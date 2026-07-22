@@ -16,4 +16,7 @@ extension Defaults.Keys {
   static let hideFromScreenRecording = Key<Bool>("hideFromScreenRecording", default: false)
   static let batteryEnabled = Key<Bool>("batteryEnabled", default: true)
   static let hudEnabled = Key<Bool>("hudEnabled", default: false)
+  static let calendarEnabled = Key<Bool>("calendarEnabled", default: false)
+  static let calendarLeadMinutes = Key<Int>("calendarLeadMinutes", default: 10)
+  static let airpodsEnabled = Key<Bool>("airpodsEnabled", default: false)
 }

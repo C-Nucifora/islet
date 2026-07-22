@@ -117,6 +117,9 @@ final class HUDController: ObservableObject {
     }
   }
 
+  /// Debug-only: exercise the HUD render path without the event tap / accessibility.
+  func debugPresent(_ snapshot: HUDSnapshot) { present(snapshot) }
+
   private func present(_ snapshot: HUDSnapshot) {
     hud = snapshot
     hideTask?.cancel()

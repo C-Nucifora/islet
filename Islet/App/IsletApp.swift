@@ -5,6 +5,7 @@ enum AppState {
   static let demoActivity = DemoActivity()
   static let nowPlaying = NowPlayingActivity()
   static let battery = BatteryActivity()
+  static let calendar = CalendarActivity()
 }
 
 @main
@@ -34,6 +35,12 @@ struct IsletApp: App {
           fake.title = "Paranoid Android"
           fake.artist = "Radiohead"
           SneakQueue.shared.submit(NowPlayingActivity.trackChangeSneak(for: fake))
+        }
+        Button("HUD: volume") {
+          HUDController.shared.debugPresent(.init(kind: .volume, level: 0.6, isMuted: false))
+        }
+        Button("HUD: brightness") {
+          HUDController.shared.debugPresent(.init(kind: .brightness, level: 0.35, isMuted: false))
         }
       }
       Divider()

@@ -22,6 +22,10 @@
 	<string>1</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Islet shows your next event and today's agenda in the notch.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Islet shows your next event and today's agenda in the notch.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
 </dict>

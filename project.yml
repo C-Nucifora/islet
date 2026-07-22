@@ -36,6 +36,8 @@ targets:
         CFBundleDisplayName: Islet
         LSUIElement: true
         NSHumanReadableCopyright: ""
+        NSCalendarsUsageDescription: "Islet shows your next event and today's agenda in the notch."
+        NSCalendarsFullAccessUsageDescription: "Islet shows your next event and today's agenda in the notch."
   IsletTests:
     type: bundle.unit-test
     platform: macOS

@@ -13,6 +13,9 @@ struct SettingsView: View {
   @Default(.batteryEnabled) private var batteryEnabled
   @Default(.hudEnabled) private var hudEnabled
   @State private var hudTrusted = HUDController.shared.isAccessibilityTrusted
+  @Default(.calendarEnabled) private var calendarEnabled
+  @Default(.calendarLeadMinutes) private var calendarLeadMinutes
+  @Default(.airpodsEnabled) private var airpodsEnabled
 
   var body: some View {
     Form {
@@ -69,6 +72,13 @@ struct SettingsView: View {
             }
           }
         }
+        Toggle("Calendar", isOn: $calendarEnabled)
+        if calendarEnabled {
+          Stepper(
+            "Countdown lead: \(calendarLeadMinutes) min", value: $calendarLeadMinutes,
+            in: 5...60, step: 5)
+        }
+        Toggle("AirPods & audio devices", isOn: $airpodsEnabled)
         LabeledContent("Media adapter") {
           Text(AppState.nowPlaying.adapterStatus).foregroundStyle(.secondary)
         }
