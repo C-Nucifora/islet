@@ -1,0 +1,5 @@
+{"type":"data","diff":false,"payload":{}}
+{"type":"data","diff":false,"payload":{"processIdentifier":6712,"bundleIdentifier":"com.apple.Music","title":"Paranoid Android","artist":"Radiohead","album":"OK Computer","playing":true,"duration":386.466,"elapsedTime":12.5,"timestamp":1784675000.123,"playbackRate":1,"artworkMimeType":"image/jpeg","artworkData":"aXNsZXQtZml4dHVyZS1hcnR3b3Jr","isMusicApp":true,"mediaType":"kMRMediaRemoteNowPlayingInfoTypeAudio"}}
+{"type":"data","diff":true,"payload":{"elapsedTime":14.7,"timestamp":1784675002.323}}
+{"type":"data","diff":true,"payload":{"playing":false,"playbackRate":0}}
+{"type":"data","diff":true,"payload":{"artworkData":null}}

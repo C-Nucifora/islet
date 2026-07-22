@@ -2,8 +2,13 @@ import Defaults
 import Foundation
 
 extension InteractionMode: Defaults.Serializable {}
+extension MediaSourceMode: Defaults.Serializable {}
 
 extension Defaults.Keys {
+  static let mediaSourceMode = Key<MediaSourceMode>("mediaSourceMode", default: .auto)
+  static let mediaPriorityList = Key<[String]>(
+    "mediaPriorityList",
+    default: ["com.spotify.client", "com.apple.Music"])
   static let interactionMode = Key<InteractionMode>("interactionMode", default: .hover)
   static let hoverExpandDelay = Key<Double>("hoverExpandDelay", default: 0.3)
   static let hoverCollapseTimeout = Key<Double>("hoverCollapseTimeout", default: 0.5)

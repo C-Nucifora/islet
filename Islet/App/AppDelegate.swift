@@ -7,6 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       EventMonitors.shared.start()
       ScreenManager.shared.start()
       ActivityCenter.shared.register(AppState.demoActivity)
+      AppState.nowPlaying.start()
+      ActivityCenter.shared.register(AppState.nowPlaying)
     }
     Log.app.info("Islet launched")
   }

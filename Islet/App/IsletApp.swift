@@ -3,6 +3,7 @@ import SwiftUI
 @MainActor
 enum AppState {
   static let demoActivity = DemoActivity()
+  static let nowPlaying = NowPlayingActivity()
 }
 
 @main

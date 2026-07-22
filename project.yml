@@ -19,9 +19,17 @@ targets:
   Islet:
     type: application
     platform: macOS
-    sources: [Islet]
+    sources:
+      - path: Islet
+        excludes: ["Resources/**"]
+      - path: Islet/Resources
+        buildPhase: resources
     dependencies:
       - package: Defaults
+      - framework: Vendor/MediaRemoteAdapter.framework
+        embed: true
+        codeSign: true
+        link: false
     info:
       path: Islet/Info.plist
       properties:
@@ -31,7 +39,11 @@ targets:
   IsletTests:
     type: bundle.unit-test
     platform: macOS
-    sources: [IsletTests]
+    sources:
+      - path: IsletTests
+        excludes: ["Fixtures/**"]
+      - path: IsletTests/Fixtures
+        buildPhase: resources
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
