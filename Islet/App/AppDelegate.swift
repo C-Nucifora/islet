@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     Task { @MainActor in
       EventMonitors.shared.start()
       ScreenManager.shared.start()
+      ActivityCenter.shared.register(AppState.demoActivity)
     }
     Log.app.info("Islet launched")
   }
