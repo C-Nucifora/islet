@@ -4,11 +4,15 @@ struct NotchRootView: View {
   @ObservedObject var vm: NotchViewModel
   @ObservedObject private var center = ActivityCenter.shared
   @ObservedObject private var sneaks = SneakQueue.shared
+  @ObservedObject private var hud = HUDController.shared
   @State private var compactLeadingWidth: CGFloat = 0
   @State private var compactTrailingWidth: CGFloat = 0
 
-  /// What the compact slots currently show: an in-flight sneak wins over the primary activity.
+  /// Compact content precedence: HUD > in-flight sneak > primary activity.
   private var compactContent: (leading: AnyView, trailing: AnyView)? {
+    if !vm.state.isExpanded, let snapshot = hud.hud {
+      return (AnyView(HUDIconView(snapshot: snapshot)), AnyView(HUDBarView(snapshot: snapshot)))
+    }
     if !vm.state.isExpanded, let sneak = sneaks.current {
       return (sneak.leading, sneak.trailing)
     }
@@ -98,7 +102,7 @@ struct NotchRootView: View {
           }
       }
       .frame(height: vm.geometry.notchSize.height)
-      .id(sneaks.current?.id)
+      .id(hud.hud == nil ? sneaks.current?.id.uuidString : "hud")
       .transition(.opacity)
     } else {
       Color.clear

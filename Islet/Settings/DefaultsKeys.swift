@@ -15,4 +15,5 @@ extension Defaults.Keys {
   static let hapticsEnabled = Key<Bool>("hapticsEnabled", default: true)
   static let hideFromScreenRecording = Key<Bool>("hideFromScreenRecording", default: false)
   static let batteryEnabled = Key<Bool>("batteryEnabled", default: true)
+  static let hudEnabled = Key<Bool>("hudEnabled", default: false)
 }

@@ -14,6 +14,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       SneakQueue.shared.isSuspended = {
         ScreenManager.shared.viewModel?.state.isExpanded ?? false
       }
+      HUDController.shared.startObserving()
+    }
+    // The HUD tap needs Accessibility; if the grant lands while running, start it on reactivation.
+    NotificationCenter.default.addObserver(
+      forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+    ) { _ in
+      MainActor.assumeIsolated { HUDController.shared.start() }
     }
     Log.app.info("Islet launched")
   }

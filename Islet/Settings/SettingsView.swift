@@ -11,6 +11,8 @@ struct SettingsView: View {
   @Default(.mediaPriorityList) private var priorityList
   @State private var newBundleID = ""
   @Default(.batteryEnabled) private var batteryEnabled
+  @Default(.hudEnabled) private var hudEnabled
+  @State private var hudTrusted = HUDController.shared.isAccessibilityTrusted
 
   var body: some View {
     Form {
@@ -57,6 +59,16 @@ struct SettingsView: View {
       }
       Section("Activities") {
         Toggle("Battery & charging", isOn: $batteryEnabled)
+        Toggle("HUD replacement (volume & brightness)", isOn: $hudEnabled)
+        if hudEnabled, !hudTrusted {
+          HStack {
+            Text("Needs Accessibility permission").foregroundStyle(.secondary)
+            Spacer()
+            Button("Grant…") {
+              HUDController.shared.promptForAccessibility()
+            }
+          }
+        }
         LabeledContent("Media adapter") {
           Text(AppState.nowPlaying.adapterStatus).foregroundStyle(.secondary)
         }
