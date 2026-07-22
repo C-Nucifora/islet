@@ -16,6 +16,9 @@ struct SettingsView: View {
   @Default(.calendarEnabled) private var calendarEnabled
   @Default(.calendarLeadMinutes) private var calendarLeadMinutes
   @Default(.airpodsEnabled) private var airpodsEnabled
+  @Default(.showOnAllDisplays) private var showOnAllDisplays
+  @Default(.hideInFullscreen) private var hideInFullscreen
+  @Default(.launchAtLogin) private var launchAtLogin
 
   var body: some View {
     Form {
@@ -84,6 +87,9 @@ struct SettingsView: View {
         }
       }
       Section("General") {
+        Toggle("Launch at login", isOn: $launchAtLogin)
+        Toggle("Show on all displays", isOn: $showOnAllDisplays)
+        Toggle("Hide when an app is fullscreen", isOn: $hideInFullscreen)
         Toggle("Hide from screen recordings", isOn: $hideFromRecording)
       }
     }

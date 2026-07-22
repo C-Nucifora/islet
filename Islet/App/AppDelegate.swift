@@ -1,6 +1,9 @@
 import AppKit
+import Defaults
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+  private var launchAtLoginObserver: Defaults.Observation?
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
     Task { @MainActor in
@@ -18,6 +21,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ScreenManager.shared.viewModel?.state.isExpanded ?? false
       }
       HUDController.shared.startObserving()
+      LaunchAtLogin.sync()
+      launchAtLoginObserver = Defaults.observe(.launchAtLogin) { change in
+        Task { @MainActor in LaunchAtLogin.apply(change.newValue) }
+      }
     }
     // The HUD tap needs Accessibility; if the grant lands while running, start it on reactivation.
     NotificationCenter.default.addObserver(

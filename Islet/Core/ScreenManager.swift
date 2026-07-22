@@ -3,12 +3,29 @@ import Combine
 import Defaults
 import SwiftUI
 
+/// One notch panel per active screen, keyed by display UUID. Rebuilds on display changes;
+/// hides panels on screens showing a fullscreen app when that option is enabled.
 @MainActor
 final class ScreenManager {
   static let shared = ScreenManager()
-  private(set) var panel: NotchPanel?
-  private(set) var viewModel: NotchViewModel?
+
+  private struct Instance {
+    let screenUUID: String
+    let panel: NotchPanel
+    let viewModel: NotchViewModel
+  }
+
+  private var instances: [String: Instance] = [:]
   private var cancellables: Set<AnyCancellable> = []
+  private var fullscreenTimer: AnyCancellable?
+
+  /// The view model on the screen under the mouse (for menu-bar-driven actions), else any.
+  var viewModel: NotchViewModel? {
+    if let uuid = NSScreen.screenWithMouse?.displayUUID, let inst = instances[uuid] {
+      return inst.viewModel
+    }
+    return instances.values.first?.viewModel
+  }
 
   func start() {
     rebuild()
@@ -20,32 +37,68 @@ final class ScreenManager {
     Defaults.publisher(.hideFromScreenRecording)
       .sink { [weak self] change in
         Task { @MainActor in
-          self?.panel?.sharingType = change.newValue ? .none : .readOnly
+          self?.instances.values.forEach {
+            $0.panel.sharingType = change.newValue ? .none : .readOnly
+          }
         }
       }
       .store(in: &cancellables)
+    Defaults.publisher(.showOnAllDisplays)
+      .dropFirst()
+      .sink { [weak self] _ in self?.rebuild() }
+      .store(in: &cancellables)
+    Defaults.publisher(.hideInFullscreen)
+      .sink { [weak self] _ in self?.updateFullscreenObserving() }
+      .store(in: &cancellables)
+    updateFullscreenObserving()
+  }
+
+  private func targetScreens() -> [NSScreen] {
+    if Defaults[.showOnAllDisplays] { return NSScreen.screens }
+    if let screen = NSScreen.builtin ?? NSScreen.main { return [screen] }
+    return []
   }
 
   func rebuild() {
-    panel?.close()
-    panel = nil
-    viewModel = nil
+    instances.values.forEach { $0.panel.close() }
+    instances.removeAll()
 
-    guard let screen = NSScreen.builtin ?? NSScreen.main else {
-      Log.shell.error("No screen available")
-      return
+    for screen in targetScreens() {
+      guard let uuid = screen.displayUUID else { continue }
+      let geometry = screen.notchGeometry
+      let vm = NotchViewModel(geometry: geometry)
+      let panel = NotchPanel(frame: geometry.panelFrame)
+      panel.contentView = NSHostingView(rootView: NotchRootView(vm: vm))
+      panel.alphaValue = 0
+      panel.orderFrontRegardless()
+      panel.setFrame(geometry.panelFrame, display: true)
+      panel.alphaValue = 1  // alpha-flash hides ghost frames
+      panel.sharingType = Defaults[.hideFromScreenRecording] ? .none : .readOnly
+      instances[uuid] = Instance(screenUUID: uuid, panel: panel, viewModel: vm)
     }
-    let geometry = screen.notchGeometry
-    let vm = NotchViewModel(geometry: geometry)
-    let p = NotchPanel(frame: geometry.panelFrame)
-    p.contentView = NSHostingView(rootView: NotchRootView(vm: vm))
-    p.alphaValue = 0
-    p.orderFrontRegardless()
-    p.setFrame(geometry.panelFrame, display: true)
-    p.alphaValue = 1  // alpha-flash hides ghost frames
-    p.sharingType = Defaults[.hideFromScreenRecording] ? .none : .readOnly
-    panel = p
-    viewModel = vm
-    Log.shell.info("Notch panel built: notch \(String(describing: geometry.notchSize))")
+    Log.shell.info("Built \(self.instances.count) notch panel(s)")
+    applyFullscreenVisibility()
+  }
+
+  // MARK: - Fullscreen awareness
+
+  private func updateFullscreenObserving() {
+    if Defaults[.hideInFullscreen] {
+      fullscreenTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+        .sink { [weak self] _ in self?.applyFullscreenVisibility() }
+    } else {
+      fullscreenTimer = nil
+      instances.values.forEach { $0.panel.alphaValue = 1 }
+    }
+  }
+
+  private func applyFullscreenVisibility() {
+    guard Defaults[.hideInFullscreen] else { return }
+    for inst in instances.values {
+      guard let screen = NSScreen.screens.first(where: { $0.displayUUID == inst.screenUUID })
+      else { continue }
+      let hidden = FullscreenDetector.hasFullscreenWindow(on: screen)
+      inst.panel.animator().alphaValue = hidden ? 0 : 1
+    }
   }
 }

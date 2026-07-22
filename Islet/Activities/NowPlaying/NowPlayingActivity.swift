@@ -10,8 +10,12 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   private(set) var activationDate: Date?
   private let watcher = MediaWatcher()
   private var streamTask: Task<Void, Never>?
+  private var idleTask: Task<Void, Never>?
+  private var idledOut = false
+  /// Deactivate this long after playback pauses, so a paused track eventually leaves the island.
+  private let idleTimeout: TimeInterval = 60
 
-  var isActive: Bool { playback != nil }
+  var isActive: Bool { playback != nil && !idledOut }
 
   func start() {
     watcher.onStatus = { status in
@@ -27,6 +31,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
         case .idle:
           self.playback = nil
           self.activationDate = nil
+          self.idleTask?.cancel()
         case .nowPlaying(let state):
           guard
             SourceFilter.shouldAccept(
@@ -35,14 +40,30 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
               mode: Defaults[.mediaSourceMode],
               priorityList: Defaults[.mediaPriorityList])
           else { continue }
-          if self.playback == nil { self.activationDate = Date() }
+          let wasVisible = self.playback != nil && !self.idledOut
+          self.idledOut = false
+          if !wasVisible { self.activationDate = Date() }
           let previous = self.playback
           self.playback = state
           if let previous, previous.title != state.title, !state.title.isEmpty {
             SneakQueue.shared.submit(Self.trackChangeSneak(for: state))
           }
+          self.scheduleIdle(paused: !state.isPlaying)
         }
       }
+    }
+  }
+
+  /// While paused, hide the island after `idleTimeout`. Playing cancels any pending idle-out.
+  private func scheduleIdle(paused: Bool) {
+    idleTask?.cancel()
+    guard paused else { return }
+    idleTask = Task { [weak self] in
+      guard let self else { return }
+      try? await Task.sleep(for: .seconds(self.idleTimeout))
+      guard !Task.isCancelled else { return }
+      self.idledOut = true
+      self.objectWillChange.send()
     }
   }
 

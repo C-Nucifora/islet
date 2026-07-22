@@ -19,4 +19,7 @@ extension Defaults.Keys {
   static let calendarEnabled = Key<Bool>("calendarEnabled", default: false)
   static let calendarLeadMinutes = Key<Int>("calendarLeadMinutes", default: 10)
   static let airpodsEnabled = Key<Bool>("airpodsEnabled", default: false)
+  static let showOnAllDisplays = Key<Bool>("showOnAllDisplays", default: false)
+  static let hideInFullscreen = Key<Bool>("hideInFullscreen", default: false)
+  static let launchAtLogin = Key<Bool>("launchAtLogin", default: false)
 }
