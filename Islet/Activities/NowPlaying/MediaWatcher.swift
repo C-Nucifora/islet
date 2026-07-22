@@ -10,6 +10,8 @@ final class MediaWatcher: @unchecked Sendable {
   private var buffer = Data()  // guarded by `queue`
   private var isRunning = false
   private var continuation: AsyncStream<AdapterUpdate>.Continuation?
+  /// Human-readable adapter status for the Settings window.
+  var onStatus: (@Sendable (String) -> Void)?
 
   private(set) lazy var updates: AsyncStream<AdapterUpdate> = AsyncStream { cont in
     self.continuation = cont
@@ -42,6 +44,7 @@ final class MediaWatcher: @unchecked Sendable {
       let frameworks = Bundle.main.privateFrameworksPath
     else {
       Log.media.error("Adapter script or framework missing from bundle")
+      onStatus?("Adapter missing from bundle")
       return
     }
     let p = Process()
@@ -62,6 +65,7 @@ final class MediaWatcher: @unchecked Sendable {
       try p.run()
       process = p
       Log.media.info("Adapter started (pid \(p.processIdentifier))")
+      onStatus?("Streaming")
     } catch {
       Log.media.error("Adapter launch failed: \(error)")
       processDied()
@@ -99,6 +103,7 @@ final class MediaWatcher: @unchecked Sendable {
     failureCount += 1
     let delay = Self.backoffDelay(failureCount: failureCount)
     Log.media.warning("Adapter died; restarting in \(delay)s (failure #\(self.failureCount))")
+    onStatus?("Restarting in \(Int(delay))s (failure #\(failureCount))")
     restartTask = Task { [weak self] in
       try? await Task.sleep(for: .seconds(delay))
       guard !Task.isCancelled else { return }

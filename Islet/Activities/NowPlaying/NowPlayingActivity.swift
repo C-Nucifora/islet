@@ -6,6 +6,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   let id = "nowPlaying"
   let priority = ActivityPriority.media
   @Published private(set) var playback: PlaybackState?
+  @Published private(set) var adapterStatus = "Starting…"
   private(set) var activationDate: Date?
   private let watcher = MediaWatcher()
   private var streamTask: Task<Void, Never>?
@@ -13,6 +14,9 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   var isActive: Bool { playback != nil }
 
   func start() {
+    watcher.onStatus = { status in
+      Task { @MainActor [weak self] in self?.adapterStatus = status }
+    }
     watcher.start()
     streamTask = Task { [weak self] in
       guard let self else { return }
@@ -32,10 +36,34 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
               priorityList: Defaults[.mediaPriorityList])
           else { continue }
           if self.playback == nil { self.activationDate = Date() }
+          let previous = self.playback
           self.playback = state
+          if let previous, previous.title != state.title, !state.title.isEmpty {
+            SneakQueue.shared.submit(Self.trackChangeSneak(for: state))
+          }
         }
       }
     }
+  }
+
+  static func trackChangeSneak(for state: PlaybackState) -> Sneak {
+    let thumb: AnyView =
+      if let data = state.artwork, let img = NSImage(data: data) {
+        AnyView(
+          Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
+            .frame(width: 16, height: 16)
+            .clipShape(RoundedRectangle(cornerRadius: 4)))
+      } else {
+        AnyView(Image(systemName: "music.note").font(.caption2).foregroundStyle(.secondary))
+      }
+    let label = state.artist.isEmpty ? state.title : "\(state.title) — \(state.artist)"
+    return Sneak(
+      source: "track",
+      leading: thumb,
+      trailing: AnyView(
+        Text(label)
+          .font(.caption2).foregroundStyle(.white)
+          .lineLimit(1).frame(maxWidth: 170)))
   }
 
   var compactLeading: AnyView { AnyView(CompactArtworkView(activity: self)) }

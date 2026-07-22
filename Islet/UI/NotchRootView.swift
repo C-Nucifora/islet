@@ -3,15 +3,27 @@ import SwiftUI
 struct NotchRootView: View {
   @ObservedObject var vm: NotchViewModel
   @ObservedObject private var center = ActivityCenter.shared
+  @ObservedObject private var sneaks = SneakQueue.shared
   @State private var compactLeadingWidth: CGFloat = 0
   @State private var compactTrailingWidth: CGFloat = 0
+
+  /// What the compact slots currently show: an in-flight sneak wins over the primary activity.
+  private var compactContent: (leading: AnyView, trailing: AnyView)? {
+    if !vm.state.isExpanded, let sneak = sneaks.current {
+      return (sneak.leading, sneak.trailing)
+    }
+    if let primary = center.primaryActivity {
+      return (primary.compactLeading, primary.compactTrailing)
+    }
+    return nil
+  }
 
   private var radii: (top: CGFloat, bottom: CGFloat) {
     vm.state.isExpanded ? Metrics.expandedRadii : Metrics.closedRadii
   }
 
   private var compactVisible: Bool {
-    !vm.state.isExpanded && center.primaryActivity != nil
+    !vm.state.isExpanded && compactContent != nil
   }
 
   /// Size of the black shape body, EXCLUDING the top-flare ears.
@@ -71,21 +83,22 @@ struct NotchRootView: View {
         }
       }
       .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .top)))
-    } else if let primary = center.primaryActivity {
+    } else if let slots = compactContent {
       HStack(spacing: 0) {
-        primary.compactLeading
+        slots.leading
           .padding(.leading, 6)
           .onGeometryChange(for: CGFloat.self, of: \.size.width) {
             compactLeadingWidth = $0 + 6
           }
         Spacer().frame(width: vm.geometry.notchSize.width)
-        primary.compactTrailing
+        slots.trailing
           .padding(.trailing, 6)
           .onGeometryChange(for: CGFloat.self, of: \.size.width) {
             compactTrailingWidth = $0 + 6
           }
       }
       .frame(height: vm.geometry.notchSize.height)
+      .id(sneaks.current?.id)
       .transition(.opacity)
     } else {
       Color.clear

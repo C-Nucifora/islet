@@ -9,6 +9,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       ActivityCenter.shared.register(AppState.demoActivity)
       AppState.nowPlaying.start()
       ActivityCenter.shared.register(AppState.nowPlaying)
+      AppState.battery.start()
+      ActivityCenter.shared.register(AppState.battery)
+      SneakQueue.shared.isSuspended = {
+        ScreenManager.shared.viewModel?.state.isExpanded ?? false
+      }
     }
     Log.app.info("Islet launched")
   }

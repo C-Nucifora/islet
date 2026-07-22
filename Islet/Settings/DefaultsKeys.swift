@@ -14,4 +14,5 @@ extension Defaults.Keys {
   static let hoverCollapseTimeout = Key<Double>("hoverCollapseTimeout", default: 0.5)
   static let hapticsEnabled = Key<Bool>("hapticsEnabled", default: true)
   static let hideFromScreenRecording = Key<Bool>("hideFromScreenRecording", default: false)
+  static let batteryEnabled = Key<Bool>("batteryEnabled", default: true)
 }

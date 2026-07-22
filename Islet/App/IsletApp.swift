@@ -4,6 +4,7 @@ import SwiftUI
 enum AppState {
   static let demoActivity = DemoActivity()
   static let nowPlaying = NowPlayingActivity()
+  static let battery = BatteryActivity()
 }
 
 @main
@@ -20,6 +21,19 @@ struct IsletApp: App {
         }
         Button("Expand") {
           ScreenManager.shared.viewModel?.apply(.clickedNotch)
+        }
+        Button("Sneak: charger") {
+          SneakQueue.shared.submit(BatteryActivity.sneak(for: .acConnected(percent: 64)))
+        }
+        Button("Sneak: low battery") {
+          SneakQueue.shared.submit(
+            BatteryActivity.sneak(for: .lowBattery(threshold: 20, percent: 18)))
+        }
+        Button("Sneak: track change") {
+          var fake = PlaybackState()
+          fake.title = "Paranoid Android"
+          fake.artist = "Radiohead"
+          SneakQueue.shared.submit(NowPlayingActivity.trackChangeSneak(for: fake))
         }
       }
       Divider()

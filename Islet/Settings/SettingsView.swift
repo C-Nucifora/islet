@@ -10,6 +10,7 @@ struct SettingsView: View {
   @Default(.mediaSourceMode) private var sourceMode
   @Default(.mediaPriorityList) private var priorityList
   @State private var newBundleID = ""
+  @Default(.batteryEnabled) private var batteryEnabled
 
   var body: some View {
     Form {
@@ -52,6 +53,12 @@ struct SettingsView: View {
             }
             .disabled(newBundleID.isEmpty)
           }
+        }
+      }
+      Section("Activities") {
+        Toggle("Battery & charging", isOn: $batteryEnabled)
+        LabeledContent("Media adapter") {
+          Text(AppState.nowPlaying.adapterStatus).foregroundStyle(.secondary)
         }
       }
       Section("General") {
