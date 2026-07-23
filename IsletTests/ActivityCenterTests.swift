@@ -24,13 +24,13 @@ final class ActivityCenterTests: XCTestCase {
     }
   }
 
-  func testHighestPriorityActiveWins() {
+  func testUserOrderDeterminesPrimary() {
+    // The primary activity is the first-in-user-order among the active ones. In the default order,
+    // "nowPlaying" precedes "battery".
     let center = ActivityCenter()
-    let ambient = Fake(id: "battery", priority: .ambient, active: true)
-    let media = Fake(id: "media", priority: .media, active: true)
-    center.register(ambient)
-    center.register(media)
-    XCTAssertEqual(center.primaryActivity?.id, "media")
+    center.register(Fake(id: "battery", priority: .ambient, active: true))
+    center.register(Fake(id: "nowPlaying", priority: .media, active: true))
+    XCTAssertEqual(center.primaryActivity?.id, "nowPlaying")
   }
 
   func testInactiveIgnored() {

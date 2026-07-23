@@ -9,6 +9,7 @@ enum AppState {
   static let timer = TimerActivity()
   static let shelf = ShelfActivity()
   static let clipboard = ClipboardActivity()
+  static let ports = PortsActivity()
 }
 
 @main

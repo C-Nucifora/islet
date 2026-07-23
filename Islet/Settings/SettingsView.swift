@@ -23,6 +23,7 @@ struct SettingsView: View {
   @Default(.launchAtLogin) private var launchAtLogin
   @Default(.activityOrder) private var activityOrder
   @Default(.clipboardEnabled) private var clipboardEnabled
+  @Default(.portsEnabled) private var portsEnabled
 
   var body: some View {
     Form {
@@ -108,6 +109,7 @@ struct SettingsView: View {
           Text("Captures everything you copy (incl. passwords), kept only until you quit.")
             .font(.caption2).foregroundStyle(.secondary)
         }
+        Toggle("Ports (what's plugged in)", isOn: $portsEnabled)
         Toggle("AirPods & audio devices", isOn: $airpodsEnabled)
         LabeledContent("Media adapter") {
           Text(AppState.nowPlaying.adapterStatus).foregroundStyle(.secondary)

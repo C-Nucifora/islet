@@ -22,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       ActivityCenter.shared.register(AppState.shelf)
       AppState.clipboard.start()
       ActivityCenter.shared.register(AppState.clipboard)
+      AppState.ports.start()
+      ActivityCenter.shared.register(AppState.ports)
       RemindersProvider.shared.start()
       AudioDeviceMonitor.shared.start()
       SneakQueue.shared.isSuspended = {

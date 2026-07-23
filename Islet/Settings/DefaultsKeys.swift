@@ -29,4 +29,5 @@ extension Defaults.Keys {
   static let launchAtLogin = Key<Bool>("launchAtLogin", default: false)
   static let activityOrder = Key<[String]>("activityOrder", default: ActivityCatalog.defaultOrder)
   static let clipboardEnabled = Key<Bool>("clipboardEnabled", default: false)
+  static let portsEnabled = Key<Bool>("portsEnabled", default: true)
 }
