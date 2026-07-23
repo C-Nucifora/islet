@@ -21,10 +21,17 @@ final class AdapterParserTests: XCTestCase {
     else { return XCTFail("expected nowPlaying") }
     XCTAssertEqual(state.title, "Paranoid Android")
     XCTAssertEqual(state.artist, "Radiohead")
-    XCTAssertEqual(state.bundleIdentifier, "com.apple.Music")
+    XCTAssertEqual(state.bundleIdentifier, "com.apple.WebKit.GPU")
     XCTAssertTrue(state.isPlaying)
     XCTAssertEqual(state.duration, 386.466, accuracy: 0.001)
     XCTAssertNotNil(state.artwork)
+    // Depth-pack fields
+    XCTAssertEqual(state.parentBundleIdentifier, "com.apple.Safari")
+    XCTAssertEqual(state.sourceBundleIdentifier, "com.apple.Safari")  // parent preferred
+    XCTAssertTrue(state.isShuffleOn)
+    XCTAssertEqual(state.repeatMode, 2)
+    XCTAssertTrue(state.supportsSkip15)
+    XCTAssertFalse(state.isAdvertisement)
   }
 
   func testDiffMergesOntoCurrent() throws {

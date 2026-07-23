@@ -50,10 +50,22 @@ struct ExpandedPlayerView: View {
       HStack(spacing: 16) {
         artwork(pb)
         VStack(alignment: .leading, spacing: 6) {
-          Text(pb.title).font(.headline).lineLimit(1)
+          HStack(spacing: 6) {
+            if let icon = Self.appIcon(for: pb.sourceBundleIdentifier) {
+              Image(nsImage: icon).resizable().frame(width: 14, height: 14)
+            }
+            Text(pb.title).font(.headline).lineLimit(1)
+            if pb.isAdvertisement {
+              Text("Ad")
+                .font(.caption2.weight(.bold))
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background(Capsule().fill(.yellow.opacity(0.25)))
+                .foregroundStyle(.yellow)
+            }
+          }
           Text(pb.artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
           scrubber(pb)
-          controls
+          controls(pb)
         }
       }
       .foregroundStyle(.white)
@@ -98,29 +110,50 @@ struct ExpandedPlayerView: View {
     }
   }
 
-  private var controls: some View {
-    HStack(spacing: 28) {
+  private func controls(_ pb: PlaybackState) -> some View {
+    HStack(spacing: 20) {
       Button {
-        MediaRemoteCommands.shared.previous()
+        MediaRemoteCommands.shared.toggleShuffle()
       } label: {
-        Image(systemName: "backward.fill")
+        Image(systemName: "shuffle").foregroundStyle(pb.isShuffleOn ? .green : .secondary)
+      }
+      // Podcasts/audiobooks get ±15 s skip; music gets prev/next.
+      Button {
+        pb.supportsSkip15
+          ? MediaRemoteCommands.shared.skipBackward15() : MediaRemoteCommands.shared.previous()
+      } label: {
+        Image(systemName: pb.supportsSkip15 ? "gobackward.15" : "backward.fill")
       }
       Button {
         MediaRemoteCommands.shared.togglePlayPause()
       } label: {
-        Image(
-          systemName: activity.playback?.isPlaying == true ? "pause.fill" : "play.fill"
-        )
-        .font(.title2)
+        Image(systemName: pb.isPlaying ? "pause.fill" : "play.fill").font(.title2)
       }
       Button {
-        MediaRemoteCommands.shared.next()
+        pb.supportsSkip15
+          ? MediaRemoteCommands.shared.skipForward15() : MediaRemoteCommands.shared.next()
       } label: {
-        Image(systemName: "forward.fill")
+        Image(systemName: pb.supportsSkip15 ? "goforward.15" : "forward.fill")
+      }
+      Button {
+        MediaRemoteCommands.shared.cycleRepeat()
+      } label: {
+        Image(systemName: pb.repeatMode == 1 ? "repeat.1" : "repeat")
+          .foregroundStyle(pb.repeatMode != 0 ? .green : .secondary)
       }
     }
     .buttonStyle(.plain)
     .frame(maxWidth: .infinity)
+    .disabled(pb.isAdvertisement)
+    .opacity(pb.isAdvertisement ? 0.4 : 1)
+  }
+
+  /// Resolves the source app's icon for attribution (parent app for browser-hosted media).
+  static func appIcon(for bundleID: String) -> NSImage? {
+    guard !bundleID.isEmpty,
+      let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+    else { return nil }
+    return NSWorkspace.shared.icon(forFile: url.path)
   }
 
   private func format(_ t: TimeInterval) -> String {

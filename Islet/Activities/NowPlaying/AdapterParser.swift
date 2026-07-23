@@ -50,5 +50,14 @@ enum AdapterParser {
       state.artwork = Data(base64Encoded: v)
     }
     if payload["artworkData"] is NSNull { state.artwork = nil }
+    if let v = payload["shuffleMode"] as? Int { state.shuffleMode = v }
+    if let v = payload["repeatMode"] as? Int { state.repeatMode = v }
+    if let v = payload["isAdvertisement"] as? Bool { state.isAdvertisement = v }
+    if let v = payload["parentApplicationBundleIdentifier"] as? String {
+      state.parentBundleIdentifier = v
+    }
+    let ff = payload["supportsFastForward15Seconds"] as? Bool
+    let rw = payload["supportsRewind15Seconds"] as? Bool
+    if ff != nil || rw != nil { state.supportsSkip15 = (ff ?? false) || (rw ?? false) }
   }
 }

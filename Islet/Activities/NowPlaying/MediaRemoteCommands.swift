@@ -35,5 +35,9 @@ final class MediaRemoteCommands: @unchecked Sendable {
   func togglePlayPause() { _ = sendCommand?(2, nil) }
   func next() { _ = sendCommand?(4, nil) }
   func previous() { _ = sendCommand?(5, nil) }
+  func toggleShuffle() { _ = sendCommand?(6, nil) }
+  func cycleRepeat() { _ = sendCommand?(7, nil) }
+  func skipBackward15() { _ = sendCommand?(12, nil) }
+  func skipForward15() { _ = sendCommand?(13, nil) }
   func seek(to seconds: Double) { setElapsed?(seconds) }
 }
