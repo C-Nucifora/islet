@@ -1,4 +1,5 @@
 import Combine
+import Defaults
 import SwiftUI
 
 @MainActor
@@ -17,11 +18,18 @@ final class ActivityCenter: ObservableObject {
     objectWillChange.send()
   }
 
-  /// All active activities, highest priority first (ties broken by most recently activated).
+  /// All active activities, ordered by the user's configured order (unlisted ones fall back to
+  /// priority, then most-recently-activated).
   var activeActivities: [any NotchActivity] {
-    activities
+    let order = Defaults[.activityOrder]
+    func rank(_ a: any NotchActivity) -> Int { order.firstIndex(of: a.id) ?? Int.max }
+    return
+      activities
       .filter(\.isActive)
       .sorted {
+        let ra = rank($0)
+        let rb = rank($1)
+        if ra != rb { return ra < rb }
         if $0.priority != $1.priority { return $0.priority > $1.priority }
         return ($0.activationDate ?? .distantPast) > ($1.activationDate ?? .distantPast)
       }

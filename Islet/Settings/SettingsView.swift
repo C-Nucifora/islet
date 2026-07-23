@@ -21,9 +21,22 @@ struct SettingsView: View {
   @Default(.showOnAllDisplays) private var showOnAllDisplays
   @Default(.hideInFullscreen) private var hideInFullscreen
   @Default(.launchAtLogin) private var launchAtLogin
+  @Default(.activityOrder) private var activityOrder
+  @Default(.clipboardEnabled) private var clipboardEnabled
 
   var body: some View {
     Form {
+      Section("Menu order") {
+        Text("Drag to reorder the tabs in the expanded island.")
+          .font(.caption).foregroundStyle(.secondary)
+        List {
+          ForEach(activityOrder, id: \.self) { id in
+            Label(ActivityCatalog.name(for: id), systemImage: ActivityCatalog.icon(for: id))
+          }
+          .onMove { activityOrder.move(fromOffsets: $0, toOffset: $1) }
+        }
+        .frame(height: 150)
+      }
       Section("Interaction") {
         Picker("Expand", selection: $mode) {
           Text("Hover").tag(InteractionMode.hover)

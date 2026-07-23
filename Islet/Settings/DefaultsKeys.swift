@@ -27,4 +27,6 @@ extension Defaults.Keys {
   static let showOnAllDisplays = Key<Bool>("showOnAllDisplays", default: false)
   static let hideInFullscreen = Key<Bool>("hideInFullscreen", default: false)
   static let launchAtLogin = Key<Bool>("launchAtLogin", default: false)
+  static let activityOrder = Key<[String]>("activityOrder", default: ActivityCatalog.defaultOrder)
+  static let clipboardEnabled = Key<Bool>("clipboardEnabled", default: false)
 }
