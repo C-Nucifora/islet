@@ -15,6 +15,7 @@ struct SettingsView: View {
   @State private var hudTrusted = HUDController.shared.isAccessibilityTrusted
   @Default(.calendarEnabled) private var calendarEnabled
   @Default(.calendarLeadMinutes) private var calendarLeadMinutes
+  @Default(.remindersEnabled) private var remindersEnabled
   @Default(.airpodsEnabled) private var airpodsEnabled
   @Default(.showOnAllDisplays) private var showOnAllDisplays
   @Default(.hideInFullscreen) private var hideInFullscreen
@@ -81,6 +82,7 @@ struct SettingsView: View {
             "Countdown lead: \(calendarLeadMinutes) min", value: $calendarLeadMinutes,
             in: 5...60, step: 5)
         }
+        Toggle("Reminders", isOn: $remindersEnabled)
         Toggle("AirPods & audio devices", isOn: $airpodsEnabled)
         LabeledContent("Media adapter") {
           Text(AppState.nowPlaying.adapterStatus).foregroundStyle(.secondary)

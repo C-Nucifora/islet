@@ -5,10 +5,11 @@ struct NotchRootView: View {
   @ObservedObject private var center = ActivityCenter.shared
   @ObservedObject private var sneaks = SneakQueue.shared
   @ObservedObject private var hud = HUDController.shared
+  @ObservedObject private var reminders = RemindersProvider.shared
   @State private var compactLeadingWidth: CGFloat = 0
   @State private var compactTrailingWidth: CGFloat = 0
 
-  /// Compact content precedence: HUD > in-flight sneak > primary activity.
+  /// Compact content precedence: HUD > in-flight sneak > primary activity > idle dashboard hint.
   private var compactContent: (leading: AnyView, trailing: AnyView)? {
     if !vm.state.isExpanded, let snapshot = hud.hud {
       return (AnyView(HUDIconView(snapshot: snapshot)), AnyView(HUDBarView(snapshot: snapshot)))
@@ -18,6 +19,15 @@ struct NotchRootView: View {
     }
     if let primary = center.primaryActivity {
       return (primary.compactLeading, primary.compactTrailing)
+    }
+    if !vm.state.isExpanded, !reminders.reminders.isEmpty {
+      // Idle affordance: a small checklist badge so pending reminders are visible at a glance.
+      return (
+        AnyView(Image(systemName: "checklist").foregroundStyle(.orange).font(.caption2)),
+        AnyView(
+          Text("\(reminders.reminders.count)")
+            .font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(.orange))
+      )
     }
     return nil
   }
@@ -75,15 +85,16 @@ struct NotchRootView: View {
     if vm.state.isExpanded {
       VStack(spacing: 0) {
         Spacer().frame(height: vm.geometry.notchSize.height)
-        if let primary = center.primaryActivity {
+        // Media gets its rich player; everything else (idle, charging, upcoming meeting)
+        // opens the dashboard so calendar and reminders are always reachable.
+        if let primary = center.primaryActivity, primary.id == "nowPlaying" {
           primary.expandedView
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding([.horizontal, .bottom], 16)
         } else {
-          Text("Islet")
-            .font(.system(.title2, design: .rounded).weight(.bold))
-            .foregroundStyle(.white)
-            .frame(maxHeight: .infinity)
+          IdleDashboardView()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding([.horizontal, .bottom], 16)
         }
       }
       .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .top)))

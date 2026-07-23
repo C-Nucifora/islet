@@ -38,6 +38,8 @@ targets:
         NSHumanReadableCopyright: ""
         NSCalendarsUsageDescription: "Islet shows your next event and today's agenda in the notch."
         NSCalendarsFullAccessUsageDescription: "Islet shows your next event and today's agenda in the notch."
+        NSRemindersUsageDescription: "Islet shows your reminders in the notch and lets you complete them."
+        NSRemindersFullAccessUsageDescription: "Islet shows your reminders in the notch and lets you complete them."
   IsletTests:
     type: bundle.unit-test
     platform: macOS

@@ -28,5 +28,9 @@
 	<string>Islet shows your next event and today's agenda in the notch.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Islet shows your reminders in the notch and lets you complete them.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Islet shows your reminders in the notch and lets you complete them.</string>
 </dict>
 </plist>

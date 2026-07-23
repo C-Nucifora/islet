@@ -14,6 +14,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
 
   private let store = EKEventStore()
   private var timer: AnyCancellable?
+  private var cancellables: Set<AnyCancellable> = []
 
   var isActive: Bool {
     guard Defaults[.calendarEnabled], let next = nextEvent else { return false }
@@ -24,10 +25,23 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   var nextEvent: AgendaEvent? { CalendarLogic.nextRelevant(events: events, now: Date()) }
 
   func start() {
-    Task { await requestAndLoad() }
+    if Defaults[.calendarEnabled] { Task { await requestAndLoad() } }
+    // Request/refresh when the feature is toggled on; clear when off.
+    Defaults.publisher(.calendarEnabled)
+      .dropFirst()
+      .sink { [weak self] change in
+        if change.newValue {
+          Task { await self?.requestAndLoad() }
+        } else {
+          self?.events = []
+          self?.objectWillChange.send()
+        }
+      }
+      .store(in: &cancellables)
     // Re-read the agenda and re-evaluate the countdown every 30 s.
     timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
       .sink { [weak self] _ in
+        guard Defaults[.calendarEnabled] else { return }
         Task { await self?.reload() }
         self?.objectWillChange.send()
       }
@@ -45,7 +59,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   }
 
   private func reload() async {
-    guard !accessDenied else { return }
+    guard Defaults[.calendarEnabled], !accessDenied else { return }
     let start = Date()
     let end = Calendar.current.date(byAdding: .day, value: 1, to: start) ?? start
     let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
