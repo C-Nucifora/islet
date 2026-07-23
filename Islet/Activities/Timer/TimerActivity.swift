@@ -109,7 +109,8 @@ final class TimerActivity: NotchActivity, ObservableObject {
         leading: AnyView(Image(systemName: "timer").foregroundStyle(.orange).font(.caption)),
         trailing: AnyView(
           Text("\(label ?? "Timer") done")
-            .font(.caption2.weight(.semibold)).foregroundStyle(.white).lineLimit(1))))
+            .font(.caption2.weight(.semibold)).foregroundStyle(.white).lineLimit(1)),
+        announcement: "\(label ?? "Timer") done"))
     // Auto-clear the finished state after a few seconds.
     completionTask = Task { [weak self] in
       try? await Task.sleep(for: .seconds(6))
@@ -144,6 +145,7 @@ struct TimerRingView: View {
       }
     }
     .frame(width: 16, height: 16)
+    .accessibilityHidden(true)  // decorative; the countdown text carries the value
   }
 }
 

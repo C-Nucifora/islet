@@ -39,7 +39,8 @@ final class AudioDeviceMonitor {
       Sneak(
         source: "audiodevice",
         leading: AnyViewBox.icon(icon),
-        trailing: AnyViewBox.name(name)))
+        trailing: AnyViewBox.name(name),
+        announcement: "\(name) connected"))
   }
 
   static func defaultOutputDevice() -> AudioObjectID {

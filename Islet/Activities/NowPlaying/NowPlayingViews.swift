@@ -37,6 +37,7 @@ struct CompactBarsView: View {
       }
       .frame(width: 20, height: 18, alignment: .center)
     }
+    .accessibilityHidden(true)  // decorative; the track is announced via a sneak
   }
 }
 

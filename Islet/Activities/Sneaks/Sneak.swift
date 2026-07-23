@@ -7,6 +7,8 @@ struct Sneak: Identifiable {
   var duration: TimeInterval = 2
   let leading: AnyView
   let trailing: AnyView
+  /// Spoken by VoiceOver when the sneak appears (the visual is otherwise invisible to it).
+  var announcement: String? = nil
 }
 
 /// Pure queue semantics, kept AppKit-free for testing.

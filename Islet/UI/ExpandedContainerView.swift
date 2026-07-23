@@ -69,6 +69,7 @@ struct ExpandedContainerView: View {
             .foregroundStyle(selected ? .white : .secondary)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(tab.id == Self.homeTab ? "Home" : ActivityCatalog.name(for: tab.id))
       }
       // Gap for the physical notch, keeping tabs in the left ear and the gear in the right ear.
       Spacer(minLength: notchSize.width)
@@ -82,6 +83,7 @@ struct ExpandedContainerView: View {
           .foregroundStyle(.secondary)
       }
       .buttonStyle(.plain)
+      .accessibilityLabel("Settings")
     }
   }
 

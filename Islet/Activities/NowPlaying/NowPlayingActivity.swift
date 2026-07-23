@@ -84,7 +84,9 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
       trailing: AnyView(
         Text(label)
           .font(.caption2).foregroundStyle(.white)
-          .lineLimit(1).frame(maxWidth: 170)))
+          .lineLimit(1).frame(maxWidth: 170)),
+      announcement: state.artist.isEmpty
+        ? "Now playing \(state.title)" : "Now playing \(state.title) by \(state.artist)")
   }
 
   let tabIcon = "music.note"

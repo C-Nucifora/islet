@@ -46,20 +46,23 @@ final class BatteryActivity: NotchActivity, ObservableObject {
         source: "battery",
         leading: AnyView(
           Image(systemName: "bolt.fill").foregroundStyle(.green).font(.caption)),
-        trailing: AnyView(BatteryPercentText(percent: percent, color: .green)))
+        trailing: AnyView(BatteryPercentText(percent: percent, color: .green)),
+        announcement: "Charger connected, \(percent) percent")
     case .acDisconnected(let percent):
       Sneak(
         source: "battery",
         leading: AnyView(
           Image(systemName: "battery.100percent").foregroundStyle(.secondary)
             .font(.caption)),
-        trailing: AnyView(BatteryPercentText(percent: percent, color: .secondary)))
+        trailing: AnyView(BatteryPercentText(percent: percent, color: .secondary)),
+        announcement: "Charger disconnected, \(percent) percent")
     case .lowBattery(_, let percent):
       Sneak(
         source: "battery", duration: 3,
         leading: AnyView(
           Image(systemName: "battery.25percent").foregroundStyle(.red).font(.caption)),
-        trailing: AnyView(BatteryPercentText(percent: percent, color: .red)))
+        trailing: AnyView(BatteryPercentText(percent: percent, color: .red)),
+        announcement: "Low battery, \(percent) percent")
     }
   }
 
