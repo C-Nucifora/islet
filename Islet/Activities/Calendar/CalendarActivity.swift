@@ -59,7 +59,14 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   }
 
   private func reload() async {
-    guard Defaults[.calendarEnabled], !accessDenied else { return }
+    guard Defaults[.calendarEnabled] else { return }
+    // Re-check authorization every reload so a mid-session revoke flips to "access off" (and a
+    // re-grant recovers), instead of silently showing an empty agenda.
+    accessDenied = EKEventStore.authorizationStatus(for: .event) != .fullAccess
+    guard !accessDenied else {
+      events = []
+      return
+    }
     let start = Date()
     let end = Calendar.current.date(byAdding: .day, value: 1, to: start) ?? start
     let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)

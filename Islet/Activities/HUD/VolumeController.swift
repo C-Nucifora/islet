@@ -3,6 +3,9 @@ import Foundation
 
 /// Minimal CoreAudio volume/mute control on the default output device.
 enum VolumeController {
+  /// Whether there's a usable default output device to act on (else the HUD must not swallow keys).
+  static var hasOutputDevice: Bool { outputDevice != kAudioObjectUnknown }
+
   private static var outputDevice: AudioObjectID {
     var id = AudioObjectID(kAudioObjectUnknown)
     var addr = AudioObjectPropertyAddress(

@@ -30,9 +30,10 @@ final class BatteryMonitor: ObservableObject {
     runLoopSource = source
     CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
 
-    // Temperature and power draw change continuously; refresh them every 5 s.
+    // Temperature and power draw change continuously; refresh every 5 s. This also re-reads
+    // `state`, so charge/charging stays live even if the IOPS notification source failed to register.
     metricsTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
-      .sink { [weak self] _ in self?.metrics = SmartBatteryReader.read() }
+      .sink { [weak self] _ in self?.refresh() }
   }
 
   func refresh() {

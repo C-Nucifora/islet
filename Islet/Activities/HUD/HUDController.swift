@@ -89,8 +89,15 @@ final class HUDController: ObservableObject {
       let decoded = HUDKey.decode(data1: nsEvent.data1)
     else { return false }
 
+    // Only swallow the key (and suppress the system OSD) if we can actually act on it.
+    // Otherwise pass it through so the system handles it and shows its own OSD.
+    guard canHandle(decoded.key) else { return false }
     if decoded.isKeyDown { apply(decoded.key, modifiers: nsEvent.modifierFlags) }
     return true  // consume both down and up so the system never sees the key
+  }
+
+  private func canHandle(_ key: HUDKey) -> Bool {
+    key.isBrightness ? BrightnessController.isAvailable : VolumeController.hasOutputDevice
   }
 
   private func apply(_ key: HUDKey, modifiers: NSEvent.ModifierFlags) {

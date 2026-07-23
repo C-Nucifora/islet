@@ -76,7 +76,8 @@ struct ExpandedPlayerView: View {
   }
 
   private func scrubber(_ pb: PlaybackState) -> some View {
-    TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+    // Only tick while actually playing; a paused track's position is fixed, so no redraw is needed.
+    TimelineView(.animation(minimumInterval: 0.5, paused: pb.isPlaying == false)) { _ in
       VStack(spacing: 2) {
         Slider(
           value: Binding(

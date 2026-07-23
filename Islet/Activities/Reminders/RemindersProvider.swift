@@ -56,7 +56,13 @@ final class RemindersProvider: ObservableObject {
   }
 
   func reload() async {
-    guard Defaults[.remindersEnabled], !accessDenied else { return }
+    guard Defaults[.remindersEnabled] else { return }
+    // Re-check authorization so a mid-session revoke flips to "access off" (and re-grant recovers).
+    accessDenied = EKEventStore.authorizationStatus(for: .reminder) != .fullAccess
+    guard !accessDenied else {
+      reminders = []
+      return
+    }
     let predicate = store.predicateForIncompleteReminders(
       withDueDateStarting: nil, ending: nil, calendars: nil)
     let items: [ReminderItem] = await withCheckedContinuation { continuation in

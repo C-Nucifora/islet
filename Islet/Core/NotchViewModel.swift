@@ -21,12 +21,12 @@ final class NotchViewModel: ObservableObject {
   init(geometry: NotchGeometry, modeOverride: InteractionMode? = nil) {
     self.geometry = geometry
     self.modeOverride = modeOverride
+    // NSEvent monitors already deliver on the main thread, so no .receive(on:) hop is needed
+    // (it would add a redundant async dispatch on every app-wide mouse move).
     EventMonitors.shared.mouseLocation
-      .receive(on: DispatchQueue.main)
       .sink { [weak self] p in self?.handleMouseMoved(p) }
       .store(in: &cancellables)
     EventMonitors.shared.mouseDown
-      .receive(on: DispatchQueue.main)
       .sink { [weak self] p in self?.handleMouseDown(p) }
       .store(in: &cancellables)
   }
