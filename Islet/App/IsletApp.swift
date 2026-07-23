@@ -6,6 +6,7 @@ enum AppState {
   static let nowPlaying = NowPlayingActivity()
   static let battery = BatteryActivity()
   static let calendar = CalendarActivity()
+  static let timer = TimerActivity()
 }
 
 @main
@@ -16,6 +17,17 @@ struct IsletApp: App {
     MenuBarExtra("Islet", systemImage: "capsule.fill") {
       SettingsLink { Text("Settings…") }
         .keyboardShortcut(",")
+      Menu("Start Timer") {
+        Button("1 minute") { AppState.timer.start(60) }
+        Button("5 minutes") { AppState.timer.start(5 * 60) }
+        Button("10 minutes") { AppState.timer.start(10 * 60) }
+        Button("25 minutes") { AppState.timer.start(25 * 60) }
+        Divider()
+        Button("Pomodoro (25 min focus)") { AppState.timer.start(25 * 60, label: "Focus") }
+        Button("Short break (5 min)") { AppState.timer.start(5 * 60, label: "Break") }
+        Divider()
+        Button("Cancel timer") { AppState.timer.cancel() }
+      }
       Menu("Debug") {
         Button("Toggle demo activity") {
           AppState.demoActivity.isActive.toggle()

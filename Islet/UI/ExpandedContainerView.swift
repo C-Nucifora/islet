@@ -20,7 +20,10 @@ struct ExpandedContainerView: View {
   private var effectiveSelection: String {
     let ids = tabs.map(\.id)
     if let selection, ids.contains(selection) { return selection }
-    if center.activeActivities.contains(where: { $0.id == "nowPlaying" }) { return "nowPlaying" }
+    // Default to a prominent active activity (running timer or media player); else the dashboard.
+    if let primary = center.primaryActivity, primary.id == "timer" || primary.id == "nowPlaying" {
+      return primary.id
+    }
     return Self.homeTab
   }
 

@@ -3,6 +3,7 @@ import SwiftUI
 enum ActivityPriority: Int, Comparable {
   case ambient = 0
   case media = 1
+  case timer = 2  // a running countdown is time-sensitive — it takes the primary slot
 
   static func < (l: Self, r: Self) -> Bool { l.rawValue < r.rawValue }
 }
