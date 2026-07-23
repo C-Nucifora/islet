@@ -1,12 +1,16 @@
+import Combine
 import Foundation
 import IOKit.ps
 
-/// Publishes battery snapshots from IOKit power-source notifications.
+/// Publishes battery snapshots from IOKit power-source notifications, plus AlDente-style deep
+/// metrics (health, cycles, temperature, power, time remaining) refreshed on a short timer.
 @MainActor
 final class BatteryMonitor: ObservableObject {
   @Published private(set) var state: BatteryState?
+  @Published private(set) var metrics: BatteryMetrics?
 
   private var runLoopSource: CFRunLoopSource?
+  private var metricsTimer: AnyCancellable?
 
   func start() {
     refresh()
@@ -25,10 +29,15 @@ final class BatteryMonitor: ObservableObject {
     }
     runLoopSource = source
     CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
+
+    // Temperature and power draw change continuously; refresh them every 5 s.
+    metricsTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+      .sink { [weak self] _ in self?.metrics = SmartBatteryReader.read() }
   }
 
   func refresh() {
     state = Self.readState()
+    metrics = SmartBatteryReader.read()
   }
 
   static func readState() -> BatteryState? {

@@ -107,15 +107,51 @@ struct BatteryExpandedView: View {
   }
 
   var body: some View {
-    VStack(spacing: 8) {
-      Image(systemName: iconName)
-        .font(.largeTitle)
-        .foregroundStyle(onAC ? .green : .secondary)
-      Text("\(monitor.state?.percent ?? 0)%")
-        .font(.title2.weight(.bold)).monospacedDigit()
-      Text(statusText)
-        .font(.caption).foregroundStyle(.secondary)
+    HStack(alignment: .center, spacing: 20) {
+      // Charge summary
+      VStack(spacing: 4) {
+        Image(systemName: iconName)
+          .font(.largeTitle)
+          .foregroundStyle(onAC ? .green : .secondary)
+        Text("\(monitor.state?.percent ?? 0)%")
+          .font(.title2.weight(.bold)).monospacedDigit()
+        Text(statusText)
+          .font(.caption2).foregroundStyle(.secondary)
+      }
+      .frame(width: 96)
+
+      // AlDente-style metrics grid
+      if let m = monitor.metrics {
+        LazyVGrid(
+          columns: [
+            GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading),
+          ],
+          alignment: .leading, spacing: 6
+        ) {
+          if let h = m.healthPercent { metric("Health", "\(h)%") }
+          if let c = m.cycleCount { metric("Cycles", "\(c)") }
+          if let t = m.temperatureC { metric("Temp", String(format: "%.1f°C", t)) }
+          if let w = m.powerWatts { metric("Power", String(format: "%+.1f W", w)) }
+          if let ttf = m.timeToFullMinutes {
+            metric("Full in", timeString(ttf))
+          } else if let tte = m.timeToEmptyMinutes {
+            metric("Left", timeString(tte))
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
     }
     .foregroundStyle(.white)
+  }
+
+  private func metric(_ label: String, _ value: String) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Text(label).font(.system(size: 9)).foregroundStyle(.secondary)
+      Text(value).font(.caption.weight(.semibold)).monospacedDigit()
+    }
+  }
+
+  private func timeString(_ minutes: Int) -> String {
+    minutes < 60 ? "\(minutes)m" : String(format: "%dh %02dm", minutes / 60, minutes % 60)
   }
 }
