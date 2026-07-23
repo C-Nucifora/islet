@@ -1,20 +1,29 @@
 import Foundation
 
 /// Spawns the bundled mediaremote-adapter under /usr/bin/perl and streams updates.
+/// The adapter is expected to die and respawn (macOS may kill it), so every process/pipe is
+/// torn down cleanly on each restart to avoid leaking file handles or stale handlers.
 final class MediaWatcher: @unchecked Sendable {
   private let queue = DispatchQueue(label: "dev.cnucifora.Islet.mediawatcher")
   private var process: Process?
+  private var pipe: Pipe?
   private var restartTask: Task<Void, Never>?
   private var failureCount = 0
   private var lastState: PlaybackState?
   private var buffer = Data()  // guarded by `queue`
   private var isRunning = false
-  private var continuation: AsyncStream<AdapterUpdate>.Continuation?
   /// Human-readable adapter status for the Settings window.
   var onStatus: (@Sendable (String) -> Void)?
 
-  private(set) lazy var updates: AsyncStream<AdapterUpdate> = AsyncStream { cont in
-    self.continuation = cont
+  // Created eagerly in init (not lazily by the consumer) so `continuation` is a `let` published
+  // before any producer-queue work can read it — no cross-thread data race.
+  let updates: AsyncStream<AdapterUpdate>
+  private let continuation: AsyncStream<AdapterUpdate>.Continuation
+
+  init() {
+    var cont: AsyncStream<AdapterUpdate>.Continuation!
+    updates = AsyncStream { cont = $0 }
+    continuation = cont
   }
 
   static func backoffDelay(failureCount: Int) -> TimeInterval {
@@ -33,30 +42,45 @@ final class MediaWatcher: @unchecked Sendable {
     queue.async { [self] in
       isRunning = false
       restartTask?.cancel()
-      process?.terminate()
-      process = nil
+      cleanup(terminate: true)
     }
   }
 
+  /// Detaches handlers and drops the current process/pipe. Must run on `queue`.
+  private func cleanup(terminate: Bool) {
+    pipe?.fileHandleForReading.readabilityHandler = nil
+    process?.terminationHandler = nil
+    if terminate { process?.terminate() }
+    process = nil
+    pipe = nil
+  }
+
   private func launch() {
+    cleanup(terminate: true)  // never leave a stale process/handler around before respawning
     guard
       let script = Bundle.main.url(forResource: "mediaremote-adapter", withExtension: "pl"),
       let frameworks = Bundle.main.privateFrameworksPath
     else {
       Log.media.error("Adapter script or framework missing from bundle")
       onStatus?("Adapter missing from bundle")
+      isRunning = false  // allow a future start() to retry
       return
     }
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
     p.arguments = [script.path, frameworks + "/MediaRemoteAdapter.framework", "stream"]
-    let pipe = Pipe()
-    p.standardOutput = pipe
+    let pp = Pipe()
+    p.standardOutput = pp
     p.standardError = FileHandle.nullDevice
 
-    pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+    pp.fileHandleForReading.readabilityHandler = { [weak self] handle in
       let data = handle.availableData
-      self?.queue.async { self?.consume(data) }
+      guard let self else { return }
+      if data.isEmpty {
+        handle.readabilityHandler = nil  // EOF — terminationHandler drives the restart
+        return
+      }
+      self.queue.async { self.consume(data) }
     }
     p.terminationHandler = { [weak self] _ in
       self?.queue.async { self?.processDied() }
@@ -64,6 +88,7 @@ final class MediaWatcher: @unchecked Sendable {
     do {
       try p.run()
       process = p
+      pipe = pp
       Log.media.info("Adapter started (pid \(p.processIdentifier))")
       onStatus?("Streaming")
     } catch {
@@ -94,11 +119,12 @@ final class MediaWatcher: @unchecked Sendable {
       failureCount = 0
       lastState = state
     }
-    continuation?.yield(update)
+    continuation.yield(update)
   }
 
   private func processDied() {
-    process = nil
+    cleanup(terminate: false)  // already dead; just detach handlers
+    buffer.removeAll(keepingCapacity: true)
     guard isRunning else { return }
     failureCount += 1
     let delay = Self.backoffDelay(failureCount: failureCount)

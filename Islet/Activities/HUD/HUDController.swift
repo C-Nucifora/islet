@@ -28,7 +28,9 @@ final class HUDController: ObservableObject {
   func startObserving() {
     Defaults.publisher(.hudEnabled)
       .sink { [weak self] change in
-        if change.newValue { self?.start() } else { self?.stop() }
+        Task { @MainActor in
+          if change.newValue { self?.start() } else { self?.stop() }
+        }
       }
       .store(in: &cancellables)
     start()

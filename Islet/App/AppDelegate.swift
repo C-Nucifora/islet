@@ -3,6 +3,7 @@ import Defaults
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
   private var launchAtLoginObserver: Defaults.Observation?
+  private var didBecomeActiveObserver: NSObjectProtocol?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
@@ -28,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       }
     }
     // The HUD tap needs Accessibility; if the grant lands while running, start it on reactivation.
-    NotificationCenter.default.addObserver(
+    didBecomeActiveObserver = NotificationCenter.default.addObserver(
       forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
     ) { _ in
       MainActor.assumeIsolated { HUDController.shared.start() }

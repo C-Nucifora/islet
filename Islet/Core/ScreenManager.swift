@@ -18,6 +18,7 @@ final class ScreenManager {
   private var instances: [String: Instance] = [:]
   private var cancellables: Set<AnyCancellable> = []
   private var fullscreenTimer: AnyCancellable?
+  private var fullscreenCancellables: Set<AnyCancellable> = []
 
   /// The view model on the screen under the mouse (for menu-bar-driven actions), else any.
   var viewModel: NotchViewModel? {
@@ -45,10 +46,10 @@ final class ScreenManager {
       .store(in: &cancellables)
     Defaults.publisher(.showOnAllDisplays)
       .dropFirst()
-      .sink { [weak self] _ in self?.rebuild() }
+      .sink { [weak self] _ in Task { @MainActor in self?.rebuild() } }
       .store(in: &cancellables)
     Defaults.publisher(.hideInFullscreen)
-      .sink { [weak self] _ in self?.updateFullscreenObserving() }
+      .sink { [weak self] _ in Task { @MainActor in self?.updateFullscreenObserving() } }
       .store(in: &cancellables)
     updateFullscreenObserving()
   }
@@ -84,11 +85,20 @@ final class ScreenManager {
 
   private func updateFullscreenObserving() {
     if Defaults[.hideInFullscreen] {
-      fullscreenTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+      // Fullscreen enter/exit moves the active Space, so react to that (near-instant, cheap) and
+      // keep only a slow safety poll instead of scanning every window once a second.
+      NSWorkspace.shared.notificationCenter
+        .publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
         .sink { [weak self] _ in self?.applyFullscreenVisibility() }
+        .store(in: &fullscreenCancellables)
+      fullscreenTimer = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
+        .sink { [weak self] _ in self?.applyFullscreenVisibility() }
+      applyFullscreenVisibility()
     } else {
       fullscreenTimer = nil
-      instances.values.forEach { $0.panel.alphaValue = 1 }
+      fullscreenCancellables.removeAll()
+      // Restore any panel we hid.
+      instances.values.forEach { if !$0.panel.isVisible { $0.panel.orderFrontRegardless() } }
     }
   }
 
@@ -98,7 +108,12 @@ final class ScreenManager {
       guard let screen = NSScreen.screens.first(where: { $0.displayUUID == inst.screenUUID })
       else { continue }
       let hidden = FullscreenDetector.hasFullscreenWindow(on: screen)
-      inst.panel.animator().alphaValue = hidden ? 0 : 1
+      // orderOut (not alpha 0) so the hidden panel's SwiftUI tree stops rendering entirely.
+      if hidden, inst.panel.isVisible {
+        inst.panel.orderOut(nil)
+      } else if !hidden, !inst.panel.isVisible {
+        inst.panel.orderFrontRegardless()
+      }
     }
   }
 }
