@@ -68,7 +68,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
       AgendaEvent(
         title: ek.title ?? "Untitled",
         start: ek.startDate, end: ek.endDate, isAllDay: ek.isAllDay,
-        calendarColorHex: nil,
+        calendarColorHex: ColorHex.string(from: ek.calendar?.cgColor),
         joinURL: Self.joinURL(from: ek))
     }
     let wasActive = isActive

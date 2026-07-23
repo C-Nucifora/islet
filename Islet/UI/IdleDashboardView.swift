@@ -54,6 +54,10 @@ struct IdleDashboardView: View {
         VStack(alignment: .leading, spacing: 6) {
           ForEach(Array(calendar.events.prefix(6).enumerated()), id: \.offset) { _, event in
             HStack(spacing: 6) {
+              // Vertical bar tinted with the event's calendar colour (like Calendar.app).
+              Capsule()
+                .fill(Color(isletHex: event.calendarColorHex) ?? .secondary)
+                .frame(width: 3, height: 14)
               Text(event.start, format: .dateTime.hour().minute())
                 .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
                 .frame(width: 46, alignment: .leading)
@@ -90,11 +94,9 @@ struct IdleDashboardView: View {
               Button {
                 withAnimation(.snappy) { reminders.complete(item) }
               } label: {
+                // Circle tinted with the reminder list's colour (like Reminders.app).
                 Image(systemName: "circle")
-                  .foregroundStyle(
-                    RemindersLogic.isOverdue(item, now: Date())
-                      ? .red : .secondary
-                  )
+                  .foregroundStyle(Color(isletHex: item.listColorHex) ?? .secondary)
                   .font(.caption)
               }
               .buttonStyle(.plain)

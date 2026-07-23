@@ -69,7 +69,7 @@ final class RemindersProvider: ObservableObject {
             title: r.title ?? "Untitled",
             dueDate: r.dueDateComponents?.date,
             priority: r.priority,
-            listColorHex: nil)
+            listColorHex: ColorHex.string(from: r.calendar?.cgColor))
         }
         continuation.resume(returning: mapped)
       }
