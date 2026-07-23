@@ -103,6 +103,11 @@ struct SettingsView: View {
             in: 5...60, step: 5)
         }
         Toggle("Reminders", isOn: $remindersEnabled)
+        Toggle("Clipboard history", isOn: $clipboardEnabled)
+        if clipboardEnabled {
+          Text("Captures everything you copy (incl. passwords), kept only until you quit.")
+            .font(.caption2).foregroundStyle(.secondary)
+        }
         Toggle("AirPods & audio devices", isOn: $airpodsEnabled)
         LabeledContent("Media adapter") {
           Text(AppState.nowPlaying.adapterStatus).foregroundStyle(.secondary)

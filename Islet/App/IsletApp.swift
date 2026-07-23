@@ -8,6 +8,7 @@ enum AppState {
   static let calendar = CalendarActivity()
   static let timer = TimerActivity()
   static let shelf = ShelfActivity()
+  static let clipboard = ClipboardActivity()
 }
 
 @main

@@ -6,6 +6,7 @@ enum ActivityCatalog {
     ("timer", "Timer", "timer"),
     ("nowPlaying", "Now Playing", "music.note"),
     ("shelf", "File Shelf", "tray.full.fill"),
+    ("clipboard", "Clipboard", "doc.on.clipboard"),
     ("calendar", "Calendar", "calendar"),
     ("battery", "Battery", "battery.100percent.bolt"),
   ]
