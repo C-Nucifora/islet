@@ -60,7 +60,9 @@ final class RemindersProvider: ObservableObject {
     let predicate = store.predicateForIncompleteReminders(
       withDueDateStarting: nil, ending: nil, calendars: nil)
     let items: [ReminderItem] = await withCheckedContinuation { continuation in
-      store.fetchReminders(matching: predicate) { fetched in
+      // Explicitly @Sendable so the closure is NOT @MainActor-isolated: EventKit invokes it on
+      // its own queue, and a MainActor-isolated closure would trap on a dispatch-queue assertion.
+      let handler: @Sendable ([EKReminder]?) -> Void = { fetched in
         let mapped = (fetched ?? []).map { r in
           ReminderItem(
             id: r.calendarItemIdentifier,
@@ -71,6 +73,7 @@ final class RemindersProvider: ObservableObject {
         }
         continuation.resume(returning: mapped)
       }
+      store.fetchReminders(matching: predicate, completion: handler)
     }
     reminders = RemindersLogic.display(items)
   }
