@@ -11,8 +11,10 @@ final class BatteryActivity: NotchActivity, ObservableObject {
   private var lastState: BatteryState?
   private var cancellables: Set<AnyCancellable> = []
 
+  // Show the persistent indicator whenever on AC power (charging OR plugged-in-and-full),
+  // so the power status is visible the whole time you're plugged in — not only while charging.
   var isActive: Bool {
-    Defaults[.batteryEnabled] && (monitor.state?.isCharging ?? false)
+    Defaults[.batteryEnabled] && (monitor.state?.onAC ?? false)
   }
 
   func start() {
@@ -26,9 +28,9 @@ final class BatteryActivity: NotchActivity, ObservableObject {
 
   private func handle(_ new: BatteryState) {
     let events = BatteryEventDetector.events(from: lastState, to: new)
-    let wasActive = lastState?.isCharging ?? false
+    let wasActive = lastState?.onAC ?? false
     lastState = new
-    if !wasActive, new.isCharging { activationDate = Date() }
+    if !wasActive, new.onAC { activationDate = Date() }
     objectWillChange.send()
 
     guard Defaults[.batteryEnabled] else { return }
@@ -63,7 +65,10 @@ final class BatteryActivity: NotchActivity, ObservableObject {
 
   let tabIcon = "battery.100percent.bolt"
   var compactLeading: AnyView {
-    AnyView(Image(systemName: "bolt.fill").foregroundStyle(.green).font(.caption2))
+    let charging = monitor.state?.isCharging ?? false
+    return AnyView(
+      Image(systemName: charging ? "bolt.fill" : "powerplug.fill")
+        .foregroundStyle(.green).font(.caption2))
   }
 
   var compactTrailing: AnyView {
@@ -89,14 +94,26 @@ struct BatteryPercentText: View {
 struct BatteryExpandedView: View {
   @ObservedObject var monitor: BatteryMonitor
 
+  private var onAC: Bool { monitor.state?.onAC ?? false }
+  private var iconName: String {
+    if monitor.state?.isCharging == true { return "bolt.fill" }
+    if onAC { return "powerplug.fill" }
+    return "battery.100percent"
+  }
+  private var statusText: String {
+    if monitor.state?.isCharging == true { return "Charging" }
+    if onAC { return "Plugged in" }
+    return "On battery"
+  }
+
   var body: some View {
     VStack(spacing: 8) {
-      Image(systemName: monitor.state?.isCharging == true ? "bolt.fill" : "battery.100percent")
+      Image(systemName: iconName)
         .font(.largeTitle)
-        .foregroundStyle(monitor.state?.isCharging == true ? .green : .secondary)
+        .foregroundStyle(onAC ? .green : .secondary)
       Text("\(monitor.state?.percent ?? 0)%")
         .font(.title2.weight(.bold)).monospacedDigit()
-      Text(monitor.state?.isCharging == true ? "Charging" : "On battery")
+      Text(statusText)
         .font(.caption).foregroundStyle(.secondary)
     }
     .foregroundStyle(.white)
