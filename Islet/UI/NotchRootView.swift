@@ -8,6 +8,7 @@ struct NotchRootView: View {
   @ObservedObject private var reminders = RemindersProvider.shared
   @State private var compactLeadingWidth: CGFloat = 0
   @State private var compactTrailingWidth: CGFloat = 0
+  @State private var dropTargeting = false
 
   /// Compact content precedence: HUD > in-flight sneak > primary activity > idle dashboard hint.
   private var compactContent: (leading: AnyView, trailing: AnyView)? {
@@ -83,12 +84,35 @@ struct NotchRootView: View {
         }
         .shadow(color: .black.opacity(vm.state.isExpanded ? 0.8 : 0), radius: 16)
         .offset(x: compactVisible ? (compactTrailingWidth - compactLeadingWidth) / 2 : 0)
+        // Only the expanded island is interactive via SwiftUI; collapsed clicks pass through
+        // to windows beneath (hover/click detection is monitor-driven).
+        .allowsHitTesting(vm.state.isExpanded)
+
+      // Drag-to-open: a near-invisible drop zone over the collapsed notch. Dropping files adds
+      // them to the shelf; hovering a drag opens the island so the shelf is visible.
+      if !vm.state.isExpanded {
+        Color.black.opacity(0.001)
+          .frame(
+            width: vm.geometry.notchSize.width + 60,
+            height: vm.geometry.notchSize.height + 12
+          )
+          .contentShape(Rectangle())
+          .onDrop(of: [.fileURL], isTargeted: $dropTargeting) { providers in
+            ShelfModel.loadURLs(from: providers) { url in
+              Task { @MainActor in ShelfModel.shared.add(url) }
+            }
+            return true
+          }
+      }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .animation(vm.state.isExpanded ? Metrics.opening : Metrics.closing, value: vm.state)
     .animation(Metrics.compact, value: compactVisible)
+    .onChange(of: dropTargeting) { _, targeted in
+      ShelfModel.shared.isDragActive = targeted
+      if targeted, !vm.state.isExpanded { vm.apply(.clickedNotch) }
+    }
     .preferredColorScheme(.dark)
-    .allowsHitTesting(vm.state.isExpanded)
   }
 
   @ViewBuilder private var content: some View {

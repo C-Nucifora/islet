@@ -18,6 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       AppState.calendar.start()
       ActivityCenter.shared.register(AppState.calendar)
       ActivityCenter.shared.register(AppState.timer)
+      AppState.shelf.start()
+      ActivityCenter.shared.register(AppState.shelf)
       RemindersProvider.shared.start()
       AudioDeviceMonitor.shared.start()
       SneakQueue.shared.isSuspended = {

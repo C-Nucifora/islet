@@ -6,6 +6,7 @@ struct ExpandedContainerView: View {
   /// The physical notch's size, so the switcher can flank it in the top band.
   let notchSize: CGSize
   @ObservedObject private var center = ActivityCenter.shared
+  @ObservedObject private var shelf = ShelfModel.shared
   /// nil selection means the dashboard ("Home"); otherwise an activity id.
   @State private var selection: String? = nil
 
@@ -21,6 +22,8 @@ struct ExpandedContainerView: View {
   /// (the media player when playing, otherwise the dashboard).
   private var effectiveSelection: String {
     let ids = tabs.map(\.id)
+    // A file drag jumps straight to the shelf so you can drop onto it.
+    if shelf.isDragActive, ids.contains("shelf") { return "shelf" }
     if let selection, ids.contains(selection) { return selection }
     // Default to a prominent active activity (running timer or media player); else the dashboard.
     if let primary = center.primaryActivity, primary.id == "timer" || primary.id == "nowPlaying" {

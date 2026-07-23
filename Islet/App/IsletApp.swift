@@ -7,6 +7,7 @@ enum AppState {
   static let battery = BatteryActivity()
   static let calendar = CalendarActivity()
   static let timer = TimerActivity()
+  static let shelf = ShelfActivity()
 }
 
 @main
