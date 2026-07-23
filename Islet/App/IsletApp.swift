@@ -15,7 +15,7 @@ struct IsletApp: App {
 
   var body: some Scene {
     MenuBarExtra("Islet", systemImage: "capsule.fill") {
-      SettingsLink { Text("Settings…") }
+      Button("Settings…") { SettingsOpener.open() }
         .keyboardShortcut(",")
       Menu("Start Timer") {
         Button("1 minute") { AppState.timer.start(60) }
@@ -59,7 +59,5 @@ struct IsletApp: App {
       Button("Quit Islet") { NSApplication.shared.terminate(nil) }
         .keyboardShortcut("q")
     }
-
-    Settings { SettingsView() }
   }
 }

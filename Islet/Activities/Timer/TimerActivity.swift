@@ -45,6 +45,7 @@ final class TimerActivity: NotchActivity, ObservableObject {
     activationDate = Date()
     endDate = Date().addingTimeInterval(duration)
     scheduleCompletion()
+    Haptics.perform()
   }
 
   func togglePause() {
@@ -100,6 +101,7 @@ final class TimerActivity: NotchActivity, ObservableObject {
     endDate = nil
     isPaused = false
     finished = true
+    Haptics.perform(.levelChange)
     NSSound(named: NSSound.Name("Glass"))?.play()
     SneakQueue.shared.submit(
       Sneak(
@@ -202,7 +204,10 @@ struct TimerExpandedView: View {
   }
 
   private func control(_ symbol: String, _ action: @escaping () -> Void) -> some View {
-    Button(action: action) {
+    Button {
+      Haptics.perform()
+      action()
+    } label: {
       Image(systemName: symbol)
         .font(.body)
         .frame(width: 34, height: 34)

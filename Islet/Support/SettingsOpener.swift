@@ -1,16 +1,26 @@
 import AppKit
+import SwiftUI
 
-/// Opens the SwiftUI Settings window from anywhere (e.g. a button inside the notch panel),
-/// activating the accessory app so the window comes to the front.
+/// Opens Islet's settings in an AppKit-managed window. This is reliable from anywhere (the notch
+/// panel, the menu bar) — unlike `showSettingsWindow:`, which doesn't route in an accessory app
+/// that has no key window.
 @MainActor
 enum SettingsOpener {
+  private static var window: NSWindow?
+
   static func open() {
     NSApp.activate(ignoringOtherApps: true)
-    // The selector name changed in macOS 13; 14+ uses showSettingsWindow:.
-    let selector =
-      NSApp.responds(to: Selector(("showSettingsWindow:")))
-      ? Selector(("showSettingsWindow:"))
-      : Selector(("showPreferencesWindow:"))
-    NSApp.sendAction(selector, to: nil, from: nil)
+    if let window {
+      window.makeKeyAndOrderFront(nil)
+      return
+    }
+    let hosting = NSHostingController(rootView: SettingsView())
+    let win = NSWindow(contentViewController: hosting)
+    win.title = "Islet Settings"
+    win.styleMask = [.titled, .closable, .miniaturizable]
+    win.isReleasedWhenClosed = false
+    win.center()
+    win.makeKeyAndOrderFront(nil)
+    window = win
   }
 }

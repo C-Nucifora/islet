@@ -40,6 +40,7 @@ struct ExpandedContainerView: View {
       ForEach(tabs, id: \.id) { tab in
         let selected = tab.id == effectiveSelection
         Button {
+          Haptics.perform(.alignment)
           selection = tab.id
         } label: {
           Image(systemName: tab.icon)
@@ -55,6 +56,7 @@ struct ExpandedContainerView: View {
       }
       Spacer(minLength: 0)
       Button {
+        Haptics.perform()
         SettingsOpener.open()
       } label: {
         Image(systemName: "gearshape.fill")

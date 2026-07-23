@@ -125,6 +125,7 @@ struct ExpandedPlayerView: View {
         Image(systemName: pb.supportsSkip15 ? "gobackward.15" : "backward.fill")
       }
       Button {
+        Haptics.perform()
         MediaRemoteCommands.shared.togglePlayPause()
       } label: {
         Image(systemName: pb.isPlaying ? "pause.fill" : "play.fill").font(.title2)
