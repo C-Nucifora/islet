@@ -10,6 +10,7 @@ final class DemoActivity: NotchActivity, ObservableObject {
   }
   private(set) var activationDate: Date?
 
+  let tabIcon = "circle.dashed"
   var compactLeading: AnyView {
     AnyView(Circle().fill(.orange).frame(width: 16, height: 16))
   }

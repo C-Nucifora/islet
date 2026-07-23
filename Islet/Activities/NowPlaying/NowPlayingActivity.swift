@@ -87,6 +87,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
           .lineLimit(1).frame(maxWidth: 170)))
   }
 
+  let tabIcon = "music.note"
   var compactLeading: AnyView { AnyView(CompactArtworkView(activity: self)) }
   var compactTrailing: AnyView { AnyView(CompactBarsView(activity: self)) }
   var expandedView: AnyView { AnyView(ExpandedPlayerView(activity: self)) }

@@ -61,6 +61,7 @@ final class BatteryActivity: NotchActivity, ObservableObject {
     }
   }
 
+  let tabIcon = "battery.100percent.bolt"
   var compactLeading: AnyView {
     AnyView(Image(systemName: "bolt.fill").foregroundStyle(.green).font(.caption2))
   }

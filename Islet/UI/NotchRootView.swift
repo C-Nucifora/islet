@@ -18,7 +18,17 @@ struct NotchRootView: View {
       return (sneak.leading, sneak.trailing)
     }
     if let primary = center.primaryActivity {
-      return (primary.compactLeading, primary.compactTrailing)
+      // Combine statuses: primary in the flanks, other active activities as small trailing glyphs
+      // (e.g. music playing shows the charging bolt alongside it).
+      let secondary = Array(center.activeActivities.dropFirst())
+      let trailing = AnyView(
+        HStack(spacing: 5) {
+          primary.compactTrailing
+          ForEach(secondary, id: \.id) { activity in
+            activity.compactLeading
+          }
+        })
+      return (primary.compactLeading, trailing)
     }
     if !vm.state.isExpanded, !reminders.reminders.isEmpty {
       // Idle affordance: a small checklist badge so pending reminders are visible at a glance.
@@ -85,17 +95,12 @@ struct NotchRootView: View {
     if vm.state.isExpanded {
       VStack(spacing: 0) {
         Spacer().frame(height: vm.geometry.notchSize.height)
-        // Media gets its rich player; everything else (idle, charging, upcoming meeting)
-        // opens the dashboard so calendar and reminders are always reachable.
-        if let primary = center.primaryActivity, primary.id == "nowPlaying" {
-          primary.expandedView
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding([.horizontal, .bottom], 16)
-        } else {
-          IdleDashboardView()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding([.horizontal, .bottom], 16)
-        }
+        // The switcher exposes every active status plus the calendar/reminders dashboard
+        // and a settings gear, so all of it is reachable from one expanded view.
+        ExpandedContainerView()
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .padding(.horizontal, 14)
+          .padding(.bottom, 12)
       }
       .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .top)))
     } else if let slots = compactContent {

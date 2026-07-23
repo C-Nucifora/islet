@@ -17,13 +17,15 @@ final class ActivityCenter: ObservableObject {
     objectWillChange.send()
   }
 
-  var primaryActivity: (any NotchActivity)? {
+  /// All active activities, highest priority first (ties broken by most recently activated).
+  var activeActivities: [any NotchActivity] {
     activities
       .filter(\.isActive)
       .sorted {
         if $0.priority != $1.priority { return $0.priority > $1.priority }
         return ($0.activationDate ?? .distantPast) > ($1.activationDate ?? .distantPast)
       }
-      .first
   }
+
+  var primaryActivity: (any NotchActivity)? { activeActivities.first }
 }

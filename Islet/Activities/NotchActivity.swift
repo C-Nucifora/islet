@@ -16,4 +16,10 @@ protocol NotchActivity: AnyObject {
   var compactLeading: AnyView { get }
   var compactTrailing: AnyView { get }
   var expandedView: AnyView { get }
+  /// SF Symbol used for this activity's chip in the expanded switcher.
+  var tabIcon: String { get }
+}
+
+extension NotchActivity {
+  var tabIcon: String { "app.dashed" }
 }

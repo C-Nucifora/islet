@@ -94,6 +94,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
       .contains { host.contains($0) }
   }
 
+  let tabIcon = "calendar"
   var compactLeading: AnyView {
     AnyView(Image(systemName: "calendar").foregroundStyle(.orange).font(.caption2))
   }
