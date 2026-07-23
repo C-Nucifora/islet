@@ -83,5 +83,18 @@ Synthesized from multi-angle web research (competitor features, notch UX pattern
 ## Quick wins (small, high value)
 - Locally-interpolated scrubber (also a perf fix) · shuffle/repeat + ±15 s skip · adapter `test` health-state · keyboard-backlight HUD · HUD style toggle · per-app exclusion · Focus Filter intent · the accessibility `accessibilityHidden`/announcement pass.
 
+## Built (2026-07-23/24 implementation pass)
+Timers/Pomodoro · now-playing depth pack (shuffle/repeat, ±15 s skip, ad pill, source-app icon, local scrubber) · **file shelf + AirDrop** · **clipboard history** (opt-in) · **Ports tab** (live USB device list via IOKit attach/detach) · **Bluetooth peripheral batteries** · HUD style option (bar/gauge) · user-defined menu (tab) order · in-notch settings window fix · haptics across interactions · calendar/reminder colours · AlDente-style battery metrics + **charger wattage** · accessibility pass (VoiceOver announcements, hidden decorative visuals, labelled controls) · switcher moved into the notch band. Plus the audit fixes (HUD key gate, MediaWatcher race/leak, fullscreen orderOut, runtime permission re-check, redraw gating).
+
+## TODO — Power feature (needs further work)
+Beyond the metrics + charger-wattage now shown, the power feature should grow into a real battery-management surface:
+- **Charge limiting** (cap charging at e.g. 80%) via SMC keys — AlDente/Battery-Toolkit territory. **Risky/private**; needs careful testing, possibly a privileged helper. Highest-value power feature but most dangerous.
+- **Discharge / "sail"** control and MagSafe LED control (SMC).
+- Richer adapter details (name, voltage/current, PD negotiation), charge-rate history graph, per-app energy impact.
+- Low-battery *peripheral* sneaks (Magic Mouse/Keyboard) — reader already exists.
+
+## Still deferred (unbuilt; risky, entitlement-bound, or unverifiable in an ad-hoc build)
+Adapter `test` health-state · keyboard-backlight HUD (private brightness API) · volume-HUD output-device readout · Weather (WeatherKit entitlement) · camera mirror (camera permission) · camera/mic privacy indicator · App Intents + Control Center Control + Focus Filter · third-party plugin/Live-Activity API · FFT visualizer (audio-capture permission) · external-display DDC/CI brightness · gestures · per-app exclusion · notchless floating pill · matchedGeometryEffect compact↔expanded morph.
+
 ## Sources
 How-To Geek & review roundups (NotchNook/Alcove/MediaMate/Boring Notch), DynamicNotch & mediaremote-adapter GitHub, Apple docs (App Intents, Focus Filters, WidgetKit/Controls, Live Activities/ActivityKit, Core Audio taps), UI/UX Dynamic Island design write-ups, Notchy/CoreMediaIO privacy-indicator notes, AlDente/coconutBattery/Battery-Toolkit internals.
