@@ -3,6 +3,8 @@ import SwiftUI
 /// The expanded island: a slim switcher row (one chip per active activity, plus a Home chip for
 /// the calendar/reminders dashboard and a Settings gear) above the selected content.
 struct ExpandedContainerView: View {
+  /// The physical notch's size, so the switcher can flank it in the top band.
+  let notchSize: CGSize
   @ObservedObject private var center = ActivityCenter.shared
   /// nil selection means the dashboard ("Home"); otherwise an activity id.
   @State private var selection: String? = nil
@@ -28,10 +30,21 @@ struct ExpandedContainerView: View {
   }
 
   var body: some View {
-    VStack(spacing: 8) {
+    ZStack(alignment: .top) {
+      // Main content sits directly below the physical notch — reclaiming the space the switcher
+      // row used to take.
+      VStack(spacing: 0) {
+        Spacer().frame(height: notchSize.height)
+        content
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .padding(.horizontal, 14)
+          .padding(.bottom, 12)
+      }
+      // Switcher tabs (left ear) and settings gear (right ear) live in the notch band, flanking
+      // the hardware notch.
       switcherBar
-      content
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(height: notchSize.height)
+        .padding(.horizontal, 12)
     }
   }
 
@@ -54,7 +67,8 @@ struct ExpandedContainerView: View {
         }
         .buttonStyle(.plain)
       }
-      Spacer(minLength: 0)
+      // Gap for the physical notch, keeping tabs in the left ear and the gear in the right ear.
+      Spacer(minLength: notchSize.width)
       Button {
         Haptics.perform()
         SettingsOpener.open()

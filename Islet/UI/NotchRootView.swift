@@ -93,16 +93,11 @@ struct NotchRootView: View {
 
   @ViewBuilder private var content: some View {
     if vm.state.isExpanded {
-      VStack(spacing: 0) {
-        Spacer().frame(height: vm.geometry.notchSize.height)
-        // The switcher exposes every active status plus the calendar/reminders dashboard
-        // and a settings gear, so all of it is reachable from one expanded view.
-        ExpandedContainerView()
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .padding(.horizontal, 14)
-          .padding(.bottom, 12)
-      }
-      .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .top)))
+      // The switcher (tabs + gear) sits in the notch band, flanking the hardware notch, and the
+      // content fills the rest — so nothing is wasted below the notch.
+      ExpandedContainerView(notchSize: vm.geometry.notchSize)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .top)))
     } else if let slots = compactContent {
       HStack(spacing: 0) {
         slots.leading
