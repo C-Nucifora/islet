@@ -12,6 +12,7 @@ struct SettingsView: View {
   @State private var newBundleID = ""
   @Default(.batteryEnabled) private var batteryEnabled
   @Default(.hudEnabled) private var hudEnabled
+  @Default(.hudStyle) private var hudStyle
   @State private var hudTrusted = HUDController.shared.isAccessibilityTrusted
   @Default(.calendarEnabled) private var calendarEnabled
   @Default(.calendarLeadMinutes) private var calendarLeadMinutes
@@ -74,6 +75,12 @@ struct SettingsView: View {
             Button("Grant…") {
               HUDController.shared.promptForAccessibility()
             }
+          }
+        }
+        if hudEnabled {
+          Picker("HUD style", selection: $hudStyle) {
+            Text("Bar").tag(HUDStyle.bar)
+            Text("Gauge").tag(HUDStyle.gauge)
           }
         }
         Toggle("Calendar", isOn: $calendarEnabled)

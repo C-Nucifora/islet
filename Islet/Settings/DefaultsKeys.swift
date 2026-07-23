@@ -1,8 +1,11 @@
 import Defaults
 import Foundation
 
+enum HUDStyle: String, CaseIterable, Codable { case bar, gauge }
+
 extension InteractionMode: Defaults.Serializable {}
 extension MediaSourceMode: Defaults.Serializable {}
+extension HUDStyle: Defaults.Serializable {}
 
 extension Defaults.Keys {
   static let mediaSourceMode = Key<MediaSourceMode>("mediaSourceMode", default: .auto)
@@ -16,6 +19,7 @@ extension Defaults.Keys {
   static let hideFromScreenRecording = Key<Bool>("hideFromScreenRecording", default: false)
   static let batteryEnabled = Key<Bool>("batteryEnabled", default: true)
   static let hudEnabled = Key<Bool>("hudEnabled", default: false)
+  static let hudStyle = Key<HUDStyle>("hudStyle", default: .bar)
   static let calendarEnabled = Key<Bool>("calendarEnabled", default: true)
   static let calendarLeadMinutes = Key<Int>("calendarLeadMinutes", default: 10)
   static let remindersEnabled = Key<Bool>("remindersEnabled", default: true)
