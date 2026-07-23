@@ -8,6 +8,7 @@ import IOKit.ps
 final class BatteryMonitor: ObservableObject {
   @Published private(set) var state: BatteryState?
   @Published private(set) var metrics: BatteryMetrics?
+  @Published private(set) var peripherals: [PeripheralBattery] = []
 
   private var runLoopSource: CFRunLoopSource?
   private var metricsTimer: AnyCancellable?
@@ -39,6 +40,7 @@ final class BatteryMonitor: ObservableObject {
   func refresh() {
     state = Self.readState()
     metrics = SmartBatteryReader.read()
+    peripherals = PeripheralBatteryReader.read()
   }
 
   static func readState() -> BatteryState? {

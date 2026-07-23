@@ -107,38 +107,55 @@ struct BatteryExpandedView: View {
   }
 
   var body: some View {
-    HStack(alignment: .center, spacing: 20) {
-      // Charge summary
-      VStack(spacing: 4) {
-        Image(systemName: iconName)
-          .font(.largeTitle)
-          .foregroundStyle(onAC ? .green : .secondary)
-        Text("\(monitor.state?.percent ?? 0)%")
-          .font(.title2.weight(.bold)).monospacedDigit()
-        Text(statusText)
-          .font(.caption2).foregroundStyle(.secondary)
-      }
-      .frame(width: 96)
-
-      // AlDente-style metrics grid
-      if let m = monitor.metrics {
-        LazyVGrid(
-          columns: [
-            GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading),
-          ],
-          alignment: .leading, spacing: 6
-        ) {
-          if let h = m.healthPercent { metric("Health", "\(h)%") }
-          if let c = m.cycleCount { metric("Cycles", "\(c)") }
-          if let t = m.temperatureC { metric("Temp", String(format: "%.1f°C", t)) }
-          if let w = m.powerWatts { metric("Power", String(format: "%+.1f W", w)) }
-          if let ttf = m.timeToFullMinutes {
-            metric("Full in", timeString(ttf))
-          } else if let tte = m.timeToEmptyMinutes {
-            metric("Left", timeString(tte))
-          }
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(alignment: .center, spacing: 20) {
+        // Charge summary
+        VStack(spacing: 4) {
+          Image(systemName: iconName)
+            .font(.largeTitle)
+            .foregroundStyle(onAC ? .green : .secondary)
+          Text("\(monitor.state?.percent ?? 0)%")
+            .font(.title2.weight(.bold)).monospacedDigit()
+          Text(statusText)
+            .font(.caption2).foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(width: 96)
+
+        // AlDente-style metrics grid
+        if let m = monitor.metrics {
+          LazyVGrid(
+            columns: [
+              GridItem(.flexible(), alignment: .leading),
+              GridItem(.flexible(), alignment: .leading),
+            ],
+            alignment: .leading, spacing: 6
+          ) {
+            if let h = m.healthPercent { metric("Health", "\(h)%") }
+            if let c = m.cycleCount { metric("Cycles", "\(c)") }
+            if let t = m.temperatureC { metric("Temp", String(format: "%.1f°C", t)) }
+            if let w = m.powerWatts { metric("Power", String(format: "%+.1f W", w)) }
+            if let ttf = m.timeToFullMinutes {
+              metric("Full in", timeString(ttf))
+            } else if let tte = m.timeToEmptyMinutes {
+              metric("Left", timeString(tte))
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
+
+      // Connected peripherals (Magic Mouse/Keyboard/Trackpad, ...) — populates when present.
+      if !monitor.peripherals.isEmpty {
+        HStack(spacing: 14) {
+          ForEach(monitor.peripherals) { device in
+            HStack(spacing: 4) {
+              Image(systemName: device.icon).font(.caption2).foregroundStyle(.secondary)
+              Text("\(device.percent)%").font(.caption2.weight(.semibold)).monospacedDigit()
+                .foregroundStyle(device.percent <= 15 ? .red : .white)
+            }
+          }
+          Spacer(minLength: 0)
+        }
       }
     }
     .foregroundStyle(.white)
