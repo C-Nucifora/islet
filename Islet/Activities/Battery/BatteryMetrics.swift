@@ -9,10 +9,12 @@ struct BatteryMetrics: Equatable {
   var powerWatts: Double?  // + charging into the battery, - discharging
   var timeToFullMinutes: Int?
   var timeToEmptyMinutes: Int?
+  var adapterWatts: Int?  // rated wattage of the connected power adapter
 
   var hasAny: Bool {
     healthPercent != nil || cycleCount != nil || temperatureC != nil
       || powerWatts != nil || timeToFullMinutes != nil || timeToEmptyMinutes != nil
+      || adapterWatts != nil
   }
 }
 
@@ -48,6 +50,13 @@ enum SmartBatteryReader {
     // 65535 is the "still calculating" sentinel.
     if let ttf = intVal("AvgTimeToFull"), ttf > 0, ttf < 65535 { m.timeToFullMinutes = ttf }
     if let tte = intVal("AvgTimeToEmpty"), tte > 0, tte < 65535 { m.timeToEmptyMinutes = tte }
+    if let adapter = IORegistryEntryCreateCFProperty(
+      service, "AdapterDetails" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
+      as? [String: Any],
+      let watts = adapter["Watts"] as? Int, watts > 0
+    {
+      m.adapterWatts = watts
+    }
 
     return m.hasAny ? m : nil
   }

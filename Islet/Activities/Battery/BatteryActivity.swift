@@ -142,6 +142,7 @@ struct BatteryExpandedView: View {
             } else if let tte = m.timeToEmptyMinutes {
               metric("Left", timeString(tte))
             }
+            if let watts = m.adapterWatts { metric("Charger", "\(watts) W") }
           }
           .frame(maxWidth: .infinity, alignment: .leading)
         }
