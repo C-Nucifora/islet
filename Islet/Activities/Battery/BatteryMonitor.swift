@@ -12,6 +12,7 @@ final class BatteryMonitor: ObservableObject {
 
   private var runLoopSource: CFRunLoopSource?
   private var metricsTimer: AnyCancellable?
+  private var fastMetrics = false
 
   func start() {
     refresh()
@@ -30,10 +31,21 @@ final class BatteryMonitor: ObservableObject {
     }
     runLoopSource = source
     CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
+    restartMetricsTimer()
+  }
 
-    // Temperature and power draw change continuously; refresh every 5 s. This also re-reads
-    // `state`, so charge/charging stays live even if the IOPS notification source failed to register.
-    metricsTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+  /// Temperature/power/charger change continuously, so refresh fast (1 s) while the battery view is
+  /// on screen and slowly (5 s) otherwise. The slow tick also re-reads `state` as a fallback poll.
+  func setLiveMetrics(_ live: Bool) {
+    guard live != fastMetrics else { return }
+    fastMetrics = live
+    restartMetricsTimer()
+    refresh()  // update immediately on the transition
+  }
+
+  private func restartMetricsTimer() {
+    let interval = fastMetrics ? 1.0 : 5.0
+    metricsTimer = Timer.publish(every: interval, on: .main, in: .common).autoconnect()
       .sink { [weak self] _ in self?.refresh() }
   }
 
