@@ -1,3 +1,4 @@
+import Defaults
 import SwiftUI
 import XCTest
 
@@ -30,6 +31,24 @@ final class ActivityCenterTests: XCTestCase {
     let center = ActivityCenter()
     center.register(Fake(id: "battery", priority: .ambient, active: true))
     center.register(Fake(id: "nowPlaying", priority: .media, active: true))
+    XCTAssertEqual(center.primaryActivity?.id, "nowPlaying")
+  }
+
+  func testDisabledActivityExcluded() {
+    let saved = Defaults[.disabledActivities]
+    defer { Defaults[.disabledActivities] = saved }
+
+    let center = ActivityCenter()
+    center.register(Fake(id: "battery", priority: .ambient, active: true))
+    center.register(Fake(id: "nowPlaying", priority: .media, active: true))
+
+    // Disabling the would-be primary drops it from the active set entirely, tab and all.
+    Defaults[.disabledActivities] = ["nowPlaying"]
+    XCTAssertEqual(center.activeActivities.map(\.id), ["battery"])
+    XCTAssertEqual(center.primaryActivity?.id, "battery")
+
+    // Re-enabling brings it back as primary.
+    Defaults[.disabledActivities] = []
     XCTAssertEqual(center.primaryActivity?.id, "nowPlaying")
   }
 
