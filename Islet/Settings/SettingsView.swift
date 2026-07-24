@@ -22,21 +22,36 @@ struct SettingsView: View {
   @Default(.hideInFullscreen) private var hideInFullscreen
   @Default(.launchAtLogin) private var launchAtLogin
   @Default(.activityOrder) private var activityOrder
+  @Default(.disabledActivities) private var disabledActivities
   @Default(.clipboardEnabled) private var clipboardEnabled
   @Default(.portsEnabled) private var portsEnabled
+
+  private func enabled(_ id: String) -> Binding<Bool> {
+    Binding(
+      get: { !disabledActivities.contains(id) },
+      set: { on in
+        if on {
+          disabledActivities.removeAll { $0 == id }
+        } else if !disabledActivities.contains(id) {
+          disabledActivities.append(id)
+        }
+      })
+  }
 
   var body: some View {
     Form {
       Section("Menu order") {
-        Text("Drag to reorder the tabs in the expanded island.")
+        Text("Drag to reorder the tabs in the expanded island. Turn one off to hide it entirely.")
           .font(.caption).foregroundStyle(.secondary)
         List {
           ForEach(activityOrder, id: \.self) { id in
-            Label(ActivityCatalog.name(for: id), systemImage: ActivityCatalog.icon(for: id))
+            Toggle(isOn: enabled(id)) {
+              Label(ActivityCatalog.name(for: id), systemImage: ActivityCatalog.icon(for: id))
+            }
           }
           .onMove { activityOrder.move(fromOffsets: $0, toOffset: $1) }
         }
-        .frame(height: 150)
+        .frame(height: 190)
       }
       Section("Interaction") {
         Picker("Expand", selection: $mode) {

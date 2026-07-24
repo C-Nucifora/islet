@@ -28,6 +28,7 @@ extension Defaults.Keys {
   static let hideInFullscreen = Key<Bool>("hideInFullscreen", default: false)
   static let launchAtLogin = Key<Bool>("launchAtLogin", default: false)
   static let activityOrder = Key<[String]>("activityOrder", default: ActivityCatalog.defaultOrder)
+  static let disabledActivities = Key<[String]>("disabledActivities", default: [])
   static let clipboardEnabled = Key<Bool>("clipboardEnabled", default: false)
   static let portsEnabled = Key<Bool>("portsEnabled", default: true)
 }

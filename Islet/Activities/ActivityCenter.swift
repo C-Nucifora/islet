@@ -9,6 +9,16 @@ final class ActivityCenter: ObservableObject {
   private(set) var activities: [any NotchActivity] = []
   private var cancellables: Set<AnyCancellable> = []
 
+  init() {
+    // Republish when the user reorders or disables activities so the notch updates live.
+    Defaults.publisher(.disabledActivities)
+      .sink { [weak self] _ in Task { @MainActor in self?.objectWillChange.send() } }
+      .store(in: &cancellables)
+    Defaults.publisher(.activityOrder)
+      .sink { [weak self] _ in Task { @MainActor in self?.objectWillChange.send() } }
+      .store(in: &cancellables)
+  }
+
   func register<T: NotchActivity & ObservableObject>(_ activity: T) {
     activities.append(activity)
     activity.objectWillChange
@@ -22,10 +32,12 @@ final class ActivityCenter: ObservableObject {
   /// priority, then most-recently-activated).
   var activeActivities: [any NotchActivity] {
     let order = Defaults[.activityOrder]
+    let disabled = Set(Defaults[.disabledActivities])
     func rank(_ a: any NotchActivity) -> Int { order.firstIndex(of: a.id) ?? Int.max }
     return
       activities
       .filter(\.isActive)
+      .filter { !disabled.contains($0.id) }
       .sorted {
         let ra = rank($0)
         let rb = rank($1)
