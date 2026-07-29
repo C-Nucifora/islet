@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum Metrics {
-  static let expandedSize = CGSize(width: 640, height: 190)
+  static let expandedSize = CGSize(width: 480, height: 190)
   static let shadowPadding: CGFloat = 20
   static let earMargin: CGFloat = 64
   static let closedOversize: CGFloat = 2  // draw wider/taller than hardware

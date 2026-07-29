@@ -47,6 +47,6 @@ struct NotchShape: Shape {
 #Preview("Expanded") {
   NotchShape(topRadius: 19, bottomRadius: 24)
     .fill(.black)
-    .frame(width: 640, height: 190)
+    .frame(width: Metrics.expandedSize.width, height: Metrics.expandedSize.height)
     .padding()
 }
