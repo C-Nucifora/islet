@@ -14,6 +14,16 @@ final class BatteryMonitor: ObservableObject {
   private var metricsTimer: AnyCancellable?
   private var fastMetrics = false
 
+  /// Temperature/power/charger change continuously, so refresh fast (1 s) while a battery view is
+  /// on screen and slowly (5 s) otherwise. The slow tick also re-reads `state` as a fallback poll.
+  ///
+  /// Refcounted rather than a Bool: during a tab cross-fade the incoming view's `onAppear` lands
+  /// before the outgoing view's `onDisappear`, so a Bool would leave sampling switched off with a
+  /// subscriber still visible. `lazy var` rather than `let` because the callback captures `self`.
+  private(set) lazy var liveGate = LiveSamplingGate { [weak self] live in
+    self?.setFastMetrics(live)
+  }
+
   func start() {
     refresh()
     let opaque = Unmanaged.passUnretained(self).toOpaque()
@@ -34,9 +44,7 @@ final class BatteryMonitor: ObservableObject {
     restartMetricsTimer()
   }
 
-  /// Temperature/power/charger change continuously, so refresh fast (1 s) while the battery view is
-  /// on screen and slowly (5 s) otherwise. The slow tick also re-reads `state` as a fallback poll.
-  func setLiveMetrics(_ live: Bool) {
+  private func setFastMetrics(_ live: Bool) {
     guard live != fastMetrics else { return }
     fastMetrics = live
     restartMetricsTimer()
@@ -49,10 +57,16 @@ final class BatteryMonitor: ObservableObject {
       .sink { [weak self] _ in self?.refresh() }
   }
 
+  /// Every value here is `Equatable`, and at 1 Hz almost all of them are unchanged from the last
+  /// tick. Assigning regardless republishes three `@Published`s a second and redraws the whole
+  /// expanded island for nothing, so diff first.
   func refresh() {
-    state = Self.readState()
-    metrics = SmartBatteryReader.read()
-    peripherals = PeripheralBatteryReader.read()
+    let newState = Self.readState()
+    if newState != state { state = newState }
+    let newMetrics = SmartBatteryReader.read()
+    if newMetrics != metrics { metrics = newMetrics }
+    let newPeripherals = PeripheralBatteryReader.read()
+    if newPeripherals != peripherals { peripherals = newPeripherals }
   }
 
   static func readState() -> BatteryState? {

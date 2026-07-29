@@ -164,8 +164,7 @@ struct BatteryExpandedView: View {
     }
     .foregroundStyle(.white)
     // Refresh power/temperature quickly while this view is visible; slow back down when it's not.
-    .onAppear { monitor.setLiveMetrics(true) }
-    .onDisappear { monitor.setLiveMetrics(false) }
+    .liveSampling(monitor.liveGate)
   }
 
   private func metric(_ label: String, _ value: String) -> some View {
