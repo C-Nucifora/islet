@@ -20,6 +20,43 @@
 - **Never add a `Co-Authored-By` trailer, and never mention Claude, Anthropic or AI in a commit message.**
 - **Phase invariant:** `Metrics` owns sizes only after this phase. Every animation constant lives in `Motion`. Every expanded-height consumer takes the height as a parameter — there is no zero-argument `expandedRect` or `panelFrame` left anywhere.
 
+### Phase 0 is assumed shipped
+
+`docs/superpowers/plans/2026-07-29-islet-p0-notch-drift.md` lands first and edits four of the files
+this plan also touches: `NotchGeometry.swift`, `NotchViewModel.swift`, `ScreenManager.swift` and
+`NotchRootView.swift`. **Every line number quoted below refers to the tree as it stood before Phase 0.
+Apply each edit by matching the quoted text, not by seeking to a line number.**
+
+What Phase 0 already added, which this plan must preserve rather than re-derive:
+
+```swift
+// NotchGeometry — Phase 0 additions
+let auxLeftWidth: CGFloat
+func islandBodyWidth(compactLeading: CGFloat, compactTrailing: CGFloat) -> CGFloat
+func islandOffset(inPanel panel: CGRect, compactLeading: CGFloat, compactTrailing: CGFloat) -> CGFloat
+func collapsedIslandRect(inPanel panel: CGRect, compactLeading: CGFloat, compactTrailing: CGFloat) -> CGRect
+
+// NotchViewModel — Phase 0 additions
+@Published private(set) var actualPanelFrame: CGRect
+func setActualPanelFrame(_ frame: CGRect)
+func cancelPendingShrink()
+
+// NotchPanel — Phase 0 addition
+override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect
+
+// NSScreen+Notch — Phase 0 REPLACED the zero-argument `notchGeometry` property with:
+var notchReading: NotchStickiness.Reading { get }
+func notchGeometry(reading: NotchStickiness.Reading) -> NotchGeometry
+```
+
+Two consequences for this plan:
+
+1. When 1.2 converts `expandedRect` and `panelFrame` into height-parameterised functions, the call
+   sites to update include Phase 0's `reassert()` / `reassertIfMoved()` path in `ScreenManager` and
+   the `PanelInstance` type Phase 0 introduces — not just the pre-Phase-0 ones listed below.
+2. `NotchRootView.islandOffset` reads `vm.actualPanelFrame` after Phase 0, **not** `vm.panelFrame`.
+   Do not revert that when editing `bodySize` for the height tier.
+
 ---
 
 ## File Structure
