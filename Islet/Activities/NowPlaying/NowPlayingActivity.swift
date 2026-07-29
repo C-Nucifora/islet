@@ -46,7 +46,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
           let previous = self.playback
           self.playback = state
           if let previous, previous.title != state.title, !state.title.isEmpty {
-            SneakQueue.shared.submit(Self.trackChangeSneak(for: state))
+            SystemEventBus.shared.emit(Self.trackChangeEvent(for: state))
           }
           self.scheduleIdle(paused: !state.isPlaying)
         }
@@ -67,26 +67,24 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     }
   }
 
-  static func trackChangeSneak(for state: PlaybackState) -> Sneak {
-    let thumb: AnyView =
-      if let data = state.artwork, let img = NSImage(data: data) {
-        AnyView(
-          Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
-            .frame(width: 16, height: 16)
-            .clipShape(RoundedRectangle(cornerRadius: 4)))
-      } else {
-        AnyView(Image(systemName: "music.note").font(.caption2).foregroundStyle(.secondary))
-      }
-    let label = state.artist.isEmpty ? state.title : "\(state.title) — \(state.artist)"
-    return Sneak(
-      source: "track",
-      leading: thumb,
-      trailing: AnyView(
-        Text(label)
-          .font(.caption2).foregroundStyle(.white)
-          .lineLimit(1).frame(maxWidth: 170)),
-      announcement: state.artist.isEmpty
-        ? "Now playing \(state.title)" : "Now playing \(state.title) by \(state.artist)")
+  /// Track changes go through the bus so they gain a Settings toggle, an entry in the generated
+  /// Debug menu, and app attribution in the subtitle — none of which the hand-built sneak had.
+  ///
+  /// Artwork is deliberately dropped in favour of the source app's name. The sneak's leading slot is
+  /// an SF Symbol for every other event, and a 16pt bitmap in that slot measures differently, which
+  /// changes the island's width for track changes only.
+  static func trackChangeEvent(for state: PlaybackState) -> SystemEvent {
+    let app = ExpandedPlayerView.appName(for: state.sourceBundleIdentifier)
+    let subtitle = [state.artist, app].filter { !$0.isEmpty }.joined(separator: " · ")
+    return SystemEvent(
+      sourceID: "nowPlaying",
+      icon: "music.note",
+      title: state.title,
+      subtitle: subtitle.isEmpty ? nil : subtitle,
+      accentHex: EventAccent.positive,
+      motion: .generic,
+      urgency: .ambient,
+      announcement: "\(state.title), \(state.artist)")
   }
 
   let tabIcon = "music.note"

@@ -40,6 +40,8 @@ targets:
         NSCalendarsFullAccessUsageDescription: "Islet shows your next event and today's agenda in the notch."
         NSRemindersUsageDescription: "Islet shows your reminders in the notch and lets you complete them."
         NSRemindersFullAccessUsageDescription: "Islet shows your reminders in the notch and lets you complete them."
+        NSBluetoothAlwaysUsageDescription: "Islet shows a brief animation when a Bluetooth device connects or disconnects, and reads the battery level of connected Apple peripherals."
+        NSLocationWhenInUseUsageDescription: "Islet shows the name of the Wi-Fi network you join. macOS requires location access to read network names; deny this and Islet will simply say 'Wi-Fi connected'."
   IsletTests:
     type: bundle.unit-test
     platform: macOS

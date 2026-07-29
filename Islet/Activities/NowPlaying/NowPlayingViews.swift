@@ -158,6 +158,15 @@ struct ExpandedPlayerView: View {
     return NSWorkspace.shared.icon(forFile: url.path)
   }
 
+  /// The source app's display name, for attribution in a track-change event. Empty when the bundle
+  /// ID does not resolve — a browser-hosted player whose parent app is not installed, say.
+  static func appName(for bundleID: String) -> String {
+    guard !bundleID.isEmpty,
+      let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+    else { return "" }
+    return FileManager.default.displayName(atPath: url.path)
+  }
+
   private func format(_ t: TimeInterval) -> String {
     let s = Int(t.rounded())
     return String(format: "%d:%02d", s / 60, s % 60)

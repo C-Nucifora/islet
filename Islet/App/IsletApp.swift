@@ -10,6 +10,27 @@ enum AppState {
   static let shelf = ShelfActivity()
   static let clipboard = ClipboardActivity()
   static let ports = PortsActivity()
+
+  /// Every system-event source, in catalogue order. Sources that only re-shape an existing
+  /// producer's output — battery, timer, track change, audio device — are not listed: those emit
+  /// from the activity that already owns the observation, and appear in Settings through
+  /// `SourceCatalog` regardless.
+  static let eventSources: [any SystemEventSource] = [
+    PortEventSource(),
+    VolumeEventSource(),
+    DisplayEventSource(),
+    PowerEventSource(),
+    SleepEventSource(),
+    PeripheralEventSource(),
+    WiFiEventSource(),
+    BluetoothEventSource(),
+    SessionEventSource(),
+    ScreenshotEventSource(),
+    AirDropOutEventSource(),
+    AirDropInEventSource(),
+    FocusEventSource(),
+    VPNEventSource(),
+  ]
 }
 
 @main
@@ -38,19 +59,34 @@ struct IsletApp: App {
         Button("Expand") {
           ScreenManager.shared.viewModel?.apply(.clickedNotch)
         }
-        Button("Sneak: charger") {
-          SneakQueue.shared.submit(BatteryActivity.sneak(for: .acConnected(percent: 64)))
+        Divider()
+        // Generated from the catalogue so every source is exercisable without the hardware —
+        // you cannot unplug a display or receive an AirDrop on demand while testing motion.
+        Menu("Fire event") {
+          ForEach(SourceCatalog.all, id: \.id) { entry in
+            Button(entry.name) {
+              SystemEventBus.shared.emit(
+                SystemEvent(
+                  sourceID: entry.id,
+                  icon: entry.icon,
+                  title: entry.name,
+                  subtitle: "Debug",
+                  accentHex: EventAccent.info,
+                  motion: SourceCatalog.debugMotion(for: entry.id)))
+            }
+          }
         }
-        Button("Sneak: low battery") {
-          SneakQueue.shared.submit(
-            BatteryActivity.sneak(for: .lowBattery(threshold: 20, percent: 18)))
+        Button("Fire a docking burst") {
+          let names = ["Studio Display", "Keyboard", "Hub", "Backup", "Mouse"]
+          let sources = ["display", "usb", "usb", "volume", "usb"]
+          for (i, name) in names.enumerated() {
+            SystemEventBus.shared.emit(
+              SystemEvent(
+                sourceID: sources[i], icon: "cable.connector", title: name,
+                accentHex: EventAccent.info, motion: .usb))
+          }
         }
-        Button("Sneak: track change") {
-          var fake = PlaybackState()
-          fake.title = "Paranoid Android"
-          fake.artist = "Radiohead"
-          SneakQueue.shared.submit(NowPlayingActivity.trackChangeSneak(for: fake))
-        }
+        Divider()
         Button("HUD: volume") {
           HUDController.shared.debugPresent(.init(kind: .volume, level: 0.6, isMuted: false))
         }

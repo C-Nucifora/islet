@@ -5,8 +5,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var launchAtLoginObserver: Defaults.Observation?
   private var didBecomeActiveObserver: NSObjectProtocol?
 
+  /// True when the app is running only as XCTest's host process. Every monitor below talks to real
+  /// hardware — CoreWLAN, IOBluetooth, Spotlight, the Downloads folder — and several of them prompt
+  /// for a permission, which hangs a test runner that has no one to answer the dialog. Unit tests
+  /// drive the pure logic directly and need none of it running.
+  private var isRunningTests: Bool {
+    NSClassFromString("XCTestCase") != nil
+  }
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
+    guard !isRunningTests else {
+      Log.app.info("Launched as a test host; skipping monitor startup")
+      return
+    }
     Task { @MainActor in
       EventMonitors.shared.start()
       ScreenManager.shared.start()
@@ -26,6 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       ActivityCenter.shared.register(AppState.ports)
       RemindersProvider.shared.start()
       AudioDeviceMonitor.shared.start()
+      AppState.eventSources.forEach { SystemEventBus.shared.register($0) }
+      SystemEventBus.shared.startEnabled()
       SneakQueue.shared.isSuspended = {
         ScreenManager.shared.viewModel?.state.isExpanded ?? false
       }

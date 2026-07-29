@@ -25,6 +25,7 @@ struct SettingsView: View {
   @Default(.disabledActivities) private var disabledActivities
   @Default(.clipboardEnabled) private var clipboardEnabled
   @Default(.portsEnabled) private var portsEnabled
+  @Default(.disabledEventSources) private var disabledEventSources
 
   private func enabled(_ id: String) -> Binding<Bool> {
     Binding(
@@ -38,8 +39,42 @@ struct SettingsView: View {
       })
   }
 
+  /// Writes through the bus rather than straight to Defaults, so toggling a source actually starts
+  /// or stops its observation instead of only silencing it.
+  private func eventSourceEnabled(_ id: String) -> Binding<Bool> {
+    Binding(
+      get: { !disabledEventSources.contains(id) },
+      set: { on in SystemEventBus.shared.setEnabled(on, for: id) })
+  }
+
   var body: some View {
     Form {
+      Section("System events") {
+        Text(
+          "Islet shows a brief animation in the island when something happens. Turn a source off and Islet stops watching it entirely."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+
+        ForEach(SystemEventTier.allCases, id: \.rawValue) { tier in
+          let ids = SourceCatalog.ids(in: tier)
+          if !ids.isEmpty {
+            Text(tier.label)
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(tier == .heuristic ? .orange : .secondary)
+            if tier == .heuristic {
+              Text(
+                "These are inferred rather than reported. AirDrop arrivals are noticed after the transfer finishes and cannot name the sender; a network tunnel may be iCloud Private Relay rather than a VPN."
+              )
+              .font(.caption2).foregroundStyle(.secondary)
+            }
+            ForEach(ids, id: \.self) { id in
+              Toggle(isOn: eventSourceEnabled(id)) {
+                Label(SourceCatalog.name(for: id), systemImage: SourceCatalog.icon(for: id))
+              }
+            }
+          }
+        }
+      }
       Section("Menu order") {
         Text("Drag to reorder the tabs in the expanded island. Turn one off to hide it entirely.")
           .font(.caption).foregroundStyle(.secondary)

@@ -34,12 +34,14 @@ final class AudioDeviceMonitor {
     guard Defaults[.airpodsEnabled] else { return }
 
     let name = Self.deviceName(device) ?? "Audio device"
-    let icon = Self.iconName(for: name)
-    SneakQueue.shared.submit(
-      Sneak(
-        source: "audiodevice",
-        leading: AnyViewBox.icon(icon),
-        trailing: AnyViewBox.name(name),
+    SystemEventBus.shared.emit(
+      SystemEvent(
+        sourceID: "audiodevice",
+        icon: Self.iconName(for: name),
+        title: name,
+        subtitle: "Output",
+        accentHex: EventAccent.info,
+        motion: .bluetooth,
         announcement: "\(name) connected"))
   }
 

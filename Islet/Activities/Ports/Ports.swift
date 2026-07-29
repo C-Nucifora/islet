@@ -115,5 +115,15 @@ final class PortMonitor: ObservableObject {
     Task { @MainActor in self.refresh() }
   }
 
-  func refresh() { devices = PortsReader.read() }
+  /// The list as it was before the most recent refresh, so an observer can diff the two. Kept here
+  /// rather than in the observer because the IOKit callback can fire twice before an observer runs,
+  /// and a diff against a stale snapshot reports a device twice.
+  private(set) var previousDevices: [PortDevice] = []
+
+  func refresh() {
+    let next = PortsReader.read()
+    guard next != devices else { return }  // IOKit re-arms fire spuriously; don't republish
+    previousDevices = devices
+    devices = next
+  }
 }

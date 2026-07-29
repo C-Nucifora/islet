@@ -31,4 +31,7 @@ extension Defaults.Keys {
   static let disabledActivities = Key<[String]>("disabledActivities", default: [])
   static let clipboardEnabled = Key<Bool>("clipboardEnabled", default: false)
   static let portsEnabled = Key<Bool>("portsEnabled", default: true)
+  /// Event sources the user has switched off. Absent means on — every source ships enabled, and a
+  /// disabled source is fully stopped rather than merely silenced.
+  static let disabledEventSources = Key<[String]>("disabledEventSources", default: [])
 }

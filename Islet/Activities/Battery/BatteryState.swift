@@ -10,6 +10,9 @@ enum BatteryEvent: Equatable {
   case acConnected(percent: Int)
   case acDisconnected(percent: Int)
   case lowBattery(threshold: Int, percent: Int)
+  /// Reached 100% while on AC. Fires once per charge, on the upward crossing only, so a battery
+  /// hovering at 100 and dropping to 99 and back does not re-announce.
+  case chargeComplete(percent: Int)
 }
 
 /// Pure change detection between consecutive battery snapshots.
@@ -30,6 +33,11 @@ enum BatteryEventDetector {
       out.append(.acConnected(percent: new.percent))
     } else if old.onAC, !new.onAC {
       out.append(.acDisconnected(percent: new.percent))
+    }
+    // Upward crossing of 100 while plugged in. Guarding on the crossing rather than on the level
+    // means a battery sitting at 100 does not re-announce on every one of the monitor's 1 Hz ticks.
+    if new.onAC, new.percent >= 100, old.percent < 100 {
+      out.append(.chargeComplete(percent: new.percent))
     }
     if !new.onAC {
       let crossed = lowBatteryDetector.crossings(

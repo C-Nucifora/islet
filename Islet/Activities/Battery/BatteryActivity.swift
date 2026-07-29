@@ -33,34 +33,33 @@ final class BatteryActivity: NotchActivity, ObservableObject {
 
     guard Defaults[.batteryEnabled] else { return }
     for event in events {
-      SneakQueue.shared.submit(Self.sneak(for: event))
+      SystemEventBus.shared.emit(Self.event(for: event))
     }
   }
 
-  static func sneak(for event: BatteryEvent) -> Sneak {
+  static func event(for event: BatteryEvent) -> SystemEvent {
     switch event {
     case .acConnected(let percent):
-      Sneak(
-        source: "battery",
-        leading: AnyView(
-          Image(systemName: "bolt.fill").foregroundStyle(.green).font(.caption)),
-        trailing: AnyView(BatteryPercentText(percent: percent, color: .green)),
+      SystemEvent(
+        sourceID: "battery", icon: "bolt.fill", title: "Charging",
+        subtitle: "\(percent)%", accentHex: EventAccent.positive, motion: .generic,
         announcement: "Charger connected, \(percent) percent")
     case .acDisconnected(let percent):
-      Sneak(
-        source: "battery",
-        leading: AnyView(
-          Image(systemName: "battery.100percent").foregroundStyle(.secondary)
-            .font(.caption)),
-        trailing: AnyView(BatteryPercentText(percent: percent, color: .secondary)),
+      SystemEvent(
+        sourceID: "battery", icon: "battery.100percent", title: "On battery",
+        subtitle: "\(percent)%", accentHex: EventAccent.neutral, motion: .generic,
         announcement: "Charger disconnected, \(percent) percent")
     case .lowBattery(_, let percent):
-      Sneak(
-        source: "battery", duration: 3,
-        leading: AnyView(
-          Image(systemName: "battery.25percent").foregroundStyle(.red).font(.caption)),
-        trailing: AnyView(BatteryPercentText(percent: percent, color: .red)),
+      SystemEvent(
+        sourceID: "battery", icon: "battery.25percent", title: "Low battery",
+        subtitle: "\(percent)%", accentHex: EventAccent.danger, motion: .peripheralLow,
+        urgency: .alert, duration: 3,
         announcement: "Low battery, \(percent) percent")
+    case .chargeComplete(let percent):
+      SystemEvent(
+        sourceID: "battery", icon: "checkmark.circle.fill", title: "Charged",
+        subtitle: "\(percent)%", accentHex: EventAccent.positive, motion: .chargeComplete,
+        announcement: "Battery fully charged")
     }
   }
 

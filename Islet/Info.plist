@@ -22,12 +22,16 @@
 	<string>1</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Islet shows a brief animation when a Bluetooth device connects or disconnects, and reads the battery level of connected Apple peripherals.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Islet shows your next event and today's agenda in the notch.</string>
 	<key>NSCalendarsUsageDescription</key>
 	<string>Islet shows your next event and today's agenda in the notch.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Islet shows the name of the Wi-Fi network you join. macOS requires location access to read network names; deny this and Islet will simply say 'Wi-Fi connected'.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Islet shows your reminders in the notch and lets you complete them.</string>
 	<key>NSRemindersUsageDescription</key>

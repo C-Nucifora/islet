@@ -103,13 +103,10 @@ final class TimerActivity: NotchActivity, ObservableObject {
     finished = true
     Haptics.perform(.levelChange)
     NSSound(named: NSSound.Name("Glass"))?.play()
-    SneakQueue.shared.submit(
-      Sneak(
-        source: "timer", duration: 4,
-        leading: AnyView(Image(systemName: "timer").foregroundStyle(.orange).font(.caption)),
-        trailing: AnyView(
-          Text("\(label ?? "Timer") done")
-            .font(.caption2.weight(.semibold)).foregroundStyle(.white).lineLimit(1)),
+    SystemEventBus.shared.emit(
+      SystemEvent(
+        sourceID: "timer", icon: "timer", title: "\(label ?? "Timer") done",
+        accentHex: EventAccent.warning, motion: .chargeComplete, urgency: .alert, duration: 4,
         announcement: "\(label ?? "Timer") done"))
     // Auto-clear the finished state after a few seconds.
     completionTask = Task { [weak self] in
