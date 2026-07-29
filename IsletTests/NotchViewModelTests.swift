@@ -127,4 +127,23 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(
       body.minX, vm.geometry.notchRect.minX - Metrics.closedOversize, accuracy: 0.01)
   }
+
+  /// Nothing in the app cancels the shrink today, but the handle that gates it must survive
+  /// cancellation: a stranded non-nil `shrinkTask` fails the `shrinkTask == nil` guard forever, so
+  /// the panel stays expanded-sized and the menu bar under it stays dead to clicks.
+  func testACancelledShrinkDoesNotBlockLaterShrinks() async throws {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))  // expand: panel grows immediately
+    vm.handleMouseDown(CGPoint(x: 100, y: 500))  // close: a shrink is scheduled
+    vm.cancelPendingShrink()
+    try await Task.sleep(for: Metrics.panelShrinkDelay + .milliseconds(200))
+    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame)  // cancelled, so nothing shrank
+
+    // A later slot measurement must still be able to schedule a fresh shrink.
+    vm.updateCompactWidths(leading: 10, trailing: 10)
+    try await Task.sleep(for: Metrics.panelShrinkDelay + .milliseconds(300))
+    XCTAssertEqual(
+      vm.panelFrame,
+      vm.geometry.collapsedPanelFrame(compactLeading: 10, compactTrailing: 10))
+  }
 }

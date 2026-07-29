@@ -113,13 +113,19 @@ final class NotchViewModel: ObservableObject {
     // forever and strand the panel at expanded size. It re-reads the target when it fires, so a
     // single timer always settles on the current frame.
     guard target != panelFrame, shrinkTask == nil else { return }
-    shrinkTask = Self.debounce(for: Metrics.panelShrinkDelay) { [weak self] in
+    shrinkTask = Self.debounce(
+      for: Metrics.panelShrinkDelay,
+      cleanup: { [weak self] in self?.shrinkTask = nil }
+    ) { [weak self] in
       guard let self else { return }
-      self.shrinkTask = nil
       let settled = self.targetPanelFrame(for: self.state)
       if settled != self.panelFrame { self.panelFrame = settled }
     }
   }
+
+  /// Cancels a pending shrink without scheduling a replacement. Exposed for tests: nothing in the
+  /// app cancels it today, and the point of the test is that the gating handle survives a cancel.
+  func cancelPendingShrink() { shrinkTask?.cancel() }
 
   func apply(_ event: NotchEvent) {
     let next = NotchStateMachine.transition(
@@ -146,13 +152,21 @@ final class NotchViewModel: ObservableObject {
 
   /// Runs `body` after `delay`, cancelling any timer passed as `cancelling`. Omitting it schedules
   /// without disturbing what's already in flight.
+  ///
+  /// `cleanup` runs on EVERY path, cancellation included. A handle that gates future scheduling —
+  /// `shrinkTask`, whose non-nil-ness blocks the next shrink — has to be released even when the
+  /// timer never fires, or the first cancel blocks that path for the rest of the process. Nilling
+  /// the handle here is safe against clobbering a newer one: no replacement can be scheduled while
+  /// the old handle is still non-nil.
   private static func debounce(
     cancelling existing: Task<Void, Never>? = nil, for delay: Duration,
+    cleanup: (@MainActor () -> Void)? = nil,
     _ body: @escaping @MainActor () -> Void
   ) -> Task<Void, Never> {
     existing?.cancel()
     return Task { @MainActor in
       try? await Task.sleep(for: delay)
+      cleanup?()
       guard !Task.isCancelled else { return }
       body()
     }
