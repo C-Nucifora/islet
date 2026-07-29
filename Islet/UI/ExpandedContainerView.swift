@@ -5,10 +5,14 @@ import SwiftUI
 struct ExpandedContainerView: View {
   /// The physical notch's size, so the switcher can flank it in the top band.
   let notchSize: CGSize
+  /// Height tiers are reported up to the view model, which owns the panel frame.
+  let vm: NotchViewModel
   @ObservedObject private var center = ActivityCenter.shared
   @ObservedObject private var shelf = ShelfModel.shared
   /// nil selection means the dashboard ("Home"); otherwise an activity id.
   @State private var selection: String? = nil
+  /// Keeps the selected chip visible when the strip is wider than the left ear.
+  @State private var scrolledTab: String?
 
   private static let homeTab = "\u{0000}home"  // sentinel id for the dashboard chip
 
@@ -32,6 +36,14 @@ struct ExpandedContainerView: View {
     return Self.homeTab
   }
 
+  /// The height tier the selected tab wants. The dashboard always takes the base tier.
+  private var selectedHeight: CGFloat {
+    guard effectiveSelection != Self.homeTab,
+      let activity = center.activeActivities.first(where: { $0.id == effectiveSelection })
+    else { return Metrics.expandedSize.height }
+    return activity.preferredExpandedHeight
+  }
+
   var body: some View {
     ZStack(alignment: .top) {
       // Main content sits directly below the physical notch — reclaiming the space the switcher
@@ -47,30 +59,58 @@ struct ExpandedContainerView: View {
       // the hardware notch.
       switcherBar
         .frame(height: notchSize.height)
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Self.rowPadding)
+    }
+    .onChange(of: effectiveSelection, initial: true) { _, id in
+      vm.setExpandedHeight(selectedHeight)
+      scrolledTab = id
     }
   }
 
+  private static let chipWidth: CGFloat = 22
+  private static let chipHeight: CGFloat = 20
+  private static let rowSpacing: CGFloat = 6
+  private static let rowPadding: CGFloat = 12
+
+  /// Width the tab strip gets in the left ear: the expanded row, minus its own horizontal padding,
+  /// the notch gap, the two spacings flanking that gap, and the settings gear. On a 14" MBP that
+  /// is 480 − 24 − 296 − 12 − 22 = 126pt, which fits five chips. Eight already overflowed it at
+  /// the old 26pt, and Phase 4 adds a ninth — so the strip scrolls rather than squeezing.
+  private var tabStripWidth: CGFloat {
+    let usable = Metrics.expandedSize.width - Self.rowPadding * 2
+    return max(
+      Self.chipWidth, usable - notchSize.width - Self.rowSpacing * 2 - Self.chipWidth)
+  }
+
   private var switcherBar: some View {
-    HStack(spacing: 6) {
-      ForEach(tabs, id: \.id) { tab in
-        let selected = tab.id == effectiveSelection
-        Button {
-          Haptics.perform(.alignment)
-          selection = tab.id
-        } label: {
-          Image(systemName: tab.icon)
-            .font(.caption)
-            .frame(width: 26, height: 20)
-            .background(
-              RoundedRectangle(cornerRadius: 6)
-                .fill(.white.opacity(selected ? 0.22 : 0.06))
-            )
-            .foregroundStyle(selected ? .white : .secondary)
+    HStack(spacing: Self.rowSpacing) {
+      ScrollView(.horizontal) {
+        HStack(spacing: Self.rowSpacing) {
+          ForEach(tabs, id: \.id) { tab in
+            let selected = tab.id == effectiveSelection
+            Button {
+              Haptics.perform(.alignment)
+              selection = tab.id
+            } label: {
+              Image(systemName: tab.icon)
+                .font(.caption)
+                .frame(width: Self.chipWidth, height: Self.chipHeight)
+                .background(
+                  RoundedRectangle(cornerRadius: 6)
+                    .fill(.white.opacity(selected ? 0.22 : 0.06))
+                )
+                .foregroundStyle(selected ? .white : .secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(
+              tab.id == Self.homeTab ? "Home" : ActivityCatalog.name(for: tab.id))
+          }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(tab.id == Self.homeTab ? "Home" : ActivityCatalog.name(for: tab.id))
+        .scrollTargetLayout()
       }
+      .scrollIndicators(.hidden)
+      .scrollPosition(id: $scrolledTab, anchor: .center)
+      .frame(width: tabStripWidth)
       // Gap for the physical notch, keeping tabs in the left ear and the gear in the right ear.
       Spacer(minLength: notchSize.width)
       Button {
@@ -79,7 +119,7 @@ struct ExpandedContainerView: View {
       } label: {
         Image(systemName: "gearshape.fill")
           .font(.caption)
-          .frame(width: 26, height: 20)
+          .frame(width: Self.chipWidth, height: Self.chipHeight)
           .foregroundStyle(.secondary)
       }
       .buttonStyle(.plain)

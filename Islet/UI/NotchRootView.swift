@@ -81,7 +81,7 @@ struct NotchRootView: View {
     case .peek:
       return CGSize(width: width, height: notch.height + Metrics.peekGrowth)
     case .expanded:
-      return Metrics.expandedSize
+      return CGSize(width: Metrics.expandedSize.width, height: vm.expandedHeight)
     }
   }
 
@@ -180,7 +180,7 @@ struct NotchRootView: View {
     if vm.state.isExpanded {
       // The switcher (tabs + gear) sits in the notch band, flanking the hardware notch, and the
       // content fills the rest — so nothing is wasted below the notch.
-      ExpandedContainerView(notchSize: vm.geometry.notchSize)
+      ExpandedContainerView(notchSize: vm.geometry.notchSize, vm: vm)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .top)))
     } else if let slots = compactContent {
