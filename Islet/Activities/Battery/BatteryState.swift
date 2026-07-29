@@ -17,6 +17,12 @@ enum BatteryEvent: Equatable {
 enum BatteryEventDetector {
   static let thresholds = [20, 10]
 
+  /// Declaration order is load-bearing: dropping straight past both thresholds in one tick has to
+  /// report 20 before 10.
+  private static var lowBatteryDetector: ThresholdDetector {
+    ThresholdDetector(thresholds: thresholds.map(Double.init), direction: .falling)
+  }
+
   static func events(from old: BatteryState?, to new: BatteryState) -> [BatteryEvent] {
     guard let old else { return [] }  // first snapshot is baseline only
     var out: [BatteryEvent] = []
@@ -26,8 +32,10 @@ enum BatteryEventDetector {
       out.append(.acDisconnected(percent: new.percent))
     }
     if !new.onAC {
-      for t in Self.thresholds where old.percent > t && new.percent <= t {
-        out.append(.lowBattery(threshold: t, percent: new.percent))
+      let crossed = lowBatteryDetector.crossings(
+        from: Double(old.percent), to: Double(new.percent))
+      for t in crossed {
+        out.append(.lowBattery(threshold: Int(t), percent: new.percent))
       }
     }
     return out
