@@ -33,10 +33,10 @@ final class SneakQueue: ObservableObject {
         guard !Task.isCancelled else { return }
       }
       guard let next = logic.popNext() else { return }
-      withAnimation(Metrics.compact) { current = next }
+      withAnimation(Motion.gated(Motion.compact)) { current = next }
       if let announcement = next.announcement { A11y.announce(announcement) }
       try? await Task.sleep(for: .seconds(next.duration))
-      withAnimation(Metrics.compact) { current = nil }
+      withAnimation(Motion.gated(Motion.compact)) { current = nil }
       try? await Task.sleep(for: .milliseconds(250))
       guard !Task.isCancelled else { return }
     }

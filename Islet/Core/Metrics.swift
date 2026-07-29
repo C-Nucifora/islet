@@ -16,12 +16,4 @@ enum Metrics {
 
   static let closedRadii = (top: CGFloat(6), bottom: CGFloat(14))
   static let expandedRadii = (top: CGFloat(19), bottom: CGFloat(24))
-
-  static let closingDuration: TimeInterval = 0.4
-  static let opening: Animation = .bouncy(duration: 0.4)
-  static let closing: Animation = .smooth(duration: closingDuration)
-  static let compact: Animation = .snappy(duration: 0.4)
-  /// The panel has to stay oversized until the closing animation has finished drawing — but not a
-  /// frame longer, since every extra millisecond is menu bar nobody can click.
-  static let panelShrinkDelay: Duration = .milliseconds(Int(closingDuration * 1000) + 32)
 }

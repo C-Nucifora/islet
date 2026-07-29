@@ -114,7 +114,7 @@ final class NotchViewModel: ObservableObject {
     // single timer always settles on the current frame.
     guard target != panelFrame, shrinkTask == nil else { return }
     shrinkTask = Self.debounce(
-      for: Metrics.panelShrinkDelay,
+      for: Motion.panelShrinkDelay,
       cleanup: { [weak self] in self?.shrinkTask = nil }
     ) { [weak self] in
       guard let self else { return }
@@ -135,7 +135,7 @@ final class NotchViewModel: ObservableObject {
     if event == .hoverEntered, next == .peek { Haptics.tick() }
     if next.isExpanded, !state.isExpanded { Haptics.perform(.levelChange) }  // firm tap on expand
     updatePanelFrame(for: next)  // widen the window before the content animates into it
-    withAnimation(opening ? Metrics.opening : Metrics.closing) {
+    withAnimation(Motion.gated(opening ? Motion.opening : Motion.closing)) {
       state = next
     }
     // hover-region may have changed shape; re-evaluate containment so exit fires correctly

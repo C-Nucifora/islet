@@ -132,8 +132,10 @@ struct NotchRootView: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    .animation(vm.state.isExpanded ? Metrics.opening : Metrics.closing, value: vm.state)
-    .animation(Metrics.compact, value: compactVisible)
+    .animation(
+      Motion.gated(vm.state.isExpanded ? Motion.opening : Motion.closing), value: vm.state
+    )
+    .animation(Motion.gated(Motion.compact), value: compactVisible)
     // The panel is only as wide as the island, so it has to know how wide the slots rendered.
     .onChange(of: compactLeadingWidth, initial: true) { _, _ in syncPanelWidths() }
     .onChange(of: compactTrailingWidth) { _, _ in syncPanelWidths() }

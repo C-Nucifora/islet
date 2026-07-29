@@ -69,7 +69,7 @@ final class NotchViewModelTests: XCTestCase {
     let vm = makeVM(mode: .clickToPin)
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
     vm.handleMouseDown(CGPoint(x: 100, y: 500))
-    try await Task.sleep(for: Metrics.panelShrinkDelay + .milliseconds(200))
+    try await Task.sleep(for: Motion.panelShrinkDelay + .milliseconds(200))
     XCTAssertEqual(vm.panelFrame, vm.geometry.collapsedPanelFrame())
   }
 
@@ -84,7 +84,7 @@ final class NotchViewModelTests: XCTestCase {
       vm.handleMouseMoved(CGPoint(x: 100, y: 500))
       try await Task.sleep(for: .milliseconds(40))
     }
-    try await Task.sleep(for: Metrics.panelShrinkDelay + .milliseconds(200))
+    try await Task.sleep(for: Motion.panelShrinkDelay + .milliseconds(200))
     XCTAssertEqual(vm.panelFrame, vm.geometry.collapsedPanelFrame())
   }
 
@@ -136,12 +136,12 @@ final class NotchViewModelTests: XCTestCase {
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))  // expand: panel grows immediately
     vm.handleMouseDown(CGPoint(x: 100, y: 500))  // close: a shrink is scheduled
     vm.cancelPendingShrink()
-    try await Task.sleep(for: Metrics.panelShrinkDelay + .milliseconds(200))
+    try await Task.sleep(for: Motion.panelShrinkDelay + .milliseconds(200))
     XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame)  // cancelled, so nothing shrank
 
     // A later slot measurement must still be able to schedule a fresh shrink.
     vm.updateCompactWidths(leading: 10, trailing: 10)
-    try await Task.sleep(for: Metrics.panelShrinkDelay + .milliseconds(300))
+    try await Task.sleep(for: Motion.panelShrinkDelay + .milliseconds(300))
     XCTAssertEqual(
       vm.panelFrame,
       vm.geometry.collapsedPanelFrame(compactLeading: 10, compactTrailing: 10))
