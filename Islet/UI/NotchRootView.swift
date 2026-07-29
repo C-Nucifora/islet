@@ -51,29 +51,35 @@ struct NotchRootView: View {
     !vm.state.isExpanded && compactContent != nil
   }
 
-  /// Horizontal offset that lines the island's notch cut-out up with the hardware notch. The
-  /// collapsed panel hugs the island flank by flank, so it is *not* centred on the notch —
-  /// everything positions off the notch's offset within the panel rather than the panel's centre,
-  /// which also keeps the island aligned while the panel is still held at expanded size.
+  /// Slot widths as layout should use them: zero whenever no compact content is drawn, so neither
+  /// the offset nor the body size can carry a stale measurement from a slot that isn't on screen.
+  private var effectiveCompact: (leading: CGFloat, trailing: CGFloat) {
+    compactVisible ? (compactLeadingWidth, compactTrailingWidth) : (0, 0)
+  }
+
+  /// Horizontal offset that lines the island's notch cut-out up with the hardware notch.
+  ///
+  /// `vm.actualPanelFrame` — the frame the window really has — NOT `vm.panelFrame`, the frame we
+  /// asked for. The island is drawn centred in the real window, so aligning it against the request
+  /// maps any divergence 1:1 onto a horizontal shift that no hover ever clears: `targetPanelFrame`
+  /// returns the same value for `.closed` and `.peek`, so hovering republishes nothing.
   private var islandOffset: CGFloat {
-    let notchInPanel = vm.geometry.notchRect.midX - vm.panelFrame.midX
-    guard compactVisible else { return notchInPanel }
-    return notchInPanel + (compactTrailingWidth - compactLeadingWidth) / 2
+    vm.geometry.islandOffset(
+      inPanel: vm.actualPanelFrame,
+      compactLeading: effectiveCompact.leading,
+      compactTrailing: effectiveCompact.trailing)
   }
 
   /// Size of the black shape body, EXCLUDING the top-flare ears.
   private var bodySize: CGSize {
     let notch = vm.geometry.notchSize
-    let compactExtra = compactVisible ? compactLeadingWidth + compactTrailingWidth : 0
+    let width = vm.geometry.islandBodyWidth(
+      compactLeading: effectiveCompact.leading, compactTrailing: effectiveCompact.trailing)
     switch vm.state {
     case .closed:
-      return CGSize(
-        width: notch.width + Metrics.closedOversize * 2 + compactExtra,
-        height: notch.height + Metrics.closedOversize)
+      return CGSize(width: width, height: notch.height + Metrics.closedOversize)
     case .peek:
-      return CGSize(
-        width: notch.width + Metrics.closedOversize * 2 + compactExtra,
-        height: notch.height + Metrics.peekGrowth)
+      return CGSize(width: width, height: notch.height + Metrics.peekGrowth)
     case .expanded:
       return Metrics.expandedSize
     }
@@ -141,8 +147,7 @@ struct NotchRootView: View {
 
   private func syncPanelWidths() {
     vm.updateCompactWidths(
-      leading: compactVisible ? compactLeadingWidth : 0,
-      trailing: compactVisible ? compactTrailingWidth : 0)
+      leading: effectiveCompact.leading, trailing: effectiveCompact.trailing)
   }
 
   @ViewBuilder private var content: some View {
