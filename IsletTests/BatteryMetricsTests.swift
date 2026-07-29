@@ -295,4 +295,275 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertNil(m.batteryPowerWatts)
     XCTAssertNil(m.adapterLossWatts)
   }
+
+  // MARK: - Charge state
+
+  func testChargeStateFlags() {
+    var m = BatteryMetrics()
+    BatteryMetricsParser.applyChargeState(&m, from: Self.smartBattery)
+    XCTAssertEqual(m.isCharging, false)
+    XCTAssertEqual(m.fullyCharged, false)
+    XCTAssertEqual(m.externalConnected, true)
+  }
+
+  func testNotChargingReasonIsReadFromChargerData() {
+    var m = BatteryMetrics()
+    BatteryMetricsParser.applyChargeState(&m, from: Self.smartBattery)
+    XCTAssertEqual(m.notChargingReason, 36_028_797_018_963_968)
+  }
+
+  func testNotChargingReasonIsAbsentWithoutChargerData() {
+    var m = BatteryMetrics()
+    BatteryMetricsParser.applyChargeState(&m, from: ["IsCharging": true])
+    XCTAssertNil(m.notChargingReason)
+    XCTAssertEqual(m.isCharging, true)
+  }
+
+  func testNotChargingReasonSetBits() {
+    XCTAssertEqual(NotChargingReason.setBits(36_028_797_018_963_968), [55])
+    XCTAssertEqual(NotChargingReason.setBits(0), [])
+    XCTAssertEqual(NotChargingReason.setBits(0b1011), [0, 1, 3])
+  }
+
+  func testNotChargingReasonCode() {
+    XCTAssertEqual(NotChargingReason.code(36_028_797_018_963_968), "0x80000000000000")
+    XCTAssertEqual(NotChargingReason.code(0), "0x0")
+    XCTAssertEqual(NotChargingReason.code(255), "0xFF")
+  }
+
+  // MARK: - Status line
+
+  func testStatusOnBattery() {
+    XCTAssertEqual(
+      PowerStatus.text(
+        onAC: false, isCharging: false, fullyCharged: false, batteryWatts: -3.6,
+        notChargingReason: nil),
+      "On battery")
+  }
+
+  func testStatusCharging() {
+    XCTAssertEqual(
+      PowerStatus.text(
+        onAC: true, isCharging: true, fullyCharged: false, batteryWatts: 30.0,
+        notChargingReason: 0),
+      "Charging")
+  }
+
+  func testStatusCharged() {
+    XCTAssertEqual(
+      PowerStatus.text(
+        onAC: true, isCharging: false, fullyCharged: true, batteryWatts: 0,
+        notChargingReason: 0),
+      "Charged")
+  }
+
+  func testStatusAdapterCannotKeepUp() {
+    // The real state on the development machine: AC attached, not charging, and the pack is
+    // supplying 5.7 W because the 30 W adapter is smaller than the 34 W load.
+    XCTAssertEqual(
+      PowerStatus.text(
+        onAC: true, isCharging: false, fullyCharged: false, batteryWatts: -5.715,
+        notChargingReason: 36_028_797_018_963_968),
+      "Adapter can't keep up")
+  }
+
+  func testStatusNotChargingSurfacesTheRawCode() {
+    // Held, but not because the adapter is undersized: report the code rather than invent a reason.
+    XCTAssertEqual(
+      PowerStatus.text(
+        onAC: true, isCharging: false, fullyCharged: false, batteryWatts: -0.05,
+        notChargingReason: 36_028_797_018_963_968),
+      "Not charging · 0x80000000000000")
+  }
+
+  func testStatusNotChargingWithoutAReason() {
+    XCTAssertEqual(
+      PowerStatus.text(
+        onAC: true, isCharging: false, fullyCharged: false, batteryWatts: 0,
+        notChargingReason: 0),
+      "Not charging")
+    XCTAssertEqual(
+      PowerStatus.text(
+        onAC: true, isCharging: false, fullyCharged: false, batteryWatts: nil,
+        notChargingReason: nil),
+      "Not charging")
+  }
+
+  // MARK: - Condition
+
+  func testConditionIsNormalWhenTheGradeIsGoodAndTheConditionIsBlank() {
+    // IOPS reports BatteryHealthCondition as an empty string on a healthy pack; System Settings
+    // renders that as "Normal".
+    XCTAssertEqual(BatteryMetricsParser.condition(health: "Good", condition: ""), "Normal")
+    XCTAssertEqual(BatteryMetricsParser.condition(health: "Good", condition: nil), "Normal")
+  }
+
+  func testConditionSurfacesARealFaultVerbatim() {
+    XCTAssertEqual(
+      BatteryMetricsParser.condition(health: "Poor", condition: "Service Recommended"),
+      "Service Recommended")
+    XCTAssertEqual(BatteryMetricsParser.condition(health: "Fair", condition: ""), "Fair")
+  }
+
+  func testConditionIsNilWhenNothingWasReported() {
+    XCTAssertNil(BatteryMetricsParser.condition(health: nil, condition: nil))
+    XCTAssertNil(BatteryMetricsParser.condition(health: "", condition: ""))
+  }
+
+  // MARK: - Whole snapshot
+
+  func testParseOfTheRealSnapshot() throws {
+    let m = BatteryMetricsParser.parse(
+      smartBattery: Self.smartBattery,
+      adapter: Self.adapter,
+      powerSource: Self.powerSource,
+      lowPowerMode: true)
+
+    XCTAssertTrue(m.hasAny)
+    XCTAssertEqual(m.healthPercent, 89)
+    XCTAssertEqual(m.rawHealthPercent, 86)
+    XCTAssertEqual(m.cycleCount, 224)
+    XCTAssertEqual(m.designCycleCount, 1000)
+    XCTAssertEqual(m.condition, "Normal")
+    XCTAssertEqual(try XCTUnwrap(m.temperatureC), 30.68, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(m.amperage), -0.322, accuracy: 0.0001)
+    XCTAssertEqual(m.adapterWatts, 30)
+    XCTAssertEqual(m.adapterDescription, "pd charger")
+    XCTAssertEqual(m.pdLadder.count, 5)
+    XCTAssertEqual(try XCTUnwrap(m.systemLoadWatts), 34.122, accuracy: 0.0001)
+    XCTAssertEqual(m.notChargingReason, 36_028_797_018_963_968)
+    XCTAssertTrue(m.lowPowerMode)
+    XCTAssertEqual(m.externalConnected, true)
+    XCTAssertNil(m.timeToFullMinutes)
+    XCTAssertEqual(m.timeToEmptyMinutes, 142)
+  }
+
+  func testParseOfAnEmptyRegistryReadsNothing() {
+    let m = BatteryMetricsParser.parse(
+      smartBattery: [:], adapter: nil, powerSource: nil, lowPowerMode: false)
+    XCTAssertFalse(m.hasAny)
+    XCTAssertNil(m.condition)
+    XCTAssertTrue(m.pdLadder.isEmpty)
+  }
+
+  // MARK: - Formatting
+
+  func testTimeFormat() {
+    XCTAssertEqual(PowerFormat.time(minutes: 0), "0m")
+    XCTAssertEqual(PowerFormat.time(minutes: 45), "45m")
+    XCTAssertEqual(PowerFormat.time(minutes: 59), "59m")
+    XCTAssertEqual(PowerFormat.time(minutes: 60), "1h 00m")
+    XCTAssertEqual(PowerFormat.time(minutes: 86), "1h 26m")
+    XCTAssertEqual(PowerFormat.time(minutes: 142), "2h 22m")
+    XCTAssertEqual(PowerFormat.time(minutes: 252), "4h 12m")
+  }
+
+  func testCapacityFormat() {
+    XCTAssertEqual(PowerFormat.capacity(5381, of: 6249), "5381 / 6249 mAh")
+    XCTAssertEqual(PowerFormat.capacity(5381, of: nil), "5381 mAh")
+    XCTAssertEqual(PowerFormat.capacity(5381, of: 0), "5381 mAh")
+    XCTAssertNil(PowerFormat.capacity(nil, of: 6249))
+  }
+
+  func testCyclesFormat() {
+    XCTAssertEqual(PowerFormat.cycles(224, of: 1000), "224 / 1000")
+    XCTAssertEqual(PowerFormat.cycles(224, of: nil), "224")
+    XCTAssertEqual(PowerFormat.cycles(224, of: 0), "224")
+  }
+
+  func testWattsCarryTheirSign() {
+    XCTAssertEqual(PowerFormat.watts(-3.607366), "-3.6 W")
+    XCTAssertEqual(PowerFormat.watts(67.9), "+67.9 W")
+    XCTAssertEqual(PowerFormat.watts(0), "+0.0 W")
+    XCTAssertEqual(PowerFormat.wattsUnsigned(34.122), "34.1 W")
+    XCTAssertEqual(PowerFormat.wattsUnsigned(0.696), "0.7 W")
+  }
+
+  func testAmpsVoltsAndTemperature() {
+    XCTAssertEqual(PowerFormat.amps(-0.322), "-0.32 A")
+    XCTAssertEqual(PowerFormat.amps(1.49), "+1.49 A")
+    XCTAssertEqual(PowerFormat.volts(11.203), "11.20 V")
+    XCTAssertEqual(PowerFormat.temperature(30.68), "30.7°C")
+  }
+
+  func testChargerSummary() {
+    XCTAssertEqual(
+      PowerFormat.chargerSummary(watts: 30, description: "pd charger"), "30 W · pd charger")
+    XCTAssertEqual(PowerFormat.chargerSummary(watts: 30, description: nil), "30 W")
+    XCTAssertEqual(PowerFormat.chargerSummary(watts: nil, description: "pd charger"), "pd charger")
+    XCTAssertNil(PowerFormat.chargerSummary(watts: nil, description: nil))
+  }
+
+  func testLadderSummary() {
+    let ladder = BatteryMetricsParser.pdLadder(from: Self.adapter["UsbHvcMenu"])
+    XCTAssertEqual(
+      PowerFormat.ladderSummary(ladder),
+      "5V/2.96A · 9V/2.98A · 12V/2.48A · 15V/1.99A · 20V/1.49A")
+    XCTAssertNil(PowerFormat.ladderSummary([]))
+  }
+
+  func testRemainingPrefersTimeToFullWhenCharging() {
+    let full = PowerFormat.remaining(timeToFull: 86, timeToEmpty: 142)
+    XCTAssertEqual(full?.label, "Full in")
+    XCTAssertEqual(full?.value, "1h 26m")
+
+    let empty = PowerFormat.remaining(timeToFull: nil, timeToEmpty: 142)
+    XCTAssertEqual(empty?.label, "Left")
+    XCTAssertEqual(empty?.value, "2h 22m")
+
+    XCTAssertNil(PowerFormat.remaining(timeToFull: nil, timeToEmpty: nil))
+  }
+
+  // MARK: - Smoothing
+
+  func testBlendWithoutAPreviousValueReturnsTheSample() throws {
+    XCTAssertEqual(
+      try XCTUnwrap(PowerSmoothing.blend(previous: nil, sample: 10)), 10, accuracy: 1e-9)
+  }
+
+  func testBlendMovesPartWayTowardTheSample() throws {
+    XCTAssertEqual(
+      try XCTUnwrap(PowerSmoothing.blend(previous: 10, sample: 20, factor: 0.5)), 15,
+      accuracy: 1e-9)
+    XCTAssertEqual(
+      try XCTUnwrap(PowerSmoothing.blend(previous: 30.0, sample: 31.0, factor: 0.35)), 30.35,
+      accuracy: 1e-9)
+  }
+
+  func testBlendDropsWhenTheSampleDisappears() {
+    // Unplugging removes a key entirely; the panel must lose the tile, not keep a ghost value.
+    XCTAssertNil(PowerSmoothing.blend(previous: 30, sample: nil))
+  }
+
+  func testBlendConvergesToExactEquality() throws {
+    // An asymptote would defeat the Equatable diff in BatteryMonitor.refresh and republish forever,
+    // so blend snaps to the sample once it is inside display precision.
+    var value: Double? = 0
+    for _ in 0..<40 { value = PowerSmoothing.blend(previous: value, sample: 100) }
+    XCTAssertEqual(try XCTUnwrap(value), 100)
+  }
+
+  func testSmoothLeavesStableFieldsUntouched() throws {
+    var old = BatteryMetrics()
+    old.temperatureC = 30.0
+    old.cycleCount = 224
+    old.healthPercent = 89
+
+    var new = BatteryMetrics()
+    new.temperatureC = 31.0
+    new.cycleCount = 225
+    new.healthPercent = 88
+
+    let out = PowerSmoothing.smooth(old, into: new)
+    XCTAssertEqual(try XCTUnwrap(out.temperatureC), 30.35, accuracy: 1e-9)
+    XCTAssertEqual(out.cycleCount, 225)
+    XCTAssertEqual(out.healthPercent, 88)
+  }
+
+  func testSmoothWithNoPreviousSnapshotIsIdentity() {
+    var new = BatteryMetrics()
+    new.temperatureC = 31.0
+    new.batteryPowerWatts = -5.715
+    XCTAssertEqual(PowerSmoothing.smooth(nil, into: new), new)
+  }
 }

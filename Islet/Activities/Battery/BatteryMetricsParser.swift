@@ -99,6 +99,52 @@ enum BatteryMetricsParser {
     if let mW = int(t, "AdapterEfficiencyLoss") { m.adapterLossWatts = Double(mW) / 1000.0 }
   }
 
+  // MARK: - Charge state
+
+  static func applyChargeState(_ m: inout BatteryMetrics, from p: [String: Any]) {
+    m.isCharging = bool(p, "IsCharging")
+    m.fullyCharged = bool(p, "FullyCharged")
+    m.externalConnected = bool(p, "ExternalConnected")
+    if let charger = p["ChargerData"] as? [String: Any] {
+      m.notChargingReason = uint64(charger, "NotChargingReason")
+    }
+  }
+
+  // MARK: - Condition
+
+  /// IOPS reports `BatteryHealthCondition` as an empty string on a healthy pack and a real string
+  /// ("Service Recommended", "Permanent Battery Failure") when something is wrong. When it is blank
+  /// we fall back to the `BatteryHealth` grade, translating the healthy grade into the word System
+  /// Settings uses. Any non-"Good" grade is surfaced verbatim so a fault is never hidden.
+  static func condition(health: String?, condition: String?) -> String? {
+    if let condition, !condition.isEmpty { return condition }
+    guard let health, !health.isEmpty else { return nil }
+    return health == "Good" ? "Normal" : health
+  }
+
+  // MARK: - Whole snapshot
+
+  static func parse(
+    smartBattery: [String: Any],
+    adapter: [String: Any]?,
+    powerSource: [String: Any]?,
+    lowPowerMode: Bool
+  ) -> BatteryMetrics {
+    var m = BatteryMetrics()
+    applyHealth(&m, from: smartBattery)
+    applyInstant(&m, from: smartBattery)
+    applyCharger(&m, from: adapter)
+    applyTelemetry(&m, from: smartBattery)
+    applyChargeState(&m, from: smartBattery)
+    if let powerSource {
+      m.condition = condition(
+        health: powerSource["BatteryHealth"] as? String,
+        condition: powerSource["BatteryHealthCondition"] as? String)
+    }
+    m.lowPowerMode = lowPowerMode
+    return m
+  }
+
   // MARK: - Typed dictionary access
 
   static func int(_ p: [String: Any], _ key: String) -> Int? {
