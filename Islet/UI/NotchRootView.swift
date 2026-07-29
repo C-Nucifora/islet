@@ -150,6 +150,30 @@ struct NotchRootView: View {
       leading: effectiveCompact.leading, trailing: effectiveCompact.trailing)
   }
 
+  /// Identity of the compact slot subtree. The HUD and each sneak get their own, so SwiftUI
+  /// cross-fades between them instead of mutating one subtree in place.
+  private var slotIdentity: String {
+    if hud.hud != nil { return "hud" }
+    if let sneak = sneaks.current { return "sneak-\(sneak.id.uuidString)" }
+    return "activity"
+  }
+
+  /// Accepts a slot measurement only from the subtree that is currently on screen.
+  ///
+  /// Both `onGeometryChange` closures live under `.id(slotIdentity)`. During a cross-fade the
+  /// outgoing subtree is still alive and still reporting, and if it reports LAST its stale width
+  /// wins — stranding a measurement for content that is no longer drawn and sizing the panel to it.
+  /// Each closure captures the identity it was built with; `slotIdentity` here reads the live
+  /// observed objects, so an outgoing subtree's write no longer matches and is dropped.
+  private func applySlotWidth(_ width: CGFloat, leading: Bool, from identity: String) {
+    guard identity == slotIdentity else { return }
+    if leading {
+      compactLeadingWidth = width
+    } else {
+      compactTrailingWidth = width
+    }
+  }
+
   @ViewBuilder private var content: some View {
     if vm.state.isExpanded {
       // The switcher (tabs + gear) sits in the notch band, flanking the hardware notch, and the
@@ -158,23 +182,24 @@ struct NotchRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .top)))
     } else if let slots = compactContent {
+      let identity = slotIdentity
       HStack(spacing: 0) {
         // The measured width already includes the padding — don't add it a second time, or the
         // shape (and the panel sized from it) gains 12pt of dead space per flank.
         slots.leading
           .padding(.leading, 6)
           .onGeometryChange(for: CGFloat.self, of: \.size.width) {
-            compactLeadingWidth = $0
+            applySlotWidth($0, leading: true, from: identity)
           }
         Spacer().frame(width: vm.geometry.notchSize.width)
         slots.trailing
           .padding(.trailing, 6)
           .onGeometryChange(for: CGFloat.self, of: \.size.width) {
-            compactTrailingWidth = $0
+            applySlotWidth($0, leading: false, from: identity)
           }
       }
       .frame(height: vm.geometry.notchSize.height)
-      .id(hud.hud == nil ? sneaks.current?.id.uuidString : "hud")
+      .id(identity)
       .transition(.opacity)
     } else {
       Color.clear
