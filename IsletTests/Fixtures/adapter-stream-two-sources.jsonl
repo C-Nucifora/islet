@@ -1,0 +1,5 @@
+{"type":"data","diff":false,"payload":{"processIdentifier":6712,"bundleIdentifier":"com.apple.WebKit.GPU","parentApplicationBundleIdentifier":"com.apple.Safari","title":"Paranoid Android","artist":"Radiohead","album":"OK Computer","playing":true,"duration":386.466,"elapsedTime":12.5}}
+{"type":"data","diff":true,"payload":{"elapsedTime":18.25}}
+{"type":"data","diff":false,"payload":{"processIdentifier":9931,"bundleIdentifier":"com.spotify.client","title":"Weird Fishes","artist":"Radiohead","album":"In Rainbows","playing":true,"duration":321.2,"elapsedTime":4}}
+{"type":"data","diff":true,"payload":{"elapsedTime":9.5}}
+{"type":"data","diff":false,"payload":{"processIdentifier":7742,"bundleIdentifier":"com.apple.WebKit.GPU","parentApplicationBundleIdentifier":"com.apple.Safari","title":"Videotape","artist":"Radiohead","playing":true,"duration":278,"elapsedTime":1}}

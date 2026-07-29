@@ -136,10 +136,14 @@ struct SettingsView: View {
         Toggle("Haptics", isOn: $haptics)
       }
       Section("Media") {
-        Picker("Source", selection: $sourceMode) {
+        Picker("Player order", selection: $sourceMode) {
           Text("Whatever is playing").tag(MediaSourceMode.auto)
-          Text("Prioritized players").tag(MediaSourceMode.prioritized)
+          Text("My order").tag(MediaSourceMode.prioritized)
         }
+        Text(
+          "Every player is shown. This picks which one gets the big player when more than one is going; the rest appear as icons underneath."
+        )
+        .font(.caption).foregroundStyle(.secondary)
         if sourceMode == .prioritized {
           List {
             ForEach(priorityList, id: \.self) { Text($0).font(.callout.monospaced()) }

@@ -10,6 +10,14 @@ final class AdapterParserTests: XCTestCase {
       .split(separator: "\n").map(String.init)
   }
 
+  func twoSourceLines() throws -> [String] {
+    let url = try XCTUnwrap(
+      Bundle(for: Self.self).url(
+        forResource: "adapter-stream-two-sources", withExtension: "jsonl"))
+    return try String(contentsOf: url, encoding: .utf8)
+      .split(separator: "\n").map(String.init)
+  }
+
   func testEmptyFullPayloadMeansIdle() throws {
     let lines = try fixtureLines()
     XCTAssertEqual(AdapterParser.parse(line: lines[0], current: nil), .idle)
@@ -17,7 +25,7 @@ final class AdapterParserTests: XCTestCase {
 
   func testFullPayloadParses() throws {
     let lines = try fixtureLines()
-    guard case .nowPlaying(let state) = AdapterParser.parse(line: lines[1], current: nil)
+    guard case .nowPlaying(_, let state) = AdapterParser.parse(line: lines[1], current: nil)
     else { return XCTFail("expected nowPlaying") }
     XCTAssertEqual(state.title, "Paranoid Android")
     XCTAssertEqual(state.artist, "Radiohead")
@@ -38,7 +46,7 @@ final class AdapterParserTests: XCTestCase {
     let lines = try fixtureLines()
     var state: PlaybackState?
     for line in lines[1...3] {
-      if case .nowPlaying(let s) = AdapterParser.parse(line: line, current: state) {
+      if case .nowPlaying(_, let s) = AdapterParser.parse(line: line, current: state) {
         state = s
       }
     }
@@ -52,7 +60,7 @@ final class AdapterParserTests: XCTestCase {
     let lines = try fixtureLines()
     var state: PlaybackState?
     for line in lines[1...4] {
-      if case .nowPlaying(let s) = AdapterParser.parse(line: line, current: state) {
+      if case .nowPlaying(_, let s) = AdapterParser.parse(line: line, current: state) {
         state = s
       }
     }
@@ -66,5 +74,53 @@ final class AdapterParserTests: XCTestCase {
 
   func testGarbageLineIgnored() {
     XCTAssertEqual(AdapterParser.parse(line: "not json", current: nil), .ignored)
+  }
+
+  func testSourceKeyResolvesParentAsDisplayIdentity() throws {
+    let lines = try fixtureLines()
+    guard case .nowPlaying(let key, _) = AdapterParser.parse(line: lines[1], current: nil)
+    else { return XCTFail("expected nowPlaying") }
+    XCTAssertEqual(key.bundleIdentifier, "com.apple.WebKit.GPU")
+    XCTAssertEqual(key.pid, 6712)
+    XCTAssertEqual(key.displayBundleIdentifier, "com.apple.Safari")
+  }
+
+  func testTwoSourcesParseToDistinctKeys() throws {
+    let lines = try twoSourceLines()
+    guard case .nowPlaying(let safari, let safariState) =
+      AdapterParser.parse(line: lines[0], current: nil)
+    else { return XCTFail("expected nowPlaying for Safari") }
+    guard case .nowPlaying(let spotify, let spotifyState) =
+      AdapterParser.parse(line: lines[2], current: nil)
+    else { return XCTFail("expected nowPlaying for Spotify") }
+
+    XCTAssertNotEqual(safari, spotify)
+    XCTAssertEqual(safari.displayBundleIdentifier, "com.apple.Safari")
+    XCTAssertEqual(spotify.displayBundleIdentifier, "com.spotify.client")
+    XCTAssertEqual(safariState.title, "Paranoid Android")
+    XCTAssertEqual(spotifyState.title, "Weird Fishes")
+  }
+
+  func testSameBundleDifferentPidIsADistinctSource() throws {
+    let lines = try twoSourceLines()
+    guard case .nowPlaying(let first, _) = AdapterParser.parse(line: lines[0], current: nil),
+      case .nowPlaying(let second, _) = AdapterParser.parse(line: lines[4], current: nil)
+    else { return XCTFail("expected two nowPlaying updates") }
+    XCTAssertEqual(first.bundleIdentifier, second.bundleIdentifier)
+    XCTAssertNotEqual(first.pid, second.pid)
+    XCTAssertNotEqual(first, second)
+  }
+
+  func testDiffMergesOntoTheSourceItWasGivenAsCurrent() throws {
+    let lines = try twoSourceLines()
+    guard case .nowPlaying(let spotify, let base) =
+      AdapterParser.parse(line: lines[2], current: nil)
+    else { return XCTFail("expected nowPlaying for Spotify") }
+    guard case .nowPlaying(let merged, let state) =
+      AdapterParser.parse(line: lines[3], current: base)
+    else { return XCTFail("expected nowPlaying after diff") }
+    XCTAssertEqual(merged, spotify)  // the diff inherits the key it merged onto
+    XCTAssertEqual(state.title, "Weird Fishes")
+    XCTAssertEqual(state.elapsed, 9.5, accuracy: 0.001)
   }
 }

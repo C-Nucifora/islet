@@ -1,0 +1,116 @@
+import Foundation
+
+/// Every media source Islet currently knows about, keyed by `SourceID`.
+///
+/// Pure and actor-free on purpose: the insert / update / remove / idle-expiry state machine and the
+/// display ordering are the parts worth testing, and tests call them synchronously.
+struct MediaSourceTable: Equatable {
+  /// Deactivate a paused source this long after it paused, so a paused track eventually leaves the
+  /// island. Was a single 60s timer on the activity; it is per-source now.
+  let idleTimeout: TimeInterval
+  private(set) var states: [SourceID: PlaybackState] = [:]
+  /// When each source first appeared, used as the recency tiebreaker.
+  private(set) var firstSeen: [SourceID: Date] = [:]
+  /// When each paused source becomes eligible for eviction. Absent while playing.
+  private(set) var idleDeadlines: [SourceID: Date] = [:]
+
+  init(idleTimeout: TimeInterval = 60) { self.idleTimeout = idleTimeout }
+
+  var isEmpty: Bool { states.isEmpty }
+
+  /// The soonest idle deadline, so a single timer can drive expiry for the whole table.
+  var nextDeadline: Date? { idleDeadlines.values.min() }
+
+  /// Inserts or updates a source. Returns true when the key was not already present.
+  @discardableResult
+  mutating func upsert(_ key: SourceID, _ state: PlaybackState, now: Date) -> Bool {
+    let isNew = states[key] == nil
+    states[key] = state
+    if isNew { firstSeen[key] = now }
+    if state.isPlaying {
+      idleDeadlines[key] = nil
+    } else if idleDeadlines[key] == nil {
+      // The countdown starts when playback pauses, and repeated paused updates do not push it
+      // back — otherwise a chatty player keeps a paused track on screen forever.
+      idleDeadlines[key] = now.addingTimeInterval(idleTimeout)
+    }
+    return isNew
+  }
+
+  /// Removes a source. Returns true when something was actually removed.
+  @discardableResult
+  mutating func remove(_ key: SourceID) -> Bool {
+    guard states.removeValue(forKey: key) != nil else { return false }
+    firstSeen[key] = nil
+    idleDeadlines[key] = nil
+    return true
+  }
+
+  mutating func removeAll() {
+    states.removeAll()
+    firstSeen.removeAll()
+    idleDeadlines.removeAll()
+  }
+
+  /// Evicts every source whose paused deadline has passed. Returns the keys removed.
+  @discardableResult
+  mutating func expire(now: Date) -> [SourceID] {
+    let due = idleDeadlines.filter { $0.value <= now }.keys.sorted { $0.pid < $1.pid }
+    for key in due { remove(key) }
+    return due
+  }
+
+  /// Display order: rank first (hidden sources dropped), then playing before paused, then most
+  /// recently seen, then pid so the order is deterministic.
+  func ordered(mode: MediaSourceMode, priorityList: [String]) -> [SourceID] {
+    states.keys
+      .compactMap { key -> (SourceID, Int)? in
+        guard
+          let rank = SourceFilter.rank(
+            bundleID: key.displayBundleIdentifier, mode: mode, priorityList: priorityList)
+        else { return nil }
+        return (key, rank)
+      }
+      .sorted { left, right in
+        if left.1 != right.1 { return left.1 < right.1 }
+        let leftPlaying = states[left.0]?.isPlaying ?? false
+        let rightPlaying = states[right.0]?.isPlaying ?? false
+        if leftPlaying != rightPlaying { return leftPlaying }
+        let leftSeen = firstSeen[left.0] ?? .distantPast
+        let rightSeen = firstSeen[right.0] ?? .distantPast
+        if leftSeen != rightSeen { return leftSeen > rightSeen }
+        return left.0.pid < right.0.pid
+      }
+      .map(\.0)
+  }
+
+  /// The source that owns the hero player.
+  func primaryKey(mode: MediaSourceMode, priorityList: [String]) -> SourceID? {
+    ordered(mode: mode, priorityList: priorityList).first
+  }
+}
+
+/// Reduces the known sources into the chip strip drawn under the hero player. Pure so the cap and
+/// the de-duplication are testable without a view.
+enum SourceStrip {
+  /// Adapter sources (which have metadata) come first; CoreAudio sources are appended unless the
+  /// same app is already represented, which would draw Spotify twice.
+  static func merge(adapter: [SourceID], audio: [SourceID]) -> [SourceID] {
+    let known = Set(adapter.map(\.displayBundleIdentifier))
+    return adapter + audio.filter { !known.contains($0.displayBundleIdentifier) }
+  }
+
+  /// Everything except the app holding the hero. Compared on display identity, so a second
+  /// WebKit.GPU process of the same Safari does not become its own chip.
+  static func secondary(all: [SourceID], primary: SourceID?) -> [SourceID] {
+    guard let primary else { return all }
+    return all.filter { $0.displayBundleIdentifier != primary.displayBundleIdentifier }
+  }
+
+  /// At most `limit` chips, then a "+N" pill. The collapsed island's width is derived from the
+  /// measured widths of its compact slots, so an uncapped strip would widen the island itself.
+  static func layout(_ sources: [SourceID], limit: Int = 3) -> (shown: [SourceID], overflow: Int) {
+    guard sources.count > limit else { return (sources, 0) }
+    return (Array(sources.prefix(limit)), sources.count - limit)
+  }
+}

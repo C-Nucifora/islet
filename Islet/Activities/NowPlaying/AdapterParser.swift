@@ -6,7 +6,10 @@ import Foundation
 /// diff=true merges keys onto the previous state (null value => key removed).
 enum AdapterUpdate: Equatable {
   case ignored
-  case nowPlaying(PlaybackState)
+  case nowPlaying(SourceID, PlaybackState)
+  /// A source Islet was tracking has ended. The vendored adapter cannot report this itself; it is
+  /// synthesised by `MediaWatcher.expand` when the adapter's single live record changes hands.
+  case sourceGone(SourceID)
   case idle
 }
 
@@ -31,7 +34,7 @@ enum AdapterParser {
 
     // Mandatory keys per adapter's keys.m: a state without a title is "nothing playing".
     if state.title.isEmpty { return .idle }
-    return .nowPlaying(state)
+    return .nowPlaying(SourceID(state: state), state)
   }
 
   private static func apply(_ payload: [String: Any], to state: inout PlaybackState) {
@@ -40,6 +43,9 @@ enum AdapterParser {
     if let v = payload["artist"] as? String { state.artist = v }
     if let v = payload["album"] as? String { state.album = v }
     if let v = payload["bundleIdentifier"] as? String { state.bundleIdentifier = v }
+    if let v = payload["processIdentifier"] as? Int {
+      state.processIdentifier = Int32(truncatingIfNeeded: v)
+    }
     if let v = payload["playing"] as? Bool { state.isPlaying = v }
     if let v = payload["duration"] as? Double { state.duration = v }
     if let v = payload["elapsedTime"] as? Double {

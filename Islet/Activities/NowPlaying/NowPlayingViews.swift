@@ -47,32 +47,91 @@ struct ExpandedPlayerView: View {
   @State private var scrubValue: Double = 0
 
   var body: some View {
-    if let pb = activity.playback {
-      HStack(spacing: 16) {
-        artwork(pb)
-        VStack(alignment: .leading, spacing: 6) {
-          HStack(spacing: 6) {
-            if let icon = Self.appIcon(for: pb.sourceBundleIdentifier) {
-              Image(nsImage: icon).resizable().frame(width: 14, height: 14)
-            }
-            Text(pb.title).font(.headline).lineLimit(1)
-            if pb.isAdvertisement {
-              Text("Ad")
-                .font(.caption2.weight(.bold))
-                .padding(.horizontal, 5).padding(.vertical, 1)
-                .background(Capsule().fill(.yellow.opacity(0.25)))
-                .foregroundStyle(.yellow)
-            }
-          }
-          Text(pb.artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-          scrubber(pb)
-          controls(pb)
-        }
+    VStack(spacing: 6) {
+      if let pb = activity.playback {
+        hero(pb)
+      } else {
+        Text("Nothing playing")
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
-      .foregroundStyle(.white)
-    } else {
-      Text("Nothing playing").foregroundStyle(.secondary)
+      if !activity.strip.isEmpty { sourceStrip }
     }
+    .foregroundStyle(.white)
+  }
+
+  private func hero(_ pb: PlaybackState) -> some View {
+    HStack(spacing: 16) {
+      artwork(pb)
+      VStack(alignment: .leading, spacing: 6) {
+        HStack(spacing: 6) {
+          if let icon = Self.appIcon(for: pb.sourceBundleIdentifier) {
+            Image(nsImage: icon).resizable().frame(width: 14, height: 14)
+          }
+          Text(pb.title).font(.headline).lineLimit(1)
+          if pb.isAdvertisement {
+            Text("Ad")
+              .font(.caption2.weight(.bold))
+              .padding(.horizontal, 5).padding(.vertical, 1)
+              .background(Capsule().fill(.yellow.opacity(0.25)))
+              .foregroundStyle(.yellow)
+          }
+        }
+        Text(pb.artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+        scrubber(pb)
+        controls(pb)
+      }
+    }
+  }
+
+  /// Other apps producing audio right now. Chips only: no title, no artist, no transport — that is
+  /// the ceiling of the non-fork approach, and it is why the design spec's "Upgrade path — fork the
+  /// MediaRemote adapter for true per-source media" section exists.
+  private var sourceStrip: some View {
+    let layout = SourceStrip.layout(activity.strip)
+    return HStack(spacing: 6) {
+      ForEach(layout.shown, id: \.self) { source in
+        Button {
+          activity.promote(source)
+        } label: {
+          chip(source)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+          "Switch to \(Self.appName(for: source.displayBundleIdentifier))")
+      }
+      if layout.overflow > 0 {
+        Text("+\(layout.overflow)")
+          .font(.caption2.weight(.semibold)).monospacedDigit()
+          .foregroundStyle(.secondary)
+          .padding(.horizontal, 6)
+          .frame(height: 22)
+          .background(Capsule().fill(.white.opacity(0.08)))
+          .accessibilityLabel("\(layout.overflow) more sources")
+      }
+      Spacer(minLength: 0)
+    }
+    .frame(height: 22)
+  }
+
+  private func chip(_ source: SourceID) -> some View {
+    // CoreAudio sources have no PlaybackState; they are listed precisely because they are
+    // producing output, so absent means playing.
+    let isPlaying = activity.sources[source]?.isPlaying ?? true
+    return HStack(spacing: 4) {
+      if let icon = Self.appIcon(for: source.displayBundleIdentifier) {
+        Image(nsImage: icon).resizable().frame(width: 14, height: 14)
+      } else {
+        Image(systemName: "speaker.wave.2.fill").font(.caption2)
+      }
+      Circle()
+        .fill(isPlaying ? Color.green : Color.secondary)
+        .frame(width: 5, height: 5)
+    }
+    .padding(.horizontal, 6)
+    .frame(height: 22)
+    .background(Capsule().fill(.white.opacity(0.10)))
+    .opacity(0.7)
   }
 
   private func artwork(_ pb: PlaybackState) -> some View {
@@ -158,17 +217,15 @@ struct ExpandedPlayerView: View {
     return NSWorkspace.shared.icon(forFile: url.path)
   }
 
-  /// The source app's display name, for attribution in a track-change event. Empty when the bundle
-  /// ID does not resolve — a browser-hosted player whose parent app is not installed, say.
-  static func appName(for bundleID: String) -> String {
-    guard !bundleID.isEmpty,
-      let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
-    else { return "" }
-    return FileManager.default.displayName(atPath: url.path)
-  }
-
   private func format(_ t: TimeInterval) -> String {
     let s = Int(t.rounded())
     return String(format: "%d:%02d", s / 60, s % 60)
+  }
+
+  /// Human-readable app name for the chip's accessibility label.
+  static func appName(for bundleID: String) -> String {
+    guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+    else { return bundleID }
+    return FileManager.default.displayName(atPath: url.path)
   }
 }

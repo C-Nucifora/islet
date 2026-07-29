@@ -5,6 +5,9 @@ struct PlaybackState: Equatable {
   var artist = ""
   var album = ""
   var bundleIdentifier = ""
+  /// The pid the adapter reported. Part of the source key: bundle identifier alone is not unique,
+  /// because several com.apple.WebKit.GPU processes coexist, one per media-hosting web view.
+  var processIdentifier: Int32 = 0
   var isPlaying = false
   var duration: TimeInterval = 0
   var elapsed: TimeInterval = 0

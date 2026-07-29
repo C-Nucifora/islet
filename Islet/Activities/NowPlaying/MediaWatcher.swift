@@ -9,7 +9,11 @@ final class MediaWatcher: @unchecked Sendable {
   private var pipe: Pipe?
   private var restartTask: Task<Void, Never>?
   private var failureCount = 0
-  private var lastState: PlaybackState?
+  /// Diff base per source. The vendored adapter collapses concurrent players, so this holds at
+  /// most one entry today — the shape is what the fork described in the design spec's
+  /// "Upgrade path — fork the MediaRemote adapter for true per-source media" section needs.
+  private var lastStates: [SourceID: PlaybackState] = [:]
+  private var currentSource: SourceID?
   private var buffer = Data()  // guarded by `queue`
   private var isRunning = false
   /// Human-readable adapter status for the Settings window.
@@ -107,19 +111,46 @@ final class MediaWatcher: @unchecked Sendable {
     }
   }
 
-  private func handle(line: String) {
-    let update = AdapterParser.parse(line: line, current: lastState)
+  /// Sequences one parsed update into what downstream should actually see.
+  ///
+  /// `Vendor/mediaremote-adapter-src/src/adapter/stream.m:189` keeps a single `liveData` record and
+  /// calls `resetAll()` whenever a notification arrives from a different process (`:396-408`,
+  /// `:437-449`). A change of source key therefore means the previous source is *gone*, not
+  /// backgrounded, and has to be evicted before the new one lands. Pure so the sequencing is
+  /// testable without a process.
+  static func expand(_ update: AdapterUpdate, current: SourceID?) -> [AdapterUpdate] {
     switch update {
     case .ignored:
-      return
-    case .idle:
-      failureCount = 0
-      lastState = nil
-    case .nowPlaying(let state):
-      failureCount = 0
-      lastState = state
+      return []
+    case .idle, .sourceGone:
+      return [update]
+    case .nowPlaying(let key, let state):
+      guard let current, current != key else { return [update] }
+      return [.sourceGone(current), .nowPlaying(key, state)]
     }
-    continuation.yield(update)
+  }
+
+  private func handle(line: String) {
+    let base = currentSource.flatMap { lastStates[$0] }
+    for update in Self.expand(AdapterParser.parse(line: line, current: base), current: currentSource)
+    {
+      switch update {
+      case .ignored:
+        continue
+      case .idle:
+        failureCount = 0
+        lastStates.removeAll()
+        currentSource = nil
+      case .sourceGone(let key):
+        lastStates[key] = nil
+        if currentSource == key { currentSource = nil }
+      case .nowPlaying(let key, let state):
+        failureCount = 0
+        lastStates[key] = state
+        currentSource = key
+      }
+      continuation.yield(update)
+    }
   }
 
   private func processDied() {
