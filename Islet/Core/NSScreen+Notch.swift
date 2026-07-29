@@ -22,12 +22,24 @@ extension NSScreen {
     return CFUUIDCreateString(nil, uuid) as String
   }
 
-  var notchGeometry: NotchGeometry {
-    NotchGeometry(
-      screenFrame: frame,
+  /// The notch numbers AppKit reports right now. Split out from geometry construction so callers
+  /// can run the reading through `NotchStickiness` first — these can come back empty transiently,
+  /// and an empty reading silently means "no notch, use the 200pt fallback".
+  var notchReading: NotchStickiness.Reading {
+    NotchStickiness.Reading(
       safeAreaTop: safeAreaInsets.top,
       auxLeftWidth: auxiliaryTopLeftArea?.width ?? 0,
-      auxRightWidth: auxiliaryTopRightArea?.width ?? 0,
+      auxRightWidth: auxiliaryTopRightArea?.width ?? 0)
+  }
+
+  /// Geometry for this screen from an explicit reading, so the caller decides whether that reading
+  /// is the live one or a remembered one.
+  func notchGeometry(reading: NotchStickiness.Reading) -> NotchGeometry {
+    NotchGeometry(
+      screenFrame: frame,
+      safeAreaTop: reading.safeAreaTop,
+      auxLeftWidth: reading.auxLeftWidth,
+      auxRightWidth: reading.auxRightWidth,
       menuBarHeight: frame.maxY - visibleFrame.maxY)
   }
 }
