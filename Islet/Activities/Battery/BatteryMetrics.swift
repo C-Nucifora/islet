@@ -19,9 +19,19 @@ struct PDProfile: Identifiable, Equatable {
 /// rather than rendering a zero for something it never read. `hasAny` is the "did we read anything
 /// worth showing at all" test that decides whether the metrics block appears.
 struct BatteryMetrics: Equatable {
-  // Health. Two numbers, deliberately: `healthPercent` matches System Settings → Battery,
-  // `rawHealthPercent` matches AlDente and coconutBattery. They disagree by 2-3 points and both
-  // are shown, labelled, so neither reads as a bug.
+  // Health. Two numbers, deliberately, because there is no single right one.
+  //
+  // `healthPercent` is NominalChargeCapacity/DesignCapacity — the closest thing to what System
+  // Settings → Battery shows, but NOT identical to it. Measured on this machine: the ratio gives
+  // 88% (5511/6249) while System Settings says 90%, and NominalChargeCapacity itself drifts between
+  // samples (5533 an hour earlier). macOS evidently smooths or latches its figure, and no public
+  // IOKit key reproduces it — `MaxCapacity` is a percentage sentinel fixed at 100 on Apple Silicon.
+  //
+  // `rawHealthPercent` is AppleRawMaxCapacity/DesignCapacity, which is what AlDente and
+  // coconutBattery show — 86% here.
+  //
+  // Both are displayed, labelled, so a reading that disagrees with another tool reads as a
+  // different definition rather than as a bug.
   var healthPercent: Int?  // NominalChargeCapacity / DesignCapacity
   var rawHealthPercent: Int?  // AppleRawMaxCapacity / DesignCapacity
   var rawMaxCapacityMAh: Int?

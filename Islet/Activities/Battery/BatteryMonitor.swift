@@ -12,6 +12,7 @@ final class BatteryMonitor: ObservableObject {
 
   private var runLoopSource: CFRunLoopSource?
   private var metricsTimer: AnyCancellable?
+  private var cancellables: Set<AnyCancellable> = []
   private var fastMetrics = false
 
   /// Temperature/power/charger change continuously, so refresh fast (1 s) while a battery view is
@@ -42,6 +43,12 @@ final class BatteryMonitor: ObservableObject {
     runLoopSource = source
     CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
     restartMetricsTimer()
+    // Low Power Mode is a ProcessInfo flag, not an IOKit property, so nothing else wakes us when
+    // it flips. Never shell out to pmset for this.
+    NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.refresh() }
+      .store(in: &cancellables)
   }
 
   private func setFastMetrics(_ live: Bool) {
@@ -61,12 +68,15 @@ final class BatteryMonitor: ObservableObject {
   /// tick. Assigning regardless republishes three `@Published`s a second and redraws the whole
   /// expanded island for nothing, so diff first.
   func refresh() {
-    let newState = Self.readState()
-    if newState != state { state = newState }
-    let newMetrics = SmartBatteryReader.read()
-    if newMetrics != metrics { metrics = newMetrics }
-    let newPeripherals = PeripheralBatteryReader.read()
-    if newPeripherals != peripherals { peripherals = newPeripherals }
+    let freshState = Self.readState()
+    if freshState != state { state = freshState }
+
+    let fresh = SmartBatteryReader.read()
+    let smoothed = fresh.map { PowerSmoothing.smooth(metrics, into: $0) }
+    if smoothed != metrics { metrics = smoothed }
+
+    let freshPeripherals = PeripheralBatteryReader.read()
+    if freshPeripherals != peripherals { peripherals = freshPeripherals }
   }
 
   static func readState() -> BatteryState? {
