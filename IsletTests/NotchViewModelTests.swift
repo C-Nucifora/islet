@@ -46,14 +46,16 @@ final class NotchViewModelTests: XCTestCase {
   func testPanelFrameStartsHuggingTheNotch() {
     let vm = makeVM()
     XCTAssertEqual(vm.panelFrame, vm.geometry.collapsedPanelFrame())
-    XCTAssertLessThan(vm.panelFrame.width, vm.geometry.panelFrame.width)
+    XCTAssertLessThan(
+      vm.panelFrame.width, vm.geometry.panelFrame(height: Metrics.expandedSize.height).width)
   }
 
   func testPanelFrameGrowsBeforeTheIslandExpands() {
     let vm = makeVM(mode: .clickToPin)
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
     XCTAssertEqual(vm.state, .expanded(pinned: true))
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame)  // grown synchronously, not deferred
+    // grown synchronously, not deferred
+    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.expandedSize.height))
   }
 
   func testPanelFrameStaysGrownUntilTheClosingAnimationEnds() {
@@ -62,7 +64,7 @@ final class NotchViewModelTests: XCTestCase {
     vm.handleMouseDown(CGPoint(x: 100, y: 500))
     XCTAssertEqual(vm.state, .closed)
     // Still expanded-sized: shrinking here would clip the island mid-collapse.
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame)
+    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.expandedSize.height))
   }
 
   func testPanelFrameShrinksAfterCollapsing() async throws {
@@ -93,6 +95,57 @@ final class NotchViewModelTests: XCTestCase {
     vm.updateCompactWidths(leading: 18, trailing: 76)
     XCTAssertEqual(
       vm.panelFrame, vm.geometry.collapsedPanelFrame(compactLeading: 18, compactTrailing: 76))
+  }
+
+  // MARK: - Per-tab height tiers
+
+  func testExpandedHeightStartsAtTheBaseTier() {
+    let vm = makeVM()
+    XCTAssertEqual(vm.expandedHeight, Metrics.expandedSize.height)
+    XCTAssertEqual(vm.expandedRect, vm.geometry.expandedRect(height: Metrics.expandedSize.height))
+  }
+
+  func testSetExpandedHeightGrowsThePanelImmediately() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    vm.setExpandedHeight(Metrics.tallExpandedHeight)
+    XCTAssertEqual(vm.expandedHeight, Metrics.tallExpandedHeight)
+    // Grown synchronously: a taller tab must never be drawn into a panel still sized for the
+    // shorter one it replaced.
+    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
+    XCTAssertEqual(vm.expandedRect.height, Metrics.tallExpandedHeight)
+  }
+
+  func testSetExpandedHeightShrinksBackOnlyAfterTheDelay() async throws {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    vm.setExpandedHeight(Metrics.tallExpandedHeight)
+    vm.setExpandedHeight(Metrics.expandedSize.height)
+    // Still tall: shrinking here would clip the outgoing tab mid-cross-fade.
+    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
+    try await Task.sleep(for: Motion.panelShrinkDelay + .milliseconds(200))
+    // The deferred shrink re-reads state and height when it fires rather than capturing them, so
+    // pin both down first: a failure here means the shrink resolved against the wrong inputs, not
+    // that the shrink itself is broken.
+    XCTAssertEqual(vm.state, .expanded(pinned: true), "the island should still be open")
+    XCTAssertEqual(vm.expandedHeight, Metrics.expandedSize.height, "height should be back at base")
+    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.expandedSize.height))
+  }
+
+  func testTallExpandedRectSwallowsAClickTheBaseTierWouldTreatAsOutside() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    vm.setExpandedHeight(Metrics.tallExpandedHeight)
+    // y = 900 is 217pt below the screen top: inside a 250pt island, below a 190pt one.
+    vm.handleMouseDown(CGPoint(x: 864, y: 900))
+    XCTAssertEqual(vm.state, .expanded(pinned: true))
+  }
+
+  func testBaseExpandedRectTreatsThatSamePointAsOutside() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    vm.handleMouseDown(CGPoint(x: 864, y: 900))
+    XCTAssertEqual(vm.state, .closed)
   }
 
   func testHoverRegionWhileExpandedIsExpandedRect() {
@@ -137,7 +190,8 @@ final class NotchViewModelTests: XCTestCase {
     vm.handleMouseDown(CGPoint(x: 100, y: 500))  // close: a shrink is scheduled
     vm.cancelPendingShrink()
     try await Task.sleep(for: Motion.panelShrinkDelay + .milliseconds(200))
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame)  // cancelled, so nothing shrank
+    // cancelled, so nothing shrank
+    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.expandedSize.height))
 
     // A later slot measurement must still be able to schedule a fresh shrink.
     vm.updateCompactWidths(leading: 10, trailing: 10)

@@ -52,16 +52,21 @@ struct NotchGeometry: Equatable {
       height: notchRect.height + Metrics.hitSlop)
   }
 
-  var expandedRect: CGRect {
+  /// The expanded island on screen. Height is a per-tab tier — `Metrics.expandedSize.height` for
+  /// the base one, `Metrics.tallExpandedHeight` for the dense ones — so it is a parameter rather
+  /// than a constant. The island always hangs off the top edge, so only the bottom edge moves.
+  func expandedRect(height: CGFloat) -> CGRect {
     CGRect(
       x: screenFrame.midX - Metrics.expandedSize.width / 2,
-      y: screenFrame.maxY - Metrics.expandedSize.height,
-      width: Metrics.expandedSize.width, height: Metrics.expandedSize.height)
+      y: screenFrame.maxY - height,
+      width: Metrics.expandedSize.width, height: height)
   }
 
-  var panelFrame: CGRect {
+  /// The panel hosting the expanded island: wide enough for the ear margins, tall enough for the
+  /// drop shadow below the island's bottom edge.
+  func panelFrame(height: CGFloat) -> CGRect {
     let w = Metrics.expandedSize.width + Metrics.earMargin * 2
-    let h = Metrics.expandedSize.height + Metrics.shadowPadding
+    let h = height + Metrics.shadowPadding
     return CGRect(x: screenFrame.midX - w / 2, y: screenFrame.maxY - h, width: w, height: h)
   }
 

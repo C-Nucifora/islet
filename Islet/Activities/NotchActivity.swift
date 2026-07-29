@@ -19,8 +19,12 @@ protocol NotchActivity: AnyObject {
   var expandedView: AnyView { get }
   /// SF Symbol used for this activity's chip in the expanded switcher.
   var tabIcon: String { get }
+  /// Height tier this activity's expanded view wants. Defaults to the base tier; dense tabs
+  /// (power, system stats) return `Metrics.tallExpandedHeight`.
+  var preferredExpandedHeight: CGFloat { get }
 }
 
 extension NotchActivity {
   var tabIcon: String { "app.dashed" }
+  var preferredExpandedHeight: CGFloat { Metrics.expandedSize.height }
 }

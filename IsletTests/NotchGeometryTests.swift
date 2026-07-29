@@ -26,10 +26,44 @@ final class NotchGeometryTests: XCTestCase {
   }
 
   func testPanelFrameFixedAndTopCentered() {
-    XCTAssertEqual(mbp.panelFrame.width, Metrics.expandedSize.width + Metrics.earMargin * 2)
-    XCTAssertEqual(mbp.panelFrame.height, Metrics.expandedSize.height + Metrics.shadowPadding)
-    XCTAssertEqual(mbp.panelFrame.maxY, 1117)
-    XCTAssertEqual(mbp.panelFrame.midX, 864, accuracy: 0.5)
+    let base = mbp.panelFrame(height: Metrics.expandedSize.height)
+    XCTAssertEqual(base.width, Metrics.expandedSize.width + Metrics.earMargin * 2)
+    XCTAssertEqual(base.height, Metrics.expandedSize.height + Metrics.shadowPadding)
+    XCTAssertEqual(base.maxY, 1117)
+    XCTAssertEqual(base.midX, 864, accuracy: 0.5)
+  }
+
+  func testExpandedRectFollowsTheRequestedHeight() {
+    let base = mbp.expandedRect(height: Metrics.expandedSize.height)
+    let tall = mbp.expandedRect(height: Metrics.tallExpandedHeight)
+    XCTAssertEqual(base.height, 190)
+    XCTAssertEqual(tall.height, 250)
+    // Both hang off the top edge and stay centred on the screen; only the bottom edge moves.
+    XCTAssertEqual(base.maxY, 1117)
+    XCTAssertEqual(tall.maxY, 1117)
+    XCTAssertEqual(tall.midX, 864, accuracy: 0.5)
+    XCTAssertEqual(tall.width, base.width)
+    XCTAssertLessThan(tall.minY, base.minY)
+  }
+
+  func testPanelFrameFollowsTheRequestedHeight() {
+    let tall = mbp.panelFrame(height: Metrics.tallExpandedHeight)
+    XCTAssertEqual(tall.height, Metrics.tallExpandedHeight + Metrics.shadowPadding)
+    // Width is fixed: only the height tier varies per tab.
+    XCTAssertEqual(tall.width, Metrics.expandedSize.width + Metrics.earMargin * 2)
+    XCTAssertEqual(tall.maxY, 1117)
+    XCTAssertEqual(tall.midX, 864, accuracy: 0.5)
+  }
+
+  func testTallPanelFrameContainsTheBaseOneAndItsIsland() {
+    let base = mbp.panelFrame(height: Metrics.expandedSize.height)
+    let tall = mbp.panelFrame(height: Metrics.tallExpandedHeight)
+    // Switching tiers never has to move the panel sideways, and the union of the two frames is
+    // just the tall one — which is what lets the view model grow now and shrink later without
+    // ever clipping the island.
+    XCTAssertTrue(tall.contains(base))
+    XCTAssertEqual(base.union(tall), tall)
+    XCTAssertTrue(tall.contains(mbp.expandedRect(height: Metrics.tallExpandedHeight)))
   }
 
   /// Distance from the notch edge to the panel edge: oversize + corner flare + margin.
@@ -40,8 +74,9 @@ final class NotchGeometryTests: XCTestCase {
   func testCollapsedPanelFrameHugsTheIsland() {
     let bare = mbp.collapsedPanelFrame()
     // Far narrower than the expanded panel, so the rest of the menu bar keeps its clicks.
-    XCTAssertLessThan(bare.width, mbp.panelFrame.width)
-    XCTAssertLessThan(bare.height, mbp.panelFrame.height)
+    let expanded = mbp.panelFrame(height: Metrics.expandedSize.height)
+    XCTAssertLessThan(bare.width, expanded.width)
+    XCTAssertLessThan(bare.height, expanded.height)
     XCTAssertEqual(bare.width, mbp.notchSize.width + collapsedEdge * 2)
     XCTAssertEqual(bare.midX, 864, accuracy: 0.5)  // no compact content -> symmetric
     XCTAssertEqual(bare.maxY, 1117)
@@ -93,7 +128,7 @@ final class NotchGeometryTests: XCTestCase {
       sized,  // the frame we asked for
       sized.offsetBy(dx: 37, dy: 0),  // AppKit nudged us right
       sized.offsetBy(dx: -12.5, dy: 0),  // ... or left, fractionally
-      mbp.panelFrame,  // ... or we are still held at expanded size mid-collapse
+      mbp.panelFrame(height: Metrics.expandedSize.height),  // ... or held at expanded size
     ]
     for panel in panels {
       let body = mbp.collapsedIslandRect(
@@ -144,10 +179,12 @@ final class NotchGeometryTests: XCTestCase {
     XCTAssertEqual(secondary.notchSize.width, 292)
     XCTAssertEqual(secondary.notchRect.minX, 2338, accuracy: 0.01)
     XCTAssertEqual(secondary.notchRect.midX, 2484, accuracy: 0.01)
-    XCTAssertEqual(secondary.panelFrame.midX, 2484, accuracy: 0.01)
-    XCTAssertEqual(secondary.expandedRect.midX, 2484, accuracy: 0.01)
+    XCTAssertEqual(
+      secondary.panelFrame(height: Metrics.expandedSize.height).midX, 2484, accuracy: 0.01)
+    XCTAssertEqual(
+      secondary.expandedRect(height: Metrics.expandedSize.height).midX, 2484, accuracy: 0.01)
     XCTAssertEqual(secondary.collapsedPanelFrame().midX, 2484, accuracy: 0.01)
-    XCTAssertEqual(secondary.panelFrame.maxY, 982)
+    XCTAssertEqual(secondary.panelFrame(height: Metrics.expandedSize.height).maxY, 982)
     let body = secondary.collapsedIslandRect(
       inPanel: secondary.collapsedPanelFrame(), compactLeading: 0, compactTrailing: 0)
     XCTAssertEqual(body.midX, 2484, accuracy: 0.01)

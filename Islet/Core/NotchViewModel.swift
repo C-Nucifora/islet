@@ -15,6 +15,9 @@ final class NotchViewModel: ObservableObject {
   /// drawn centred in the real window, so any divergence from `panelFrame` maps 1:1 onto a
   /// horizontal shift of the island.
   @Published private(set) var actualPanelFrame: CGRect
+  /// Height tier the currently selected tab asked for. Reported by `ExpandedContainerView`; drives
+  /// the drawn island, the hover region, the click-inside test and the panel frame.
+  @Published private(set) var expandedHeight: CGFloat = Metrics.expandedSize.height
   var preventAutoClose = false
 
   let geometry: NotchGeometry
@@ -46,9 +49,12 @@ final class NotchViewModel: ObservableObject {
       .store(in: &cancellables)
   }
 
+  /// The expanded island's rect at the current height tier.
+  var expandedRect: CGRect { geometry.expandedRect(height: expandedHeight) }
+
   /// The region that counts as "hovering" for the current state.
   private var hoverRegion: CGRect {
-    state.isExpanded ? geometry.expandedRect.union(geometry.hitRect) : geometry.hitRect
+    state.isExpanded ? expandedRect.union(geometry.hitRect) : geometry.hitRect
   }
 
   func handleMouseMoved(_ location: CGPoint) {
@@ -71,7 +77,7 @@ final class NotchViewModel: ObservableObject {
     lastMouseLocation = location
     if geometry.hitRect.contains(location) {
       apply(.clickedNotch)
-    } else if state.isExpanded, geometry.expandedRect.contains(location) {
+    } else if state.isExpanded, expandedRect.contains(location) {
       apply(.clickedInsideExpanded)
     } else if state.isExpanded {
       apply(.clickedOutside)
@@ -97,9 +103,19 @@ final class NotchViewModel: ObservableObject {
 
   private func targetPanelFrame(for state: NotchState) -> CGRect {
     state.isExpanded
-      ? geometry.panelFrame
+      ? geometry.panelFrame(height: expandedHeight)
       : geometry.collapsedPanelFrame(
         compactLeading: compactLeadingWidth, compactTrailing: compactTrailingWidth)
+  }
+
+  /// The selected tab's height tier, reported by `ExpandedContainerView`. Reuses the same
+  /// grow-now/shrink-later panel path as expanding does, so switching to a taller tab widens the
+  /// window before the content draws into it and switching back only shrinks once the cross-fade
+  /// has finished.
+  func setExpandedHeight(_ height: CGFloat) {
+    guard height != expandedHeight else { return }
+    withAnimation(Motion.gated(Motion.opening)) { expandedHeight = height }
+    updatePanelFrame(for: state)
   }
 
   /// Grows the panel immediately so nothing is ever clipped mid-animation, but defers shrinking
