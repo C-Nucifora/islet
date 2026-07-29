@@ -6,6 +6,11 @@ struct NotchGeometry: Equatable {
   let notchSize: CGSize
   let hasHardwareNotch: Bool
   let menuBarHeight: CGFloat
+  /// Width of the menu bar area to the LEFT of the hardware notch, as AppKit reports it. Stored
+  /// because the notch is not centred: `auxLeftWidth` and `auxRightWidth` differ by a few points on
+  /// real hardware, and deriving the notch origin from the screen centre shifts the drawn island by
+  /// half that difference — rightward whenever the right aux area is the wider one.
+  let auxLeftWidth: CGFloat
 
   init(
     screenFrame: CGRect, safeAreaTop: CGFloat, auxLeftWidth: CGFloat,
@@ -13,6 +18,7 @@ struct NotchGeometry: Equatable {
   ) {
     self.screenFrame = screenFrame
     self.menuBarHeight = menuBarHeight
+    self.auxLeftWidth = auxLeftWidth
     if safeAreaTop > 0, auxLeftWidth > 0, auxRightWidth > 0 {
       hasHardwareNotch = true
       notchSize = CGSize(
@@ -24,10 +30,16 @@ struct NotchGeometry: Equatable {
     }
   }
 
+  /// With real hardware the notch starts where AppKit says it starts — the screen's left edge plus
+  /// the left aux area. Without one there is nothing to anchor to, so the fallback rectangle
+  /// centres on the screen.
   var notchRect: CGRect {
-    CGRect(
-      x: screenFrame.midX - notchSize.width / 2,
-      y: screenFrame.maxY - notchSize.height,
+    let x =
+      hasHardwareNotch
+      ? screenFrame.minX + auxLeftWidth
+      : screenFrame.midX - notchSize.width / 2
+    return CGRect(
+      x: x, y: screenFrame.maxY - notchSize.height,
       width: notchSize.width, height: notchSize.height)
   }
 

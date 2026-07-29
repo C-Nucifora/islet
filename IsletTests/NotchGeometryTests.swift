@@ -117,4 +117,50 @@ final class NotchGeometryTests: XCTestCase {
     XCTAssertEqual(body.minX - panel.minX, slack, accuracy: 0.01)
     XCTAssertEqual(panel.maxX - body.maxX, slack, accuracy: 0.01)
   }
+
+  // MARK: - Notch origin
+  //
+  // Every fixture above sits at screen origin (0,0) with symmetric 716/716 aux areas, so nothing
+  // catches an x term that forgot `screenFrame.minX` or one that assumed a centred notch.
+
+  func testNotchRectFollowsAuxLeftWidthNotTheScreenCentre() {
+    // Real hardware: the aux areas differ by a few points. Deriving the origin from the screen
+    // centre puts the notch at 712 and drags the whole island 4pt right of the hardware.
+    let offCentre = NotchGeometry(
+      screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+      safeAreaTop: 32, auxLeftWidth: 716, auxRightWidth: 708, menuBarHeight: 37)
+    XCTAssertEqual(offCentre.notchSize.width, 304)
+    XCTAssertEqual(offCentre.notchRect.minX, 716, accuracy: 0.01)
+    XCTAssertEqual(offCentre.notchRect.maxX, 1728 - 708, accuracy: 0.01)
+    XCTAssertNotEqual(offCentre.notchRect.midX, offCentre.screenFrame.midX)
+  }
+
+  func testPanelsCentreOnTheNotchForAScreenAtANonZeroOrigin() {
+    // A second display placed to the right of the built-in one. notch = 1512 - 610 - 610 = 292,
+    // starting at 1728 + 610 = 2338, so its centre is 2484.
+    let secondary = NotchGeometry(
+      screenFrame: CGRect(x: 1728, y: 0, width: 1512, height: 982),
+      safeAreaTop: 32, auxLeftWidth: 610, auxRightWidth: 610, menuBarHeight: 37)
+    XCTAssertEqual(secondary.notchSize.width, 292)
+    XCTAssertEqual(secondary.notchRect.minX, 2338, accuracy: 0.01)
+    XCTAssertEqual(secondary.notchRect.midX, 2484, accuracy: 0.01)
+    XCTAssertEqual(secondary.panelFrame.midX, 2484, accuracy: 0.01)
+    XCTAssertEqual(secondary.expandedRect.midX, 2484, accuracy: 0.01)
+    XCTAssertEqual(secondary.collapsedPanelFrame().midX, 2484, accuracy: 0.01)
+    XCTAssertEqual(secondary.panelFrame.maxY, 982)
+    let body = secondary.collapsedIslandRect(
+      inPanel: secondary.collapsedPanelFrame(), compactLeading: 0, compactTrailing: 0)
+    XCTAssertEqual(body.midX, 2484, accuracy: 0.01)
+  }
+
+  func testFallbackNotchStaysScreenCentred() {
+    // No hardware notch: there is no aux area to anchor to, so the 200pt rectangle keeps centring
+    // on the screen — including on a screen that does not start at x = 0.
+    let ext = NotchGeometry(
+      screenFrame: CGRect(x: 2560, y: 0, width: 2560, height: 1440),
+      safeAreaTop: 0, auxLeftWidth: 0, auxRightWidth: 0, menuBarHeight: 24)
+    XCTAssertFalse(ext.hasHardwareNotch)
+    XCTAssertEqual(ext.notchRect.midX, ext.screenFrame.midX, accuracy: 0.01)
+    XCTAssertEqual(ext.notchRect.minX, 3840 - Metrics.fallbackNotchWidth / 2, accuracy: 0.01)
+  }
 }
