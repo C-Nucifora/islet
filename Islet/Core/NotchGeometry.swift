@@ -69,4 +69,42 @@ struct NotchGeometry: Equatable {
     return CGRect(
       x: notchRect.midX - left, y: screenFrame.maxY - h, width: left + right, height: h)
   }
+
+  // MARK: - Island alignment
+
+  /// Width of the drawn island body — the black shape, EXCLUDING the outward corner flare — for a
+  /// pair of measured compact slot widths. One definition, shared by the view that draws it and by
+  /// `collapsedIslandRect` below that says where it lands.
+  func islandBodyWidth(compactLeading: CGFloat, compactTrailing: CGFloat) -> CGFloat {
+    notchSize.width + Metrics.closedOversize * 2 + compactLeading + compactTrailing
+  }
+
+  /// Horizontal offset that lines the island's notch cut-out up with the hardware notch.
+  ///
+  /// `panel` must be the frame the window ACTUALLY occupies, not the frame the app asked for. The
+  /// island is drawn centred in the real window, so any divergence between requested and real maps
+  /// 1:1 onto a horizontal shift of the drawn island — the drift this function exists to make
+  /// testable. Positioning off the notch's offset within the panel rather than the panel's centre
+  /// also keeps the island aligned while the panel is still held at expanded size mid-collapse.
+  func islandOffset(inPanel panel: CGRect, compactLeading: CGFloat, compactTrailing: CGFloat)
+    -> CGFloat
+  {
+    notchRect.midX - panel.midX + (compactTrailing - compactLeading) / 2
+  }
+
+  /// Where the collapsed island body lands on screen, given the panel it is drawn in. Height is the
+  /// `.closed` body; `.peek` grows by 4pt instead of 2pt but never moves in x, so every alignment
+  /// assertion here holds for both.
+  func collapsedIslandRect(inPanel panel: CGRect, compactLeading: CGFloat, compactTrailing: CGFloat)
+    -> CGRect
+  {
+    let width = islandBodyWidth(compactLeading: compactLeading, compactTrailing: compactTrailing)
+    let height = notchSize.height + Metrics.closedOversize
+    let centreX =
+      panel.midX
+      + islandOffset(
+        inPanel: panel, compactLeading: compactLeading, compactTrailing: compactTrailing)
+    return CGRect(
+      x: centreX - width / 2, y: panel.maxY - height, width: width, height: height)
+  }
 }

@@ -73,4 +73,48 @@ final class NotchGeometryTests: XCTestCase {
     XCTAssertFalse(ext.hasHardwareNotch)
     XCTAssertEqual(ext.notchSize, CGSize(width: Metrics.fallbackNotchWidth, height: 24))
   }
+
+  // MARK: - Island alignment
+  //
+  // The island is drawn centred in the panel window and nudged sideways by `islandOffset`. If that
+  // nudge is computed against a frame the window does not actually have, the divergence lands 1:1
+  // on the drawn island — it slides right and disappears under the hardware notch, and no hover
+  // ever clears it. These pin the offset down as a function of the REAL panel frame.
+
+  func testIslandScreenPositionIsInvariantUnderAnArbitraryPanelFrame() {
+    let leading: CGFloat = 18
+    let trailing: CGFloat = 76
+    let sized = mbp.collapsedPanelFrame(compactLeading: leading, compactTrailing: trailing)
+    // Where the island body must land, expressed only in hardware terms.
+    let expectedMinX = mbp.notchRect.minX - Metrics.closedOversize - leading
+    let expectedMaxX = mbp.notchRect.maxX + Metrics.closedOversize + trailing
+
+    let panels: [CGRect] = [
+      sized,  // the frame we asked for
+      sized.offsetBy(dx: 37, dy: 0),  // AppKit nudged us right
+      sized.offsetBy(dx: -12.5, dy: 0),  // ... or left, fractionally
+      mbp.panelFrame,  // ... or we are still held at expanded size mid-collapse
+    ]
+    for panel in panels {
+      let body = mbp.collapsedIslandRect(
+        inPanel: panel, compactLeading: leading, compactTrailing: trailing)
+      XCTAssertEqual(body.minX, expectedMinX, accuracy: 0.01, "panel \(panel)")
+      XCTAssertEqual(body.maxX, expectedMaxX, accuracy: 0.01, "panel \(panel)")
+      XCTAssertEqual(body.maxY, panel.maxY, accuracy: 0.01, "panel \(panel)")
+    }
+  }
+
+  func testASizedPanelFullyContainsItsIslandOnBothFlanks() {
+    let leading: CGFloat = 18
+    let trailing: CGFloat = 76
+    let panel = mbp.collapsedPanelFrame(compactLeading: leading, compactTrailing: trailing)
+    let body = mbp.collapsedIslandRect(
+      inPanel: panel, compactLeading: leading, compactTrailing: trailing)
+    XCTAssertTrue(panel.contains(body), "panel \(panel) clips island \(body)")
+    // Asymmetric slots must not eat the margin on the narrow side: both flanks keep the corner
+    // flare plus the island margin, which is the whole point of sizing each flank independently.
+    let slack = Metrics.closedRadii.top + Metrics.islandMargin
+    XCTAssertEqual(body.minX - panel.minX, slack, accuracy: 0.01)
+    XCTAssertEqual(panel.maxX - body.maxX, slack, accuracy: 0.01)
+  }
 }
