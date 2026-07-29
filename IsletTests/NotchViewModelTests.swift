@@ -102,4 +102,29 @@ final class NotchViewModelTests: XCTestCase {
     vm.handleMouseMoved(CGPoint(x: 864, y: 1000))
     XCTAssertEqual(vm.state, .expanded(pinned: true))
   }
+
+  // MARK: - Actual panel frame
+  //
+  // `panelFrame` is what we ask AppKit for; `actualPanelFrame` is what the window ended up with.
+  // The island is drawn centred in the real window, so the drawing offset must use the second one.
+
+  func testActualPanelFrameStartsEqualToTheRequestedFrame() {
+    let vm = makeVM()
+    XCTAssertEqual(vm.actualPanelFrame, vm.panelFrame)
+    XCTAssertEqual(vm.actualPanelFrame, vm.geometry.collapsedPanelFrame())
+  }
+
+  func testActualPanelFrameTracksTheWindowNotTheRequest() {
+    let vm = makeVM()
+    let drifted = vm.panelFrame.offsetBy(dx: 37, dy: 0)
+    vm.setActualPanelFrame(drifted)
+    XCTAssertEqual(vm.actualPanelFrame, drifted)
+    XCTAssertNotEqual(vm.panelFrame, drifted)  // the request is left alone
+
+    // The whole point: with the real frame in hand the island still lands on the notch.
+    let body = vm.geometry.collapsedIslandRect(
+      inPanel: vm.actualPanelFrame, compactLeading: 0, compactTrailing: 0)
+    XCTAssertEqual(
+      body.minX, vm.geometry.notchRect.minX - Metrics.closedOversize, accuracy: 0.01)
+  }
 }

@@ -7,8 +7,14 @@ import SwiftUI
 final class NotchViewModel: ObservableObject {
   @Published private(set) var state: NotchState = .closed
   /// Screen-coordinate frame the panel should occupy right now. Tracked so the collapsed island
-  /// doesn't reserve — and swallow the clicks of — the whole expanded footprint.
+  /// doesn't reserve — and swallow the clicks of — the whole expanded footprint. This is a
+  /// REQUEST: AppKit is handed it, and what the window ends up with is `actualPanelFrame`.
   @Published private(set) var panelFrame: CGRect
+  /// The frame the window really occupies, read back from AppKit after every `setFrame` by
+  /// `ScreenManager`. Anything that positions drawn content on screen must use this: the island is
+  /// drawn centred in the real window, so any divergence from `panelFrame` maps 1:1 onto a
+  /// horizontal shift of the island.
+  @Published private(set) var actualPanelFrame: CGRect
   var preventAutoClose = false
 
   let geometry: NotchGeometry
@@ -27,7 +33,9 @@ final class NotchViewModel: ObservableObject {
   init(geometry: NotchGeometry, modeOverride: InteractionMode? = nil) {
     self.geometry = geometry
     self.modeOverride = modeOverride
-    self.panelFrame = geometry.collapsedPanelFrame()
+    let initialFrame = geometry.collapsedPanelFrame()
+    self.panelFrame = initialFrame
+    self.actualPanelFrame = initialFrame
     // NSEvent monitors already deliver on the main thread, so no .receive(on:) hop is needed
     // (it would add a redundant async dispatch on every app-wide mouse move).
     EventMonitors.shared.mouseLocation
@@ -77,6 +85,14 @@ final class NotchViewModel: ObservableObject {
     compactLeadingWidth = leading
     compactTrailingWidth = trailing
     updatePanelFrame(for: state)
+  }
+
+  /// Records where AppKit actually put the window. Only drawing offsets read it — `panelFrame`
+  /// remains the single source of truth for what Islet asks for, so a rejected request is visible
+  /// as a divergence rather than being quietly adopted as the new intent.
+  func setActualPanelFrame(_ frame: CGRect) {
+    guard frame != actualPanelFrame else { return }
+    actualPanelFrame = frame
   }
 
   private func targetPanelFrame(for state: NotchState) -> CGRect {
