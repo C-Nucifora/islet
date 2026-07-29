@@ -25,6 +25,9 @@ struct SettingsView: View {
   @Default(.disabledActivities) private var disabledActivities
   @Default(.clipboardEnabled) private var clipboardEnabled
   @Default(.portsEnabled) private var portsEnabled
+  @Default(.systemEnabled) private var systemEnabled
+  @Default(.systemAlwaysVisible) private var systemAlwaysVisible
+  @Default(.metricStyles) private var metricStyles
   @Default(.disabledEventSources) private var disabledEventSources
 
   private func enabled(_ id: String) -> Binding<Bool> {
@@ -39,6 +42,12 @@ struct SettingsView: View {
       })
   }
 
+  private func styleBinding(_ kind: SystemMetricKind) -> Binding<MetricDisplayStyle> {
+    Binding(
+      get: { MetricDisplayStyle.resolve(metricStyles[kind.rawValue]) },
+      set: { metricStyles[kind.rawValue] = $0.rawValue })
+  }
+
   /// Writes through the bus rather than straight to Defaults, so toggling a source actually starts
   /// or stops its observation instead of only silencing it.
   private func eventSourceEnabled(_ id: String) -> Binding<Bool> {
@@ -49,6 +58,25 @@ struct SettingsView: View {
 
   var body: some View {
     Form {
+      Section("System stats") {
+        Toggle("System stats tab", isOn: $systemEnabled)
+        if systemEnabled {
+          Toggle("Always show the tab", isOn: $systemAlwaysVisible)
+          Text(
+            "Off: the tab appears only when the CPU stays above 80% for five seconds, or the Mac is thermally throttled."
+          )
+          .font(.caption2).foregroundStyle(.secondary)
+          ForEach(SystemMetricKind.allCases, id: \.self) { kind in
+            Picker(kind.displayName, selection: styleBinding(kind)) {
+              ForEach(MetricDisplayStyle.allCases, id: \.self) { style in
+                Text(style.displayName).tag(style)
+              }
+            }
+          }
+          Text("Thermal has no history, so the sparkline styles show its state as text.")
+            .font(.caption2).foregroundStyle(.secondary)
+        }
+      }
       Section("System events") {
         Text(
           "Islet shows a brief animation in the island when something happens. Turn a source off and Islet stops watching it entirely."
@@ -86,7 +114,7 @@ struct SettingsView: View {
           }
           .onMove { activityOrder.move(fromOffsets: $0, toOffset: $1) }
         }
-        .frame(height: 190)
+        .frame(height: 216)
       }
       Section("Interaction") {
         Picker("Expand", selection: $mode) {

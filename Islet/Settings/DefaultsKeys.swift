@@ -34,4 +34,12 @@ extension Defaults.Keys {
   /// Event sources the user has switched off. Absent means on — every source ships enabled, and a
   /// disabled source is fully stopped rather than merely silenced.
   static let disabledEventSources = Key<[String]>("disabledEventSources", default: [])
+  static let systemEnabled = Key<Bool>("systemEnabled", default: true)
+  /// Off: the System tab appears only while `SystemPresenceGate` is hot. On: it is always in the
+  /// switcher, which is how you look at an idle machine's stats.
+  static let systemAlwaysVisible = Key<Bool>("systemAlwaysVisible", default: false)
+  /// Keyed by `SystemMetricKind.rawValue`, valued by `MetricDisplayStyle.rawValue`. Stored as
+  /// strings so an unknown value from a future build resolves to the fallback instead of failing
+  /// to decode the whole dictionary.
+  static let metricStyles = Key<[String: String]>("metricStyles", default: [:])
 }

@@ -10,6 +10,7 @@ enum ActivityCatalog {
     ("ports", "Ports", "cable.connector"),
     ("calendar", "Calendar", "calendar"),
     ("battery", "Battery", "battery.100percent.bolt"),
+    ("system", "System", "cpu"),
   ]
 
   static var defaultOrder: [String] { orderable.map(\.id) }
