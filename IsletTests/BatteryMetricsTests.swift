@@ -1,3 +1,5 @@
+import Defaults
+import SwiftUI
 import XCTest
 
 @testable import Islet
@@ -565,5 +567,60 @@ final class BatteryMetricsTests: XCTestCase {
     new.temperatureC = 31.0
     new.batteryPowerWatts = -5.715
     XCTAssertEqual(PowerSmoothing.smooth(nil, into: new), new)
+  }
+
+  // MARK: - Compact island
+
+  func testBatterySymbolBuckets() {
+    // SF Symbols only ships 0/25/50/75/100 fills, so the buckets are centred on those.
+    XCTAssertEqual(BatteryActivity.batterySymbol(for: 0), "battery.0percent")
+    XCTAssertEqual(BatteryActivity.batterySymbol(for: 12), "battery.0percent")
+    XCTAssertEqual(BatteryActivity.batterySymbol(for: 13), "battery.25percent")
+    XCTAssertEqual(BatteryActivity.batterySymbol(for: 37), "battery.25percent")
+    XCTAssertEqual(BatteryActivity.batterySymbol(for: 38), "battery.50percent")
+    XCTAssertEqual(BatteryActivity.batterySymbol(for: 62), "battery.50percent")
+    XCTAssertEqual(BatteryActivity.batterySymbol(for: 63), "battery.75percent")
+    XCTAssertEqual(BatteryActivity.batterySymbol(for: 87), "battery.75percent")
+    XCTAssertEqual(BatteryActivity.batterySymbol(for: 88), "battery.100percent")
+    XCTAssertEqual(BatteryActivity.batterySymbol(for: 100), "battery.100percent")
+  }
+
+  func testTintIsGreenWheneverPowerIsComingIn() {
+    XCTAssertEqual(
+      BatteryActivity.tint(for: BatteryState(percent: 8, isCharging: true, onAC: true)), .charging)
+    XCTAssertEqual(
+      BatteryActivity.tint(for: BatteryState(percent: 100, isCharging: false, onAC: true)),
+      .charging)
+  }
+
+  func testTintIsRedOnBatteryUnderTwentyPercent() {
+    XCTAssertEqual(
+      BatteryActivity.tint(for: BatteryState(percent: 20, isCharging: false, onAC: false)), .low)
+    XCTAssertEqual(
+      BatteryActivity.tint(for: BatteryState(percent: 21, isCharging: false, onAC: false)),
+      .normal)
+  }
+
+  func testTintIsNeutralWithoutAReading() {
+    XCTAssertEqual(BatteryActivity.tint(for: nil), .normal)
+  }
+
+  @MainActor func testBatteryTabStaysActiveOffAC() {
+    let saved = Defaults[.batteryEnabled]
+    defer { Defaults[.batteryEnabled] = saved }
+
+    // The monitor has never produced a state, so `onAC` is false. The tab must still be active.
+    let activity = BatteryActivity()
+    Defaults[.batteryEnabled] = true
+    XCTAssertTrue(activity.isActive)
+    Defaults[.batteryEnabled] = false
+    XCTAssertFalse(activity.isActive)
+  }
+
+  // MARK: - Height tier
+
+  @MainActor func testBatteryRequestsTheTallTier() {
+    XCTAssertEqual(BatteryActivity().preferredExpandedHeight, Metrics.tallExpandedHeight)
+    XCTAssertEqual(Metrics.tallExpandedHeight, 250)
   }
 }

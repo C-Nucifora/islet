@@ -11,11 +11,9 @@ final class BatteryActivity: NotchActivity, ObservableObject {
   private var lastState: BatteryState?
   private var cancellables: Set<AnyCancellable> = []
 
-  // Show the persistent indicator whenever on AC power (charging OR plugged-in-and-full),
-  // so the power status is visible the whole time you're plugged in — not only while charging.
-  var isActive: Bool {
-    Defaults[.batteryEnabled] && (monitor.state?.onAC ?? false)
-  }
+  // The tab is available whenever the feature is on. Gating it on AC power made the whole power
+  // screen vanish the moment you unplugged — which is exactly when you want to read it.
+  var isActive: Bool { Defaults[.batteryEnabled] }
 
   func start() {
     monitor.start()
@@ -28,9 +26,9 @@ final class BatteryActivity: NotchActivity, ObservableObject {
 
   private func handle(_ new: BatteryState) {
     let events = BatteryEventDetector.events(from: lastState, to: new)
-    let wasActive = lastState?.onAC ?? false
     lastState = new
-    if !wasActive, new.onAC { activationDate = Date() }
+    // Now that the tab is always active, its activation date is simply when it first had a reading.
+    if activationDate == nil { activationDate = Date() }
     objectWillChange.send()
 
     guard Defaults[.batteryEnabled] else { return }
@@ -67,15 +65,49 @@ final class BatteryActivity: NotchActivity, ObservableObject {
   }
 
   let tabIcon = "battery.100percent.bolt"
+  let preferredExpandedHeight = Metrics.tallExpandedHeight
+
   var compactLeading: AnyView {
-    let charging = monitor.state?.isCharging ?? false
-    return AnyView(
-      Image(systemName: charging ? "bolt.fill" : "powerplug.fill")
-        .foregroundStyle(.green).font(.caption2))
+    AnyView(
+      Image(systemName: Self.compactSymbol(for: monitor.state))
+        .foregroundStyle(Self.tint(for: monitor.state).color)
+        .font(.caption2))
   }
 
   var compactTrailing: AnyView {
-    AnyView(BatteryPercentText(percent: monitor.state?.percent ?? 0, color: .green))
+    AnyView(
+      BatteryPercentText(
+        percent: monitor.state?.percent ?? 0,
+        color: Self.tint(for: monitor.state).color))
+  }
+
+  // These three are pure and marked `nonisolated` so the tests can call them without hopping to the
+  // main actor — `BatteryActivity` is @MainActor, which would otherwise isolate its statics too.
+
+  /// Bolt while charging, plug while topped up on AC, a filled battery on battery power.
+  nonisolated static func compactSymbol(for state: BatteryState?) -> String {
+    guard let state else { return "battery.100percent" }
+    if state.isCharging { return "bolt.fill" }
+    if state.onAC { return "powerplug.fill" }
+    return batterySymbol(for: state.percent)
+  }
+
+  /// SF Symbols only ships 0/25/50/75/100 battery fills.
+  nonisolated static func batterySymbol(for percent: Int) -> String {
+    switch percent {
+    case ..<13: "battery.0percent"
+    case ..<38: "battery.25percent"
+    case ..<63: "battery.50percent"
+    case ..<88: "battery.75percent"
+    default: "battery.100percent"
+    }
+  }
+
+  /// Green while power is coming in, red under 20% on battery, neutral otherwise.
+  nonisolated static func tint(for state: BatteryState?) -> BatteryTint {
+    guard let state else { return .normal }
+    if state.onAC { return .charging }
+    return state.percent <= 20 ? .low : .normal
   }
 
   var expandedView: AnyView {
@@ -94,87 +126,16 @@ struct BatteryPercentText: View {
   }
 }
 
-struct BatteryExpandedView: View {
-  @ObservedObject var monitor: BatteryMonitor
+/// The compact island's colour states, kept as an enum rather than a `Color` so the rule that picks
+/// them is testable without comparing opaque style values.
+enum BatteryTint: Equatable {
+  case charging, low, normal
 
-  private var onAC: Bool { monitor.state?.onAC ?? false }
-  private var iconName: String {
-    if monitor.state?.isCharging == true { return "bolt.fill" }
-    if onAC { return "powerplug.fill" }
-    return "battery.100percent"
-  }
-  private var statusText: String {
-    if monitor.state?.isCharging == true { return "Charging" }
-    if onAC { return "Plugged in" }
-    return "On battery"
-  }
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack(alignment: .center, spacing: 20) {
-        // Charge summary
-        VStack(spacing: 4) {
-          Image(systemName: iconName)
-            .font(.largeTitle)
-            .foregroundStyle(onAC ? .green : .secondary)
-          Text("\(monitor.state?.percent ?? 0)%")
-            .font(.title2.weight(.bold)).monospacedDigit()
-          Text(statusText)
-            .font(.caption2).foregroundStyle(.secondary)
-        }
-        .frame(width: 96)
-
-        // AlDente-style metrics grid
-        if let m = monitor.metrics {
-          LazyVGrid(
-            columns: [
-              GridItem(.flexible(), alignment: .leading),
-              GridItem(.flexible(), alignment: .leading),
-            ],
-            alignment: .leading, spacing: 6
-          ) {
-            if let h = m.healthPercent { metric("Health", "\(h)%") }
-            if let c = m.cycleCount { metric("Cycles", "\(c)") }
-            if let t = m.temperatureC { metric("Temp", String(format: "%.1f°C", t)) }
-            if let w = m.powerWatts { metric("Power", String(format: "%+.1f W", w)) }
-            if let ttf = m.timeToFullMinutes {
-              metric("Full in", timeString(ttf))
-            } else if let tte = m.timeToEmptyMinutes {
-              metric("Left", timeString(tte))
-            }
-            if let watts = m.adapterWatts { metric("Charger", "\(watts) W") }
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-        }
-      }
-
-      // Connected peripherals (Magic Mouse/Keyboard/Trackpad, ...) — populates when present.
-      if !monitor.peripherals.isEmpty {
-        HStack(spacing: 14) {
-          ForEach(monitor.peripherals) { device in
-            HStack(spacing: 4) {
-              Image(systemName: device.icon).font(.caption2).foregroundStyle(.secondary)
-              Text("\(device.percent)%").font(.caption2.weight(.semibold)).monospacedDigit()
-                .foregroundStyle(device.percent <= 15 ? .red : .white)
-            }
-          }
-          Spacer(minLength: 0)
-        }
-      }
+  var color: Color {
+    switch self {
+    case .charging: .green
+    case .low: .red
+    case .normal: .secondary
     }
-    .foregroundStyle(.white)
-    // Refresh power/temperature quickly while this view is visible; slow back down when it's not.
-    .liveSampling(monitor.liveGate)
-  }
-
-  private func metric(_ label: String, _ value: String) -> some View {
-    VStack(alignment: .leading, spacing: 0) {
-      Text(label).font(.system(size: 9)).foregroundStyle(.secondary)
-      Text(value).font(.caption.weight(.semibold)).monospacedDigit()
-    }
-  }
-
-  private func timeString(_ minutes: Int) -> String {
-    minutes < 60 ? "\(minutes)m" : String(format: "%dh %02dm", minutes / 60, minutes % 60)
   }
 }
