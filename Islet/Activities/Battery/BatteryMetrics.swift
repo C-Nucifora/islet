@@ -1,61 +1,77 @@
 import Foundation
 
-/// AlDente-style deep battery metrics read from the AppleSmartBattery IORegistry entry.
-struct BatteryMetrics: Equatable {
-  var healthPercent: Int?  // maxCapacity / designCapacity
-  var cycleCount: Int?
-  var temperatureC: Double?
-  var powerWatts: Double?  // + charging into the battery, - discharging
-  var timeToFullMinutes: Int?
-  var timeToEmptyMinutes: Int?
-  var adapterWatts: Int?  // rated wattage of the connected power adapter
+/// One rung of the USB-C Power Delivery ladder the attached charger advertises
+/// (`AdapterDetails.UsbHvcMenu`), in volts and amps.
+struct PDProfile: Identifiable, Equatable {
+  let index: Int
+  let volts: Double
+  let amps: Double
 
-  var hasAny: Bool {
-    healthPercent != nil || cycleCount != nil || temperatureC != nil
-      || powerWatts != nil || timeToFullMinutes != nil || timeToEmptyMinutes != nil
-      || adapterWatts != nil
-  }
+  var id: Int { index }
+  var watts: Double { volts * amps }
 }
 
-enum SmartBatteryReader {
-  /// One bulk IORegistry read of AppleSmartBattery, then a pure parse. Returns nil on a machine
-  /// with no battery.
-  static func read() -> BatteryMetrics? {
-    guard let props = IORegistryReader.properties(matching: "AppleSmartBattery") else {
-      return nil
-    }
-    return metrics(from: props)
-  }
+/// Deep battery, charger and power-flow telemetry, read from AppleSmartBattery, IOPS and
+/// ProcessInfo.
+///
+/// Every reading is optional on purpose. Most of these registry keys are undocumented and several
+/// are absent on machines other than the one this was developed against, so the panel omits a tile
+/// rather than rendering a zero for something it never read. `hasAny` is the "did we read anything
+/// worth showing at all" test that decides whether the metrics block appears.
+struct BatteryMetrics: Equatable {
+  // Health. Two numbers, deliberately: `healthPercent` matches System Settings → Battery,
+  // `rawHealthPercent` matches AlDente and coconutBattery. They disagree by 2-3 points and both
+  // are shown, labelled, so neither reads as a bug.
+  var healthPercent: Int?  // NominalChargeCapacity / DesignCapacity
+  var rawHealthPercent: Int?  // AppleRawMaxCapacity / DesignCapacity
+  var rawMaxCapacityMAh: Int?
+  var nominalCapacityMAh: Int?
+  var designCapacityMAh: Int?
+  var cycleCount: Int?
+  var designCycleCount: Int?  // DesignCycleCount9C
+  var condition: String?  // IOPS BatteryHealthCondition, else the BatteryHealth grade
 
-  /// Pure parse of one AppleSmartBattery property dictionary. Split out of `read()` so the health
-  /// formula, the unit conversions and the sentinels can be tested against literal dictionaries
-  /// instead of whatever the machine's battery happens to be doing.
-  static func metrics(from props: [String: Any]) -> BatteryMetrics? {
-    func intVal(_ key: String) -> Int? { (props[key] as? NSNumber)?.intValue }
+  // Instantaneous pack readings.
+  var temperatureC: Double?
+  var voltage: Double?  // V
+  var amperage: Double?  // A, negative while discharging
+  var powerWatts: Double?  // voltage * amperage, negative while discharging
+  var timeToFullMinutes: Int?
+  var timeToEmptyMinutes: Int?
 
-    var m = BatteryMetrics()
+  // The attached charger.
+  var adapterWatts: Int?
+  var adapterDescription: String?
+  var adapterVolts: Double?
+  var adapterAmps: Double?
+  var adapterIsWireless: Bool?
+  var adapterPowerTier: Int?
+  var pdLadder: [PDProfile] = []
+  var pdSelectedIndex: Int?
 
-    if let maxCap = intVal("AppleRawMaxCapacity") ?? intVal("MaxCapacity"),
-      let design = intVal("DesignCapacity"), design > 0
-    {
-      m.healthPercent = Int((Double(maxCap) / Double(design) * 100).rounded())
-    }
-    m.cycleCount = intVal("CycleCount")
-    if let rawTemp = intVal("Temperature") {
-      m.temperatureC = Double(rawTemp) / 100.0  // reported in centi-degrees
-    }
-    if let mV = intVal("Voltage"), let mA = IORegistryReader.signedInt(intVal("Amperage")) {
-      m.powerWatts = Double(mV) / 1000.0 * Double(mA) / 1000.0
-    }
-    // 65535 is the "still calculating" sentinel.
-    if let ttf = intVal("AvgTimeToFull"), ttf > 0, ttf < 65535 { m.timeToFullMinutes = ttf }
-    if let tte = intVal("AvgTimeToEmpty"), tte > 0, tte < 65535 { m.timeToEmptyMinutes = tte }
-    if let adapter = props["AdapterDetails"] as? [String: Any],
-      let watts = (adapter["Watts"] as? NSNumber)?.intValue, watts > 0
-    {
-      m.adapterWatts = watts
-    }
+  // Power flow, from the undocumented PowerTelemetryData dictionary. All watts.
+  var systemPowerInWatts: Double?  // SystemPowerIn — what the wall is delivering
+  var systemVoltageIn: Double?
+  var systemCurrentIn: Double?
+  var systemLoadWatts: Double?  // SystemLoad — what the machine is drawing
+  var batteryPowerWatts: Double?  // BatteryPower — + into the pack, - out of it
+  var adapterLossWatts: Double?  // AdapterEfficiencyLoss
 
-    return m.hasAny ? m : nil
+  // Charge state.
+  var isCharging: Bool?
+  var fullyCharged: Bool?
+  var externalConnected: Bool?
+  var notChargingReason: UInt64?
+
+  var lowPowerMode = false
+
+  /// True when at least one real reading landed. Low Power Mode is excluded — it is a system flag,
+  /// not a battery reading, and on its own it should not make an empty panel appear.
+  var hasAny: Bool {
+    healthPercent != nil || rawHealthPercent != nil || cycleCount != nil
+      || temperatureC != nil || voltage != nil || amperage != nil || powerWatts != nil
+      || timeToFullMinutes != nil || timeToEmptyMinutes != nil
+      || adapterWatts != nil || adapterDescription != nil
+      || systemPowerInWatts != nil || batteryPowerWatts != nil
   }
 }
