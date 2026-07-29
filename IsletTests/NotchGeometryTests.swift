@@ -163,4 +163,51 @@ final class NotchGeometryTests: XCTestCase {
     XCTAssertEqual(ext.notchRect.midX, ext.screenFrame.midX, accuracy: 0.01)
     XCTAssertEqual(ext.notchRect.minX, 3840 - Metrics.fallbackNotchWidth / 2, accuracy: 0.01)
   }
+
+  // MARK: - Notch stickiness
+
+  private var notchedReading: NotchStickiness.Reading {
+    NotchStickiness.Reading(safeAreaTop: 32, auxLeftWidth: 716, auxRightWidth: 708)
+  }
+  private var emptyReading: NotchStickiness.Reading {
+    NotchStickiness.Reading(safeAreaTop: 0, auxLeftWidth: 0, auxRightWidth: 0)
+  }
+
+  func testAKnownNotchedBuiltinDisplayKeepsItsNotchWhenAuxAreasReadEmpty() {
+    var sticky = NotchStickiness()
+    XCTAssertTrue(notchedReading.hasNotch)
+    XCTAssertFalse(emptyReading.hasNotch)
+    XCTAssertEqual(
+      sticky.resolve(displayUUID: "builtin", isBuiltin: true, reading: notchedReading),
+      notchedReading)
+    // A transient empty read must not downgrade it to the 200pt fallback.
+    XCTAssertEqual(
+      sticky.resolve(displayUUID: "builtin", isBuiltin: true, reading: emptyReading),
+      notchedReading)
+    // ... and the geometry built from what we hand back still has a hardware notch.
+    let remembered = sticky.resolve(
+      displayUUID: "builtin", isBuiltin: true, reading: emptyReading)
+    let geometry = NotchGeometry(
+      screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+      safeAreaTop: remembered.safeAreaTop, auxLeftWidth: remembered.auxLeftWidth,
+      auxRightWidth: remembered.auxRightWidth, menuBarHeight: 37)
+    XCTAssertTrue(geometry.hasHardwareNotch)
+    XCTAssertEqual(geometry.notchRect.minX, 716, accuracy: 0.01)
+  }
+
+  func testAnExternalDisplayIsNeverStickied() {
+    var sticky = NotchStickiness()
+    _ = sticky.resolve(displayUUID: "external", isBuiltin: false, reading: notchedReading)
+    // An external display that stops reporting a notch really has stopped having one.
+    XCTAssertEqual(
+      sticky.resolve(displayUUID: "external", isBuiltin: false, reading: emptyReading),
+      emptyReading)
+  }
+
+  func testStickinessIsKeyedPerDisplay() {
+    var sticky = NotchStickiness()
+    _ = sticky.resolve(displayUUID: "A", isBuiltin: true, reading: notchedReading)
+    XCTAssertEqual(
+      sticky.resolve(displayUUID: "B", isBuiltin: true, reading: emptyReading), emptyReading)
+  }
 }
