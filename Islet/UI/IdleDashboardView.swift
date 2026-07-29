@@ -58,9 +58,12 @@ struct IdleDashboardView: View {
               Capsule()
                 .fill(Color(isletHex: event.calendarColorHex) ?? .secondary)
                 .frame(width: 3, height: 14)
+              // Wide enough for "12:00 pm" — monospacedDigit only pins the digits, and the pm/am
+              // pair is the widest suffix, so a tighter frame wraps the label onto two lines.
               Text(event.start, format: .dateTime.hour().minute())
                 .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
-                .frame(width: 46, alignment: .leading)
+                .lineLimit(1)
+                .frame(width: 54, alignment: .leading)
               Text(event.title).font(.caption).lineLimit(1)
               Spacer(minLength: 0)
               if let url = event.joinURL {
