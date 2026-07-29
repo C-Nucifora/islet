@@ -13,6 +13,7 @@ final class ScreenManager {
     let screenUUID: String
     let panel: NotchPanel
     let viewModel: NotchViewModel
+    let frameSink: AnyCancellable
   }
 
   private var instances: [String: Instance] = [:]
@@ -68,14 +69,25 @@ final class ScreenManager {
       guard let uuid = screen.displayUUID else { continue }
       let geometry = screen.notchGeometry
       let vm = NotchViewModel(geometry: geometry)
-      let panel = NotchPanel(frame: geometry.panelFrame)
+      let panel = NotchPanel(frame: vm.panelFrame)
       panel.contentView = NSHostingView(rootView: NotchRootView(vm: vm))
       panel.alphaValue = 0
       panel.orderFrontRegardless()
-      panel.setFrame(geometry.panelFrame, display: true)
+      panel.setFrame(vm.panelFrame, display: true)
       panel.alphaValue = 1  // alpha-flash hides ghost frames
       panel.sharingType = Defaults[.hideFromScreenRecording] ? .none : .readOnly
-      instances[uuid] = Instance(screenUUID: uuid, panel: panel, viewModel: vm)
+      // The panel only claims the space the island actually occupies, so the rest of the menu
+      // bar stays clickable; it grows on expand and back down on collapse.
+      // display: false — the view reports its slot widths from inside a SwiftUI update, so this
+      // sink can run mid-layout; forcing a synchronous display pass there re-enters layout.
+      let sink = vm.$panelFrame
+        .removeDuplicates()
+        .sink { [weak panel] frame in
+          guard let panel, panel.frame != frame else { return }
+          panel.setFrame(frame, display: false)
+        }
+      instances[uuid] = Instance(
+        screenUUID: uuid, panel: panel, viewModel: vm, frameSink: sink)
     }
     Log.shell.info("Built \(self.instances.count) notch panel(s)")
     applyFullscreenVisibility()

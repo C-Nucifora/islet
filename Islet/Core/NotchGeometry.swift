@@ -52,4 +52,21 @@ struct NotchGeometry: Equatable {
     let h = Metrics.expandedSize.height + Metrics.shadowPadding
     return CGRect(x: screenFrame.midX - w / 2, y: screenFrame.maxY - h, width: w, height: h)
   }
+
+  /// Panel frame while collapsed. A window swallows every mouse event inside its frame, so the
+  /// expanded frame left the whole top-centre of the screen — several menu bar items included —
+  /// dead to clicks. Collapsed, the panel hugs the drawn island instead.
+  ///
+  /// Each flank is sized from its own compact slot rather than the wider of the two: the slots are
+  /// rarely the same width (a HUD is an icon against a 70pt bar), and mirroring the wider one just
+  /// moves the invisible dead-click strip to the narrow side.
+  func collapsedPanelFrame(compactLeading: CGFloat = 0, compactTrailing: CGFloat = 0) -> CGRect {
+    // Beyond the body the shape's top corners flare outward by their radius.
+    let edge = Metrics.closedOversize + Metrics.closedRadii.top + Metrics.islandMargin
+    let left = notchSize.width / 2 + compactLeading + edge
+    let right = notchSize.width / 2 + compactTrailing + edge
+    let h = notchSize.height + Metrics.collapsedDepth
+    return CGRect(
+      x: notchRect.midX - left, y: screenFrame.maxY - h, width: left + right, height: h)
+  }
 }

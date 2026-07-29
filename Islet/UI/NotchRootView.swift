@@ -51,6 +51,16 @@ struct NotchRootView: View {
     !vm.state.isExpanded && compactContent != nil
   }
 
+  /// Horizontal offset that lines the island's notch cut-out up with the hardware notch. The
+  /// collapsed panel hugs the island flank by flank, so it is *not* centred on the notch —
+  /// everything positions off the notch's offset within the panel rather than the panel's centre,
+  /// which also keeps the island aligned while the panel is still held at expanded size.
+  private var islandOffset: CGFloat {
+    let notchInPanel = vm.geometry.notchRect.midX - vm.panelFrame.midX
+    guard compactVisible else { return notchInPanel }
+    return notchInPanel + (compactTrailingWidth - compactLeadingWidth) / 2
+  }
+
   /// Size of the black shape body, EXCLUDING the top-flare ears.
   private var bodySize: CGSize {
     let notch = vm.geometry.notchSize
@@ -72,7 +82,14 @@ struct NotchRootView: View {
   var body: some View {
     ZStack(alignment: .top) {
       content
-        .frame(width: bodySize.width, height: bodySize.height, alignment: .top)
+        // Compact content is left unconstrained horizontally. Constraining it to `bodySize.width`
+        // — which is itself derived from the slots' measured widths — makes each measurement the
+        // next layout pass's proposal, so flexible content (a sneak's track title) creeps out to
+        // its real width a few points per frame, resizing the panel the whole way. The black
+        // shape is sized from the measurement regardless: that's the mask, below.
+        .frame(
+          width: compactVisible ? nil : bodySize.width, height: bodySize.height, alignment: .top
+        )
         .background { Rectangle().fill(.black).padding(-50) }
         .mask {
           NotchShape(topRadius: radii.top, bottomRadius: radii.bottom)
@@ -83,20 +100,23 @@ struct NotchRootView: View {
             .padding(.horizontal, -0.5)
         }
         .shadow(color: .black.opacity(vm.state.isExpanded ? 0.8 : 0), radius: 16)
-        .offset(x: compactVisible ? (compactTrailingWidth - compactLeadingWidth) / 2 : 0)
+        .offset(x: islandOffset)
         // Only the expanded island is interactive via SwiftUI; collapsed clicks pass through
         // to windows beneath (hover/click detection is monitor-driven).
         .allowsHitTesting(vm.state.isExpanded)
 
-      // Drag-to-open: a near-invisible drop zone over the collapsed notch. Dropping files adds
-      // them to the shelf; hovering a drag opens the island so the shelf is visible.
+      // Drag-to-open: a near-invisible drop zone over the collapsed island. Dropping files adds
+      // them to the shelf; hovering a drag opens the island so the shelf is visible. It covers the
+      // island exactly — anything wider would only be clipped by the panel, which no longer
+      // reserves slack around the notch for it.
       if !vm.state.isExpanded {
         Color.black.opacity(0.001)
           .frame(
-            width: vm.geometry.notchSize.width + 60,
-            height: vm.geometry.notchSize.height + 12
+            width: bodySize.width + (Metrics.closedRadii.top + Metrics.islandMargin) * 2,
+            height: vm.geometry.notchSize.height + Metrics.collapsedDepth
           )
           .contentShape(Rectangle())
+          .offset(x: islandOffset)
           .onDrop(of: [.fileURL], isTargeted: $dropTargeting) { providers in
             ShelfModel.loadURLs(from: providers) { url in
               Task { @MainActor in ShelfModel.shared.add(url) }
@@ -108,11 +128,21 @@ struct NotchRootView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .animation(vm.state.isExpanded ? Metrics.opening : Metrics.closing, value: vm.state)
     .animation(Metrics.compact, value: compactVisible)
+    // The panel is only as wide as the island, so it has to know how wide the slots rendered.
+    .onChange(of: compactLeadingWidth, initial: true) { _, _ in syncPanelWidths() }
+    .onChange(of: compactTrailingWidth) { _, _ in syncPanelWidths() }
+    .onChange(of: compactVisible) { _, _ in syncPanelWidths() }
     .onChange(of: dropTargeting) { _, targeted in
       ShelfModel.shared.isDragActive = targeted
       if targeted, !vm.state.isExpanded { vm.apply(.clickedNotch) }
     }
     .preferredColorScheme(.dark)
+  }
+
+  private func syncPanelWidths() {
+    vm.updateCompactWidths(
+      leading: compactVisible ? compactLeadingWidth : 0,
+      trailing: compactVisible ? compactTrailingWidth : 0)
   }
 
   @ViewBuilder private var content: some View {
@@ -124,16 +154,18 @@ struct NotchRootView: View {
         .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .top)))
     } else if let slots = compactContent {
       HStack(spacing: 0) {
+        // The measured width already includes the padding — don't add it a second time, or the
+        // shape (and the panel sized from it) gains 12pt of dead space per flank.
         slots.leading
           .padding(.leading, 6)
           .onGeometryChange(for: CGFloat.self, of: \.size.width) {
-            compactLeadingWidth = $0 + 6
+            compactLeadingWidth = $0
           }
         Spacer().frame(width: vm.geometry.notchSize.width)
         slots.trailing
           .padding(.trailing, 6)
           .onGeometryChange(for: CGFloat.self, of: \.size.width) {
-            compactTrailingWidth = $0 + 6
+            compactTrailingWidth = $0
           }
       }
       .frame(height: vm.geometry.notchSize.height)
