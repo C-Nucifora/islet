@@ -16,6 +16,9 @@ enum AppState {
   /// producer's output — battery, timer, track change, audio device — are not listed: those emit
   /// from the activity that already owns the observation, and appear in Settings through
   /// `SourceCatalog` regardless.
+  /// Named so the shelf's share observer can report completions into it.
+  static let airdropOut = AirDropOutEventSource()
+
   static let eventSources: [any SystemEventSource] = [
     PortEventSource(),
     VolumeEventSource(),
@@ -27,7 +30,7 @@ enum AppState {
     BluetoothEventSource(),
     SessionEventSource(),
     ScreenshotEventSource(),
-    AirDropOutEventSource(),
+    airdropOut,
     AirDropInEventSource(),
     FocusEventSource(),
     VPNEventSource(),

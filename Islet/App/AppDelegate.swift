@@ -20,6 +20,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       return
     }
     Task { @MainActor in
+      // Bring a persisted activity order forward before anything renders from it: entries added to
+      // the catalogue after the order was first written would otherwise be missing from Settings.
+      let merged = ActivityCatalog.mergedOrder(Defaults[.activityOrder])
+      if merged != Defaults[.activityOrder] { Defaults[.activityOrder] = merged }
       EventMonitors.shared.start()
       ScreenManager.shared.start()
       ActivityCenter.shared.register(AppState.demoActivity)

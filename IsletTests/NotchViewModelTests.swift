@@ -211,4 +211,24 @@ final class NotchViewModelTests: XCTestCase {
       vm.panelFrame,
       vm.geometry.collapsedPanelFrame(compactLeading: 10, compactTrailing: 10))
   }
+
+  /// The selection lives in ExpandedContainerView and dies with it on collapse, so the next open
+  /// lands on the default tab. A surviving tall tier would draw a 250pt island around 190pt
+  /// content until the new view corrected it.
+  func testCollapsingResetsTheHeightTier() async {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    vm.setExpandedHeight(Metrics.tallExpandedHeight)
+    await Task.yield()
+    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
+
+    vm.handleMouseDown(CGPoint(x: 100, y: 500))  // collapse
+    XCTAssertEqual(vm.expandedHeight, Metrics.expandedSize.height)
+
+    // Reopening therefore grows the panel to the BASE tier, not the stale tall one.
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight),
+                   "still tall only because the earlier grow has not shrunk yet")
+    XCTAssertEqual(vm.expandedRect.height, Metrics.expandedSize.height)
+  }
 }

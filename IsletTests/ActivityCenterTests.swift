@@ -67,4 +67,30 @@ final class ActivityCenterTests: XCTestCase {
     center.register(b)
     XCTAssertEqual(center.primaryActivity?.id, "b")
   }
+
+  // MARK: - Stored-order migration
+
+  /// The Settings menu-order list renders from the persisted order, so an entry added to the
+  /// catalogue after that order was written must be appended or it can never be reordered or
+  /// disabled there.
+  func testMergedOrderAppendsCatalogueEntriesTheStoredOrderPredates() {
+    let preSystem = ["timer", "nowPlaying", "shelf", "clipboard", "ports", "calendar", "battery"]
+    let merged = ActivityCatalog.mergedOrder(preSystem)
+    XCTAssertEqual(merged, preSystem + ["system"])
+  }
+
+  func testMergedOrderPreservesTheUsersOrderingAndUnknownIDs() {
+    // A custom order, plus an id from some future build this one does not know about.
+    let stored = ["battery", "future-thing", "timer", "system"]
+    let merged = ActivityCatalog.mergedOrder(stored)
+    XCTAssertEqual(Array(merged.prefix(4)), stored)  // user's order untouched, unknown id kept
+    XCTAssertEqual(Set(merged), Set(stored + ActivityCatalog.defaultOrder))
+  }
+
+  func testMergedOrderIsIdempotent() {
+    let once = ActivityCatalog.mergedOrder(["battery"])
+    XCTAssertEqual(ActivityCatalog.mergedOrder(once), once)
+    XCTAssertEqual(ActivityCatalog.mergedOrder(ActivityCatalog.defaultOrder),
+                   ActivityCatalog.defaultOrder)
+  }
 }

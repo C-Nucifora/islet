@@ -109,7 +109,10 @@ struct ShelfView: View {
   }
 
   private func airdropAll() {
-    NSSharingService(named: .sendViaAirDrop)?.perform(withItems: model.urls)
+    guard let service = NSSharingService(named: .sendViaAirDrop) else { return }
+    // The observer is what makes the "AirDrop sent" event source fire on completion.
+    AirDropShareObserver.observe(service)
+    service.perform(withItems: model.urls)
   }
 }
 

@@ -78,6 +78,9 @@ final class PortMonitor: ObservableObject {
   private var iterators: [io_iterator_t] = []
 
   func start() {
+    // Both PortsActivity and PortEventSource start the shared monitor; the second call must be a
+    // no-op or it overwrites (and leaks) the first notification port and doubles every callback.
+    guard notifyPort == nil else { return }
     refresh()
     notifyPort = IONotificationPortCreate(kIOMainPortDefault)
     guard let notifyPort else { return }

@@ -72,14 +72,16 @@ final class AirDropInEventSource: SystemEventSource {
     s.setEventHandler { [weak self] in
       MainActor.assumeIsolated { self?.check() }
     }
+    // Owns the close: cancel() is asynchronous, and closing the fd from stop() while the source is
+    // still draining is a documented fd-reuse race.
+    s.setCancelHandler { close(fd) }
     source = s
     s.resume()
   }
 
   func stop() {
-    source?.cancel()
+    source?.cancel()  // its cancellation handler closes the fd
     source = nil
-    if descriptor >= 0 { close(descriptor) }
     descriptor = -1
     known = []
   }
@@ -117,5 +119,39 @@ final class AirDropInEventSource: SystemEventSource {
       let agent = quarantine[kLSQuarantineAgentNameKey as String] as? String
     else { return false }
     return agent.localizedCaseInsensitiveContains("sharingd")
+  }
+}
+
+/// Holds one AirDrop share's delegate long enough to report its completion, then lets go.
+///
+/// `NSSharingService.delegate` is weak and the service is created per share, so without a retained
+/// observer the completion callback has no receiver — which is exactly how the "AirDrop sent"
+/// source shipped wired to nothing. The delegate callbacks are AppKit UI and arrive on the main
+/// thread, but after the IOBluetooth lesson nothing here assumes that: the methods are
+/// `nonisolated` and hop to the main actor with only the item count.
+@MainActor
+final class AirDropShareObserver: NSObject, NSSharingServiceDelegate {
+  /// Strong reference for the share in flight. One at a time is enough: the AirDrop sheet is modal
+  /// in practice, and a second share simply replaces the observer of an abandoned first.
+  private static var current: AirDropShareObserver?
+
+  static func observe(_ service: NSSharingService) {
+    let observer = AirDropShareObserver()
+    current = observer
+    service.delegate = observer
+  }
+
+  nonisolated func sharingService(_ sharingService: NSSharingService, didShareItems items: [Any]) {
+    let count = items.count
+    Task { @MainActor in
+      AppState.airdropOut.report(fileCount: count)
+      Self.current = nil
+    }
+  }
+
+  nonisolated func sharingService(
+    _ sharingService: NSSharingService, didFailToShareItems items: [Any], error: any Error
+  ) {
+    Task { @MainActor in Self.current = nil }
   }
 }

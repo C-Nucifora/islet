@@ -167,6 +167,14 @@ final class NotchViewModel: ObservableObject {
     withAnimation(Motion.gated(opening ? Motion.opening : Motion.closing)) {
       state = next
     }
+    // Closing resets the height tier. The selection state lives in ExpandedContainerView and dies
+    // with it, so the next open lands on the default tab — leaving a tall tier behind would draw a
+    // 250pt island around 190pt content until the new view corrected it. Set with no animation:
+    // nothing reads expandedHeight while the island is closed, so the change is invisible.
+    if !next.isExpanded, expandedHeight != Metrics.expandedSize.height {
+      heightResizeTask?.cancel()
+      expandedHeight = Metrics.expandedSize.height
+    }
     // hover-region may have changed shape; re-evaluate containment so exit fires correctly
     wasInside = hoverRegion.contains(lastMouseLocation)
   }

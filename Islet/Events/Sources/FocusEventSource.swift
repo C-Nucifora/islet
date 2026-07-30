@@ -30,9 +30,11 @@ final class FocusEventSource: SystemEventSource {
   }
 
   func stop() {
+    // The fd is closed by the source's cancellation handler, never here: cancel() is asynchronous,
+    // and closing the descriptor while the source may still be draining is a documented fd-reuse
+    // race — a recycled descriptor number could belong to anyone by the time the source lets go.
     source?.cancel()
     source = nil
-    if descriptor >= 0 { close(descriptor) }
     descriptor = -1
     lastActive = nil
   }
@@ -56,15 +58,17 @@ final class FocusEventSource: SystemEventSource {
         self.rearmIfReplaced(s)
       }
     }
+    // Owns the close. `fd` is captured by value, so cancellation closes exactly the descriptor
+    // this source was watching regardless of what `descriptor` holds by then.
+    s.setCancelHandler { close(fd) }
     source = s
     s.resume()
   }
 
   private func rearmIfReplaced(_ s: DispatchSourceFileSystemObject) {
     guard s.data.contains(.delete) || s.data.contains(.rename) else { return }
-    source?.cancel()
+    source?.cancel()  // its cancellation handler closes the old fd
     source = nil
-    if descriptor >= 0 { close(descriptor) }
     descriptor = -1
     watch()
   }
