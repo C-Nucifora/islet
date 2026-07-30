@@ -105,22 +105,32 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(vm.expandedRect, vm.geometry.expandedRect(height: Metrics.expandedSize.height))
   }
 
-  func testSetExpandedHeightGrowsThePanelImmediately() {
+  /// The height itself changes synchronously — the drawn island follows it immediately — but the
+  /// window resize lands one main-actor turn later. That deferral is not an optimisation: resizing
+  /// the hosting window from inside the SwiftUI update that selects the tab throws an uncaught
+  /// NSException out of AppKit's constraint pass and aborts the app. See `setExpandedHeight`.
+  func testSetExpandedHeightAppliesTheHeightNowAndResizesTheWindowNextTurn() async {
     let vm = makeVM(mode: .clickToPin)
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
     vm.setExpandedHeight(Metrics.tallExpandedHeight)
+
+    // Immediate: the model and the drawn island.
     XCTAssertEqual(vm.expandedHeight, Metrics.tallExpandedHeight)
-    // Grown synchronously: a taller tab must never be drawn into a panel still sized for the
-    // shorter one it replaced.
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
     XCTAssertEqual(vm.expandedRect.height, Metrics.tallExpandedHeight)
+    // NOT yet the window — publishing here is what crashed.
+    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.expandedSize.height))
+
+    await Task.yield()
+    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
   }
 
   func testSetExpandedHeightShrinksBackOnlyAfterTheDelay() async throws {
     let vm = makeVM(mode: .clickToPin)
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
     vm.setExpandedHeight(Metrics.tallExpandedHeight)
+    await Task.yield()
     vm.setExpandedHeight(Metrics.expandedSize.height)
+    await Task.yield()
     // Still tall: shrinking here would clip the outgoing tab mid-cross-fade.
     XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
     try await Task.sleep(for: Motion.panelShrinkDelay + .milliseconds(200))
@@ -135,6 +145,7 @@ final class NotchViewModelTests: XCTestCase {
   func testTallExpandedRectSwallowsAClickTheBaseTierWouldTreatAsOutside() {
     let vm = makeVM(mode: .clickToPin)
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    // No yield needed: the hit region follows `expandedHeight`, which is applied synchronously.
     vm.setExpandedHeight(Metrics.tallExpandedHeight)
     // y = 900 is 217pt below the screen top: inside a 250pt island, below a 190pt one.
     vm.handleMouseDown(CGPoint(x: 864, y: 900))

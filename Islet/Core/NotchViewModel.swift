@@ -31,6 +31,7 @@ final class NotchViewModel: ObservableObject {
   private var dwellTask: Task<Void, Never>?
   private var collapseTask: Task<Void, Never>?
   private var shrinkTask: Task<Void, Never>?
+  private var heightResizeTask: Task<Void, Never>?
   private var cancellables: Set<AnyCancellable> = []
 
   init(geometry: NotchGeometry, modeOverride: InteractionMode? = nil) {
@@ -112,10 +113,22 @@ final class NotchViewModel: ObservableObject {
   /// grow-now/shrink-later panel path as expanding does, so switching to a taller tab widens the
   /// window before the content draws into it and switching back only shrinks once the cross-fade
   /// has finished.
+  ///
+  /// The panel resize is deferred by one main-actor turn, and that is load-bearing. This is called
+  /// from `ExpandedContainerView`'s `.onChange(initial: true)`, which SwiftUI can run *inside* the
+  /// update that is building that view. `updatePanelFrame` publishes `panelFrame`, whose sink calls
+  /// `NSWindow.setFrame` — resizing the hosting window from inside AppKit's layout pass re-enters
+  /// it and throws an uncaught NSException out of the display-cycle constraint observer, aborting
+  /// the process the instant a tall tab is selected. Deferring here rather than at the call site
+  /// means no future caller can reintroduce it. One turn is ~8 ms against a 400 ms animation.
   func setExpandedHeight(_ height: CGFloat) {
     guard height != expandedHeight else { return }
     withAnimation(Motion.gated(Motion.opening)) { expandedHeight = height }
-    updatePanelFrame(for: state)
+    heightResizeTask?.cancel()
+    heightResizeTask = Task { @MainActor [weak self] in
+      guard let self, !Task.isCancelled else { return }
+      self.updatePanelFrame(for: self.state)
+    }
   }
 
   /// Grows the panel immediately so nothing is ever clipped mid-animation, but defers shrinking

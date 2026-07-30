@@ -62,8 +62,11 @@ struct ExpandedContainerView: View {
         .padding(.horizontal, Self.rowPadding)
     }
     .onChange(of: effectiveSelection, initial: true) { _, id in
-      vm.setExpandedHeight(selectedHeight)
       scrolledTab = id
+      // `initial: true` means this can run inside the SwiftUI update building this view.
+      // `setExpandedHeight` defers the actual window resize for exactly that reason — see its doc
+      // comment; do not "simplify" it back into a synchronous resize.
+      vm.setExpandedHeight(selectedHeight)
     }
   }
 
