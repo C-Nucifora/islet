@@ -27,9 +27,8 @@ enum PowerStatus {
     // AC attached, not charging, and the pack is still discharging: the adapter is smaller than the
     // current system load. Derived from PowerTelemetryData.BatteryPower, not from a guessed bit.
     if let batteryWatts, batteryWatts < -0.5 { return "Adapter can't keep up" }
-    if let notChargingReason, notChargingReason != 0 {
-      return "Not charging · \(NotChargingReason.code(notChargingReason))"
-    }
+    // The reason bitfield is undocumented diagnostics, not prose — the view offers it in a
+    // tooltip. Putting the hex in this line truncated it into "Not charging · 0x80000…".
     return "Not charging"
   }
 }

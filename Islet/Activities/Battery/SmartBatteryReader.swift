@@ -11,9 +11,11 @@ enum SmartBatteryReader {
   static func read() -> BatteryMetrics? {
     guard let props = IORegistryReader.properties(matching: "AppleSmartBattery") else { return nil }
 
-    // Prefer the public, documented adapter API; fall back to the raw registry key, which is what
-    // it is derived from anyway and which survives when IOPS has not caught up yet.
-    let adapter = externalAdapterDetails() ?? (props["AdapterDetails"] as? [String: Any])
+    // The registry dict is primary: it carries the description ("pd charger") and the negotiated
+    // PD ladder, which the public IOPS dict strips down to little more than the wattage — showing
+    // a bare "50 W" charger tile with no tooltip. IOPS remains the fallback for the moment right
+    // after a plug-in when the registry key has not appeared yet.
+    let adapter = (props["AdapterDetails"] as? [String: Any]) ?? externalAdapterDetails()
 
     let metrics = BatteryMetricsParser.parse(
       smartBattery: props,

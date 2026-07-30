@@ -369,13 +369,14 @@ final class BatteryMetricsTests: XCTestCase {
       "Adapter can't keep up")
   }
 
-  func testStatusNotChargingSurfacesTheRawCode() {
-    // Held, but not because the adapter is undersized: report the code rather than invent a reason.
+  func testStatusNotChargingKeepsTheProseCleanOfTheRawCode() {
+    // Held, but not because the adapter is undersized. The bitfield is available for the tooltip
+    // via NotChargingReason.code; in the one-line status it truncated into "Not charging · 0x8…".
     XCTAssertEqual(
       PowerStatus.text(
         onAC: true, isCharging: false, fullyCharged: false, batteryWatts: -0.05,
         notChargingReason: 36_028_797_018_963_968),
-      "Not charging · 0x80000000000000")
+      "Not charging")
   }
 
   func testStatusNotChargingWithoutAReason() {
