@@ -31,7 +31,6 @@ final class NotchViewModel: ObservableObject {
   private var dwellTask: Task<Void, Never>?
   private var collapseTask: Task<Void, Never>?
   private var shrinkTask: Task<Void, Never>?
-  private var heightResizeTask: Task<Void, Never>?
   private var cancellables: Set<AnyCancellable> = []
 
   init(geometry: NotchGeometry, modeOverride: InteractionMode? = nil) {
@@ -103,32 +102,26 @@ final class NotchViewModel: ObservableObject {
   }
 
   private func targetPanelFrame(for state: NotchState) -> CGRect {
+    // The expanded panel is sized for the TALLEST tier, always — it does not follow
+    // `expandedHeight`. Resizing the window while the hosting view animates a tier change throws
+    // an uncaught NSException out of AppKit's constraint pass and aborts the app; reproduced
+    // deterministically in TallTierHostingTests, where the identical transition against a fixed
+    // window survives. The drawn island is what changes height — the shape mask clips it and
+    // `testTallPanelFrameContainsTheBaseOneAndItsIsland` pins the containment. Cost: while a
+    // base-tier tab is open, the panel swallows a ~60pt strip below the island, which the
+    // expanded island's full-frame black backdrop was already doing.
     state.isExpanded
-      ? geometry.panelFrame(height: expandedHeight)
+      ? geometry.panelFrame(height: Metrics.tallExpandedHeight)
       : geometry.collapsedPanelFrame(
         compactLeading: compactLeadingWidth, compactTrailing: compactTrailingWidth)
   }
 
-  /// The selected tab's height tier, reported by `ExpandedContainerView`. Reuses the same
-  /// grow-now/shrink-later panel path as expanding does, so switching to a taller tab widens the
-  /// window before the content draws into it and switching back only shrinks once the cross-fade
-  /// has finished.
-  ///
-  /// The panel resize is deferred by one main-actor turn, and that is load-bearing. This is called
-  /// from `ExpandedContainerView`'s `.onChange(initial: true)`, which SwiftUI can run *inside* the
-  /// update that is building that view. `updatePanelFrame` publishes `panelFrame`, whose sink calls
-  /// `NSWindow.setFrame` — resizing the hosting window from inside AppKit's layout pass re-enters
-  /// it and throws an uncaught NSException out of the display-cycle constraint observer, aborting
-  /// the process the instant a tall tab is selected. Deferring here rather than at the call site
-  /// means no future caller can reintroduce it. One turn is ~8 ms against a 400 ms animation.
+  /// The selected tab's height tier, reported by `ExpandedContainerView`. Only the drawn island
+  /// and the hit region follow it — deliberately NOT the panel, which stays at the tallest tier
+  /// for the whole expanded state. See `targetPanelFrame` for the crash this avoids.
   func setExpandedHeight(_ height: CGFloat) {
     guard height != expandedHeight else { return }
     withAnimation(Motion.gated(Motion.opening)) { expandedHeight = height }
-    heightResizeTask?.cancel()
-    heightResizeTask = Task { @MainActor [weak self] in
-      guard let self, !Task.isCancelled else { return }
-      self.updatePanelFrame(for: self.state)
-    }
   }
 
   /// Grows the panel immediately so nothing is ever clipped mid-animation, but defers shrinking
@@ -172,7 +165,6 @@ final class NotchViewModel: ObservableObject {
     // 250pt island around 190pt content until the new view corrected it. Set with no animation:
     // nothing reads expandedHeight while the island is closed, so the change is invisible.
     if !next.isExpanded, expandedHeight != Metrics.expandedSize.height {
-      heightResizeTask?.cancel()
       expandedHeight = Metrics.expandedSize.height
     }
     // hover-region may have changed shape; re-evaluate containment so exit fires correctly

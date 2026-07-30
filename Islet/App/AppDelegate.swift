@@ -14,6 +14,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    // An uncaught NSException thrown inside AppKit's display cycle aborts the app with a crash
+    // report that carries the unwound stack but NOT the reason. Log both before dying, so the
+    // next "it crashed when I clicked X" comes with the exception text attached.
+    NSSetUncaughtExceptionHandler { exception in
+      Log.app.fault(
+        "Uncaught \(exception.name.rawValue, privacy: .public): \(exception.reason ?? "no reason", privacy: .public)\n\(exception.callStackSymbols.joined(separator: "\n"), privacy: .public)"
+      )
+    }
     NSApp.setActivationPolicy(.accessory)
     guard !isRunningTests else {
       Log.app.info("Launched as a test host; skipping monitor startup")

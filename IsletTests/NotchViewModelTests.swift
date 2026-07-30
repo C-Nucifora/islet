@@ -54,8 +54,9 @@ final class NotchViewModelTests: XCTestCase {
     let vm = makeVM(mode: .clickToPin)
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
     XCTAssertEqual(vm.state, .expanded(pinned: true))
-    // grown synchronously, not deferred
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.expandedSize.height))
+    // Grown synchronously, and straight to the TALLEST tier: the panel never resizes while
+    // expanded, because a setFrame during the tier cross-fade throws inside AppKit layout.
+    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
   }
 
   func testPanelFrameStaysGrownUntilTheClosingAnimationEnds() {
@@ -64,7 +65,7 @@ final class NotchViewModelTests: XCTestCase {
     vm.handleMouseDown(CGPoint(x: 100, y: 500))
     XCTAssertEqual(vm.state, .closed)
     // Still expanded-sized: shrinking here would clip the island mid-collapse.
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.expandedSize.height))
+    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
   }
 
   func testPanelFrameShrinksAfterCollapsing() async throws {
@@ -105,41 +106,24 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(vm.expandedRect, vm.geometry.expandedRect(height: Metrics.expandedSize.height))
   }
 
-  /// The height itself changes synchronously — the drawn island follows it immediately — but the
-  /// window resize lands one main-actor turn later. That deferral is not an optimisation: resizing
-  /// the hosting window from inside the SwiftUI update that selects the tab throws an uncaught
-  /// NSException out of AppKit's constraint pass and aborts the app. See `setExpandedHeight`.
-  func testSetExpandedHeightAppliesTheHeightNowAndResizesTheWindowNextTurn() async {
+  /// The height tier drives the drawn island and the hit region ONLY. The panel holds the tallest
+  /// tier for the whole expanded state: resizing the window while the hosting view animates the
+  /// tier change throws an uncaught NSException out of AppKit's constraint pass — reproduced in
+  /// TallTierHostingTests, where the identical transition against a fixed window survives.
+  func testHeightTierNeverMovesThePanel() {
     let vm = makeVM(mode: .clickToPin)
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
-    vm.setExpandedHeight(Metrics.tallExpandedHeight)
+    let expanded = vm.geometry.panelFrame(height: Metrics.tallExpandedHeight)
+    XCTAssertEqual(vm.panelFrame, expanded)
 
-    // Immediate: the model and the drawn island.
+    vm.setExpandedHeight(Metrics.tallExpandedHeight)
     XCTAssertEqual(vm.expandedHeight, Metrics.tallExpandedHeight)
     XCTAssertEqual(vm.expandedRect.height, Metrics.tallExpandedHeight)
-    // NOT yet the window — publishing here is what crashed.
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.expandedSize.height))
+    XCTAssertEqual(vm.panelFrame, expanded, "tier change must not republish the panel frame")
 
-    await Task.yield()
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
-  }
-
-  func testSetExpandedHeightShrinksBackOnlyAfterTheDelay() async throws {
-    let vm = makeVM(mode: .clickToPin)
-    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
-    vm.setExpandedHeight(Metrics.tallExpandedHeight)
-    await Task.yield()
     vm.setExpandedHeight(Metrics.expandedSize.height)
-    await Task.yield()
-    // Still tall: shrinking here would clip the outgoing tab mid-cross-fade.
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
-    try await Task.sleep(for: Motion.panelShrinkDelay + .milliseconds(200))
-    // The deferred shrink re-reads state and height when it fires rather than capturing them, so
-    // pin both down first: a failure here means the shrink resolved against the wrong inputs, not
-    // that the shrink itself is broken.
-    XCTAssertEqual(vm.state, .expanded(pinned: true), "the island should still be open")
-    XCTAssertEqual(vm.expandedHeight, Metrics.expandedSize.height, "height should be back at base")
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.expandedSize.height))
+    XCTAssertEqual(vm.expandedRect.height, Metrics.expandedSize.height)
+    XCTAssertEqual(vm.panelFrame, expanded, "nor on the way back down")
   }
 
   func testTallExpandedRectSwallowsAClickTheBaseTierWouldTreatAsOutside() {
@@ -201,8 +185,8 @@ final class NotchViewModelTests: XCTestCase {
     vm.handleMouseDown(CGPoint(x: 100, y: 500))  // close: a shrink is scheduled
     vm.cancelPendingShrink()
     try await Task.sleep(for: Motion.panelShrinkDelay + .milliseconds(200))
-    // cancelled, so nothing shrank
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.expandedSize.height))
+    // cancelled, so nothing shrank (the expanded panel is always the tallest tier)
+    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
 
     // A later slot measurement must still be able to schedule a fresh shrink.
     vm.updateCompactWidths(leading: 10, trailing: 10)
@@ -219,16 +203,12 @@ final class NotchViewModelTests: XCTestCase {
     let vm = makeVM(mode: .clickToPin)
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
     vm.setExpandedHeight(Metrics.tallExpandedHeight)
-    await Task.yield()
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
 
     vm.handleMouseDown(CGPoint(x: 100, y: 500))  // collapse
     XCTAssertEqual(vm.expandedHeight, Metrics.expandedSize.height)
 
-    // Reopening therefore grows the panel to the BASE tier, not the stale tall one.
+    // Reopening therefore draws the base tier, not the stale tall one.
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight),
-                   "still tall only because the earlier grow has not shrunk yet")
     XCTAssertEqual(vm.expandedRect.height, Metrics.expandedSize.height)
   }
 }
