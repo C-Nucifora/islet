@@ -15,29 +15,37 @@ struct EventLeadingView: View {
   }
 }
 
-/// The trailing slot: title, plus subtitle when there is one and it fits.
+/// The trailing slot: title and subtitle on ONE line, side by side.
 ///
-/// `lineLimit(1)` and a max width are load-bearing. The compact slots are measured and the panel is
-/// sized from the measurement, so an unbounded string drags the island out to the width of a track
-/// title — the creep `NotchRootView` already warns about.
+/// The collapsed island is a 34pt band built around single-line content — every pre-bus sneak
+/// (battery percent, track title, HUD bar) is one line. A stacked title/subtitle block is ~24pt
+/// tall: its second line lands inside the bottom corner-radius zone of the island shape and reads
+/// as spilling out of it. Snapshot-verified in SneakSnapshotTests before this layout replaced it.
+///
+/// `lineLimit(1)` and the max width are load-bearing: the slots are measured and the panel is
+/// sized from the measurement, so an unbounded string drags the island out to the width of a
+/// device name. No `fixedSize` — it reported an ideal width the measurement pass never saw, which
+/// pushed the title flush against the island's right edge. The title wins the space
+/// (`layoutPriority`); the subtitle truncates first, since "Connected" cut short costs less than
+/// the device's name cut short.
 struct EventTrailingView: View {
   let event: SystemEvent
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
+    HStack(spacing: 5) {
       Text(event.title)
         .font(.caption2.weight(.semibold))
         .foregroundStyle(.white)
         .lineLimit(1)
+        .layoutPriority(1)
       if let subtitle = event.subtitle, !subtitle.isEmpty {
         Text(subtitle)
-          .font(.system(size: 9))
+          .font(.caption2)
           .foregroundStyle(.secondary)
           .lineLimit(1)
       }
     }
-    .frame(maxWidth: 150, alignment: .leading)
-    .fixedSize(horizontal: true, vertical: false)
+    .frame(maxWidth: 175, alignment: .leading)
   }
 }
 
