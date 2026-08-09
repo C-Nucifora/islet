@@ -1,5 +1,38 @@
 import SwiftUI
 
+/// Islet's menu-bar mark: the hardware-notch shoulders flow into a compact rounded island.
+/// The open dip at the top keeps the silhouette legible when macOS renders it at menu-bar scale.
+struct IsletMenuBarIconShape: Shape {
+  func path(in rect: CGRect) -> Path {
+    let xScale = rect.width / 18
+    let yScale = rect.height / 16
+    func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+      CGPoint(x: rect.minX + x * xScale, y: rect.minY + y * yScale)
+    }
+
+    var path = Path()
+    path.move(to: point(1, 6))
+    path.addCurve(
+      to: point(5, 2), control1: point(1, 3.7), control2: point(2.8, 2))
+    path.addLine(to: point(7.4, 2))
+    path.addCurve(
+      to: point(9, 5.2), control1: point(7.8, 2), control2: point(7.8, 5.2))
+    path.addCurve(
+      to: point(10.6, 2), control1: point(10.2, 5.2), control2: point(10.2, 2))
+    path.addLine(to: point(13, 2))
+    path.addCurve(
+      to: point(17, 6), control1: point(15.2, 2), control2: point(17, 3.7))
+    path.addLine(to: point(17, 9.5))
+    path.addCurve(
+      to: point(12.5, 14), control1: point(17, 12.2), control2: point(15.2, 14))
+    path.addLine(to: point(5.5, 14))
+    path.addCurve(
+      to: point(1, 9.5), control1: point(2.8, 14), control2: point(1, 12.2))
+    path.closeSubpath()
+    return path
+  }
+}
+
 @MainActor
 enum AppState {
   static let demoActivity = DemoActivity()
@@ -42,7 +75,7 @@ struct IsletApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
   var body: some Scene {
-    MenuBarExtra("Islet", systemImage: "capsule.fill") {
+    MenuBarExtra {
       Button("Settings…") { SettingsOpener.open() }
         .keyboardShortcut(",")
       Menu("Start Timer") {
@@ -101,6 +134,11 @@ struct IsletApp: App {
       Divider()
       Button("Quit Islet") { NSApplication.shared.terminate(nil) }
         .keyboardShortcut("q")
+    } label: {
+      IsletMenuBarIconShape()
+        .fill(.primary)
+        .frame(width: 18, height: 16)
+        .accessibilityLabel("Islet")
     }
   }
 }
