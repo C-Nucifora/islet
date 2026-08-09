@@ -8,6 +8,18 @@ import XCTest
 /// SneakQueue, measured slot widths, panel-frame sink, shape mask — into /tmp/sneak_snapshot.png.
 @MainActor
 final class SneakSnapshotTests: XCTestCase {
+  func testLongEventTrailingViewHasBoundedWidth() {
+    let event = SystemEvent(
+      sourceID: "bluetooth", icon: "dot.radiowaves.right",
+      title: "Christian's extraordinarily long Bluetooth headphone device name",
+      subtitle: "Connected")
+    let host = NSHostingView(rootView: EventTrailingView(event: event))
+
+    host.layoutSubtreeIfNeeded()
+
+    XCTAssertEqual(host.fittingSize.width, 120, accuracy: 0.5)
+  }
+
   func testSnapshotBluetoothSneak() throws {
     let geometry = NotchGeometry(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),

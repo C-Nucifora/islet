@@ -1,5 +1,36 @@
 import SwiftUI
 
+/// Pure timing and geometry for a compact, repeating text marquee.
+///
+/// The view owns dates and rendering; this model makes the reading phases deterministic and keeps
+/// fitting content completely still.
+struct MarqueeMotion {
+  var viewportWidth: CGFloat
+  var contentWidth: CGFloat
+  var pointsPerSecond: CGFloat = 24
+  var startPause: TimeInterval = 1
+  var endPause: TimeInterval = 0.8
+  var resetPause: TimeInterval = 0.35
+
+  var travelDistance: CGFloat { max(0, contentWidth - viewportWidth) }
+
+  var cycleDuration: TimeInterval {
+    guard travelDistance > 0, pointsPerSecond > 0 else { return 0 }
+    return startPause + TimeInterval(travelDistance / pointsPerSecond) + endPause + resetPause
+  }
+
+  func offset(at elapsed: TimeInterval) -> CGFloat {
+    guard cycleDuration > 0 else { return 0 }
+    let elapsedInCycle = max(0, elapsed).truncatingRemainder(dividingBy: cycleDuration)
+    guard elapsedInCycle >= startPause else { return 0 }
+
+    let scrollDuration = TimeInterval(travelDistance / pointsPerSecond)
+    let scrollElapsed = elapsedInCycle - startPause
+    guard scrollElapsed < scrollDuration else { return -travelDistance }
+    return -travelDistance * CGFloat(scrollElapsed / scrollDuration)
+  }
+}
+
 /// The leading slot: the event's icon, tinted, wearing its source's bespoke choreography.
 ///
 /// Sized to match the existing compact glyphs exactly (`.font(.caption)`), because the panel width
@@ -12,6 +43,64 @@ struct EventLeadingView: View {
       .font(.caption)
       .foregroundStyle(Color(isletHex: event.accentHex) ?? .white)
       .eventMotion(event.motion)
+  }
+}
+
+/// A fixed-width, single-line viewport that only moves when its content overflows.
+///
+/// Timeline-driven offsets avoid a long-lived task and keep speed independent of refresh rate.
+/// The viewport—not the content's ideal width—is what the compact panel measures.
+struct CompactMarquee<Content: View>: View {
+  let viewportWidth: CGFloat
+  private let content: Content
+
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var contentWidth: CGFloat = 0
+  @State private var epoch = Date()
+
+  init(viewportWidth: CGFloat, @ViewBuilder content: () -> Content) {
+    self.viewportWidth = viewportWidth
+    self.content = content()
+  }
+
+  private var motion: MarqueeMotion {
+    MarqueeMotion(viewportWidth: viewportWidth, contentWidth: contentWidth)
+  }
+
+  @ViewBuilder var body: some View {
+    if reduceMotion {
+      content
+        .lineLimit(1)
+        .frame(width: viewportWidth, alignment: .leading)
+        .clipped()
+    } else {
+      TimelineView(.animation(minimumInterval: 1 / 30, paused: motion.travelDistance == 0)) {
+        timeline in
+        let offset = motion.offset(at: timeline.date.timeIntervalSince(epoch))
+        content
+          .fixedSize(horizontal: true, vertical: false)
+          .onGeometryChange(for: CGFloat.self, of: \.size.width) { width in
+            guard width != contentWidth else { return }
+            contentWidth = width
+            epoch = Date()
+          }
+          .offset(x: offset)
+          .frame(width: viewportWidth, alignment: .leading)
+          .clipped()
+          .mask {
+            LinearGradient(
+              stops: [
+                .init(color: offset < -0.5 ? .clear : .black, location: 0),
+                .init(color: .black, location: 0.06),
+                .init(color: .black, location: 0.94),
+                .init(
+                  color: offset > -motion.travelDistance + 0.5 ? .clear : .black,
+                  location: 1),
+              ],
+              startPoint: .leading, endPoint: .trailing)
+          }
+      }
+    }
   }
 }
 
@@ -32,20 +121,21 @@ struct EventTrailingView: View {
   let event: SystemEvent
 
   var body: some View {
-    HStack(spacing: 5) {
-      Text(event.title)
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(.white)
-        .lineLimit(1)
-        .layoutPriority(1)
-      if let subtitle = event.subtitle, !subtitle.isEmpty {
-        Text(subtitle)
-          .font(.caption2)
-          .foregroundStyle(.secondary)
+    CompactMarquee(viewportWidth: 120) {
+      HStack(spacing: 5) {
+        Text(event.title)
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.white)
           .lineLimit(1)
+          .layoutPriority(1)
+        if let subtitle = event.subtitle, !subtitle.isEmpty {
+          Text(subtitle)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
       }
     }
-    .frame(maxWidth: 175, alignment: .leading)
   }
 }
 
