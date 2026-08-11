@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Islet's menu-bar mark: the hardware-notch shoulders flow into a compact rounded island.
-/// The open dip at the top keeps the silhouette legible when macOS renders it at menu-bar scale.
+/// Islet's menu-bar mark: a thin display horizon interrupted by its hanging hardware notch.
+/// The sparse silhouette stays crisp when macOS renders it at menu-bar scale.
 struct IsletMenuBarIconShape: Shape {
   func path(in rect: CGRect) -> Path {
     let xScale = rect.width / 18
@@ -11,23 +11,21 @@ struct IsletMenuBarIconShape: Shape {
     }
 
     var path = Path()
-    path.move(to: point(1, 6))
+    path.addRoundedRect(
+      in: CGRect(
+        x: point(1.5, 2.5).x,
+        y: point(1.5, 2.5).y,
+        width: 15 * xScale,
+        height: 1.5 * yScale),
+      cornerSize: CGSize(width: 0.75 * xScale, height: 0.75 * yScale))
+
+    path.move(to: point(6.25, 2.5))
+    path.addLine(to: point(11.75, 2.5))
+    path.addLine(to: point(11.75, 5.75))
     path.addCurve(
-      to: point(5, 2), control1: point(1, 3.7), control2: point(2.8, 2))
-    path.addLine(to: point(7.4, 2))
+      to: point(9, 8.5), control1: point(11.75, 7.27), control2: point(10.52, 8.5))
     path.addCurve(
-      to: point(9, 5.2), control1: point(7.8, 2), control2: point(7.8, 5.2))
-    path.addCurve(
-      to: point(10.6, 2), control1: point(10.2, 5.2), control2: point(10.2, 2))
-    path.addLine(to: point(13, 2))
-    path.addCurve(
-      to: point(17, 6), control1: point(15.2, 2), control2: point(17, 3.7))
-    path.addLine(to: point(17, 9.5))
-    path.addCurve(
-      to: point(12.5, 14), control1: point(17, 12.2), control2: point(15.2, 14))
-    path.addLine(to: point(5.5, 14))
-    path.addCurve(
-      to: point(1, 9.5), control1: point(2.8, 14), control2: point(1, 12.2))
+      to: point(6.25, 5.75), control1: point(7.48, 8.5), control2: point(6.25, 7.27))
     path.closeSubpath()
     return path
   }
