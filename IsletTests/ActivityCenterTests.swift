@@ -76,7 +76,7 @@ final class ActivityCenterTests: XCTestCase {
   func testMergedOrderAppendsCatalogueEntriesTheStoredOrderPredates() {
     let preSystem = ["timer", "nowPlaying", "shelf", "clipboard", "ports", "calendar", "battery"]
     let merged = ActivityCatalog.mergedOrder(preSystem)
-    XCTAssertEqual(merged, preSystem + ["system"])
+    XCTAssertEqual(merged, preSystem + ["system", "continuity"])
   }
 
   func testMergedOrderPreservesTheUsersOrderingAndUnknownIDs() {

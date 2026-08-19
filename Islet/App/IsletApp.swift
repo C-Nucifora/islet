@@ -42,6 +42,7 @@ enum AppState {
   static let clipboard = ClipboardActivity()
   static let ports = PortsActivity()
   static let system = SystemActivity()
+  static let continuity = ContinuityActivity()
 
   /// Every system-event source, in catalogue order. Sources that only re-shape an existing
   /// producer's output — battery, timer, track change, audio device — are not listed: those emit

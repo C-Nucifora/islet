@@ -50,6 +50,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       ActivityCenter.shared.register(AppState.ports)
       AppState.system.start()
       ActivityCenter.shared.register(AppState.system)
+      AppState.continuity.start()
+      ActivityCenter.shared.register(AppState.continuity)
       RemindersProvider.shared.start()
       AudioDeviceMonitor.shared.start()
       AppState.eventSources.forEach { SystemEventBus.shared.register($0) }

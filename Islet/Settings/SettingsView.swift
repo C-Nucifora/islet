@@ -29,6 +29,9 @@ struct SettingsView: View {
   @Default(.systemAlwaysVisible) private var systemAlwaysVisible
   @Default(.metricStyles) private var metricStyles
   @Default(.disabledEventSources) private var disabledEventSources
+  @Default(.continuityEnabled) private var continuityEnabled
+  @Default(.continuityAlwaysVisible) private var continuityAlwaysVisible
+  @Default(.continuitySneaks) private var continuitySneaks
 
   private func enabled(_ id: String) -> Binding<Bool> {
     Binding(
@@ -75,6 +78,19 @@ struct SettingsView: View {
           }
           Text("Thermal has no history, so the sparkline styles show its state as text.")
             .font(.caption2).foregroundStyle(.secondary)
+        }
+      }
+      Section("iPhone") {
+        Toggle("iPhone Live Activities", isOn: $continuityEnabled)
+        if continuityEnabled {
+          Toggle("Always show the tab", isOn: $continuityAlwaysVisible)
+          Toggle("Announce when one starts or ends", isOn: $continuitySneaks)
+          Text(ContinuityMonitor.shared.availability.explanation)
+            .font(.caption2).foregroundStyle(.secondary)
+          Text(
+            "Shows the same Live Activities macOS puts in the menu bar. Islet draws them itself, so how much detail it can show varies by app."
+          )
+          .font(.caption2).foregroundStyle(.secondary)
         }
       }
       Section("System events") {

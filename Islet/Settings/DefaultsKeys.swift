@@ -42,4 +42,12 @@ extension Defaults.Keys {
   /// strings so an unknown value from a future build resolves to the fallback instead of failing
   /// to decode the whole dictionary.
   static let metricStyles = Key<[String: String]>("metricStyles", default: [:])
+  static let continuityEnabled = Key<Bool>("continuityEnabled", default: true)
+  /// Off: the iPhone tab appears only while the phone has something running. On: it stays in the
+  /// switcher so the empty state can explain why nothing is arriving. Mirrors `systemAlwaysVisible`.
+  static let continuityAlwaysVisible = Key<Bool>("continuityAlwaysVisible", default: false)
+  static let continuitySneaks = Key<Bool>("continuitySneaks", default: true)
+  /// Writes every raw Live Activity payload to disk for building test fixtures. Off by default and
+  /// intentionally undiscoverable — the payloads are the user's own orders, rides and tickets.
+  static let continuityCapture = Key<Bool>("continuityCapture", default: false)
 }

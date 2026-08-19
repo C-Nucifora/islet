@@ -11,6 +11,7 @@ enum ActivityCatalog {
     ("calendar", "Calendar", "calendar"),
     ("battery", "Battery", "battery.100percent.bolt"),
     ("system", "System", "cpu"),
+    ("continuity", "iPhone", "iphone.gen3"),
   ]
 
   static var defaultOrder: [String] { orderable.map(\.id) }
