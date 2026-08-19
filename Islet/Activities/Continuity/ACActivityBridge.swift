@@ -133,11 +133,31 @@ final class ACActivityBridge: @unchecked Sendable {
     (object as? NSObject)?.value(forKey: key) as? NSNumber
   }
 
+  /// The iOS bundle identifier behind an activity.
+  ///
+  /// `platterTargetBundleIdentifier` reads like the obvious accessor, but it is derived rather
+  /// than stored: building a descriptor with `sceneTargetBundleIdentifiers` populated and reading
+  /// it back yields nil for every key the initialiser accepts, so it resolves off internal state
+  /// only the daemon sets. Relying on it alone would leave `bundleIdentifier` nil in practice —
+  /// every card would fall back to the generic phone glyph and no adapter could ever match.
+  ///
+  /// The scene-target dictionary itself always round-trips. One activity belongs to exactly one
+  /// app, so every entry names the same bundle and the distinct value is a safe fallback; the sort
+  /// only exists to keep the choice deterministic if that assumption is ever wrong.
+  static func bundleIdentifier(platter: String?, sceneTargets: [AnyHashable: Any]?) -> String? {
+    if let platter, !platter.isEmpty { return platter }
+    guard let sceneTargets else { return nil }
+    let names = Set(sceneTargets.values.compactMap { $0 as? String }.filter { !$0.isEmpty })
+    return names.sorted().first
+  }
+
   static func activity(fromDescriptor descriptor: AnyObject) -> RawLiveActivity? {
     guard let id = value(descriptor, "activityIdentifier") as? String else { return nil }
     return RawLiveActivity(
       id: id,
-      bundleIdentifier: value(descriptor, "platterTargetBundleIdentifier") as? String,
+      bundleIdentifier: bundleIdentifier(
+        platter: value(descriptor, "platterTargetBundleIdentifier") as? String,
+        sceneTargets: value(descriptor, "sceneTargetBundleIdentifiers") as? [AnyHashable: Any]),
       appName: value(descriptor, "localizedAppName") as? String,
       remoteDeviceIdentifier: value(descriptor, "remoteDeviceIdentifier") as? String,
       createdDate: value(descriptor, "createdDate") as? Date,
