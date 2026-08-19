@@ -36,13 +36,9 @@ final class HUDController: ObservableObject {
     start()
   }
 
-  var isAccessibilityTrusted: Bool { AXIsProcessTrusted() }
+  var isAccessibilityTrusted: Bool { AccessibilityPermission.isTrusted }
 
-  func promptForAccessibility() {
-    // Literal avoids referencing the non-Sendable global kAXTrustedCheckOptionPrompt.
-    let options = ["AXTrustedCheckOptionPrompt": true]
-    _ = AXIsProcessTrustedWithOptions(options as CFDictionary)
-  }
+  func promptForAccessibility() { AccessibilityPermission.prompt() }
 
   func start() {
     guard Defaults[.hudEnabled], eventTap == nil, isAccessibilityTrusted else { return }

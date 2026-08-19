@@ -2,23 +2,7 @@ import Combine
 import Defaults
 import SwiftUI
 
-/// Formats the compact countdown.
-///
-/// `CalendarLogic.countdownText` rounds to whole minutes, which is right for "your meeting is in
-/// 12m" and wrong here: a Live Activity is very often a running timer, and a timer that reads "1m"
-/// for sixty seconds looks broken.
-enum LiveActivityCountdown {
-  static func text(to end: Date, now: Date) -> String {
-    let seconds = Int(end.timeIntervalSince(now).rounded())
-    guard seconds > 0 else { return "0:00" }
-    if seconds < 3600 { return String(format: "%d:%02d", seconds / 60, seconds % 60) }
-    let hours = seconds / 3600
-    let minutes = (seconds % 3600) / 60
-    return String(format: "%d:%02d", hours, minutes)
-  }
-}
-
-/// The iPhone tab: Live Activities replicated from the paired phone.
+/// The iPhone tab: which apps are running Live Activities on the paired phone.
 @MainActor
 final class ContinuityActivity: NotchActivity, ObservableObject {
   let id = "continuity"
@@ -34,7 +18,8 @@ final class ContinuityActivity: NotchActivity, ObservableObject {
     return !monitor.cards.isEmpty || Defaults[.continuityAlwaysVisible]
   }
 
-  /// The card the compact island shows. `cards` is already ordered most-relevant first.
+  /// The card the compact island shows: the leftmost in the menu bar, matching what the user's eye
+  /// lands on first.
   var promoted: LiveActivityCard? { monitor.cards.first }
 
   func start() {
@@ -53,6 +38,4 @@ final class ContinuityActivity: NotchActivity, ObservableObject {
   var compactLeading: AnyView { AnyView(ContinuityCompactLeading(activity: self)) }
   var compactTrailing: AnyView { AnyView(ContinuityCompactTrailing(activity: self)) }
   var expandedView: AnyView { AnyView(ContinuityExpandedView(activity: self)) }
-  /// A list of cards needs the dense tier; at the base height three activities already clip.
-  var preferredExpandedHeight: CGFloat { Metrics.tallExpandedHeight }
 }

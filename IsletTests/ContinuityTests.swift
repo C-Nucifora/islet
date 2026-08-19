@@ -2,303 +2,222 @@ import XCTest
 
 @testable import Islet
 
-/// Builds a raw activity without needing a paired iPhone or the private framework.
-private func raw(
-  _ id: String,
-  bundle: String? = "com.example.app",
-  app: String? = "Example",
-  remote: String? = "iphone-1",
-  created: Date? = nil,
-  content: String? = nil,
-  attributes: String? = nil,
-  stale: Date? = nil,
-  relevance: Double = 0,
-  state: Int = 0
-) -> RawLiveActivity {
-  RawLiveActivity(
-    id: id,
-    bundleIdentifier: bundle,
-    appName: app,
-    remoteDeviceIdentifier: remote,
-    createdDate: created,
-    attributesData: attributes.map { Data($0.utf8) },
-    contentData: content.map { Data($0.utf8) },
-    staleDate: stale,
-    relevanceScore: relevance,
-    state: state)
+private func item(_ identifier: String, name: String? = "Example", minX: CGFloat = 0)
+  -> MenuBarLiveActivity
+{
+  MenuBarLiveActivity(axIdentifier: identifier, appName: name, minX: minX)
 }
 
-final class LiveActivityStoreTests: XCTestCase {
-  let now = Date(timeIntervalSince1970: 1_786_430_090)
-
-  func testDescriptorAddsAnActivity() {
-    var store = LiveActivityStore()
-    let change = store.apply(descriptors: [raw("a")], now: now)
-    XCTAssertEqual(change.added.map(\.id), ["a"])
-    XCTAssertEqual(store.ordered(now: now).map(\.id), ["a"])
-  }
-
-  /// The descriptor stream re-sends the whole set and carries no payload. Overwriting wholesale
-  /// would blank every card each time any one activity ticked.
-  func testDescriptorRefreshKeepsContentAlreadyReceived() {
-    var store = LiveActivityStore()
-    _ = store.apply(descriptors: [raw("a")], now: now)
-    _ = store.apply(content: raw("a", content: #"{"title":"Cooking"}"#), now: now)
-    _ = store.apply(descriptors: [raw("a")], now: now)
-    XCTAssertEqual(store.ordered(now: now).first?.render.title, "Cooking")
-  }
-
-  func testActivityMissingFromDescriptorsIsRemoved() {
-    var store = LiveActivityStore()
-    _ = store.apply(descriptors: [raw("a"), raw("b")], now: now)
-    let change = store.apply(descriptors: [raw("b")], now: now)
-    XCTAssertEqual(change.removed.map(\.id), ["a"])
-    XCTAssertEqual(store.ordered(now: now).map(\.id), ["b"])
-  }
-
-  /// The content stream is allowed to be the first thing we hear about an activity.
-  func testContentWithoutAPriorDescriptorStillCreatesACard() {
-    var store = LiveActivityStore()
-    let change = store.apply(content: raw("a", content: #"{"title":"Ride"}"#), now: now)
-    XCTAssertEqual(change.added.map(\.id), ["a"])
-    XCTAssertEqual(store.ordered(now: now).first?.render.title, "Ride")
-  }
-
-  func testEndedActivitiesLeaveTheList() {
-    var store = LiveActivityStore()
-    _ = store.apply(descriptors: [raw("a")], now: now)
-    let change = store.apply(content: raw("a", state: 2), now: now)
-    XCTAssertEqual(change.removed.map(\.id), ["a"])
-    XCTAssertTrue(store.ordered(now: now).isEmpty)
-  }
-
-  func testHigherRelevanceIsPromoted() {
-    var store = LiveActivityStore()
-    _ = store.apply(descriptors: [raw("a"), raw("b")], now: now)
-    _ = store.apply(content: raw("a", relevance: 1), now: now)
-    _ = store.apply(content: raw("b", relevance: 9), now: now)
-    XCTAssertEqual(store.ordered(now: now).map(\.id), ["b", "a"])
-  }
-
-  func testNewerActivityWinsWhenRelevanceTies() {
-    var store = LiveActivityStore()
-    _ = store.apply(
-      descriptors: [
-        raw("old", created: now.addingTimeInterval(-600)),
-        raw("new", created: now.addingTimeInterval(-60)),
-      ], now: now)
-    XCTAssertEqual(store.ordered(now: now).map(\.id), ["new", "old"])
-  }
-
-  func testRemoteActivitiesOutrankMacOnes() {
-    var store = LiveActivityStore()
-    _ = store.apply(descriptors: [raw("mac", remote: nil), raw("phone")], now: now)
-    XCTAssertEqual(store.ordered(now: now).map(\.id), ["phone", "mac"])
-    XCTAssertEqual(store.ordered(now: now).map(\.isRemote), [true, false])
-  }
-
-  /// Equal-scoring activities must not swap places between renders, or the promoted card flickers.
-  func testOrderIsTotalAndStable() {
-    var store = LiveActivityStore()
-    _ = store.apply(descriptors: [raw("c"), raw("a"), raw("b")], now: now)
-    let first = store.ordered(now: now).map(\.id)
-    for _ in 0..<20 { XCTAssertEqual(store.ordered(now: now).map(\.id), first) }
-    XCTAssertEqual(first, ["a", "b", "c"])
-  }
-
-  func testNoChangeProducesNoSneaks() {
-    var store = LiveActivityStore()
-    _ = store.apply(descriptors: [raw("a")], now: now)
-    XCTAssertTrue(store.apply(descriptors: [raw("a")], now: now).isEmpty)
-  }
-}
-
-final class LiveActivityCardTests: XCTestCase {
-  let now = Date(timeIntervalSince1970: 1_786_430_090)
-
-  /// `staleDate` is the daemon's own expiry and is schema-independent, so it is a safe countdown
-  /// when the app's payload did not yield one.
-  func testStaleDateBecomesTheCountdownWhenThePayloadHasNone() {
-    let end = now.addingTimeInterval(300)
-    let card = LiveActivityCard.make(
-      from: raw("a", content: #"{"title":"Order"}"#, stale: end), now: now)
-    XCTAssertEqual(card.render.endDate, end)
-  }
-
-  func testAPayloadCountdownBeatsStaleDate() throws {
-    let payloadEnd = now.addingTimeInterval(60)
-    let card = LiveActivityCard.make(
-      from: raw(
-        "a",
-        content: #"{"title":"Order","endDate":\#(payloadEnd.timeIntervalSinceReferenceDate)}"#,
-        stale: now.addingTimeInterval(9000)),
-      now: now)
+final class LiveActivityIdentifierTests: XCTestCase {
+  /// The identifier is the whole basis of detection: macOS names these items
+  /// `<iOS bundle id>.liveActivity`, which both marks them and names the app.
+  func testAppIdentifierYieldsTheBundleIdentifier() {
     XCTAssertEqual(
-      try XCTUnwrap(card.render.endDate).timeIntervalSince1970, payloadEnd.timeIntervalSince1970,
-      accuracy: 1)
+      LiveActivityIdentifier.parse("com.t3tools.t3code.liveActivity"),
+      .app(bundleIdentifier: "com.t3tools.t3code"))
   }
 
-  func testAlreadyExpiredStaleDateIsNotACountdown() {
-    let card = LiveActivityCard.make(
-      from: raw("a", content: #"{"title":"Order"}"#, stale: now.addingTimeInterval(-10)), now: now)
-    XCTAssertNil(card.render.endDate)
+  func testOrdinaryStatusItemsAreNotLiveActivities() {
+    XCTAssertNil(LiveActivityIdentifier.parse("com.apple.menuextra.clock"))
+    XCTAssertNil(LiveActivityIdentifier.parse("com.apple.menuextra.wifi"))
+    XCTAssertNil(LiveActivityIdentifier.parse(""))
   }
 
-  func testKnownAppsGetTheirOwnGlyph() {
-    let card = LiveActivityCard.make(from: raw("a", bundle: "com.apple.mobiletimer"), now: now)
-    XCTAssertEqual(card.render.symbol, "timer")
+  func testControlCentresOwnPlaceholdersAreRecognised() {
+    XCTAssertEqual(
+      LiveActivityIdentifier.parse("com.apple.ControlCenter.overflow.liveActivity"), .overflow)
+    XCTAssertEqual(
+      LiveActivityIdentifier.parse("com.apple.ControlCenter.empty.liveActivity"), .empty)
+  }
+
+  /// A bare suffix names no app; treating it as one would render a card with an empty title.
+  func testSuffixWithoutABundleIdentifierIsRejected() {
+    XCTAssertNil(LiveActivityIdentifier.parse(".liveActivity"))
+  }
+
+  func testSuffixMustBeAtTheEnd() {
+    XCTAssertNil(LiveActivityIdentifier.parse("com.example.liveActivity.helper"))
+  }
+}
+
+final class LiveActivityCatalogTests: XCTestCase {
+  private func cards(
+    _ items: [MenuBarLiveActivity], installed: Set<String> = []
+  ) -> [LiveActivityCard] {
+    LiveActivityCatalog.cards(from: items) { installed.contains($0) }
+  }
+
+  func testBuildsACardPerApp() {
+    let out = cards([item("com.ubercab.UberClient.liveActivity", name: "Uber")])
+    XCTAssertEqual(out.map(\.bundleIdentifier), ["com.ubercab.UberClient"])
+    XCTAssertEqual(out.first?.appName, "Uber")
+    XCTAssertEqual(out.first?.symbol, "car.fill")
+  }
+
+  /// ControlCenter's overflow and empty placeholders are its own bookkeeping, not activities, and
+  /// rendering them would put "overflow" in the island as though it were an app.
+  func testPlaceholdersAreDropped() {
+    let out = cards([
+      item("com.apple.ControlCenter.overflow.liveActivity"),
+      item("com.apple.ControlCenter.empty.liveActivity"),
+      item("com.apple.mobiletimer.liveActivity", name: "Clock"),
+    ])
+    XCTAssertEqual(out.map(\.bundleIdentifier), ["com.apple.mobiletimer"])
+  }
+
+  func testNonLiveActivityItemsAreDropped() {
+    XCTAssertTrue(cards([item("com.apple.menuextra.clock", name: "Clock")]).isEmpty)
+  }
+
+  /// Ordered by position so the island lists activities the way the menu bar does.
+  func testCardsFollowMenuBarOrder() {
+    let out = cards([
+      item("com.c.app.liveActivity", minX: 900),
+      item("com.a.app.liveActivity", minX: 100),
+      item("com.b.app.liveActivity", minX: 500),
+    ])
+    XCTAssertEqual(out.map(\.bundleIdentifier), ["com.a.app", "com.b.app", "com.c.app"])
+  }
+
+  /// Two items for one app would render twice under the same name with nothing to tell them apart.
+  func testOneCardPerAppEvenIfTheMenuBarRepeatsIt() {
+    let out = cards([
+      item("com.a.app.liveActivity", name: "A", minX: 100),
+      item("com.a.app.liveActivity", name: "A", minX: 300),
+    ])
+    XCTAssertEqual(out.count, 1)
+    XCTAssertEqual(out.first?.id, "com.a.app.liveActivity")
   }
 
   func testUnknownAppsFallBackToThePhoneGlyph() {
-    let card = LiveActivityCard.make(from: raw("a", bundle: "com.unknown.thing"), now: now)
-    XCTAssertEqual(card.render.symbol, LiveActivityAppStyle.fallbackSymbol)
+    let out = cards([item("com.unknown.thing.liveActivity")])
+    XCTAssertEqual(out.first?.symbol, LiveActivityAppStyle.fallbackSymbol)
   }
 
-  /// An unreadable payload should still say which app it belongs to rather than render blank.
-  func testUndecodablePayloadStillNamesTheApp() {
-    var activity = raw("a", app: "Uber", content: nil)
-    activity.contentData = Data([0xFF, 0x00, 0x01])
-    let card = LiveActivityCard.make(from: activity, now: now)
-    XCTAssertEqual(card.compactText, "Uber")
+  func testMissingAccessibilityNameFallsBackToTheBundleLeaf() {
+    XCTAssertEqual(cards([item("com.doordash.doordash.liveActivity", name: nil)]).first?.appName,
+      "doordash")
+    XCTAssertEqual(cards([item("com.doordash.doordash.liveActivity", name: "")]).first?.appName,
+      "doordash")
   }
 
-  func testMissingAppNameFallsBackToTheBundleLeaf() {
-    let card = LiveActivityCard.make(
-      from: raw("a", bundle: "com.doordash.doordash", app: nil), now: now)
-    XCTAssertEqual(card.appName, "doordash")
+  /// An activity whose app is installed on this Mac probably originated here, and should not pass
+  /// itself off as coming from the phone.
+  func testLocallyInstalledAppsAreNotMarkedRemote() {
+    let out = cards([item("com.local.app.liveActivity")], installed: ["com.local.app"])
+    XCTAssertEqual(out.first?.isRemote, false)
+    XCTAssertEqual(cards([item("com.phone.app.liveActivity")]).first?.isRemote, true)
+  }
+
+  func testNoItemsYieldNoCards() {
+    XCTAssertTrue(cards([]).isEmpty)
   }
 }
 
 final class ContinuityAvailabilityTests: XCTestCase {
-  func testUnresolvedBridgeIsUnsupported() {
+  func testWithoutAccessibilityNothingElseMatters() {
+    XCTAssertEqual(
+      .needsAccessibility,
+      ContinuityAvailability.resolve(
+        isTrusted: false, controlCenterReachable: true, systemEnabled: true, cardCount: 3))
+  }
+
+  func testUnreachableControlCentreIsUnsupported() {
     XCTAssertEqual(
       .unsupported,
       ContinuityAvailability.resolve(
-        bridgeAvailable: false, systemEnabled: true, companionPaired: true, cardCount: 3))
+        isTrusted: true, controlCenterReachable: false, systemEnabled: true, cardCount: 0))
   }
 
   func testSystemSwitchedOffIsReported() {
     XCTAssertEqual(
       .systemDisabled,
       ContinuityAvailability.resolve(
-        bridgeAvailable: true, systemEnabled: false, companionPaired: false, cardCount: 0))
+        isTrusted: true, controlCenterReachable: true, systemEnabled: false, cardCount: 0))
   }
 
-  func testEnabledButNoPhoneIsWaiting() {
+  func testEnabledButEmptyIsWaiting() {
     XCTAssertEqual(
       .waiting,
       ContinuityAvailability.resolve(
-        bridgeAvailable: true, systemEnabled: true, companionPaired: false, cardCount: 0))
+        isTrusted: true, controlCenterReachable: true, systemEnabled: true, cardCount: 0))
   }
 
-  /// ControlCenter's pairing flag is a cache it only rewrites when it notices a change, so it can
-  /// read stale. An activity in hand proves the pipe is open whatever the cache says.
-  func testCardsInHandOutrankAStalePairingFlag() {
+  /// Cards in hand beat every settings signal — whatever the preferences claim, something is here.
+  func testCardsInHandOutrankTheSettings() {
     XCTAssertEqual(
       .active,
       ContinuityAvailability.resolve(
-        bridgeAvailable: true, systemEnabled: false, companionPaired: false, cardCount: 1))
+        isTrusted: true, controlCenterReachable: false, systemEnabled: false, cardCount: 1))
   }
 
   func testEveryStateExplainsItself() {
-    for state: ContinuityAvailability in [.unsupported, .systemDisabled, .waiting, .active] {
+    for state: ContinuityAvailability in
+      [.needsAccessibility, .unsupported, .systemDisabled, .waiting, .active]
+    {
       XCTAssertFalse(state.explanation.isEmpty)
     }
   }
 }
 
 final class ControlCenterSettingsTests: XCTestCase {
-  private func state(_ json: String) -> Data { Data(json.utf8) }
-
-  func testReadsPairingFromTheJSONBlob() {
-    let s = ControlCenterLiveActivitySettings.parse(
-      remoteEnabled: NSNumber(value: true),
-      stateData: state(#"{"CompanionPaired":true,"SettingEnabled":true}"#))
-    XCTAssertTrue(s.remoteEnabled)
-    XCTAssertTrue(s.companionPaired)
+  func testReadsTheEnabledFlag() {
+    XCTAssertTrue(
+      ControlCenterLiveActivitySettings.parse(
+        remoteEnabled: NSNumber(value: true), stateData: nil).remoteEnabled)
+    XCTAssertFalse(
+      ControlCenterLiveActivitySettings.parse(
+        remoteEnabled: NSNumber(value: false), stateData: nil).remoteEnabled)
   }
 
-  func testSettingDisabledInTheBlobWins() {
+  func testSettingDisabledInTheJSONBlobWins() {
     let s = ControlCenterLiveActivitySettings.parse(
       remoteEnabled: NSNumber(value: true),
-      stateData: state(#"{"CompanionPaired":false,"SettingEnabled":false}"#))
+      stateData: Data(#"{"CompanionPaired":true,"SettingEnabled":false}"#.utf8))
     XCTAssertFalse(s.remoteEnabled)
   }
 
   /// An absent key means the user has never touched the setting, which macOS treats as on.
   func testAbsentPreferenceDefaultsToEnabled() {
-    let s = ControlCenterLiveActivitySettings.parse(remoteEnabled: nil, stateData: nil)
-    XCTAssertTrue(s.remoteEnabled)
-    XCTAssertFalse(s.companionPaired)
+    XCTAssertTrue(
+      ControlCenterLiveActivitySettings.parse(remoteEnabled: nil, stateData: nil).remoteEnabled)
   }
 
-  func testGarbageBlobDoesNotCrashOrClaimPairing() {
-    let s = ControlCenterLiveActivitySettings.parse(
-      remoteEnabled: NSNumber(value: false), stateData: Data([0xFF, 0x01]))
-    XCTAssertFalse(s.remoteEnabled)
-    XCTAssertFalse(s.companionPaired)
+  func testGarbageBlobDoesNotCrashOrFlipTheFlag() {
+    XCTAssertTrue(
+      ControlCenterLiveActivitySettings.parse(
+        remoteEnabled: NSNumber(value: true), stateData: Data([0xFF, 0x01])).remoteEnabled)
   }
 }
 
-final class LiveActivityCountdownTests: XCTestCase {
-  let now = Date(timeIntervalSince1970: 1_786_430_090)
-
-  /// A Live Activity is very often a running timer, and a timer that reads "1m" for a whole minute
-  /// looks broken — which is why this does not reuse `CalendarLogic.countdownText`.
-  func testSecondsAreShownUnderAnHour() {
-    XCTAssertEqual(LiveActivityCountdown.text(to: now.addingTimeInterval(65), now: now), "1:05")
-    XCTAssertEqual(LiveActivityCountdown.text(to: now.addingTimeInterval(9), now: now), "0:09")
-  }
-
-  func testHoursAndMinutesPastAnHour() {
-    XCTAssertEqual(LiveActivityCountdown.text(to: now.addingTimeInterval(3665), now: now), "1:01")
-  }
-
-  func testExpiredCountdownsClampToZero() {
-    XCTAssertEqual(LiveActivityCountdown.text(to: now.addingTimeInterval(-5), now: now), "0:00")
-    XCTAssertEqual(LiveActivityCountdown.text(to: now, now: now), "0:00")
-  }
-}
-
-final class ContinuityCaptureTests: XCTestCase {
-  /// A capture is only useful if it round-trips through the real decode path, so the raw blobs
-  /// have to survive as blobs rather than as someone's pre-parsed convenience shape.
-  func testRecordKeepsBlobsRecoverable() throws {
-    let activity = raw("a", content: #"{"title":"Ride"}"#, attributes: #"{"driver":"Sam"}"#)
-    let record = ContinuityCapture.record(kind: "content", activity: activity)
-    let contentBase64 = try XCTUnwrap(record["contentData"] as? String)
-    let restored = try XCTUnwrap(Data(base64Encoded: contentBase64))
-    XCTAssertEqual(PayloadValue.decode(restored), .object(["title": .string("Ride")]))
-    XCTAssertEqual(record["kind"] as? String, "content")
-    XCTAssertEqual(record["id"] as? String, "a")
-    XCTAssertEqual(record["isRemote"] as? Bool, true)
-  }
-
-  func testRecordIsJSONSerialisable() throws {
-    let record = ContinuityCapture.record(kind: "descriptor", activity: raw("a"))
-    XCTAssertTrue(JSONSerialization.isValidJSONObject(record))
-    XCTAssertNoThrow(try JSONSerialization.data(withJSONObject: record))
-  }
-}
-
-/// The canary for the private-API path.
+/// Exercises the real accessibility read against the running ControlCenter.
 ///
-/// Everything else in this file is pure and would keep passing long after macOS moved
-/// `ACActivityCenter` out from under us — the app would degrade to a permanently empty iPhone tab
-/// and nothing would say why. This is the one test that touches the real framework, and a failure
-/// here means exactly one thing: the private path this feature rests on has changed.
+/// Everything above is pure and would keep passing if macOS renamed `AXExtrasMenuBar`, changed the
+/// identifier format, or stopped exposing status items — leaving a permanently empty iPhone tab
+/// with nothing to say why. This is the one test that touches the live tree.
 ///
-/// Safe to run in a test host. Resolving the class and instantiating it starts no listeners,
-/// prompts for no permission and touches no hardware, which is why it does not need the monitor
-/// guard `AppDelegate` applies to everything else.
-final class ACActivityBridgeAvailabilityTests: XCTestCase {
-  func testTheLiveActivityPrivateAPIStillResolves() {
-    XCTAssertEqual(
-      ACActivityBridge.shared.availability, .available,
-      """
-      ACActivityCenter no longer resolves. iPhone Live Activities are now dark in Islet — the app \
-      degrades on its own, but the bridge in ACActivityBridge.swift needs re-checking against this \
-      macOS version.
-      """)
+/// Skips without the Accessibility grant, which the test host will usually lack. That is a real
+/// limitation of testing this at all, not something to assert around.
+@MainActor
+final class LiveActivityAXReaderIntegrationTests: XCTestCase {
+  func testReadsTheLiveMenuBar() throws {
+    guard AccessibilityPermission.isTrusted else {
+      throw XCTSkip("Accessibility not granted to the test host")
+    }
+    let items = LiveActivityAXReader.shared.read()
+    let reachable = try XCTUnwrap(
+      items, "ControlCenter is running but exposed no AXExtrasMenuBar — the attribute has moved")
+
+    // Whatever is running, every item the reader returns must parse; returning something the
+    // catalogue then silently drops would mean the filter and the reader disagree.
+    for item in reachable {
+      XCTAssertNotNil(
+        LiveActivityIdentifier.parse(item.axIdentifier),
+        "reader returned \(item.axIdentifier), which the identifier parser rejects")
+    }
+    let cards = LiveActivityCatalog.cards(from: reachable) { _ in false }
+    XCTAssertLessThanOrEqual(cards.count, reachable.count)
+    print("AX read \(reachable.count) live activity item(s): \(reachable.map(\.axIdentifier))")
+    print("  -> cards: \(cards.map { "\($0.appName) [\($0.bundleIdentifier)] \($0.symbol)" })")
   }
 }
