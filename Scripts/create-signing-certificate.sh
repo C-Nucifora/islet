@@ -15,6 +15,17 @@
 #
 # Run once per machine. Safe to re-run: it exits if the identity already exists.
 #
+# After switching from ad-hoc, the old grants must be cleared before re-granting. Every ad-hoc
+# build that ever asked for a permission left its own orphaned TCC row behind, all named "Islet",
+# all keyed to cdhashes that no longer exist — three of them on the machine this was developed on.
+# Toggling one of those on grants the *old* requirement and the new build stays untrusted, which
+# looks exactly like the fix not working. Clear them first:
+#
+#     tccutil reset Accessibility dev.cnucifora.Islet
+#
+# then add /Applications/Islet.app in System Settings. Repeat per service as needed
+# (Calendar, Reminders, Bluetooth, Location).
+#
 # To undo:  security delete-certificate -c "Islet Dev"
 set -euo pipefail
 
