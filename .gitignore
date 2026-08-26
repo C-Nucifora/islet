@@ -3,3 +3,8 @@
 build/
 DerivedData/
 Vendor/mediaremote-adapter-src/
+
+# Internal process documents
+docs/audit/
+docs/research/
+docs/superpowers/
