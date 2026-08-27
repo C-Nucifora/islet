@@ -11,14 +11,20 @@ final class RemindersProvider: ObservableObject {
   static let shared = RemindersProvider()
 
   @Published private(set) var reminders: [ReminderItem] = []
-  @Published private(set) var accessDenied = false
+  @Published private(set) var authorization = EventKitPermissionState(
+    EKEventStore.authorizationStatus(for: .reminder))
   @Published private(set) var hasRequestedAccess = false
+
+  var accessDenied: Bool { !authorization.canRead }
 
   private let store = EKEventStore()
   private var cancellables: Set<AnyCancellable> = []
   private var observing = false
+  private var isRunning = false
 
   func start() {
+    guard !isRunning else { return }
+    isRunning = true
     if Defaults[.remindersEnabled] { Task { await requestAccess() } }
     Defaults.publisher(.remindersEnabled)
       .dropFirst()
@@ -36,44 +42,70 @@ final class RemindersProvider: ObservableObject {
       .store(in: &cancellables)
   }
 
+  func stop() {
+    guard isRunning else { return }
+    isRunning = false
+    cancellables.removeAll()
+    observing = false
+    reminders = []
+  }
+
   private func observeStoreChanges() {
     guard !observing else { return }
     observing = true
     NotificationCenter.default
-      .publisher(for: .EKEventStoreChanged, object: store)
+      .publisher(for: .EKEventStoreChanged)
       .sink { [weak self] _ in Task { await self?.reload() } }
       .store(in: &cancellables)
   }
 
   func requestAccess() async {
     hasRequestedAccess = true
+    authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
+    if authorization.canRead {
+      observeStoreChanges()
+      await reload()
+      return
+    }
+    reminders = []
+    guard authorization == .notDetermined else { return }
     do {
       let granted = try await store.requestFullAccessToReminders()
-      accessDenied = !granted
-      if granted {
+      authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
+      if granted, authorization.canRead {
         observeStoreChanges()
         await reload()
       }
     } catch {
-      accessDenied = true
+      authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
       Log.app.error("Reminders access error: \(error.localizedDescription)")
     }
   }
 
-  private func refreshAuthorization() async {
-    let status = EKEventStore.authorizationStatus(for: .reminder)
-    accessDenied = status != .fullAccess
-    if status == .fullAccess {
+  func recoverAccess() async {
+    await refreshAuthorization()
+    if authorization == .notDetermined {
+      await requestAccess()
+    } else if authorization.requiresSettingsRecovery {
+      SystemSettingsPrivacyPane.reminders.open()
+    }
+  }
+
+  func refreshAuthorization() async {
+    authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
+    if authorization.canRead {
       observeStoreChanges()
       await reload()
+    } else {
+      reminders = []
     }
   }
 
   func reload() async {
     guard Defaults[.remindersEnabled] else { return }
     // Re-check authorization so a mid-session revoke flips to "access off" (and re-grant recovers).
-    accessDenied = EKEventStore.authorizationStatus(for: .reminder) != .fullAccess
-    guard !accessDenied else {
+    authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
+    guard authorization.canRead else {
       reminders = []
       return
     }
@@ -84,10 +116,15 @@ final class RemindersProvider: ObservableObject {
       // its own queue, and a MainActor-isolated closure would trap on a dispatch-queue assertion.
       let handler: @Sendable ([EKReminder]?) -> Void = { fetched in
         let mapped = (fetched ?? []).map { r in
+          let dueComponents = r.dueDateComponents
+          let hasDueTime =
+            dueComponents?.hour != nil || dueComponents?.minute != nil
+            || dueComponents?.second != nil
           ReminderItem(
             id: r.calendarItemIdentifier,
             title: r.title ?? "Untitled",
-            dueDate: r.dueDateComponents?.date,
+            dueDate: RemindersLogic.dueDate(from: dueComponents),
+            hasDueTime: hasDueTime,
             priority: r.priority,
             listColorHex: ColorHex.string(from: r.calendar?.cgColor))
         }
@@ -109,6 +146,28 @@ final class RemindersProvider: ObservableObject {
       reminders.removeAll { $0.id == item.id }  // optimistic; store-change reload confirms
     } catch {
       Log.app.error("Failed to complete reminder: \(error.localizedDescription)")
+    }
+  }
+
+  /// Moves a reminder without changing its list, notes, recurrence, or other EventKit metadata.
+  /// This is the model operation used by future quick-snooze surfaces and automation actions.
+  @discardableResult
+  func reschedule(_ item: ReminderItem, to date: Date, hasTime: Bool = true) -> Bool {
+    guard authorization.canRead,
+      let reminder = store.calendarItem(withIdentifier: item.id) as? EKReminder
+    else { return false }
+    reminder.dueDateComponents = RemindersLogic.dueComponents(for: date, hasTime: hasTime)
+    do {
+      try store.save(reminder, commit: true)
+      if let index = reminders.firstIndex(where: { $0.id == item.id }) {
+        reminders[index].dueDate = date
+        reminders[index].hasDueTime = hasTime
+        reminders = RemindersLogic.display(reminders)
+      }
+      return true
+    } catch {
+      Log.app.error("Failed to reschedule reminder: \(error.localizedDescription)")
+      return false
     }
   }
 }

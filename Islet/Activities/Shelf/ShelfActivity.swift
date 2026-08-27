@@ -61,12 +61,24 @@ struct ShelfView: View {
           .buttonStyle(.plain)
           Button {
             Haptics.perform(.levelChange)
-            model.clear()
+            Task { await model.clear() }
           } label: {
             Image(systemName: "trash")
           }
           .buttonStyle(.plain)
         }
+      }
+
+      if let error = model.lastError {
+        HStack(spacing: 5) {
+          Image(systemName: "exclamationmark.triangle.fill")
+          Text(error).lineLimit(1)
+          Spacer(minLength: 0)
+          Button("Dismiss") { model.dismissError() }.buttonStyle(.link)
+        }
+        .font(.caption2)
+        .foregroundStyle(.orange)
+        .accessibilityElement(children: .combine)
       }
 
       if model.items.isEmpty {
@@ -97,7 +109,7 @@ struct ShelfView: View {
     .contentShape(Rectangle())
     .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
       ShelfModel.loadURLs(from: providers) { url in
-        Task { @MainActor in model.add(url) }
+        Task { @MainActor in await ShelfModel.shared.add(url) }
       }
       return true
     }
@@ -120,12 +132,13 @@ struct ShelfItemView: View {
   let item: ShelfItem
   @ObservedObject var model: ShelfModel
   @State private var hovering = false
+  @State private var thumbnailImage: NSImage?
 
   var body: some View {
     VStack(spacing: 3) {
       ZStack {
         RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.08))
-        if let data = item.thumbnail, let img = NSImage(data: data) {
+        if let img = thumbnailImage {
           Image(nsImage: img).resizable().aspectRatio(contentMode: .fit).padding(4)
         } else {
           Image(systemName: "doc").font(.title2).foregroundStyle(.secondary)
@@ -133,22 +146,36 @@ struct ShelfItemView: View {
       }
       .frame(width: 56, height: 56)
       .overlay(alignment: .topTrailing) {
-        if hovering {
-          Button {
-            Haptics.perform()
-            model.remove(item)
-          } label: {
-            Image(systemName: "xmark.circle.fill")
-              .foregroundStyle(.white, .black.opacity(0.6))
-          }
-          .buttonStyle(.plain)
-          .offset(x: 4, y: -4)
+        Button {
+          Haptics.perform()
+          Task { await model.remove(item) }
+        } label: {
+          Image(systemName: "xmark.circle.fill")
+            .foregroundStyle(.white, .black.opacity(0.6))
         }
+        .buttonStyle(.plain)
+        .opacity(hovering ? 1 : 0.6)
+        .offset(x: 4, y: -4)
+        .accessibilityLabel("Remove \(item.name) from Shelf")
       }
       Text(item.name).font(.system(size: 9)).lineLimit(1).frame(width: 60)
     }
     .onHover { hovering = $0 }
+    .onAppear { updateThumbnail() }
+    .onChange(of: item.thumbnail) { _, _ in updateThumbnail() }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("\(item.name), file on Shelf")
+    .contextMenu {
+      Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
+      Button("Remove from Shelf", role: .destructive) {
+        Task { await model.remove(item) }
+      }
+    }
     // Drag back out to Finder / other apps.
     .onDrag { NSItemProvider(contentsOf: item.url) ?? NSItemProvider() }
+  }
+
+  private func updateThumbnail() {
+    thumbnailImage = item.thumbnail.flatMap(NSImage.init(data:))
   }
 }
