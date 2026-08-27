@@ -53,6 +53,14 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(vm.state, .expanded(pinned: false))
   }
 
+  func testRawDeviceTravelWorksWhenBarrierBeginsAtExactTopEdge() {
+    let vm = makeVM()
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1117))
+    XCTAssertEqual(vm.state, .peek)
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1117), deviceDeltaY: -288)
+    XCTAssertEqual(vm.state, .expanded(pinned: false))
+  }
+
   func testDownwardMovementDoesNotBuildBarrierPressure() {
     let vm = makeVM()
     vm.handleMouseMoved(CGPoint(x: 864, y: 1090))

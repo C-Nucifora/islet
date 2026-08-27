@@ -64,10 +64,22 @@ final class NotchViewModel: ObservableObject {
     state.isExpanded ? expandedRect.union(geometry.hitRect) : geometry.hitRect
   }
 
+  /// `CGRect.contains` excludes its maximum edges. The pointer can legitimately clamp to the
+  /// display's exact `maxY`, so nudge that coordinate one representable value back onto the screen
+  /// before hit-testing. Without this, reaching the top resets the barrier before raw deltas can
+  /// carry the push any farther.
+  private func region(_ region: CGRect, contains location: CGPoint) -> Bool {
+    var hitLocation = location
+    if hitLocation.y >= geometry.screenFrame.maxY {
+      hitLocation.y = geometry.screenFrame.maxY.nextDown
+    }
+    return region.contains(hitLocation)
+  }
+
   func handleMouseMoved(_ location: CGPoint, deviceDeltaY: CGFloat? = nil) {
     let coordinateDeltaY = lastMouseLocation == .zero ? 0 : location.y - lastMouseLocation.y
     lastMouseLocation = location
-    let inside = hoverRegion.contains(location)
+    let inside = region(hoverRegion, contains: location)
     if inside, wasInside {
       updateBarrier(
         at: location, coordinateDeltaY: coordinateDeltaY, deviceDeltaY: deviceDeltaY)
@@ -88,7 +100,7 @@ final class NotchViewModel: ObservableObject {
 
   func handleMouseDown(_ location: CGPoint) {
     lastMouseLocation = location
-    if geometry.hitRect.contains(location) {
+    if region(geometry.hitRect, contains: location) {
       apply(.clickedNotch)
     } else if state.isExpanded, expandedRect.contains(location) {
       apply(.clickedInsideExpanded)
@@ -197,7 +209,7 @@ final class NotchViewModel: ObservableObject {
       expandedHeight = Metrics.expandedSize.height
     }
     // hover-region may have changed shape; re-evaluate containment so exit fires correctly
-    wasInside = hoverRegion.contains(lastMouseLocation)
+    wasInside = region(hoverRegion, contains: lastMouseLocation)
   }
 
   private func order(_ s: NotchState) -> Int {
@@ -251,8 +263,11 @@ final class NotchViewModel: ObservableObject {
       if abs(coordinateDeltaY) > 0.01 {
         upwardDeviceDeltaSign = coordinateDeltaY * deviceDeltaY >= 0 ? 1 : -1
       }
-      if let sign = upwardDeviceDeltaSign,
-        abs(coordinateDeltaY) > 0.01 || location.y >= geometry.screenFrame.maxY - 1
+      // Core Graphics mouse Y deltas use device coordinates, where an upward movement is negative.
+      // If the barrier begins with the pointer already clamped, there is no coordinate movement to
+      // calibrate against, so use that native sign directly instead of dropping the input.
+      let sign = upwardDeviceDeltaSign ?? -1
+      if abs(coordinateDeltaY) > 0.01 || location.y >= geometry.screenFrame.maxY - 1
       {
         upwardTravel = deviceDeltaY * sign
       }

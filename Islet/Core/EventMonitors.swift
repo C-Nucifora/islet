@@ -50,8 +50,13 @@ final class EventMonitors {
   func start() {
     guard monitors.isEmpty else { return }
     let move = PairedMonitor(mask: [.mouseMoved, .leftMouseDragged]) { [weak self] event in
+      // The on-screen cursor stops changing at a display edge, but Core Graphics keeps the raw
+      // device delta in the event. Preserve it so pressure gestures can continue past that edge.
+      let rawDelta = event.cgEvent?.getIntegerValueField(.mouseEventDeltaY) ?? 0
       self?.mouseMovement.send(
-        MouseMovement(location: NSEvent.mouseLocation, deviceDeltaY: event.deltaY))
+        MouseMovement(
+          location: NSEvent.mouseLocation,
+          deviceDeltaY: rawDelta == 0 ? event.deltaY : CGFloat(rawDelta)))
     }
     let down = PairedMonitor(mask: [.leftMouseDown]) { [weak self] _ in
       self?.mouseDown.send(NSEvent.mouseLocation)
