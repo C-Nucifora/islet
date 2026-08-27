@@ -10,18 +10,31 @@ final class BatteryActivity: NotchActivity, ObservableObject {
   private let monitor = BatteryMonitor()
   private var lastState: BatteryState?
   private var cancellables: Set<AnyCancellable> = []
+  private var isMonitoring = false
 
   // The tab is available whenever the feature is on. Gating it on AC power made the whole power
   // screen vanish the moment you unplugged — which is exactly when you want to read it.
   var isActive: Bool { Defaults[.batteryEnabled] }
 
   func start() {
+    guard !isMonitoring else { return }
+    isMonitoring = true
     monitor.start()
     monitor.$state
       .receive(on: DispatchQueue.main)
       .compactMap { $0 }
       .sink { [weak self] new in self?.handle(new) }
       .store(in: &cancellables)
+  }
+
+  func stop() {
+    guard isMonitoring else { return }
+    isMonitoring = false
+    monitor.stop()
+    cancellables.removeAll()
+    lastState = nil
+    activationDate = nil
+    objectWillChange.send()
   }
 
   private func handle(_ new: BatteryState) {

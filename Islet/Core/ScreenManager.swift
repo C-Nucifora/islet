@@ -91,6 +91,7 @@ final class ScreenManager {
   }
 
   func start() {
+    guard cancellables.isEmpty else { return }
     rebuild()
     NotificationCenter.default
       .publisher(for: NSApplication.didChangeScreenParametersNotification)
@@ -135,6 +136,16 @@ final class ScreenManager {
       .sink { [weak self] _ in Task { @MainActor in self?.updateFullscreenObserving() } }
       .store(in: &cancellables)
     updateFullscreenObserving()
+  }
+
+  func stop() {
+    fullscreenTimer = nil
+    cancellables.removeAll()
+    for instance in instances.values {
+      instance.cancellables.removeAll()
+      instance.panel.close()
+    }
+    instances.removeAll()
   }
 
   private func targetScreens() -> [NSScreen] {

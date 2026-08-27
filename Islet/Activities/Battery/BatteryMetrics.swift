@@ -2,7 +2,7 @@ import Foundation
 
 /// One rung of the USB-C Power Delivery ladder the attached charger advertises
 /// (`AdapterDetails.UsbHvcMenu`), in volts and amps.
-struct PDProfile: Identifiable, Equatable {
+struct PDProfile: Identifiable, Equatable, Sendable {
   let index: Int
   let volts: Double
   let amps: Double
@@ -13,7 +13,7 @@ struct PDProfile: Identifiable, Equatable {
 
 /// Live power the Mac is sourcing to a peripheral through one USB-C port. AppleSmartBattery
 /// publishes these entries only while power is flowing out; the values are milli-units.
-struct USBPowerOutput: Identifiable, Equatable {
+struct USBPowerOutput: Identifiable, Equatable, Sendable {
   let portIndex: Int
   var watts: Double
   let volts: Double?
@@ -29,7 +29,7 @@ struct USBPowerOutput: Identifiable, Equatable {
 /// are absent on machines other than the one this was developed against, so the panel omits a tile
 /// rather than rendering a zero for something it never read. `hasAny` is the "did we read anything
 /// worth showing at all" test that decides whether the metrics block appears.
-struct BatteryMetrics: Equatable {
+struct BatteryMetrics: Equatable, Sendable {
   // Health. Two numbers, deliberately, because there is no single right one.
   //
   // `healthPercent` is NominalChargeCapacity/DesignCapacity — the closest thing to what System

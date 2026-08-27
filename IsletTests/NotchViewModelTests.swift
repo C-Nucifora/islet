@@ -270,4 +270,24 @@ final class NotchViewModelTests: XCTestCase {
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
     XCTAssertEqual(vm.expandedRect.height, Metrics.expandedSize.height)
   }
+
+  func testMouseMonitorTopBandCoversTallIslandButNotTheDesktop() {
+    let frame = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+    XCTAssertTrue(
+      EventMonitors.isInTopInteractionBand(
+        CGPoint(x: 864, y: 900), screenFrames: [frame]))
+    XCTAssertFalse(
+      EventMonitors.isInTopInteractionBand(
+        CGPoint(x: 864, y: 500), screenFrames: [frame]))
+  }
+
+  func testMouseMonitorTopBandHandlesOffsetDisplaysAndExactTopEdge() {
+    let secondary = CGRect(x: -1440, y: 200, width: 1440, height: 900)
+    XCTAssertTrue(
+      EventMonitors.isInTopInteractionBand(
+        CGPoint(x: -720, y: secondary.maxY), screenFrames: [secondary]))
+    XCTAssertFalse(
+      EventMonitors.isInTopInteractionBand(
+        CGPoint(x: 100, y: secondary.maxY), screenFrames: [secondary]))
+  }
 }

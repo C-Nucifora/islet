@@ -50,6 +50,12 @@ final class SystemEventBus: ObservableObject {
     }
   }
 
+  func stopAll() {
+    flushTask?.cancel()
+    flushTask = nil
+    for source in sources { source.stop() }
+  }
+
   // MARK: - Enable / disable
 
   func isEnabled(_ sourceID: String) -> Bool {

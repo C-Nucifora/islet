@@ -4,12 +4,25 @@ import IOKit.ps
 /// The only place in the battery stack that touches IOKit, IOPS or ProcessInfo. It gathers the
 /// three dictionaries and hands them straight to `BatteryMetricsParser`, which is pure and tested.
 ///
-/// One bulk `IORegistryEntryCreateCFProperties` replaces the per-key reads this used to do. That
-/// call also drags in some large blobs (`RaTableRaw`, `PortControllerInfo`), but it is a single
-/// round trip at 1 Hz and the alternative was a dozen.
+/// Reads are split into live telemetry and stable health/topology fields. The reader asks IOKit
+/// only for properties Islet displays, rather than bridging the node's large calibration and
+/// controller blobs into Swift on every sample.
 enum SmartBatteryReader {
-  static func read() -> BatteryMetrics? {
-    guard let props = IORegistryReader.properties(matching: "AppleSmartBattery") else { return nil }
+  private static let liveKeys = [
+    "Temperature", "Voltage", "InstantAmperage", "Amperage", "AvgTimeToFull",
+    "AvgTimeToEmpty", "AdapterDetails", "PowerTelemetryData", "PowerOutDetails",
+    "IsCharging", "FullyCharged", "ExternalConnected", "ChargerData",
+  ]
+  private static let stableKeys = [
+    "DesignCapacity", "NominalChargeCapacity", "AppleRawMaxCapacity", "CycleCount",
+    "DesignCycleCount9C",
+  ]
+
+  static func read(includeStable: Bool = true) -> BatteryMetrics? {
+    let keys = includeStable ? liveKeys + stableKeys : liveKeys
+    guard
+      let props = IORegistryReader.properties(matching: "AppleSmartBattery", keys: keys)
+    else { return nil }
 
     // The registry dict is primary: it carries the description ("pd charger") and the negotiated
     // PD ladder, which the public IOPS dict strips down to little more than the wattage — showing
@@ -22,7 +35,7 @@ enum SmartBatteryReader {
       adapter: adapter,
       powerSource: primaryPowerSource(),
       lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
-    metrics.inputPortType = PowerConnectorReader.activeInputPortType()
+    if includeStable { metrics.inputPortType = PowerConnectorReader.activeInputPortType() }
 
     return metrics.hasAny ? metrics : nil
   }
@@ -41,9 +54,10 @@ enum SmartBatteryReader {
           let winning = props["WinningPowerSourceOption"] as? [String: Any]
           let options = props["PowerSourceOptions"] as? [[String: Any]] ?? []
           let winningWatts = (winning?["Max Power (mW)"] as? NSNumber)?.intValue ?? 0
-          let optionWatts = options.compactMap {
-            ($0["Max Power (mW)"] as? NSNumber)?.intValue
-          }.max() ?? 0
+          let optionWatts =
+            options.compactMap {
+              ($0["Max Power (mW)"] as? NSNumber)?.intValue
+            }.max() ?? 0
           return (type, winningWatts > 0, max(winningWatts, optionWatts))
         }
         .filter { $0.watts > 0 }
