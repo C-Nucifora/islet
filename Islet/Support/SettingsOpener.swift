@@ -17,9 +17,12 @@ enum SettingsOpener {
     let hosting = NSHostingController(rootView: SettingsView())
     let win = NSWindow(contentViewController: hosting)
     win.title = "Islet Settings"
-    win.styleMask = [.titled, .closable, .miniaturizable]
+    win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+    win.setContentSize(NSSize(width: 860, height: 650))
+    win.contentMinSize = NSSize(width: 760, height: 560)
+    win.setFrameAutosaveName("IsletSettingsWindow")
     win.isReleasedWhenClosed = false
-    win.center()
+    if !win.setFrameUsingName("IsletSettingsWindow") { win.center() }
     win.makeKeyAndOrderFront(nil)
     window = win
   }
