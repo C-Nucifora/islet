@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Spawns the bundled mediaremote-adapter under /usr/bin/perl and streams updates.
@@ -5,6 +6,7 @@ import Foundation
 /// torn down cleanly on each restart to avoid leaking file handles or stale handlers.
 final class MediaWatcher: @unchecked Sendable {
   private let queue = DispatchQueue(label: "dev.nedlane.Islet.mediawatcher")
+  private let queueKey = DispatchSpecificKey<Void>()
   private var process: Process?
   private var pipe: Pipe?
   private var restartTask: Task<Void, Never>?
@@ -28,6 +30,7 @@ final class MediaWatcher: @unchecked Sendable {
     var cont: AsyncStream<AdapterUpdate>.Continuation!
     updates = AsyncStream { cont = $0 }
     continuation = cont
+    queue.setSpecific(key: queueKey, value: ())
   }
 
   static func backoffDelay(failureCount: Int) -> TimeInterval {
@@ -43,10 +46,24 @@ final class MediaWatcher: @unchecked Sendable {
   }
 
   func stop() {
-    queue.async { [self] in
+    onQueueSync { [self] in
       isRunning = false
       restartTask?.cancel()
+      restartTask = nil
       cleanup(terminate: true)
+      buffer.removeAll(keepingCapacity: false)
+      lastStates.removeAll()
+      currentSource = nil
+      failureCount = 0
+      onStatus?("Stopped")
+    }
+  }
+
+  private func onQueueSync(_ operation: () -> Void) {
+    if DispatchQueue.getSpecific(key: queueKey) != nil {
+      operation()
+    } else {
+      queue.sync(execute: operation)
     }
   }
 
@@ -54,7 +71,17 @@ final class MediaWatcher: @unchecked Sendable {
   private func cleanup(terminate: Bool) {
     pipe?.fileHandleForReading.readabilityHandler = nil
     process?.terminationHandler = nil
-    if terminate { process?.terminate() }
+    if terminate, let process, process.isRunning {
+      process.terminate()
+      // `applicationWillTerminate` has only a short synchronous window. Give cooperative adapters
+      // a moment to exit, then guarantee that a wedged helper cannot be orphaned under launchd.
+      let deadline = Date().addingTimeInterval(0.25)
+      while process.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+      if process.isRunning {
+        Darwin.kill(process.processIdentifier, SIGKILL)
+        process.waitUntilExit()
+      }
+    }
     process = nil
     pipe = nil
   }
@@ -132,7 +159,8 @@ final class MediaWatcher: @unchecked Sendable {
 
   private func handle(line: String) {
     let base = currentSource.flatMap { lastStates[$0] }
-    for update in Self.expand(AdapterParser.parse(line: line, current: base), current: currentSource)
+    for update in Self.expand(
+      AdapterParser.parse(line: line, current: base), current: currentSource)
     {
       switch update {
       case .ignored:

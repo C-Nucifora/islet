@@ -6,16 +6,31 @@ import SwiftUI
 
 @MainActor
 final class CalendarActivity: NotchActivity, ObservableObject {
+  enum LoadState: Equatable {
+    case idle
+    case loading
+    case loaded
+    case failed(String)
+  }
+
   let id = "calendar"
   let priority = ActivityPriority.ambient
   private(set) var activationDate: Date?
 
   @Published private(set) var events: [AgendaEvent] = []
-  @Published private(set) var accessDenied = false
+  @Published private(set) var authorization = EventKitPermissionState(
+    EKEventStore.authorizationStatus(for: .event))
+  @Published private(set) var loadState: LoadState = .idle
+
+  /// Compatibility for existing views. New permission UI should render `authorization` so denied,
+  /// restricted, write-only, and not-yet-requested states are not conflated.
+  var accessDenied: Bool { !authorization.canRead }
 
   private let store = EKEventStore()
   private var timer: AnyCancellable?
   private var cancellables: Set<AnyCancellable> = []
+  private var isRunning = false
+  private var lastReloadDate: Date?
 
   var isActive: Bool {
     guard Defaults[.calendarEnabled], let next = nextEvent else { return false }
@@ -26,6 +41,8 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   var nextEvent: AgendaEvent? { CalendarLogic.nextRelevant(events: events, now: Date()) }
 
   func start() {
+    guard !isRunning else { return }
+    isRunning = true
     if Defaults[.calendarEnabled] { Task { await requestAccess() } }
     // Request/refresh when the feature is toggled on; clear when off.
     Defaults.publisher(.calendarEnabled)
@@ -35,6 +52,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
           Task { await self?.requestAccess() }
         } else {
           self?.events = []
+          self?.activationDate = nil
           self?.objectWillChange.send()
         }
       }
@@ -44,44 +62,93 @@ final class CalendarActivity: NotchActivity, ObservableObject {
     NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
       .sink { [weak self] _ in Task { await self?.refreshAuthorization() } }
       .store(in: &cancellables)
-    // Re-read the agenda and re-evaluate the countdown every 30 s.
+    NotificationCenter.default.publisher(for: .EKEventStoreChanged)
+      .sink { [weak self] _ in Task { await self?.refreshAuthorization() } }
+      .store(in: &cancellables)
+    // Re-evaluate the countdown every 30 s, but only query EventKit every five minutes. Store
+    // change and app-activation notifications still trigger immediate refreshes.
     timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
       .sink { [weak self] _ in
-        guard Defaults[.calendarEnabled] else { return }
-        Task { await self?.reload() }
-        self?.objectWillChange.send()
+        guard let self, Defaults[.calendarEnabled] else { return }
+        if self.lastReloadDate.map({ Date().timeIntervalSince($0) >= 300 }) ?? true {
+          Task { await self.reload() }
+        }
+        self.objectWillChange.send()
       }
   }
 
+  func stop() {
+    guard isRunning else { return }
+    isRunning = false
+    timer = nil
+    cancellables.removeAll()
+    events = []
+    loadState = .idle
+    activationDate = nil
+    lastReloadDate = nil
+  }
+
   func requestAccess() async {
+    authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
+    if authorization.canRead {
+      await reload()
+      return
+    }
+    events = []
+    // TCC prompts exactly once. Calling the request API again after denial is a dead end, so leave
+    // recovery to `recoverAccess()` rather than pretending another prompt can appear.
+    guard authorization == .notDetermined else { return }
     do {
       let granted = try await store.requestFullAccessToEvents()
-      accessDenied = !granted
-      if granted { await reload() }
+      authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
+      if granted, authorization.canRead { await reload() }
     } catch {
-      accessDenied = true
+      authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
+      loadState = .failed(error.localizedDescription)
       Log.app.error("Calendar access error: \(error.localizedDescription)")
     }
   }
 
-  private func refreshAuthorization() async {
-    let status = EKEventStore.authorizationStatus(for: .event)
-    accessDenied = status != .fullAccess
-    if status == .fullAccess { await reload() }
+  /// Action for permission UI: prompts only when TCC has not decided, otherwise opens the exact
+  /// Settings pane where an existing denial or stale app identity can be repaired.
+  func recoverAccess() async {
+    await refreshAuthorization()
+    if authorization == .notDetermined {
+      await requestAccess()
+    } else if authorization.requiresSettingsRecovery {
+      SystemSettingsPrivacyPane.calendars.open()
+    }
+  }
+
+  func openCalendarPrivacySettings() {
+    SystemSettingsPrivacyPane.calendars.open()
+  }
+
+  func refreshAuthorization() async {
+    authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
+    if authorization.canRead {
+      await reload()
+    } else {
+      events = []
+      loadState = .idle
+    }
   }
 
   private func reload() async {
     guard Defaults[.calendarEnabled] else { return }
     // Re-check authorization every reload so a mid-session revoke flips to "access off" (and a
     // re-grant recovers), instead of silently showing an empty agenda.
-    accessDenied = EKEventStore.authorizationStatus(for: .event) != .fullAccess
-    guard !accessDenied else {
+    authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
+    guard authorization.canRead else {
       events = []
+      loadState = .idle
       return
     }
-    let start = Date()
-    let end = Calendar.current.date(byAdding: .day, value: 1, to: start) ?? start
-    let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
+    loadState = .loading
+    let now = Date()
+    let interval = CalendarLogic.agendaInterval(containing: now)
+    let predicate = store.predicateForEvents(
+      withStart: interval.start, end: interval.end, calendars: nil)
     let ekEvents = store.events(matching: predicate)
     let mapped = ekEvents.map { ek in
       AgendaEvent(
@@ -91,26 +158,71 @@ final class CalendarActivity: NotchActivity, ObservableObject {
         joinURL: Self.joinURL(from: ek))
     }
     let wasActive = isActive
-    events = mapped.sorted { $0.start < $1.start }
+    events = CalendarLogic.display(events: mapped, now: now, interval: interval)
+    lastReloadDate = now
+    loadState = .loaded
     if !wasActive, isActive { activationDate = Date() }
+    if wasActive, !isActive { activationDate = nil }
   }
 
   /// Pull a video-call link from the event's URL or notes.
   static func joinURL(from event: EKEvent) -> URL? {
     if let url = event.url, Self.isMeetingLink(url) { return url }
-    guard let notes = event.notes else { return nil }
     let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-    let range = NSRange(notes.startIndex..., in: notes)
-    let match = detector?.matches(in: notes, range: range)
-      .compactMap(\.url)
-      .first(where: Self.isMeetingLink)
-    return match
+    for text in [event.location, event.structuredLocation?.title, event.notes].compactMap({ $0 }) {
+      let range = NSRange(text.startIndex..., in: text)
+      if let match = detector?.matches(in: text, range: range)
+        .compactMap(\.url)
+        .first(where: Self.isMeetingLink)
+      {
+        return match
+      }
+    }
+    return nil
   }
 
-  static func isMeetingLink(_ url: URL) -> Bool {
-    let host = url.host?.lowercased() ?? ""
-    return ["zoom.us", "meet.google.com", "teams.microsoft.com", "webex.com"]
-      .contains { host.contains($0) }
+  nonisolated static func isMeetingLink(_ url: URL) -> Bool {
+    guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+      let scheme = components.scheme?.lowercased()
+    else { return false }
+
+    // Native call links are useful join targets and do not pass through a browser.
+    if ["facetime", "facetime-audio"].contains(scheme) { return true }
+    guard scheme == "https", components.user == nil,
+      components.password == nil, let host = components.host?.lowercased(), !host.isEmpty
+    else { return false }
+
+    // Keep known services for links whose paths are opaque, but match at DNS-label boundaries so
+    // a hostname such as `zoom.us.attacker.example` is never accepted.
+    let knownDomains = [
+      "zoom.us", "meet.google.com", "teams.microsoft.com", "teams.live.com",
+      "webex.com", "whereby.com", "around.co", "meet.jit.si", "chime.aws",
+    ]
+    if knownDomains.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return true }
+
+    // Corporate and new providers should work without an app release. Prefer semantic host/path
+    // and query markers rather than an ever-growing provider allow-list.
+    let markers: Set<String> = [
+      "call", "calls", "conference", "join", "meet", "meeting", "meetings", "room",
+      "video", "videocall", "webinar",
+    ]
+    if !Set(host.split(separator: ".").map(String.init)).isDisjoint(with: markers) { return true }
+
+    let pathMarkers = Set(
+      components.path.split(separator: "/").map {
+        $0.lowercased().replacingOccurrences(of: "-", with: "")
+      })
+    if !pathMarkers.isDisjoint(with: markers) { return true }
+
+    let queryMarkers: Set<String> = [
+      "callid", "conferenceid", "confno", "meetingid", "roomid", "webinarid",
+    ]
+    return components.queryItems?.contains {
+      queryMarkers.contains(
+        $0.name.lowercased()
+          .replacingOccurrences(of: "_", with: "")
+          .replacingOccurrences(of: "-", with: ""))
+    } == true
   }
 
   let tabIcon = "calendar"
@@ -150,9 +262,15 @@ struct CalendarAgendaView: View {
       } else {
         ForEach(Array(activity.events.prefix(4).enumerated()), id: \.offset) { _, event in
           HStack(spacing: 8) {
-            Text(event.start, format: .dateTime.hour().minute())
-              .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-              .frame(width: 52, alignment: .leading)
+            if event.isAllDay {
+              Text("All day")
+                .font(.caption).foregroundStyle(.secondary)
+                .frame(width: 52, alignment: .leading)
+            } else {
+              Text(event.start, format: .dateTime.hour().minute())
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                .frame(width: 52, alignment: .leading)
+            }
             Text(event.title).font(.callout).foregroundStyle(.white).lineLimit(1)
             Spacer()
             if let url = event.joinURL {
@@ -162,6 +280,8 @@ struct CalendarAgendaView: View {
                 Image(systemName: "video.fill").foregroundStyle(.green)
               }
               .buttonStyle(.plain)
+              .help("Join \(event.title)")
+              .accessibilityLabel("Join \(event.title)")
             }
           }
         }

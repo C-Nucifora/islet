@@ -4,11 +4,48 @@ struct ReminderItem: Identifiable, Equatable, Sendable {
   let id: String
   var title: String
   var dueDate: Date?
+  /// EventKit represents an all-day due date as midnight. Keep whether the original
+  /// `DateComponents` actually contained a clock time so the UI never invents “12:00 am”.
+  var hasDueTime: Bool
   var priority: Int  // EventKit: 0 none, 1 high … 9 low
   var listColorHex: String?
+
+  init(
+    id: String, title: String, dueDate: Date?, hasDueTime: Bool = true, priority: Int,
+    listColorHex: String?
+  ) {
+    self.id = id
+    self.title = title
+    self.dueDate = dueDate
+    self.hasDueTime = dueDate != nil && hasDueTime
+    self.priority = priority
+    self.listColorHex = listColorHex
+  }
 }
 
 enum RemindersLogic {
+  /// Resolves EventKit date components in their declared calendar/time zone, falling back to the
+  /// user's current local calendar. `DateComponents.date` can be nil or use surprising defaults
+  /// when a provider omits one of those fields.
+  static func dueDate(
+    from components: DateComponents?, fallbackCalendar: Calendar = .current
+  ) -> Date? {
+    guard let components else { return nil }
+    var calendar = components.calendar ?? fallbackCalendar
+    if let timeZone = components.timeZone { calendar.timeZone = timeZone }
+    return calendar.date(from: components)
+  }
+
+  static func dueComponents(
+    for date: Date, hasTime: Bool, calendar: Calendar = .current
+  ) -> DateComponents {
+    var components = calendar.dateComponents(
+      hasTime ? [.year, .month, .day, .hour, .minute] : [.year, .month, .day], from: date)
+    components.calendar = calendar
+    components.timeZone = calendar.timeZone
+    return components
+  }
+
   /// Ordering for the dashboard: dated reminders first (soonest due first),
   /// then undated, then by EventKit priority (1 highest, treating 0/none as lowest).
   static func display(_ items: [ReminderItem], limit: Int = 8) -> [ReminderItem] {
@@ -31,6 +68,9 @@ enum RemindersLogic {
   /// Whether a reminder is overdue relative to `now` (has a due date in the past).
   static func isOverdue(_ item: ReminderItem, now: Date) -> Bool {
     guard let due = item.dueDate else { return false }
+    // A date-only reminder is due for the whole local calendar day, not at its synthetic
+    // midnight representation.
+    if !item.hasDueTime, Calendar.current.isDate(due, inSameDayAs: now) { return false }
     return due < now
   }
 

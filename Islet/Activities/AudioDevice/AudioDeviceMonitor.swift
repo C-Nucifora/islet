@@ -10,6 +10,7 @@ final class AudioDeviceMonitor {
 
   private var lastDeviceID: AudioObjectID = kAudioObjectUnknown
   private var listenerInstalled = false
+  private var listener: AudioObjectPropertyListenerBlock?
 
   private var address = AudioObjectPropertyAddress(
     mSelector: kAudioHardwarePropertyDefaultOutputDevice,
@@ -20,11 +21,28 @@ final class AudioDeviceMonitor {
     guard !listenerInstalled else { return }
     listenerInstalled = true
     lastDeviceID = Self.defaultOutputDevice()
-    AudioObjectAddPropertyListenerBlock(
-      AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main
-    ) { [weak self] _, _ in
+    let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
       Task { @MainActor in self?.deviceChanged() }
     }
+    let status = AudioObjectAddPropertyListenerBlock(
+      AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main, block)
+    if status == noErr {
+      listener = block
+    } else {
+      listenerInstalled = false
+      Log.app.error("Default audio-device listener failed with \(status)")
+    }
+  }
+
+  func stop() {
+    guard listenerInstalled else { return }
+    listenerInstalled = false
+    if let listener {
+      AudioObjectRemovePropertyListenerBlock(
+        AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main, listener)
+      self.listener = nil
+    }
+    lastDeviceID = kAudioObjectUnknown
   }
 
   private func deviceChanged() {
@@ -39,10 +57,10 @@ final class AudioDeviceMonitor {
         sourceID: "audiodevice",
         icon: Self.iconName(for: name),
         title: name,
-        subtitle: "Output",
+        subtitle: "Output selected",
         accentHex: EventAccent.info,
         motion: .bluetooth,
-        announcement: "\(name) connected"))
+        announcement: "\(name) selected for audio output"))
   }
 
   static func defaultOutputDevice() -> AudioObjectID {
@@ -52,9 +70,9 @@ final class AudioDeviceMonitor {
       mScope: kAudioObjectPropertyScopeGlobal,
       mElement: kAudioObjectPropertyElementMain)
     var size = UInt32(MemoryLayout<AudioObjectID>.size)
-    AudioObjectGetPropertyData(
+    let status = AudioObjectGetPropertyData(
       AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id)
-    return id
+    return status == noErr ? id : kAudioObjectUnknown
   }
 
   static func deviceName(_ device: AudioObjectID) -> String? {
@@ -62,6 +80,7 @@ final class AudioDeviceMonitor {
       mSelector: kAudioObjectPropertyName,
       mScope: kAudioObjectPropertyScopeGlobal,
       mElement: kAudioObjectPropertyElementMain)
+    // CoreAudio documents this property as a retained CF object owned by the caller.
     var name: Unmanaged<CFString>?
     var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
     let status = AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &name)
