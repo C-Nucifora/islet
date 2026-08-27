@@ -41,4 +41,21 @@ final class HUDKeyTests: XCTestCase {
     XCTAssertEqual(HUDMath.stepped(1.0, up: true), 1)
     XCTAssertEqual(HUDMath.stepped(0.5, up: true, divisor: 4), 0.5 + 1.0 / 64.0, accuracy: 1e-6)
   }
+
+  func testOnlySuccessfulKeyDownConsumesMatchingKeyUp() {
+    var state = HUDKeyConsumptionState()
+    XCTAssertFalse(state.recordKeyDown(.volumeUp, applied: false))
+    XCTAssertFalse(state.shouldConsumeKeyUp(.volumeUp))
+
+    XCTAssertTrue(state.recordKeyDown(.volumeUp, applied: true))
+    XCTAssertTrue(state.shouldConsumeKeyUp(.volumeUp))
+    XCTAssertFalse(state.shouldConsumeKeyUp(.volumeUp))
+  }
+
+  func testFailedRepeatReturnsKeyOwnershipToMacOS() {
+    var state = HUDKeyConsumptionState()
+    XCTAssertTrue(state.recordKeyDown(.brightnessDown, applied: true))
+    XCTAssertFalse(state.recordKeyDown(.brightnessDown, applied: false))
+    XCTAssertFalse(state.shouldConsumeKeyUp(.brightnessDown))
+  }
 }

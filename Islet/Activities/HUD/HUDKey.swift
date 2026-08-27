@@ -1,6 +1,6 @@
 import Foundation
 
-enum HUDKey: Equatable {
+enum HUDKey: Hashable {
   case volumeUp, volumeDown, mute, brightnessUp, brightnessDown
 
   /// Decodes a system-defined NSEvent's `data1`. Returns nil for keys we don't handle.
@@ -29,5 +29,28 @@ enum HUDMath {
   static func stepped(_ value: Float, up: Bool, divisor: Float = 1) -> Float {
     let delta = step / max(divisor, 0.25)
     return max(0, min(1, value + (up ? delta : -delta)))
+  }
+}
+
+/// Tracks which key-up events may be suppressed. A failed key-down and its key-up must both reach
+/// macOS; a successfully handled key-down and its key-up must both be hidden from macOS.
+struct HUDKeyConsumptionState {
+  private var consumedKeyDowns: Set<HUDKey> = []
+
+  mutating func recordKeyDown(_ key: HUDKey, applied: Bool) -> Bool {
+    if applied {
+      consumedKeyDowns.insert(key)
+    } else {
+      consumedKeyDowns.remove(key)
+    }
+    return applied
+  }
+
+  mutating func shouldConsumeKeyUp(_ key: HUDKey) -> Bool {
+    consumedKeyDowns.remove(key) != nil
+  }
+
+  mutating func reset() {
+    consumedKeyDowns.removeAll()
   }
 }

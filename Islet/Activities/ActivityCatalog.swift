@@ -3,6 +3,7 @@ import Foundation
 /// The activities the user can reorder in the expanded switcher (Home is always pinned first).
 enum ActivityCatalog {
   static let orderable: [(id: String, name: String, icon: String)] = [
+    ("pulse", "Pulse", "waveform.path.ecg"),
     ("t3Code", "T3 Code", "terminal.fill"),
     ("timer", "Timer", "timer"),
     ("nowPlaying", "Now Playing", "music.note"),

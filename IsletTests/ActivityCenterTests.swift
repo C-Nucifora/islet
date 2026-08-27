@@ -58,6 +58,21 @@ final class ActivityCenterTests: XCTestCase {
     XCTAssertNil(center.primaryActivity)
   }
 
+  func testActivityLifecyclePolicyStopsHiddenAndFeatureDisabledActivities() {
+    XCTAssertTrue(
+      ActivityLifecyclePolicy.shouldRun(
+        activityID: "battery", featureEnabled: true, disabledActivities: []))
+    XCTAssertFalse(
+      ActivityLifecyclePolicy.shouldRun(
+        activityID: "battery", featureEnabled: false, disabledActivities: []))
+    XCTAssertFalse(
+      ActivityLifecyclePolicy.shouldRun(
+        activityID: "battery", featureEnabled: true, disabledActivities: ["battery"]))
+    XCTAssertFalse(
+      ActivityLifecyclePolicy.shouldRun(
+        activityID: "nowPlaying", disabledActivities: ["nowPlaying"]))
+  }
+
   func testTieBrokenByRecency() {
     let center = ActivityCenter()
     let a = Fake(id: "a", priority: .ambient, active: true)
@@ -76,7 +91,7 @@ final class ActivityCenterTests: XCTestCase {
   func testMergedOrderAppendsCatalogueEntriesTheStoredOrderPredates() {
     let preSystem = ["timer", "nowPlaying", "shelf", "clipboard", "ports", "calendar", "battery"]
     let merged = ActivityCatalog.mergedOrder(preSystem)
-    XCTAssertEqual(merged, preSystem + ["t3Code", "system"])
+    XCTAssertEqual(merged, preSystem + ["pulse", "t3Code", "system"])
   }
 
   func testMergedOrderPreservesTheUsersOrderingAndUnknownIDs() {
@@ -90,7 +105,7 @@ final class ActivityCenterTests: XCTestCase {
   func testMergedOrderIsIdempotent() {
     let once = ActivityCatalog.mergedOrder(["battery"])
     XCTAssertEqual(ActivityCatalog.mergedOrder(once), once)
-    XCTAssertEqual(ActivityCatalog.mergedOrder(ActivityCatalog.defaultOrder),
-                   ActivityCatalog.defaultOrder)
+    XCTAssertEqual(
+      ActivityCatalog.mergedOrder(ActivityCatalog.defaultOrder), ActivityCatalog.defaultOrder)
   }
 }

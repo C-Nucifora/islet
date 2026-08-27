@@ -180,11 +180,20 @@ struct NotchRootView: View {
 
   @ViewBuilder private var content: some View {
     if vm.state.isExpanded {
-      // The switcher (tabs + gear) sits in the notch band, flanking the hardware notch, and the
-      // content fills the rest — so nothing is wasted below the notch.
-      ExpandedContainerView(notchSize: vm.geometry.notchSize, vm: vm)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .top)))
+      ZStack {
+        // The switcher (tabs + gear) sits in the notch band, flanking the hardware notch, and the
+        // content fills the rest — so nothing is wasted below the notch.
+        ExpandedContainerView(notchSize: vm.geometry.notchSize, vm: vm)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Media keys can arrive while the island is open. Keep their feedback above expanded
+        // content so replacing the system OSD never produces an invisible change.
+        if let snapshot = hud.hud {
+          ExpandedHUDOverlay(snapshot: snapshot)
+            .transition(.opacity.combined(with: .scale(scale: 0.94)))
+            .zIndex(2)
+        }
+      }
+      .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .top)))
     } else if let slots = compactContent {
       let identity = slotIdentity
       HStack(spacing: 0) {
@@ -208,5 +217,24 @@ struct NotchRootView: View {
     } else {
       Color.clear
     }
+  }
+}
+
+private struct ExpandedHUDOverlay: View {
+  let snapshot: HUDSnapshot
+
+  var body: some View {
+    HStack(spacing: 10) {
+      HUDIconView(snapshot: snapshot)
+      HUDBarView(snapshot: snapshot)
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 11)
+    .background(.black.opacity(0.88), in: Capsule())
+    .overlay(Capsule().stroke(.white.opacity(0.14), lineWidth: 1))
+    .shadow(color: .black.opacity(0.5), radius: 8, y: 3)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(snapshot.kind == .volume ? "Volume" : "Brightness")
+    .accessibilityValue("\(Int((snapshot.level * 100).rounded())) percent")
   }
 }

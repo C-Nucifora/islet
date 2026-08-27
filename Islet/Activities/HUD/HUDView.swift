@@ -56,6 +56,6 @@ struct HUDBarView: View {
           }
       }
     }
-    .animation(.linear(duration: 0.12), value: snapshot.level)
+    .animation(Motion.gated(.linear(duration: 0.12)), value: snapshot.level)
   }
 }
