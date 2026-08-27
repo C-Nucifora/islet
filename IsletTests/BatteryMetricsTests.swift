@@ -433,6 +433,17 @@ final class BatteryMetricsTests: XCTestCase {
       "Charging")
   }
 
+  func testInstantBatteryDischargeOverridesNominalChargingState() {
+    // IOPS may still say IsCharging while the adapter supplies 9.150 W, the system consumes
+    // 9.346 W, and BatteryPower is -0.196 W. The graph correctly puts that battery flow on the
+    // input side, so the headline must not describe the same sample as charging.
+    XCTAssertEqual(
+      PowerStatus.text(
+        onAC: true, isCharging: true, fullyCharged: false, batteryWatts: -0.196,
+        notChargingReason: 0),
+      "Adapter can't keep up")
+  }
+
   func testStatusCharged() {
     XCTAssertEqual(
       PowerStatus.text(

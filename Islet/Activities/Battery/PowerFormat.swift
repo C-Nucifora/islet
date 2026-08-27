@@ -22,11 +22,12 @@ enum PowerStatus {
     batteryWatts: Double?, notChargingReason: UInt64?
   ) -> String {
     if !onAC { return "On battery" }
+    // IOPS's `IsCharging` describes the requested charger state and can remain true while the
+    // pack is momentarily supplying the shortfall. Prefer the same signed live measurement used
+    // by the flow graph so the headline can never claim that a left-side battery ribbon is charge.
+    if let batteryWatts, batteryWatts < -0.05 { return "Adapter can't keep up" }
     if isCharging { return "Charging" }
     if fullyCharged { return "Charged" }
-    // AC attached, not charging, and the pack is still discharging: the adapter is smaller than the
-    // current system load. Derived from PowerTelemetryData.BatteryPower, not from a guessed bit.
-    if let batteryWatts, batteryWatts < -0.5 { return "Adapter can't keep up" }
     // The reason bitfield is undocumented diagnostics, not prose — the view offers it in a
     // tooltip. Putting the hex in this line truncated it into "Not charging · 0x80000…".
     return "Not charging"
@@ -65,9 +66,9 @@ enum PowerFormat {
     // Written with explicit returns: a switch *expression* whose branches mix String and nil does
     // not type-check against a String? contextual type.
     switch (watts, description) {
-    case let (w?, d?): return "\(w) W · \(d)"
-    case let (w?, nil): return "\(w) W"
-    case let (nil, d?): return d
+    case (let w?, let d?): return "\(w) W · \(d)"
+    case (let w?, nil): return "\(w) W"
+    case (nil, let d?): return d
     case (nil, nil): return nil
     }
   }
@@ -75,7 +76,8 @@ enum PowerFormat {
   /// The whole negotiated PD ladder on one line, for the charger tile's tooltip.
   static func ladderSummary(_ ladder: [PDProfile]) -> String? {
     guard !ladder.isEmpty else { return nil }
-    return ladder
+    return
+      ladder
       .map { String(format: "%.0fV/%.2fA", $0.volts, $0.amps) }
       .joined(separator: " · ")
   }
