@@ -18,6 +18,8 @@ final class NotchViewModel: ObservableObject {
   /// Height tier the currently selected tab asked for. Reported by `ExpandedContainerView`; drives
   /// the drawn island, the hover region, the click-inside test and the panel frame.
   @Published private(set) var expandedHeight: CGFloat = Metrics.expandedSize.height
+  /// Live 0...1 pressure against the hover barrier. The view turns this into elastic stretch.
+  @Published private(set) var barrierProgress: CGFloat = 0
   var preventAutoClose = false
 
   let geometry: NotchGeometry
@@ -28,7 +30,8 @@ final class NotchViewModel: ObservableObject {
   private var lastMouseLocation: CGPoint = .zero
   private var compactLeadingWidth: CGFloat = 0
   private var compactTrailingWidth: CGFloat = 0
-  private var dwellTask: Task<Void, Never>?
+  private var barrierStartY: CGFloat?
+  private var barrierContactFired = false
   private var collapseTask: Task<Void, Never>?
   private var shrinkTask: Task<Void, Never>?
   private var cancellables: Set<AnyCancellable> = []
@@ -60,14 +63,18 @@ final class NotchViewModel: ObservableObject {
   func handleMouseMoved(_ location: CGPoint) {
     lastMouseLocation = location
     let inside = hoverRegion.contains(location)
+    if inside, wasInside {
+      updateBarrier(with: location)
+      return
+    }
     guard inside != wasInside else { return }
     wasInside = inside
     if inside {
       collapseTask?.cancel()
       apply(.hoverEntered)
-      if state == .peek, mode == .hover { scheduleDwell() }
+      beginBarrier(at: location)
     } else {
-      dwellTask?.cancel()
+      resetBarrier()
       apply(.hoverExited)
       if case .expanded(false) = state { scheduleCollapse() }
     }
@@ -154,8 +161,14 @@ final class NotchViewModel: ObservableObject {
       from: state, on: event, mode: mode, preventAutoClose: preventAutoClose)
     guard next != state else { return }
     let opening = order(next) > order(state)
-    if event == .hoverEntered, next == .peek { Haptics.tick() }
-    if next.isExpanded, !state.isExpanded { Haptics.opening() }
+    if next.isExpanded, !state.isExpanded {
+      if event == .pushThresholdCrossed {
+        Haptics.barrierSnap()
+      } else {
+        Haptics.perform(.levelChange)
+      }
+      resetBarrier()
+    }
     updatePanelFrame(for: next)  // widen the window before the content animates into it
     withAnimation(Motion.gated(opening ? Motion.opening : Motion.closing)) {
       state = next
@@ -201,13 +214,34 @@ final class NotchViewModel: ObservableObject {
     }
   }
 
-  private func scheduleDwell() {
-    dwellTask = Self.debounce(
-      cancelling: dwellTask, for: .seconds(Defaults[.hoverExpandDelay])
-    ) { [weak self] in
-      guard let self, self.wasInside else { return }
-      self.apply(.hoverDwellElapsed)
+  private func beginBarrier(at location: CGPoint) {
+    guard state == .peek, mode == .hover else { return }
+    barrierStartY = location.y
+    barrierProgress = 0
+    barrierContactFired = false
+  }
+
+  private func updateBarrier(with location: CGPoint) {
+    guard state == .peek, mode == .hover, let startY = barrierStartY else { return }
+    let progress = min(max((location.y - startY) / Metrics.barrierPushDistance, 0), 1)
+    if progress != barrierProgress { barrierProgress = progress }
+
+    // A fast flick may cross both marks in one event. In that case the snap alone is clearer than
+    // two simultaneous pulses; normal deliberate pressure still gets contact, then release.
+    if progress >= 1 {
+      apply(.pushThresholdCrossed)
+      return
     }
+    if !barrierContactFired, progress >= Metrics.barrierContactProgress {
+      barrierContactFired = true
+      Haptics.barrierResistance()
+    }
+  }
+
+  private func resetBarrier() {
+    barrierStartY = nil
+    barrierProgress = 0
+    barrierContactFired = false
   }
 
   private func scheduleCollapse() {

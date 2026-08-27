@@ -18,6 +18,38 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(vm.state, .peek)
   }
 
+  func testUpwardPushStretchesPeekBeforeOpening() {
+    let vm = makeVM()
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1082))
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1088))
+    XCTAssertEqual(vm.state, .peek)
+    XCTAssertEqual(vm.barrierProgress, 0.5, accuracy: 0.01)
+  }
+
+  func testUpwardPushSnapsOpenAtThreshold() {
+    let vm = makeVM()
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1082))
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1094))
+    XCTAssertEqual(vm.state, .expanded(pinned: false))
+    XCTAssertEqual(vm.barrierProgress, 0)
+  }
+
+  func testDownwardMovementDoesNotBuildBarrierPressure() {
+    let vm = makeVM()
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1090))
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1084))
+    XCTAssertEqual(vm.state, .peek)
+    XCTAssertEqual(vm.barrierProgress, 0)
+  }
+
+  func testClickModeIgnoresBarrierPressure() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1082))
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1100))
+    XCTAssertEqual(vm.state, .peek)
+    XCTAssertEqual(vm.barrierProgress, 0)
+  }
+
   func testMouseOutOfHitRectClosesFromPeek() {
     let vm = makeVM()
     vm.handleMouseMoved(CGPoint(x: 864, y: 1110))

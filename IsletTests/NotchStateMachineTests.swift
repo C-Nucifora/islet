@@ -38,12 +38,12 @@ final class NotchStateMachineTests: XCTestCase {
   }
 
   // Hover mode
-  func testDwellExpandsUnpinnedInHoverMode() {
-    XCTAssertEqual(t(.peek, .hoverDwellElapsed, .hover), .expanded(pinned: false))
+  func testPushExpandsUnpinnedInHoverMode() {
+    XCTAssertEqual(t(.peek, .pushThresholdCrossed, .hover), .expanded(pinned: false))
   }
 
-  func testDwellDoesNothingInClickMode() {
-    XCTAssertEqual(t(.peek, .hoverDwellElapsed, .clickToPin), .peek)
+  func testPushDoesNothingInClickMode() {
+    XCTAssertEqual(t(.peek, .pushThresholdCrossed, .clickToPin), .peek)
   }
 
   func testCollapseTimeoutClosesUnpinnedOnly() {

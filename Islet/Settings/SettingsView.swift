@@ -3,7 +3,6 @@ import SwiftUI
 
 struct SettingsView: View {
   @Default(.interactionMode) private var mode
-  @Default(.hoverExpandDelay) private var expandDelay
   @Default(.hoverCollapseTimeout) private var collapseTimeout
   @Default(.hapticsEnabled) private var haptics
   @Default(.hideFromScreenRecording) private var hideFromRecording
@@ -119,15 +118,12 @@ struct SettingsView: View {
       }
       Section("Interaction") {
         Picker("Expand", selection: $mode) {
-          Text("Hover").tag(InteractionMode.hover)
+          Text("Push through").tag(InteractionMode.hover)
           Text("Click to pin").tag(InteractionMode.clickToPin)
         }
         if mode == .hover {
-          LabeledContent(
-            "Hover delay: \(expandDelay, format: .number.precision(.fractionLength(1)))s"
-          ) {
-            Slider(value: $expandDelay, in: 0.1...1.0, step: 0.1)
-          }
+          Text("Move upward into the notch: it stretches under the cursor, then snaps open.")
+            .font(.caption2).foregroundStyle(.secondary)
           LabeledContent(
             "Collapse after: \(collapseTimeout, format: .number.precision(.fractionLength(1)))s"
           ) {
