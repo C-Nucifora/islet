@@ -155,7 +155,7 @@ final class NotchViewModel: ObservableObject {
     guard next != state else { return }
     let opening = order(next) > order(state)
     if event == .hoverEntered, next == .peek { Haptics.tick() }
-    if next.isExpanded, !state.isExpanded { Haptics.perform(.levelChange) }  // firm tap on expand
+    if next.isExpanded, !state.isExpanded { Haptics.opening() }
     updatePanelFrame(for: next)  // widen the window before the content animates into it
     withAnimation(Motion.gated(opening ? Motion.opening : Motion.closing)) {
       state = next

@@ -42,4 +42,7 @@ extension Defaults.Keys {
   /// strings so an unknown value from a future build resolves to the fallback instead of failing
   /// to decode the whole dictionary.
   static let metricStyles = Key<[String: String]>("metricStyles", default: [:])
+  static let t3CodeEnabled = Key<Bool>("t3CodeEnabled", default: true)
+  static let t3RemoteEnvironments = Key<[T3EnvironmentProfile]>(
+    "t3RemoteEnvironments", default: [])
 }

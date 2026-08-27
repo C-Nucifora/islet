@@ -77,6 +77,7 @@ struct SettingsView: View {
             .font(.caption2).foregroundStyle(.secondary)
         }
       }
+      T3SettingsSection(activity: AppState.t3Code)
       Section("System events") {
         Text(
           "Islet shows a brief animation in the island when something happens. Turn a source off and Islet stops watching it entirely."
@@ -114,7 +115,7 @@ struct SettingsView: View {
           }
           .onMove { activityOrder.move(fromOffsets: $0, toOffset: $1) }
         }
-        .frame(height: 216)
+        .frame(height: 240)
       }
       Section("Interaction") {
         Picker("Expand", selection: $mode) {

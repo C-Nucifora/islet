@@ -1,0 +1,219 @@
+import Defaults
+import SwiftUI
+
+struct T3CompactStatusView: View {
+  @ObservedObject var activity: T3CodeActivity
+
+  var body: some View {
+    HStack(spacing: 3) {
+      if let first = activity.agents.first {
+        Image(systemName: first.phase.symbol).font(.system(size: 8))
+      }
+      Text("\(activity.agents.count)")
+        .font(.caption.weight(.semibold)).monospacedDigit()
+    }
+    .foregroundStyle(activity.compactColor)
+    .accessibilityLabel("\(activity.agents.count) active T3 Code agents")
+  }
+}
+
+struct T3CodeExpandedView: View {
+  @ObservedObject var activity: T3CodeActivity
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack {
+        Label("T3 Code", systemImage: "terminal.fill")
+          .font(.caption.weight(.semibold))
+        Spacer()
+        Text("\(activity.agents.count) agent\(activity.agents.count == 1 ? "" : "s")")
+          .font(.caption2).foregroundStyle(.secondary)
+      }
+
+      if activity.agents.isEmpty {
+        VStack(spacing: 5) {
+          Image(systemName: "checkmark.circle").font(.title3).foregroundStyle(.green)
+          Text("No active agents").font(.caption)
+          Text(connectionSummary).font(.system(size: 9)).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        ScrollView(.vertical, showsIndicators: false) {
+          VStack(spacing: 7) {
+            ForEach(activity.environments.filter { !$0.agents.isEmpty }) { environment in
+              environmentGroup(environment)
+            }
+          }
+        }
+      }
+    }
+    .foregroundStyle(.white)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  private var connectionSummary: String {
+    let connected = activity.environments.filter { $0.state == .connected }.count
+    return connected == 0 ? "Open T3 Code or add a machine in Settings" : "Watching \(connected) machine\(connected == 1 ? "" : "s")"
+  }
+
+  private func environmentGroup(_ environment: T3EnvironmentSnapshot) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(spacing: 5) {
+        Image(systemName: environment.isLocal ? "laptopcomputer" : "network")
+        Text(environment.label).lineLimit(1)
+        Spacer()
+        Circle().fill(.green).frame(width: 5, height: 5)
+      }
+      .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+
+      ForEach(environment.agents) { agent in
+        T3AgentRow(agent: agent)
+      }
+    }
+  }
+}
+
+private struct T3AgentRow: View {
+  let agent: T3AgentSnapshot
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Image(systemName: agent.phase.symbol)
+        .font(.caption2).foregroundStyle(phaseColor).frame(width: 14)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(agent.title).font(.caption.weight(.medium)).lineLimit(1)
+        HStack(spacing: 4) {
+          Text(agent.providerInstance).font(.system(size: 9, weight: .semibold))
+            .padding(.horizontal, 4).padding(.vertical, 1)
+            .background(Capsule().fill(.white.opacity(0.09)))
+          Text(agent.model).font(.system(size: 9)).lineLimit(1)
+          Text("·").foregroundStyle(.tertiary)
+          Text(agent.branch.map { "\(agent.project) · \($0)" } ?? agent.project)
+            .font(.system(size: 9)).lineLimit(1)
+        }
+        .foregroundStyle(.secondary)
+        if let step = agent.planStep {
+          HStack(spacing: 4) {
+            if let completed = agent.completedPlanSteps, let total = agent.totalPlanSteps {
+              Text("\(completed)/\(total)").monospacedDigit()
+            }
+            Text(step).lineLimit(1)
+          }
+          .font(.system(size: 9)).foregroundStyle(.secondary)
+        }
+      }
+      Spacer(minLength: 4)
+      Text(agent.phase.label)
+        .font(.system(size: 9, weight: .semibold)).foregroundStyle(phaseColor)
+        .lineLimit(1)
+    }
+    .padding(.vertical, 4).padding(.horizontal, 7)
+    .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.06)))
+  }
+
+  private var phaseColor: Color {
+    switch agent.phase {
+    case .needsInput, .needsApproval: .orange
+    case .working, .monitoring: .purple
+    case .finished: .green
+    case .failed: .red
+    }
+  }
+}
+
+struct T3SettingsSection: View {
+  @ObservedObject var activity: T3CodeActivity
+  @Default(.t3CodeEnabled) private var enabled
+  @Default(.t3RemoteEnvironments) private var profiles
+  @State private var pairingLink = ""
+  @State private var isPairing = false
+  @State private var statusMessage: String?
+  @State private var allowInsecureHTTP = false
+
+  var body: some View {
+    Section("T3 Code agents") {
+      Toggle("Show active agents", isOn: $enabled)
+      Text("Provider-neutral monitoring for every connected T3 Code machine. Pairing is read-only and credentials stay in Keychain.")
+        .font(.caption2).foregroundStyle(.secondary)
+
+      if enabled {
+        machineRows
+        HStack {
+          SecureField("Paste a T3 Code pairing link", text: $pairingLink)
+          Button(isPairing ? "Pairing…" : "Add") { pair() }
+            .disabled(pairingLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPairing)
+        }
+        Toggle("Allow plain HTTP for this pairing", isOn: $allowInsecureHTTP)
+          .font(.caption)
+        Text("Leave this off outside localhost. HTTPS or a private Tailscale endpoint is recommended.")
+          .font(.caption2).foregroundStyle(.secondary)
+        if let statusMessage {
+          Text(statusMessage).font(.caption2)
+            .foregroundStyle(statusMessage.hasPrefix("Added") ? .green : .orange)
+        }
+        Button("Reconnect now") { activity.reconnect() }
+      }
+    }
+  }
+
+  @ViewBuilder private var machineRows: some View {
+    if let local = activity.environments.first(where: \.isLocal) {
+      machineRow(local)
+    } else {
+      LabeledContent("This Mac") { Text("Discovering…").foregroundStyle(.secondary) }
+    }
+    ForEach(profiles) { profile in
+      let snapshot = activity.environments.first { $0.id == profile.id }
+      HStack {
+        Toggle(
+          profile.label,
+          isOn: Binding(
+            get: { profile.enabled },
+            set: { activity.setRemoteEnabled($0, environmentID: profile.id) }))
+        Spacer()
+        Text(snapshot?.state.label ?? (profile.enabled ? "Connecting" : "Off"))
+          .font(.caption).foregroundStyle(connectionColor(snapshot?.state))
+        Button(role: .destructive) { activity.removeRemote(environmentID: profile.id) } label: {
+          Image(systemName: "trash")
+        }
+        .buttonStyle(.borderless).accessibilityLabel("Remove \(profile.label)")
+      }
+    }
+  }
+
+  private func machineRow(_ snapshot: T3EnvironmentSnapshot) -> some View {
+    LabeledContent {
+      Text(snapshot.state.label).font(.caption).foregroundStyle(connectionColor(snapshot.state))
+    } label: {
+      Label(snapshot.label, systemImage: snapshot.isLocal ? "laptopcomputer" : "network")
+    }
+  }
+
+  private func connectionColor(_ state: T3ConnectionState?) -> Color {
+    switch state {
+    case .some(.connected): .green
+    case .some(.needsPairing): .orange
+    case .some(.offline): .red
+    default: .secondary
+    }
+  }
+
+  private func pair() {
+    let link = pairingLink
+    pairingLink = ""
+    isPairing = true
+    statusMessage = nil
+    Task { @MainActor in
+      defer { isPairing = false }
+      do {
+        try await activity.addRemote(
+          pairingLink: link, allowInsecureHTTP: allowInsecureHTTP)
+        allowInsecureHTTP = false
+        statusMessage = "Added T3 Code machine."
+        Haptics.perform(.levelChange)
+      } catch {
+        statusMessage = error.localizedDescription
+      }
+    }
+  }
+}
