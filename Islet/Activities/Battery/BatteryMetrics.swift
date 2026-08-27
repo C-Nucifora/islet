@@ -11,6 +11,17 @@ struct PDProfile: Identifiable, Equatable {
   var watts: Double { volts * amps }
 }
 
+/// Live power the Mac is sourcing to a peripheral through one USB-C port. AppleSmartBattery
+/// publishes these entries only while power is flowing out; the values are milli-units.
+struct USBPowerOutput: Identifiable, Equatable {
+  let portIndex: Int
+  var watts: Double
+  let volts: Double?
+  let amps: Double?
+
+  var id: Int { portIndex }
+}
+
 /// Deep battery, charger and power-flow telemetry, read from AppleSmartBattery, IOPS and
 /// ProcessInfo.
 ///
@@ -58,6 +69,8 @@ struct BatteryMetrics: Equatable {
   var adapterPowerTier: Int?
   var pdLadder: [PDProfile] = []
   var pdSelectedIndex: Int?
+  /// `ParentPortTypeDescription` from the active IOPortFeaturePowerSource node.
+  var inputPortType: String?
 
   // Power flow, from the undocumented PowerTelemetryData dictionary. All watts.
   var systemPowerInWatts: Double?  // SystemPowerIn — what the wall is delivering
@@ -66,6 +79,7 @@ struct BatteryMetrics: Equatable {
   var systemLoadWatts: Double?  // SystemLoad — what the machine is drawing
   var batteryPowerWatts: Double?  // BatteryPower — + into the pack, - out of it
   var adapterLossWatts: Double?  // AdapterEfficiencyLoss
+  var usbPowerOutputs: [USBPowerOutput] = []  // PowerOutDetails, one entry per sourcing port
 
   // Charge state.
   var isCharging: Bool?
@@ -82,6 +96,6 @@ struct BatteryMetrics: Equatable {
       || temperatureC != nil || voltage != nil || amperage != nil || powerWatts != nil
       || timeToFullMinutes != nil || timeToEmptyMinutes != nil
       || adapterWatts != nil || adapterDescription != nil
-      || systemPowerInWatts != nil || batteryPowerWatts != nil
+      || systemPowerInWatts != nil || batteryPowerWatts != nil || !usbPowerOutputs.isEmpty
   }
 }
