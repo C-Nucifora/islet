@@ -31,7 +31,7 @@ final class NotchViewModel: ObservableObject {
   private var compactLeadingWidth: CGFloat = 0
   private var compactTrailingWidth: CGFloat = 0
   private var barrierStartY: CGFloat?
-  private var barrierContactFired = false
+  private var barrierHapticStage = 0
   private var collapseTask: Task<Void, Never>?
   private var shrinkTask: Task<Void, Never>?
   private var cancellables: Set<AnyCancellable> = []
@@ -218,7 +218,7 @@ final class NotchViewModel: ObservableObject {
     guard state == .peek, mode == .hover else { return }
     barrierStartY = location.y
     barrierProgress = 0
-    barrierContactFired = false
+    barrierHapticStage = 0
   }
 
   private func updateBarrier(with location: CGPoint) {
@@ -232,16 +232,19 @@ final class NotchViewModel: ObservableObject {
       apply(.pushThresholdCrossed)
       return
     }
-    if !barrierContactFired, progress >= Metrics.barrierContactProgress {
-      barrierContactFired = true
-      Haptics.barrierResistance()
+    if barrierHapticStage < 2, progress >= Metrics.barrierStrainProgress {
+      barrierHapticStage = 2
+      Haptics.barrierResistance(strong: true)
+    } else if barrierHapticStage < 1, progress >= Metrics.barrierContactProgress {
+      barrierHapticStage = 1
+      Haptics.barrierResistance(strong: false)
     }
   }
 
   private func resetBarrier() {
     barrierStartY = nil
     barrierProgress = 0
-    barrierContactFired = false
+    barrierHapticStage = 0
   }
 
   private func scheduleCollapse() {

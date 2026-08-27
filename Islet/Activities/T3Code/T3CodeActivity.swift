@@ -26,9 +26,11 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
 
   func start() {
     Defaults.publisher(.t3CodeEnabled)
+      .dropFirst()
       .sink { [weak self] _ in Task { @MainActor in self?.restartMonitors() } }
       .store(in: &cancellables)
     Defaults.publisher(.t3RemoteEnvironments)
+      .dropFirst()
       .sink { [weak self] _ in Task { @MainActor in self?.restartMonitors() } }
       .store(in: &cancellables)
     restartMonitors()
@@ -118,7 +120,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       let endpoint = await T3LocalDiscovery.endpoint()
       do {
         let descriptor = try await T3Client(endpoint: endpoint, token: nil).fetchDescriptor()
-        var token = T3CredentialStore.load(environmentID: descriptor.environmentId)
+        var token = T3CredentialStore.load(
+          environmentID: descriptor.environmentId, migrateLegacy: false)
         if token == nil {
           let pairingCredential = try await T3LocalPairingMinting.mint()
           token = try await T3Client(endpoint: endpoint, token: nil)

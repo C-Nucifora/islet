@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Defaults
 import EventKit
@@ -18,7 +19,7 @@ final class RemindersProvider: ObservableObject {
   private var observing = false
 
   func start() {
-    if Defaults[.remindersEnabled] { Task { await requestAndLoad() } }
+    if Defaults[.remindersEnabled] { Task { await requestAccess() } }
     Defaults.publisher(.remindersEnabled)
       .dropFirst()
       .sink { [weak self] change in
@@ -26,8 +27,12 @@ final class RemindersProvider: ObservableObject {
           self?.reminders = []
           return
         }
-        Task { await self?.requestAndLoad() }
+        Task { await self?.requestAccess() }
       }
+      .store(in: &cancellables)
+    // Reflect grants made in System Settings immediately after the app becomes active again.
+    NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+      .sink { [weak self] _ in Task { await self?.refreshAuthorization() } }
       .store(in: &cancellables)
   }
 
@@ -40,7 +45,7 @@ final class RemindersProvider: ObservableObject {
       .store(in: &cancellables)
   }
 
-  private func requestAndLoad() async {
+  func requestAccess() async {
     hasRequestedAccess = true
     do {
       let granted = try await store.requestFullAccessToReminders()
@@ -52,6 +57,15 @@ final class RemindersProvider: ObservableObject {
     } catch {
       accessDenied = true
       Log.app.error("Reminders access error: \(error.localizedDescription)")
+    }
+  }
+
+  private func refreshAuthorization() async {
+    let status = EKEventStore.authorizationStatus(for: .reminder)
+    accessDenied = status != .fullAccess
+    if status == .fullAccess {
+      observeStoreChanges()
+      await reload()
     }
   }
 

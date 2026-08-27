@@ -3,15 +3,27 @@ import Defaults
 
 @MainActor
 enum Haptics {
+  private static var snapTask: Task<Void, Never>?
+
   /// Deliberate feedback for a discrete action (tap, expand, completion). Not throttled.
   static func perform(_ pattern: NSHapticFeedbackManager.FeedbackPattern = .generic) {
     guard Defaults[.hapticsEnabled] else { return }
     NSHapticFeedbackManager.defaultPerformer.perform(pattern, performanceTime: .now)
   }
 
-  /// Light contact while the cursor is stretching the barrier, before it gives way.
-  static func barrierResistance() { perform(.alignment) }
+  /// Two pressure gates turn continued upward travel into progressively firmer tactile resistance.
+  static func barrierResistance(strong: Bool) {
+    perform(strong ? .levelChange : .alignment)
+  }
 
-  /// Firmer release at the exact movement threshold where the island snaps open.
-  static func barrierSnap() { perform(.levelChange) }
+  /// A strong two-beat release at the exact movement threshold where the island snaps open.
+  static func barrierSnap() {
+    perform(.generic)
+    snapTask?.cancel()
+    snapTask = Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(38))
+      guard !Task.isCancelled else { return }
+      perform(.levelChange)
+    }
+  }
 }

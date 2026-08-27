@@ -21,7 +21,7 @@ final class NotchViewModelTests: XCTestCase {
   func testUpwardPushStretchesPeekBeforeOpening() {
     let vm = makeVM()
     vm.handleMouseMoved(CGPoint(x: 864, y: 1082))
-    vm.handleMouseMoved(CGPoint(x: 864, y: 1088))
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1094))
     XCTAssertEqual(vm.state, .peek)
     XCTAssertEqual(vm.barrierProgress, 0.5, accuracy: 0.01)
   }
@@ -29,7 +29,7 @@ final class NotchViewModelTests: XCTestCase {
   func testUpwardPushSnapsOpenAtThreshold() {
     let vm = makeVM()
     vm.handleMouseMoved(CGPoint(x: 864, y: 1082))
-    vm.handleMouseMoved(CGPoint(x: 864, y: 1094))
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1106))
     XCTAssertEqual(vm.state, .expanded(pinned: false))
     XCTAssertEqual(vm.barrierProgress, 0)
   }

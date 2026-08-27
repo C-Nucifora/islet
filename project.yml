@@ -1,6 +1,6 @@
 name: Islet
 options:
-  bundleIdPrefix: dev.cnucifora
+  bundleIdPrefix: dev.nedlane
   deploymentTarget:
     macOS: "26.0"
   createIntermediateGroups: true

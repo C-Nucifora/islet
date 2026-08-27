@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Defaults
 import EventKit
@@ -25,18 +26,23 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   var nextEvent: AgendaEvent? { CalendarLogic.nextRelevant(events: events, now: Date()) }
 
   func start() {
-    if Defaults[.calendarEnabled] { Task { await requestAndLoad() } }
+    if Defaults[.calendarEnabled] { Task { await requestAccess() } }
     // Request/refresh when the feature is toggled on; clear when off.
     Defaults.publisher(.calendarEnabled)
       .dropFirst()
       .sink { [weak self] change in
         if change.newValue {
-          Task { await self?.requestAndLoad() }
+          Task { await self?.requestAccess() }
         } else {
           self?.events = []
           self?.objectWillChange.send()
         }
       }
+      .store(in: &cancellables)
+    // A grant made in System Settings happens out of process. Refresh as soon as the user returns
+    // so the dashboard does not keep showing stale "Calendar access off" state.
+    NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+      .sink { [weak self] _ in Task { await self?.refreshAuthorization() } }
       .store(in: &cancellables)
     // Re-read the agenda and re-evaluate the countdown every 30 s.
     timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
@@ -47,7 +53,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
       }
   }
 
-  private func requestAndLoad() async {
+  func requestAccess() async {
     do {
       let granted = try await store.requestFullAccessToEvents()
       accessDenied = !granted
@@ -56,6 +62,12 @@ final class CalendarActivity: NotchActivity, ObservableObject {
       accessDenied = true
       Log.app.error("Calendar access error: \(error.localizedDescription)")
     }
+  }
+
+  private func refreshAuthorization() async {
+    let status = EKEventStore.authorizationStatus(for: .event)
+    accessDenied = status != .fullAccess
+    if status == .fullAccess { await reload() }
   }
 
   private func reload() async {

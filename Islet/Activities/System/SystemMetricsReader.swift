@@ -185,7 +185,7 @@ enum SystemMetricsReader {
   /// The interface holding the default IPv4 route, via public SystemConfiguration. Verified to
   /// return "en6" on this machine.
   static func primaryInterfaceName() -> String? {
-    guard let store = SCDynamicStoreCreate(nil, "dev.cnucifora.Islet" as CFString, nil, nil),
+    guard let store = SCDynamicStoreCreate(nil, "dev.nedlane.Islet" as CFString, nil, nil),
       let global = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString)
         as? [String: Any],
       let name = global["PrimaryInterface"] as? String

@@ -2,6 +2,8 @@ import Defaults
 import SwiftUI
 
 struct SettingsView: View {
+  @ObservedObject private var calendar = AppState.calendar
+  @ObservedObject private var reminders = RemindersProvider.shared
   @Default(.interactionMode) private var mode
   @Default(.hoverCollapseTimeout) private var collapseTimeout
   @Default(.hapticsEnabled) private var haptics
@@ -177,12 +179,18 @@ struct SettingsView: View {
           }
         }
         Toggle("Calendar", isOn: $calendarEnabled)
+        if calendarEnabled, calendar.accessDenied {
+          Button("Grant Calendar access…") { Task { await calendar.requestAccess() } }
+        }
         if calendarEnabled {
           Stepper(
             "Countdown lead: \(calendarLeadMinutes) min", value: $calendarLeadMinutes,
             in: 5...60, step: 5)
         }
         Toggle("Reminders", isOn: $remindersEnabled)
+        if remindersEnabled, reminders.accessDenied {
+          Button("Grant Reminders access…") { Task { await reminders.requestAccess() } }
+        }
         Toggle("Clipboard history", isOn: $clipboardEnabled)
         if clipboardEnabled {
           Text("Captures everything you copy (incl. passwords), kept only until you quit.")
