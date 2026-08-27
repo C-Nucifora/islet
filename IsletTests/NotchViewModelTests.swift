@@ -18,10 +18,18 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(vm.state, .peek)
   }
 
+  func testHoverPeekPanelMakesRoomForTheFullBarrierStretch() {
+    let vm = makeVM()
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1082))
+    XCTAssertEqual(
+      vm.panelFrame,
+      vm.geometry.collapsedPanelFrame(depth: Metrics.barrierPanelDepth))
+  }
+
   func testUpwardPushStretchesPeekBeforeOpening() {
     let vm = makeVM()
     vm.handleMouseMoved(CGPoint(x: 864, y: 1082))
-    vm.handleMouseMoved(CGPoint(x: 864, y: 1094))
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1100))
     XCTAssertEqual(vm.state, .peek)
     XCTAssertEqual(vm.barrierProgress, 0.5, accuracy: 0.01)
   }
@@ -29,9 +37,20 @@ final class NotchViewModelTests: XCTestCase {
   func testUpwardPushSnapsOpenAtThreshold() {
     let vm = makeVM()
     vm.handleMouseMoved(CGPoint(x: 864, y: 1082))
-    vm.handleMouseMoved(CGPoint(x: 864, y: 1106))
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1110))
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: 8)
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: 4)
     XCTAssertEqual(vm.state, .expanded(pinned: false))
     XCTAssertEqual(vm.barrierProgress, 0)
+  }
+
+  func testDeviceTravelKeepsBuildingPressureAtTheTopScreenEdge() {
+    let vm = makeVM()
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1090))
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -27)
+    XCTAssertEqual(vm.state, .peek)
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -9)
+    XCTAssertEqual(vm.state, .expanded(pinned: false))
   }
 
   func testDownwardMovementDoesNotBuildBarrierPressure() {

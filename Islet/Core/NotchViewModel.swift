@@ -30,7 +30,8 @@ final class NotchViewModel: ObservableObject {
   private var lastMouseLocation: CGPoint = .zero
   private var compactLeadingWidth: CGFloat = 0
   private var compactTrailingWidth: CGFloat = 0
-  private var barrierStartY: CGFloat?
+  private var barrierTravel: CGFloat = 0
+  private var upwardDeviceDeltaSign: CGFloat?
   private var barrierHapticStage = 0
   private var collapseTask: Task<Void, Never>?
   private var shrinkTask: Task<Void, Never>?
@@ -44,8 +45,11 @@ final class NotchViewModel: ObservableObject {
     self.actualPanelFrame = initialFrame
     // NSEvent monitors already deliver on the main thread, so no .receive(on:) hop is needed
     // (it would add a redundant async dispatch on every app-wide mouse move).
-    EventMonitors.shared.mouseLocation
-      .sink { [weak self] p in self?.handleMouseMoved(p) }
+    EventMonitors.shared.mouseMovement
+      .sink { [weak self] movement in
+        self?.handleMouseMoved(
+          movement.location, deviceDeltaY: movement.deviceDeltaY)
+      }
       .store(in: &cancellables)
     EventMonitors.shared.mouseDown
       .sink { [weak self] p in self?.handleMouseDown(p) }
@@ -60,11 +64,13 @@ final class NotchViewModel: ObservableObject {
     state.isExpanded ? expandedRect.union(geometry.hitRect) : geometry.hitRect
   }
 
-  func handleMouseMoved(_ location: CGPoint) {
+  func handleMouseMoved(_ location: CGPoint, deviceDeltaY: CGFloat? = nil) {
+    let coordinateDeltaY = lastMouseLocation == .zero ? 0 : location.y - lastMouseLocation.y
     lastMouseLocation = location
     let inside = hoverRegion.contains(location)
     if inside, wasInside {
-      updateBarrier(with: location)
+      updateBarrier(
+        at: location, coordinateDeltaY: coordinateDeltaY, deviceDeltaY: deviceDeltaY)
       return
     }
     guard inside != wasInside else { return }
@@ -117,10 +123,20 @@ final class NotchViewModel: ObservableObject {
     // `testTallPanelFrameContainsTheBaseOneAndItsIsland` pins the containment. Cost: while a
     // base-tier tab is open, the panel swallows a ~60pt strip below the island, which the
     // expanded island's full-frame black backdrop was already doing.
-    state.isExpanded
-      ? geometry.panelFrame(height: Metrics.tallExpandedHeight)
-      : geometry.collapsedPanelFrame(
+    switch state {
+    case .expanded:
+      geometry.panelFrame(height: Metrics.tallExpandedHeight)
+    case .peek where mode == .hover:
+      geometry.collapsedPanelFrame(
+        compactLeading: compactLeadingWidth, compactTrailing: compactTrailingWidth,
+        depth: Metrics.barrierPanelDepth)
+    case .peek:
+      geometry.collapsedPanelFrame(
         compactLeading: compactLeadingWidth, compactTrailing: compactTrailingWidth)
+    case .closed:
+      geometry.collapsedPanelFrame(
+        compactLeading: compactLeadingWidth, compactTrailing: compactTrailingWidth)
+    }
   }
 
   /// The selected tab's height tier, reported by `ExpandedContainerView`. Only the drawn island
@@ -216,14 +232,33 @@ final class NotchViewModel: ObservableObject {
 
   private func beginBarrier(at location: CGPoint) {
     guard state == .peek, mode == .hover else { return }
-    barrierStartY = location.y
+    barrierTravel = 0
+    upwardDeviceDeltaSign = nil
     barrierProgress = 0
     barrierHapticStage = 0
   }
 
-  private func updateBarrier(with location: CGPoint) {
-    guard state == .peek, mode == .hover, let startY = barrierStartY else { return }
-    let progress = min(max((location.y - startY) / Metrics.barrierPushDistance, 0), 1)
+  private func updateBarrier(
+    at location: CGPoint, coordinateDeltaY: CGFloat, deviceDeltaY: CGFloat?
+  ) {
+    guard state == .peek, mode == .hover else { return }
+
+    var upwardTravel = coordinateDeltaY
+    if let deviceDeltaY, abs(deviceDeltaY) > 0.01 {
+      // Calibrate the device-delta sign while the cursor can still move. Once it reaches the top
+      // edge, the screen coordinate clamps but device deltas continue, which creates the feeling
+      // of pressing into a barrier instead of running out of pixels.
+      if abs(coordinateDeltaY) > 0.01 {
+        upwardDeviceDeltaSign = coordinateDeltaY * deviceDeltaY >= 0 ? 1 : -1
+      }
+      if let sign = upwardDeviceDeltaSign,
+        abs(coordinateDeltaY) > 0.01 || location.y >= geometry.screenFrame.maxY - 1
+      {
+        upwardTravel = deviceDeltaY * sign
+      }
+    }
+    barrierTravel = min(max(barrierTravel + upwardTravel, 0), Metrics.barrierPushDistance)
+    let progress = barrierTravel / Metrics.barrierPushDistance
     if progress != barrierProgress { barrierProgress = progress }
 
     // A fast flick may cross both marks in one event. In that case the snap alone is clearer than
@@ -242,7 +277,8 @@ final class NotchViewModel: ObservableObject {
   }
 
   private func resetBarrier() {
-    barrierStartY = nil
+    barrierTravel = 0
+    upwardDeviceDeltaSign = nil
     barrierProgress = 0
     barrierHapticStage = 0
   }
