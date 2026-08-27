@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Defaults
 import SwiftUI
@@ -14,6 +15,10 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
 
   private var monitorTasks: [String: Task<Void, Never>] = [:]
   private var cancellables: Set<AnyCancellable> = []
+  private var workspaceCancellables: Set<AnyCancellable> = []
+  private var isMonitoring = false
+  private var isSystemSuspended = false
+  private var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
 
   var agents: [T3AgentSnapshot] {
     environments.flatMap(\.agents).sorted {
@@ -25,15 +30,56 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   var isActive: Bool { Defaults[.t3CodeEnabled] && !agents.isEmpty }
 
   func start() {
-    Defaults.publisher(.t3CodeEnabled)
-      .dropFirst()
-      .sink { [weak self] _ in Task { @MainActor in self?.restartMonitors() } }
-      .store(in: &cancellables)
+    guard !isMonitoring else { return }
+    isMonitoring = true
+    lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
     Defaults.publisher(.t3RemoteEnvironments)
       .dropFirst()
       .sink { [weak self] _ in Task { @MainActor in self?.restartMonitors() } }
       .store(in: &cancellables)
+    Defaults.publisher(.energyMode)
+      .dropFirst()
+      .sink { [weak self] _ in
+        Task { @MainActor in self?.restartMonitors(clearSnapshots: false) }
+      }
+      .store(in: &cancellables)
+    NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        guard let self else { return }
+        let next = ProcessInfo.processInfo.isLowPowerModeEnabled
+        guard next != self.lowPowerMode else { return }
+        self.lowPowerMode = next
+        self.restartMonitors(clearSnapshots: false)
+      }
+      .store(in: &cancellables)
+
+    let workspace = NSWorkspace.shared.notificationCenter
+    workspace.publisher(for: NSWorkspace.willSleepNotification)
+      .merge(with: workspace.publisher(for: NSWorkspace.sessionDidResignActiveNotification))
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.setSystemSuspended(true) }
+      .store(in: &workspaceCancellables)
+    workspace.publisher(for: NSWorkspace.didWakeNotification)
+      .merge(with: workspace.publisher(for: NSWorkspace.sessionDidBecomeActiveNotification))
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.setSystemSuspended(false) }
+      .store(in: &workspaceCancellables)
     restartMonitors()
+  }
+
+  func stop() {
+    guard isMonitoring else { return }
+    isMonitoring = false
+    cancelMonitorTasks()
+    cancellables.removeAll()
+    workspaceCancellables.removeAll()
+    // A session-resign notification may have been the last event before the feature was disabled.
+    // Do not carry that stale suspension into a later start after the Mac has already unlocked —
+    // there would be no new didBecomeActive notification to wake the restarted monitor.
+    isSystemSuspended = false
+    environments = []
+    activationDate = nil
   }
 
   func reconnect() { restartMonitors() }
@@ -102,20 +148,37 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     return .green
   }
 
-  private func restartMonitors() {
-    monitorTasks.values.forEach { $0.cancel() }
-    monitorTasks.removeAll()
-    environments.removeAll()
-    activationDate = nil
-    guard Defaults[.t3CodeEnabled] else { return }
+  private func restartMonitors(clearSnapshots: Bool = true) {
+    cancelMonitorTasks()
+    if clearSnapshots {
+      environments.removeAll()
+      activationDate = nil
+    }
+    guard isMonitoring, Defaults[.t3CodeEnabled], !isSystemSuspended else { return }
 
     monitorTasks["local"] = Task { [weak self] in await self?.monitorLocal() }
-    for profile in Defaults[.t3RemoteEnvironments] where profile.enabled {
-      monitorTasks[profile.id] = Task { [weak self] in await self?.monitorRemote(profile) }
+    // Remote polling is optional work and can keep radios awake. Leave the last snapshot visible
+    // in Low Power Mode and reconnect when normal power policy resumes.
+    if energyPolicy.allowsRemotePolling {
+      for profile in Defaults[.t3RemoteEnvironments] where profile.enabled {
+        monitorTasks[profile.id] = Task { [weak self] in await self?.monitorRemote(profile) }
+      }
     }
   }
 
+  private func cancelMonitorTasks() {
+    for task in monitorTasks.values { task.cancel() }
+    monitorTasks.removeAll()
+  }
+
+  private func setSystemSuspended(_ suspended: Bool) {
+    guard suspended != isSystemSuspended else { return }
+    isSystemSuspended = suspended
+    restartMonitors(clearSnapshots: false)
+  }
+
   private func monitorLocal() async {
+    var failures = 0
     while !Task.isCancelled {
       let endpoint = await T3LocalDiscovery.endpoint()
       do {
@@ -138,20 +201,24 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         }
       } catch {
         guard !Task.isCancelled else { return }
+        failures += 1
         upsert(
           T3EnvironmentSnapshot(
             id: "local", label: "This Mac", baseURL: endpoint.baseURL.absoluteString,
             isLocal: true, platform: nil, serverVersion: nil,
             state: .offline(error.localizedDescription), agents: []))
       }
-      try? await Task.sleep(for: .seconds(3))
+      let delay = Self.reconnectDelay(failureCount: failures, remote: false)
+      try? await Task.sleep(for: .seconds(Self.jitter(delay)))
     }
   }
 
   private func monitorRemote(_ profile: T3EnvironmentProfile) async {
-    guard let url = URL(string: profile.baseURL), let endpoint = try? T3Endpoint(
-      url, allowInsecureRemoteHTTP: true)
+    guard
+      let url = URL(string: profile.baseURL),
+      let endpoint = try? T3Endpoint(url, allowInsecureRemoteHTTP: true)
     else { return }
+    var failures = 0
     while !Task.isCancelled {
       do {
         let descriptor = try await T3Client(endpoint: endpoint, token: nil).fetchDescriptor()
@@ -166,14 +233,17 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       } catch is CancellationError {
         return
       } catch T3ClientError.unauthorized {
+        failures += 1
         upsert(snapshot(profile, descriptor: nil, state: .needsPairing, agents: []))
       } catch {
         guard !Task.isCancelled else { return }
+        failures += 1
         upsert(
           snapshot(
             profile, descriptor: nil, state: .offline(error.localizedDescription), agents: []))
       }
-      try? await Task.sleep(for: .seconds(5))
+      let delay = Self.reconnectDelay(failureCount: failures, remote: true)
+      try? await Task.sleep(for: .seconds(Self.jitter(delay)))
     }
   }
 
@@ -201,8 +271,14 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
           serverVersion: descriptor.serverVersion,
           state: .connected,
           agents: active))
-      let busy = active.contains { [.working, .monitoring, .needsInput, .needsApproval].contains($0.phase) }
-      try await Task.sleep(for: .milliseconds(busy ? 1_500 : 4_000))
+      let busy = active.contains {
+        [.working, .monitoring, .needsInput, .needsApproval].contains($0.phase)
+      }
+      let expanded = ScreenManager.shared.viewModel?.state.isExpanded ?? false
+      let interval = Self.pollInterval(
+        busy: busy, expanded: expanded, lowPowerMode: lowPowerMode,
+        energyMode: Defaults[.energyMode])
+      try await Task.sleep(for: .seconds(Self.jitter(interval)))
     }
   }
 
@@ -226,17 +302,48 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   }
 
   private func upsert(_ snapshot: T3EnvironmentSnapshot) {
+    let next = Self.upserting(snapshot, into: environments)
+    guard next != environments else { return }
+    environments = next
+    activationDate = agents.isEmpty ? nil : (activationDate ?? Date())
+  }
+
+  nonisolated static func upserting(
+    _ snapshot: T3EnvironmentSnapshot, into current: [T3EnvironmentSnapshot]
+  ) -> [T3EnvironmentSnapshot] {
+    var next = current
     // Once the real local environment id is known, replace the provisional "local" row.
-    if snapshot.isLocal { environments.removeAll { $0.id == "local" && $0.id != snapshot.id } }
-    if let index = environments.firstIndex(where: { $0.id == snapshot.id }) {
-      environments[index] = snapshot
+    if snapshot.isLocal { next.removeAll { $0.id == "local" && $0.id != snapshot.id } }
+    if let index = next.firstIndex(where: { $0.id == snapshot.id }) {
+      next[index] = snapshot
     } else {
-      environments.append(snapshot)
+      next.append(snapshot)
     }
-    environments.sort {
+    next.sort {
       if $0.isLocal != $1.isLocal { return $0.isLocal }
       return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
     }
-    activationDate = agents.isEmpty ? nil : (activationDate ?? Date())
+    return next
+  }
+
+  nonisolated static func pollInterval(
+    busy: Bool, expanded: Bool, lowPowerMode: Bool, energyMode: EnergyMode = .automatic
+  ) -> TimeInterval {
+    EnergyPolicy(mode: energyMode, systemLowPowerMode: lowPowerMode)
+      .t3PollInterval(busy: busy, expanded: expanded)
+  }
+
+  nonisolated static func reconnectDelay(failureCount: Int, remote: Bool) -> TimeInterval {
+    let floor: TimeInterval = remote ? 5 : 3
+    let ceiling: TimeInterval = remote ? 5 * 60 : 60
+    return min(floor * pow(2, Double(max(0, failureCount - 1))), ceiling)
+  }
+
+  nonisolated private static func jitter(_ interval: TimeInterval) -> TimeInterval {
+    interval * Double.random(in: 0.9...1.1)
+  }
+
+  private var energyPolicy: EnergyPolicy {
+    EnergyPolicy(mode: Defaults[.energyMode], systemLowPowerMode: lowPowerMode)
   }
 }

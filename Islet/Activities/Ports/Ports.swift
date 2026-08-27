@@ -76,14 +76,19 @@ final class PortMonitor: ObservableObject {
 
   private var notifyPort: IONotificationPortRef?
   private var iterators: [io_iterator_t] = []
+  private var owners: Set<String> = []
 
-  func start() {
-    // Both PortsActivity and PortEventSource start the shared monitor; the second call must be a
-    // no-op or it overwrites (and leaks) the first notification port and doubles every callback.
-    guard notifyPort == nil else { return }
+  func start(owner: String) {
+    let inserted = owners.insert(owner).inserted
+    guard inserted, notifyPort == nil else { return }
     refresh()
     notifyPort = IONotificationPortCreate(kIOMainPortDefault)
-    guard let notifyPort else { return }
+    guard let notifyPort else {
+      // Do not strand the owner in a logically-running state after setup fails. A later lifecycle
+      // reconciliation must be able to retry rather than hitting the duplicate-owner guard.
+      owners.remove(owner)
+      return
+    }
     IONotificationPortSetDispatchQueue(notifyPort, DispatchQueue.main)
 
     let context = Unmanaged.passUnretained(self).toOpaque()
@@ -110,7 +115,31 @@ final class PortMonitor: ObservableObject {
           service = IOIteratorNext(iterator)
         }
         iterators.append(iterator)
+      } else if iterator != 0 {
+        IOObjectRelease(iterator)
       }
+    }
+    if iterators.count != 2 {
+      tearDownNotifications()
+      owners.remove(owner)
+      Log.app.error("Could not register both USB matching notifications")
+    }
+  }
+
+  func stop(owner: String) {
+    owners.remove(owner)
+    guard owners.isEmpty else { return }
+    tearDownNotifications()
+    previousDevices = devices
+    devices = []
+  }
+
+  private func tearDownNotifications() {
+    for iterator in iterators { IOObjectRelease(iterator) }
+    iterators.removeAll()
+    if let notifyPort {
+      IONotificationPortDestroy(notifyPort)
+      self.notifyPort = nil
     }
   }
 

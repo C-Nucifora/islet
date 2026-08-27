@@ -2,6 +2,7 @@ import XCTest
 
 @testable import Islet
 
+@MainActor
 final class T3CodeTests: XCTestCase {
   func testParsesHostedPairingLink() throws {
     let target = try T3PairingTarget.parse(
@@ -51,5 +52,41 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(agents[0].model, "future-1")
     XCTAssertEqual(agents[0].phase, .needsInput)
     XCTAssertEqual(agents[0].planStep, "Wire the API")
+  }
+
+  func testPollingPolicySlowsInBackgroundAndLowPowerMode() {
+    XCTAssertEqual(
+      T3CodeActivity.pollInterval(busy: true, expanded: true, lowPowerMode: false), 3)
+    XCTAssertEqual(
+      T3CodeActivity.pollInterval(busy: false, expanded: true, lowPowerMode: false), 5)
+    XCTAssertEqual(
+      T3CodeActivity.pollInterval(busy: true, expanded: false, lowPowerMode: false), 5)
+    XCTAssertEqual(
+      T3CodeActivity.pollInterval(busy: false, expanded: false, lowPowerMode: false), 12)
+    XCTAssertEqual(
+      T3CodeActivity.pollInterval(busy: true, expanded: true, lowPowerMode: true), 30)
+    XCTAssertEqual(
+      T3CodeActivity.pollInterval(
+        busy: true, expanded: true, lowPowerMode: true, energyMode: .live), 2)
+    XCTAssertEqual(
+      T3CodeActivity.pollInterval(
+        busy: true, expanded: true, lowPowerMode: false, energyMode: .lowEnergy), 30)
+  }
+
+  func testReconnectBackoffIsExponentialAndCapped() {
+    XCTAssertEqual(T3CodeActivity.reconnectDelay(failureCount: 1, remote: false), 3)
+    XCTAssertEqual(T3CodeActivity.reconnectDelay(failureCount: 4, remote: false), 24)
+    XCTAssertEqual(T3CodeActivity.reconnectDelay(failureCount: 20, remote: false), 60)
+    XCTAssertEqual(T3CodeActivity.reconnectDelay(failureCount: 1, remote: true), 5)
+    XCTAssertEqual(T3CodeActivity.reconnectDelay(failureCount: 20, remote: true), 300)
+  }
+
+  func testUpsertOfUnchangedSnapshotDoesNotChangePublishedValue() {
+    let snapshot = T3EnvironmentSnapshot(
+      id: "local", label: "This Mac", baseURL: "http://127.0.0.1:3773/",
+      isLocal: true, platform: "macOS · arm64", serverVersion: "1",
+      state: .connected, agents: [])
+    let current = [snapshot]
+    XCTAssertEqual(T3CodeActivity.upserting(snapshot, into: current), current)
   }
 }

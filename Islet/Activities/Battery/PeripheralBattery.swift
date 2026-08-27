@@ -1,7 +1,7 @@
 import Foundation
 import IOKit
 
-struct PeripheralBattery: Identifiable, Equatable {
+struct PeripheralBattery: Identifiable, Equatable, Sendable {
   let id: String
   let name: String
   let percent: Int
