@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// The power screen: a charge ring, a four-row telemetry grid, the power-flow row and a footer of
-/// peripheral batteries. Pinned to the top-left so rows do not shuffle vertically as tiles come and
-/// go — the whole panel is optional-parsed and any tile can vanish between ticks.
+/// The power screen leads with the live story: what is supplying the Mac, and where that power is
+/// going. Battery health and electrical diagnostics remain available in the compact strip below.
 struct BatteryExpandedView: View {
   @ObservedObject var monitor: BatteryMonitor
 
@@ -10,6 +9,7 @@ struct BatteryExpandedView: View {
   private var metrics: BatteryMetrics? { monitor.metrics }
   private var percent: Int { state?.percent ?? 0 }
   private var onAC: Bool { state?.onAC ?? false }
+  private var flow: PowerFlowSnapshot { PowerFlowSnapshot(metrics: metrics) }
 
   private var statusText: String {
     PowerStatus.text(
@@ -22,243 +22,276 @@ struct BatteryExpandedView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      HStack(alignment: .top, spacing: 14) {
-        ringColumn.frame(width: 84)
-        metricGrid
-      }
-
-      Spacer(minLength: 0)
-
-      // The flow row (and the peripherals footer, when there is one) anchor to the bottom edge.
-      // Between the grid and a mid-panel flow row sat ~60pt of nothing, which read as a layout
-      // accident; the same slack above a bottom-anchored bar reads as breathing room.
-      if !flowNodes.isEmpty {
-        Divider().overlay(.white.opacity(0.12))
-        powerFlowRow
-      }
-
-      // Peripherals only. Low Power lives on the flow row, so a machine with no Bluetooth
-      // batteries does not spend a divider and a whole row on one glyph.
-      if !monitor.peripherals.isEmpty {
-        Divider().overlay(.white.opacity(0.12))
-        footerRow
-      }
+      header
+      powerGraph
+      Divider().overlay(.white.opacity(0.12))
+      detailStrip
     }
     .foregroundStyle(.white)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .liveSampling(monitor.liveGate)
   }
 
-  // MARK: - Charge ring
+  // MARK: - Header
 
-  private var ringColumn: some View {
-    VStack(spacing: 5) {
+  private var header: some View {
+    HStack(spacing: 9) {
       ZStack {
-        // Inset by half the stroke: a stroke is centred on the path, so an un-inset circle
-        // overhangs its frame by 3.5pt and gets clipped against the top of the content box.
-        Circle()
-          .inset(by: 3.5)
-          .stroke(.white.opacity(0.12), lineWidth: 7)
-        Circle()
-          .inset(by: 3.5)
-          .trim(from: 0, to: max(0.001, Double(percent) / 100))
-          .stroke(
-            Self.tint(percent: percent, onAC: onAC),
-            style: StrokeStyle(lineWidth: 7, lineCap: .round)
-          )
-          .rotationEffect(.degrees(-90))
-          .animation(Motion.gated(Motion.compact), value: percent)
-        Text("\(percent)%")
-          .font(.system(size: 17, weight: .bold)).monospacedDigit()
+        Circle().fill(batteryTint.opacity(0.14))
+        Image(systemName: BatteryActivity.batterySymbol(for: percent))
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(batteryTint)
       }
-      .frame(width: 66, height: 66)
+      .frame(width: 30, height: 30)
+      .accessibilityHidden(true)
 
-      statusLine
+      VStack(alignment: .leading, spacing: 0) {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+          Text("\(percent)%")
+            .font(.system(size: 19, weight: .bold, design: .rounded)).monospacedDigit()
+          Text(statusText)
+            .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            .lineLimit(1).minimumScaleFactor(0.8)
+        }
+        if let remaining {
+          Text("\(remaining.label) \(remaining.value)")
+            .font(.system(size: 9, weight: .medium)).foregroundStyle(.tertiary)
+        }
+      }
+      .accessibilityElement(children: .combine)
+      .accessibilityLabel("Battery \(percent) percent, \(statusText)")
+
+      Spacer(minLength: 8)
+
+      if metrics?.lowPowerMode == true {
+        statusPill("Low Power", symbol: "leaf.fill", tint: .yellow)
+      }
+      statusPill("Live", symbol: "circle.fill", tint: flow.hasLivePower ? .green : .secondary)
     }
-    .frame(maxWidth: .infinity)
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel("Battery \(percent) percent, \(statusText)")
+    .frame(height: 30)
   }
 
-  /// The one-line state under the ring. The raw NotChargingReason bitfield is diagnostics, not
-  /// prose — it lives in the tooltip, where it cannot truncate the line into "0x80000…".
-  @ViewBuilder private var statusLine: some View {
-    let text = Text(statusText)
-      .font(.system(size: 9)).foregroundStyle(.secondary)
-      .lineLimit(1).minimumScaleFactor(0.8)
-    if let reason = metrics?.notChargingReason, reason != 0 {
-      text.help("NotChargingReason \(NotChargingReason.code(reason))")
+  private func statusPill(_ label: String, symbol: String, tint: Color) -> some View {
+    HStack(spacing: 4) {
+      Image(systemName: symbol).font(.system(size: symbol == "circle.fill" ? 5 : 9))
+      Text(label).font(.system(size: 9, weight: .semibold))
+    }
+    .foregroundStyle(tint)
+    .padding(.horizontal, 7).frame(height: 20)
+    .background(Capsule().fill(tint.opacity(0.11)))
+  }
+
+  // MARK: - Power graph
+
+  private struct FlowItem: Identifiable {
+    let id: String
+    let label: String
+    let note: String
+    let symbol: String
+    let watts: Double
+    let tint: Color
+  }
+
+  private var inputItems: [FlowItem] {
+    var items: [FlowItem] = []
+    if let watts = flow.adapterInputWatts {
+      let kind = PowerInputKind.detect(from: metrics)
+      items.append(
+        FlowItem(
+          id: "adapter", label: kind.label, note: adapterNote,
+          symbol: kind.symbol, watts: watts, tint: .green))
+    }
+    if let watts = flow.batteryInputWatts {
+      items.append(
+        FlowItem(
+          id: "battery-source", label: "Battery", note: "system battery supplement",
+          symbol: "battery.100percent", watts: watts, tint: .orange))
+    }
+    return items
+  }
+
+  private var outputItems: [FlowItem] {
+    var items: [FlowItem] = []
+    if let watts = flow.macUseWatts, watts > 0.05 {
+      items.append(
+        FlowItem(
+          id: "mac", label: "Running the Mac", note: "internal system load",
+          symbol: "laptopcomputer", watts: watts, tint: .cyan))
+    }
+    if flow.usbOutputWatts > 0.05 {
+      let ports = flow.usbOutputs.count
+      items.append(
+        FlowItem(
+          id: "usb-output", label: "USB output",
+          note: ports == 1 ? "powering port \(flow.usbOutputs[0].portIndex)" : "powering \(ports) ports",
+          symbol: "cable.connector", watts: flow.usbOutputWatts, tint: .purple))
+    }
+    if let watts = flow.batteryChargeWatts {
+      items.append(
+        FlowItem(
+          id: "battery-charge", label: "Charging battery", note: "stored in the system battery",
+          symbol: "battery.100percent.bolt", watts: watts, tint: .green))
+    }
+    return items
+  }
+
+  private var adapterNote: String {
+    switch (metrics?.adapterVolts, metrics?.adapterAmps, metrics?.adapterWatts) {
+    case let (volts?, amps?, _): return String(format: "%.0f V × %.2f A negotiated", volts, amps)
+    case let (_, _, watts?): return "\(watts) W adapter rating"
+    default: return "external power"
+    }
+  }
+
+  @ViewBuilder private var powerGraph: some View {
+    if flow.hasLivePower {
+      HStack(alignment: .top, spacing: 8) {
+        flowColumn(title: "COMING IN", items: inputItems)
+          .frame(width: 166)
+        flowBridge.frame(width: 58)
+        flowColumn(title: "GOING TO", items: outputItems)
+          .frame(maxWidth: .infinity)
+      }
+      .frame(maxHeight: .infinity, alignment: .top)
     } else {
-      text
+      VStack(spacing: 6) {
+        Image(systemName: "bolt.horizontal.circle")
+          .font(.system(size: 24, weight: .light)).foregroundStyle(.secondary)
+        Text("Waiting for live power telemetry").font(.caption.weight(.semibold))
+        Text(onAC ? "Power is connected; the next hardware sample will populate the flow." : "Battery flow will appear as the Mac reports it.")
+          .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .accessibilityElement(children: .combine)
     }
   }
 
-  private static func tint(percent: Int, onAC: Bool) -> Color {
-    if onAC { return .green }
-    return percent <= 20 ? .red : .white
-  }
-
-  // MARK: - Metric grid
-
-  /// Fixed column widths, on purpose. `Grid` with `gridCellColumns` spans let the widest spanning
-  /// cell blow a column out to ~220pt and strand its neighbours mid-air; three constant columns
-  /// keep every label vertically aligned no matter which tiles are present. The grid box is
-  /// 452 − 84 (ring) − 14 (gap) = 354pt: 132 + 100 + 108 + 2 × 7 spacing.
-  private static let columnWidths: [CGFloat] = [132, 100, 108]
-  private static let columnSpacing: CGFloat = 7
-
-  private var metricGrid: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      gridRow(
-        ("Health", metrics?.healthPercent.map { "\($0)%" }),
-        ("Raw", metrics?.rawHealthPercent.map { "\($0)%" }),
-        ("Cycles", cyclesValue))
-      gridRow(
-        ("Temp", metrics?.temperatureC.map(PowerFormat.temperature)),
-        ("Volt", metrics?.voltage.map(PowerFormat.volts)),
-        ("Amps", metrics?.amperage.map(PowerFormat.amps)))
-      gridRow(
-        ("Capacity", capacityValue),
-        ("Condition", metrics?.condition),
-        (remaining?.label ?? "Left", remaining?.value))
-      // The charger line runs the full grid width so "50 W · pd charger" never fights a column.
-      chargerLine
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  private func gridRow(
-    _ a: (String, String?), _ b: (String, String?), _ c: (String, String?)
-  ) -> some View {
-    HStack(alignment: .top, spacing: Self.columnSpacing) {
-      tile(a.0, a.1).frame(width: Self.columnWidths[0], alignment: .leading)
-      tile(b.0, b.1).frame(width: Self.columnWidths[1], alignment: .leading)
-      tile(c.0, c.1).frame(width: Self.columnWidths[2], alignment: .leading)
+  private func flowColumn(title: String, items: [FlowItem]) -> some View {
+    let compact = items.count > 2
+    return VStack(alignment: .leading, spacing: 4) {
+      Text(title)
+        .font(.system(size: 8, weight: .bold)).tracking(0.8)
+        .foregroundStyle(.tertiary)
+      ForEach(items) { item in flowBar(item, compact: compact) }
     }
   }
 
-  private var cyclesValue: String? {
-    metrics?.cycleCount.map { PowerFormat.cycles($0, of: metrics?.designCycleCount) }
+  private func flowBar(_ item: FlowItem, compact: Bool) -> some View {
+    let fraction = flow.proportion(of: item.watts)
+    return VStack(alignment: .leading, spacing: 3) {
+      HStack(spacing: 4) {
+        Image(systemName: item.symbol)
+          .font(.system(size: 9, weight: .semibold)).foregroundStyle(item.tint)
+          .frame(width: 12)
+        Text(item.label).font(.system(size: 9, weight: .semibold)).lineLimit(1)
+        Spacer(minLength: 3)
+        Text(PowerFormat.wattsUnsigned(item.watts))
+          .font(.system(size: 9, weight: .bold, design: .rounded)).monospacedDigit()
+        Text(PowerFormat.percentage(fraction))
+          .font(.system(size: 8, weight: .bold)).monospacedDigit().foregroundStyle(item.tint)
+          .lineLimit(1).minimumScaleFactor(0.75)
+          .frame(width: 27, alignment: .trailing)
+      }
+      GeometryReader { proxy in
+        ZStack(alignment: .leading) {
+          Capsule().fill(.white.opacity(0.08))
+          Capsule()
+            .fill(
+              LinearGradient(
+                colors: [item.tint.opacity(0.45), item.tint],
+                startPoint: .leading, endPoint: .trailing)
+            )
+            .frame(width: max(4, proxy.size.width * fraction))
+            .animation(Motion.gated(Motion.compact), value: fraction)
+        }
+      }
+      .frame(height: 5)
+      if !compact {
+        Text(item.note).font(.system(size: 7.5)).foregroundStyle(.tertiary).lineLimit(1)
+      }
+    }
+    .padding(.horizontal, 6).padding(.vertical, 4)
+    .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.045)))
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(
+      "\(item.label), \(PowerFormat.wattsUnsigned(item.watts)), \(PowerFormat.percentage(fraction)) of power")
   }
 
-  private var capacityValue: String? {
-    PowerFormat.capacity(
-      metrics?.rawMaxCapacityMAh ?? metrics?.nominalCapacityMAh, of: metrics?.designCapacityMAh)
+  private var flowBridge: some View {
+    VStack(spacing: 3) {
+      Spacer(minLength: 13)
+      ZStack {
+        Circle().fill(Color.green.opacity(0.12))
+        Circle().stroke(Color.green.opacity(0.28), lineWidth: 1)
+        Image(systemName: "arrow.right")
+          .font(.system(size: 11, weight: .bold)).foregroundStyle(.green)
+      }
+      .frame(width: 30, height: 30)
+      Text(PowerFormat.wattsUnsigned(flow.scaleWatts))
+        .font(.system(size: 10, weight: .bold, design: .rounded)).monospacedDigit()
+      Text("FLOWING")
+        .font(.system(size: 7, weight: .bold)).tracking(0.5).foregroundStyle(.tertiary)
+      Spacer(minLength: 0)
+      if let loss = metrics?.adapterLossWatts, loss > 0.05 {
+        Text("\(PowerFormat.wattsUnsigned(loss)) loss")
+          .font(.system(size: 7)).foregroundStyle(.tertiary).lineLimit(1)
+          .help("Adapter efficiency loss")
+      }
+    }
+    .accessibilityElement(children: .combine)
   }
+
+  // MARK: - Secondary readings
 
   private var remaining: (label: String, value: String)? {
     PowerFormat.remaining(
       timeToFull: metrics?.timeToFullMinutes, timeToEmpty: metrics?.timeToEmptyMinutes)
   }
 
-  /// Charger wattage and description inline, the whole negotiated PD ladder in the tooltip — the
-  /// ladder is five rungs and would not survive any column.
-  @ViewBuilder private var chargerLine: some View {
-    let summary = PowerFormat.chargerSummary(
-      watts: metrics?.adapterWatts, description: metrics?.adapterDescription)
-    if let ladder = PowerFormat.ladderSummary(metrics?.pdLadder ?? []) {
-      tile("Charger", summary).help("Power Delivery ladder: \(ladder)")
-    } else {
-      tile("Charger", summary)
+  private var detailStrip: some View {
+    ScrollView(.horizontal) {
+      HStack(spacing: 16) {
+        detail("Health", metrics?.healthPercent.map { "\($0)%" }, symbol: "heart.fill")
+          .help(healthHelp)
+        detail("Temperature", metrics?.temperatureC.map(PowerFormat.temperature), symbol: "thermometer.medium")
+        detail("Cycles", metrics?.cycleCount.map(String.init), symbol: "arrow.triangle.2.circlepath")
+        detail("Capacity", capacityValue, symbol: "battery.75percent")
+        ForEach(monitor.peripherals) { device in
+          detail(device.name, "\(device.percent)%", symbol: device.icon)
+        }
+      }
     }
+    .scrollIndicators(.hidden)
+    .frame(height: 29)
   }
 
-  /// A labelled reading, or an empty spacer that still holds the column when the key was absent.
-  @ViewBuilder private func tile(_ label: String, _ value: String?) -> some View {
+  @ViewBuilder private func detail(_ label: String, _ value: String?, symbol: String) -> some View {
     if let value {
-      VStack(alignment: .leading, spacing: 1) {
-        Text(label).font(.system(size: 9)).foregroundStyle(.secondary)
-        Text(value).font(.caption.weight(.semibold)).monospacedDigit().lineLimit(1)
+      HStack(spacing: 5) {
+        Image(systemName: symbol).font(.system(size: 9)).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+          Text(value).font(.system(size: 10, weight: .semibold)).monospacedDigit().lineLimit(1)
+          Text(label).font(.system(size: 8)).foregroundStyle(.tertiary).lineLimit(1)
+        }
       }
       .accessibilityElement(children: .combine)
-    } else {
-      Color.clear.frame(height: 1)
     }
   }
 
-  // MARK: - Power flow
-
-  /// One stage of the wall-to-machine-to-pack chain. Identified by its label so `ForEach` does not
-  /// churn every tick.
-  private struct FlowNode: Identifiable {
-    let label: String
-    let value: String
-    let tint: Color
-    var id: String { label }
+  private var healthHelp: String {
+    var parts: [String] = []
+    if let raw = metrics?.rawHealthPercent { parts.append("Raw health \(raw)%") }
+    if let condition = metrics?.condition { parts.append("Condition: \(condition)") }
+    return parts.isEmpty ? "Battery health" : parts.joined(separator: " · ")
   }
 
-  /// Built only from what `PowerTelemetryData` actually returned; the whole row disappears on a
-  /// machine that does not publish the key.
-  private var flowNodes: [FlowNode] {
-    guard let m = metrics else { return [] }
-    var nodes: [FlowNode] = []
-    if let inW = m.systemPowerInWatts {
-      nodes.append(FlowNode(label: "Adapter", value: PowerFormat.wattsUnsigned(inW), tint: .green))
-    }
-    if let load = m.systemLoadWatts {
-      nodes.append(FlowNode(label: "System", value: PowerFormat.wattsUnsigned(load), tint: .white))
-    }
-    if let batt = m.batteryPowerWatts {
-      nodes.append(
-        FlowNode(
-          label: "Battery", value: PowerFormat.watts(batt), tint: batt >= 0 ? .green : .orange))
-    }
-    return nodes
+  private var capacityValue: String? {
+    guard let current = metrics?.rawMaxCapacityMAh ?? metrics?.nominalCapacityMAh else { return nil }
+    return "\(current) mAh"
   }
 
-  private var powerFlowRow: some View {
-    let nodes = flowNodes
-    return HStack(spacing: 6) {
-      Image(systemName: "bolt.fill").font(.system(size: 10)).foregroundStyle(.yellow)
-        .accessibilityHidden(true)
-      ForEach(nodes) { node in
-        if node.id != nodes.first?.id {
-          Image(systemName: "arrow.right").font(.system(size: 9)).foregroundStyle(.secondary)
-            .accessibilityHidden(true)
-        }
-        HStack(spacing: 4) {
-          Text(node.label).font(.system(size: 9)).foregroundStyle(.secondary)
-          Text(node.value).font(.caption.weight(.semibold)).monospacedDigit()
-            .foregroundStyle(node.tint)
-        }
-        .accessibilityElement(children: .combine)
-      }
-      Spacer(minLength: 8)
-      if let loss = metrics?.adapterLossWatts {
-        HStack(spacing: 4) {
-          Text("Loss").font(.system(size: 9)).foregroundStyle(.secondary)
-          Text(PowerFormat.wattsUnsigned(loss)).font(.caption.weight(.semibold)).monospacedDigit()
-            .foregroundStyle(.secondary)
-        }
-        .accessibilityElement(children: .combine)
-      }
-      if let m = metrics {
-        HStack(spacing: 3) {
-          Image(systemName: m.lowPowerMode ? "leaf.fill" : "leaf")
-            .font(.system(size: 10))
-            .foregroundStyle(m.lowPowerMode ? .yellow : .secondary)
-          Text("Low Power").font(.system(size: 9)).foregroundStyle(.secondary)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(m.lowPowerMode ? "Low Power Mode on" : "Low Power Mode off")
-      }
-    }
-  }
-
-  // MARK: - Footer
-
-  private var footerRow: some View {
-    HStack(spacing: 12) {
-      ForEach(monitor.peripherals) { device in
-        HStack(spacing: 4) {
-          Image(systemName: device.icon).font(.caption2).foregroundStyle(.secondary)
-          Text("\(device.percent)%").font(.caption2.weight(.semibold)).monospacedDigit()
-            .foregroundStyle(device.percent <= 15 ? .red : .white)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(device.name) \(device.percent) percent")
-      }
-      Spacer(minLength: 0)
-    }
+  private var batteryTint: Color {
+    if onAC { return .green }
+    return percent <= 20 ? .red : .white
   }
 }

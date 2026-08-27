@@ -54,6 +54,9 @@ enum PowerFormat {
   /// Signed: the sign is the information — into the pack or out of it.
   static func watts(_ w: Double) -> String { String(format: "%+.1f W", w) }
   static func wattsUnsigned(_ w: Double) -> String { String(format: "%.1f W", w) }
+  static func percentage(_ fraction: Double) -> String {
+    "\(Int((min(1, max(0, fraction)) * 100).rounded()))%"
+  }
   static func amps(_ a: Double) -> String { String(format: "%+.2f A", a) }
   static func volts(_ v: Double) -> String { String(format: "%.2f V", v) }
   static func temperature(_ c: Double) -> String { String(format: "%.1f°C", c) }
@@ -118,6 +121,13 @@ enum PowerSmoothing {
     out.systemLoadWatts = blend(previous: old.systemLoadWatts, sample: new.systemLoadWatts)
     out.batteryPowerWatts = blend(previous: old.batteryPowerWatts, sample: new.batteryPowerWatts)
     out.adapterLossWatts = blend(previous: old.adapterLossWatts, sample: new.adapterLossWatts)
+    out.usbPowerOutputs = new.usbPowerOutputs.map { sample in
+      guard let previous = old.usbPowerOutputs.first(where: { $0.portIndex == sample.portIndex })
+      else { return sample }
+      var smoothed = sample
+      smoothed.watts = blend(previous: previous.watts, sample: sample.watts) ?? sample.watts
+      return smoothed
+    }
     return out
   }
 }
