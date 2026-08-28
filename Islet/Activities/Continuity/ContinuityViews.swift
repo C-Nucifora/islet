@@ -44,7 +44,7 @@ struct ContinuityExpandedView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       Label(
-        cards.isEmpty ? "iPhone" : "iPhone — \(cards.count)",
+        cards.isEmpty ? "iPhone" : "iPhone, \(cards.count)",
         systemImage: "iphone.gen3"
       )
       .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -71,7 +71,7 @@ struct ContinuityExpandedView: View {
         .fixedSize(horizontal: false, vertical: true)
       // The one empty state the user can act on from here.
       if availability == .needsAccessibility {
-        Button("Grant Accessibility Access") {
+        Button("Allow Accessibility access") {
           AccessibilityPermission.prompt()
           AccessibilityPermission.openSettings()
         }

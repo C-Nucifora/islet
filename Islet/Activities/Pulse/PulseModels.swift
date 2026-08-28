@@ -336,7 +336,7 @@ struct PulseProviderDescriptor: Identifiable, Equatable, Sendable {
       setupHint: "Run Tools/islet-pulse.swift from this project."),
     .init(
       id: "github-actions", name: "GitHub workflow watcher",
-      summary: "Surface GitHub run state observed on this Mac.",
+      summary: "Shows GitHub run status observed on this Mac.",
       symbol: "shippingbox.fill", sourceIDs: ["github-actions", "github"],
       capabilities: [.events, .progress, .webActions],
       setupHint: "Use the example locally or on a self-hosted Mac runner."),

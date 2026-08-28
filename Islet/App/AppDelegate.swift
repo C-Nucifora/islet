@@ -72,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       configureActivityLifecycles()
       RemindersProvider.shared.start()
       for source in AppState.eventSources { SystemEventBus.shared.register(source) }
-      SystemEventBus.shared.startEnabled()
+      if OnboardingState.isComplete { SystemEventBus.shared.startEnabled() }
       SneakQueue.shared.isSuspended = {
         ScreenManager.shared.viewModel?.state.isExpanded ?? false
       }
@@ -81,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       launchAtLoginObserver = Defaults.observe(.launchAtLogin) { change in
         Task { @MainActor in LaunchAtLogin.apply(change.newValue) }
       }
+      OnboardingOpener.openIfNeeded()
     }
     Log.app.info("Islet launched")
   }

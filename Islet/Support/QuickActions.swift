@@ -14,13 +14,13 @@ struct IsletQuickAction: Identifiable {
   static var all: [Self] {
     [
       .init(
-        id: "show", title: "Show Islet", detail: "Open the current activity surface",
+        id: "show", title: "Show Islet", detail: "Expand the notch panel",
         symbol: "waveform.path.ecg", keywords: "open expand island notch", isAvailable: { true }
       ) {
         ScreenManager.shared.viewModel?.apply(.clickedNotch)
       },
       .init(
-        id: "timer-5", title: "Start 5-minute timer", detail: "Start a short countdown",
+        id: "timer-5", title: "Start 5-minute timer", detail: "Set a five-minute countdown",
         symbol: "timer", keywords: "countdown short break", isAvailable: { true }
       ) {
         AppState.timer.start(5 * 60, label: "Timer")
@@ -101,7 +101,7 @@ struct IsletQuickAction: Identifiable {
       },
       .init(
         id: "pulse-settings", title: "Open Pulse providers",
-        detail: "Review providers, routing rules, and payload-free history",
+        detail: "Review providers, routing rules and session history",
         symbol: "point.3.connected.trianglepath.dotted",
         keywords: "integration settings history sources token", isAvailable: { true }
       ) {
@@ -236,7 +236,7 @@ private struct QuickActionsView: View {
       }
       Divider()
       HStack {
-        Text("Type to filter • Return runs the first action")
+        Text("Type to filter. Return runs the first action.")
         Spacer()
         Text("⌘K from the Islet menu")
       }

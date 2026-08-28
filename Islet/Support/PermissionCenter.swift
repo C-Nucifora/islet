@@ -124,14 +124,17 @@ struct PermissionDiagnosticsSnapshot: Equatable, Sendable {
 /// Read-only permission and code-identity diagnostics for Settings and support reports. Merely
 /// accessing this model never prompts for TCC access.
 @MainActor
-final class PermissionCenter: ObservableObject {
+final class PermissionCenter: NSObject, ObservableObject, CLLocationManagerDelegate {
   static let shared = PermissionCenter()
 
   @Published private(set) var diagnostics: PermissionDiagnosticsSnapshot
+  private let locationManager = CLLocationManager()
   private var activeObserver: NSObjectProtocol?
 
-  private init() {
+  private override init() {
     diagnostics = Self.capture()
+    super.init()
+    locationManager.delegate = self
     activeObserver = NotificationCenter.default.addObserver(
       forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
     ) { [weak self] _ in
@@ -145,6 +148,14 @@ final class PermissionCenter: ObservableObject {
 
   func open(_ pane: SystemSettingsPrivacyPane) {
     pane.open()
+  }
+
+  func requestLocationAccess() {
+    locationManager.requestWhenInUseAuthorization()
+  }
+
+  nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    Task { @MainActor [weak self] in self?.refresh() }
   }
 
   private static func capture() -> PermissionDiagnosticsSnapshot {
