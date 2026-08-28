@@ -84,7 +84,7 @@ struct NotchRootView: View {
         width: width,
         height: notch.height + Metrics.peekGrowth + Metrics.barrierStretch * vm.barrierProgress)
     case .expanded:
-      return CGSize(width: Metrics.expandedSize.width, height: vm.expandedHeight)
+      return CGSize(width: vm.expandedWidth, height: vm.expandedHeight)
     }
   }
 

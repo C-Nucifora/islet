@@ -16,6 +16,11 @@ final class NotchViewModelTests: XCTestCase {
       geometry: g, modeOverride: mode, barrierPushDistanceOverride: barrierPushDistance)
   }
 
+  func expandedPanel(_ vm: NotchViewModel) -> CGRect {
+    vm.geometry.panelFrame(
+      width: vm.maximumExpandedWidth, height: Metrics.tallExpandedHeight)
+  }
+
   func testMouseIntoHitRectPeeks() {
     let vm = makeVM()
     vm.handleMouseMoved(CGPoint(x: 864, y: 1110))  // inside notch
@@ -129,7 +134,7 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(vm.state, .expanded(pinned: true))
     // Grown synchronously, and straight to the TALLEST tier: the panel never resizes while
     // expanded, because a setFrame during the tier cross-fade throws inside AppKit layout.
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
+    XCTAssertEqual(vm.panelFrame, expandedPanel(vm))
   }
 
   func testPanelFrameStaysGrownUntilTheClosingAnimationEnds() {
@@ -138,7 +143,7 @@ final class NotchViewModelTests: XCTestCase {
     vm.handleMouseDown(CGPoint(x: 100, y: 500))
     XCTAssertEqual(vm.state, .closed)
     // Still expanded-sized: shrinking here would clip the island mid-collapse.
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
+    XCTAssertEqual(vm.panelFrame, expandedPanel(vm))
   }
 
   func testPanelFrameShrinksAfterCollapsing() async throws {
@@ -179,6 +184,22 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(vm.expandedRect, vm.geometry.expandedRect(height: Metrics.expandedSize.height))
   }
 
+  func testExpandedWidthTracksTheTabCountWithoutMovingThePanel() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    let panel = expandedPanel(vm)
+    XCTAssertEqual(vm.panelFrame, panel)
+
+    vm.setExpandedWidth(700)
+    XCTAssertEqual(vm.expandedWidth, 700)
+    XCTAssertEqual(vm.expandedRect.width, 700)
+    XCTAssertEqual(vm.panelFrame, panel)
+
+    vm.setExpandedWidth(vm.maximumExpandedWidth + 100)
+    XCTAssertEqual(vm.expandedWidth, vm.maximumExpandedWidth)
+    XCTAssertEqual(vm.panelFrame, panel)
+  }
+
   /// The height tier drives the drawn island and the hit region ONLY. The panel holds the tallest
   /// tier for the whole expanded state: resizing the window while the hosting view animates the
   /// tier change throws an uncaught NSException out of AppKit's constraint pass — reproduced in
@@ -186,7 +207,7 @@ final class NotchViewModelTests: XCTestCase {
   func testHeightTierNeverMovesThePanel() {
     let vm = makeVM(mode: .clickToPin)
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
-    let expanded = vm.geometry.panelFrame(height: Metrics.tallExpandedHeight)
+    let expanded = expandedPanel(vm)
     XCTAssertEqual(vm.panelFrame, expanded)
 
     vm.setExpandedHeight(Metrics.tallExpandedHeight)
@@ -259,7 +280,7 @@ final class NotchViewModelTests: XCTestCase {
     vm.cancelPendingShrink()
     try await Task.sleep(for: Motion.panelShrinkDelay + .milliseconds(200))
     // cancelled, so nothing shrank (the expanded panel is always the tallest tier)
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
+    XCTAssertEqual(vm.panelFrame, expandedPanel(vm))
 
     // A later slot measurement must still be able to schedule a fresh shrink.
     vm.updateCompactWidths(leading: 10, trailing: 10)
@@ -283,6 +304,15 @@ final class NotchViewModelTests: XCTestCase {
     // Reopening therefore draws the base tier, not the stale tall one.
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
     XCTAssertEqual(vm.expandedRect.height, Metrics.expandedSize.height)
+  }
+
+  func testCollapsingResetsTheWidthTier() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    vm.setExpandedWidth(700)
+
+    vm.handleMouseDown(CGPoint(x: 100, y: 500))
+    XCTAssertEqual(vm.expandedWidth, Metrics.expandedSize.width)
   }
 
   func testMouseMonitorTopBandCoversTallIslandButNotTheDesktop() {

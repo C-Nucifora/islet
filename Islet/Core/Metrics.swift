@@ -1,8 +1,10 @@
 import SwiftUI
 
 enum Metrics {
-  /// The base height tier. Width is fixed for every tier; only the height varies per tab.
+  /// Minimum expanded size. The width grows from here to fit the live activity tabs.
   static let expandedSize = CGSize(width: 520, height: 190)
+  /// Keeps the expanded panel and its shadow clear of the screen edges at maximum tab width.
+  static let expandedScreenMargin: CGFloat = 12
   /// The tall tier, for information-dense tabs (power, system stats).
   static let tallExpandedHeight: CGFloat = 250
   static let shadowPadding: CGFloat = 20

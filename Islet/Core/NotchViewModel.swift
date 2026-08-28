@@ -18,6 +18,9 @@ final class NotchViewModel: ObservableObject {
   /// Height tier the currently selected tab asked for. Reported by `ExpandedContainerView`; drives
   /// the drawn island, the hover region, the click-inside test and the panel frame.
   @Published private(set) var expandedHeight: CGFloat = Metrics.expandedSize.height
+  /// Drawn island width for the live tab count. The expanded panel reserves the maximum supported
+  /// width up front, so changing this value animates only SwiftUI content and never resizes AppKit.
+  @Published private(set) var expandedWidth: CGFloat = Metrics.expandedSize.width
   /// Live 0...1 pressure against the hover barrier. The view turns this into elastic stretch.
   @Published private(set) var barrierProgress: CGFloat = 0
   var preventAutoClose = false
@@ -68,8 +71,20 @@ final class NotchViewModel: ObservableObject {
       .store(in: &cancellables)
   }
 
-  /// The expanded island's rect at the current height tier.
-  var expandedRect: CGRect { geometry.expandedRect(height: expandedHeight) }
+  /// Widest island needed for every catalogued activity, clamped to the current screen.
+  var maximumExpandedWidth: CGFloat {
+    let screenLimit = max(
+      Metrics.expandedSize.width,
+      geometry.screenFrame.width - (Metrics.earMargin + Metrics.expandedScreenMargin) * 2)
+    return ActivityTabLayout.preferredContainerWidth(
+      tabCount: ActivityCatalog.orderable.count + 1, notchWidth: geometry.notchSize.width,
+      minimumWidth: Metrics.expandedSize.width, maximumWidth: screenLimit)
+  }
+
+  /// The expanded island's rect at the current width and height tiers.
+  var expandedRect: CGRect {
+    geometry.expandedRect(width: expandedWidth, height: expandedHeight)
+  }
 
   /// The region that counts as "hovering" for the current state.
   private var hoverRegion: CGRect {
@@ -139,17 +154,17 @@ final class NotchViewModel: ObservableObject {
   }
 
   private func targetPanelFrame(for state: NotchState) -> CGRect {
-    // The expanded panel is sized for the TALLEST tier, always — it does not follow
-    // `expandedHeight`. Resizing the window while the hosting view animates a tier change throws
-    // an uncaught NSException out of AppKit's constraint pass and aborts the app; reproduced
-    // deterministically in TallTierHostingTests, where the identical transition against a fixed
+    // The expanded panel is sized for the TALLEST and WIDEST supported island, always. It follows
+    // neither `expandedHeight` nor `expandedWidth`. Resizing the window while the hosting view
+    // animates throws an uncaught NSException out of AppKit's constraint pass and aborts the app.
+    // TallTierHostingTests reproduces it deterministically; the same transition against a fixed
     // window survives. The drawn island is what changes height — the shape mask clips it and
     // `testTallPanelFrameContainsTheBaseOneAndItsIsland` pins the containment. Cost: while a
     // base-tier tab is open, the panel swallows a ~60pt strip below the island, which the
     // expanded island's full-frame black backdrop was already doing.
     switch state {
     case .expanded:
-      geometry.panelFrame(height: Metrics.tallExpandedHeight)
+      geometry.panelFrame(width: maximumExpandedWidth, height: Metrics.tallExpandedHeight)
     case .peek where mode == .hover:
       geometry.collapsedPanelFrame(
         compactLeading: compactLeadingWidth, compactTrailing: compactTrailingWidth,
@@ -169,6 +184,14 @@ final class NotchViewModel: ObservableObject {
   func setExpandedHeight(_ height: CGFloat) {
     guard height != expandedHeight else { return }
     withAnimation(Motion.gated(Motion.opening)) { expandedHeight = height }
+  }
+
+  /// Sets the width requested by the current tab count. The panel already reserves
+  /// `maximumExpandedWidth`, so this changes only the drawn island and its hit region.
+  func setExpandedWidth(_ width: CGFloat) {
+    let clamped = min(maximumExpandedWidth, max(Metrics.expandedSize.width, ceil(width)))
+    guard clamped != expandedWidth else { return }
+    withAnimation(Motion.gated(Motion.opening)) { expandedWidth = clamped }
   }
 
   /// Grows the panel immediately so nothing is ever clipped mid-animation, but defers shrinking
@@ -209,12 +232,15 @@ final class NotchViewModel: ObservableObject {
     withAnimation(Motion.gated(opening ? Motion.opening : Motion.closing)) {
       state = next
     }
-    // Closing resets the height tier. The selection state lives in ExpandedContainerView and dies
+    // Closing resets the size tiers. The selection state lives in ExpandedContainerView and dies
     // with it, so the next open lands on the default tab — leaving a tall tier behind would draw a
     // 250pt island around 190pt content until the new view corrected it. Set with no animation:
     // nothing reads expandedHeight while the island is closed, so the change is invisible.
     if !next.isExpanded, expandedHeight != Metrics.expandedSize.height {
       expandedHeight = Metrics.expandedSize.height
+    }
+    if !next.isExpanded, expandedWidth != Metrics.expandedSize.width {
+      expandedWidth = Metrics.expandedSize.width
     }
     // hover-region may have changed shape; re-evaluate containment so exit fires correctly
     wasInside = region(hoverRegion, contains: lastMouseLocation)
@@ -275,8 +301,7 @@ final class NotchViewModel: ObservableObject {
       // If the barrier begins with the pointer already clamped, there is no coordinate movement to
       // calibrate against, so use that native sign directly instead of dropping the input.
       let sign = upwardDeviceDeltaSign ?? -1
-      if abs(coordinateDeltaY) > 0.01 || location.y >= geometry.screenFrame.maxY - 1
-      {
+      if abs(coordinateDeltaY) > 0.01 || location.y >= geometry.screenFrame.maxY - 1 {
         upwardTravel = deviceDeltaY * sign
       }
     }

@@ -69,7 +69,9 @@ final class TallTierHostingTests: XCTestCase {
   func testTallTransitionWithAFixedOversizedWindow() {
     let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
     let panel = NotchPanel(
-      frame: geometry.panelFrame(height: Metrics.tallExpandedHeight).insetBy(dx: -20, dy: -20))
+      frame: geometry.panelFrame(
+        width: vm.maximumExpandedWidth, height: Metrics.tallExpandedHeight
+      ).insetBy(dx: -20, dy: -20))
     panel.contentView = NSHostingView(rootView: NotchRootView(vm: vm))
     panel.orderFrontRegardless()
 
@@ -86,7 +88,9 @@ final class TallTierHostingTests: XCTestCase {
     let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
     vm.apply(.clickedNotch)
     vm.setExpandedHeight(Metrics.tallExpandedHeight)
-    let panel = NotchPanel(frame: geometry.panelFrame(height: Metrics.tallExpandedHeight))
+    let panel = NotchPanel(
+      frame: geometry.panelFrame(
+        width: vm.maximumExpandedWidth, height: Metrics.tallExpandedHeight))
     panel.contentView = NSHostingView(rootView: NotchRootView(vm: vm))
     panel.orderFrontRegardless()
     pump(1.0)

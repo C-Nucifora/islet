@@ -7,11 +7,11 @@ final class ActivityTabLayoutTests: XCTestCase {
     ["home"] + (1..<count).map { "activity-\($0)" }
   }
 
-  func testFiveActivitiesUseFourPriorityControlsAndMore() {
+  func testFiveTabsStayVisibleWhenFiveControlsFit() {
     let result = ActivityTabLayout.split(
       tabIDs: ids(5), selectedID: "home", controlCapacity: 5)
-    XCTAssertEqual(result.visibleIDs, ["home", "activity-1", "activity-2", "activity-3"])
-    XCTAssertEqual(result.overflowIDs, ["activity-4"])
+    XCTAssertEqual(result.visibleIDs, ids(5))
+    XCTAssertTrue(result.overflowIDs.isEmpty)
   }
 
   func testSixNineAndTwelveActivitiesStayBounded() {
@@ -47,17 +47,53 @@ final class ActivityTabLayoutTests: XCTestCase {
       ActivityTabLayout.controlCapacity(width: width, controlWidth: 20, spacing: 4), 5)
   }
 
-  func testExpandedIslandFitsFourTabsBesideHardwareNotch() {
-    let width = ActivityTabLayout.leftStripWidth(
-      containerWidth: Metrics.expandedSize.width, horizontalPadding: 12, notchWidth: 296,
-      spacing: 4, minimum: 20)
-    let capacity = ActivityTabLayout.controlCapacity(width: width, controlWidth: 20, spacing: 4)
+  func testPreferredWidthFitsAllSixTabsBesideHardwareNotch() {
+    let containerWidth = ActivityTabLayout.preferredContainerWidth(
+      tabCount: 6, notchWidth: 296, minimumWidth: Metrics.expandedSize.width,
+      maximumWidth: 1_000)
+    let stripWidth = ActivityTabLayout.leftStripWidth(
+      containerWidth: containerWidth, horizontalPadding: 12, notchWidth: 296, spacing: 4,
+      minimum: 20)
+    let capacity = ActivityTabLayout.controlCapacity(
+      width: stripWidth, controlWidth: 20, spacing: 4)
     let result = ActivityTabLayout.split(
-      tabIDs: ids(4), selectedID: "home", controlCapacity: capacity)
+      tabIDs: ids(6), selectedID: "home", controlCapacity: capacity)
 
-    XCTAssertEqual(width, 96)
-    XCTAssertEqual(capacity, 4)
-    XCTAssertEqual(result.visibleIDs, ids(4))
+    XCTAssertEqual(containerWidth, 608)
+    XCTAssertEqual(stripWidth, 140)
+    XCTAssertEqual(capacity, 6)
+    XCTAssertEqual(result.visibleIDs, ids(6))
     XCTAssertTrue(result.overflowIDs.isEmpty)
+  }
+
+  func testPreferredWidthShrinksToTheMinimumWithFewTabs() {
+    XCTAssertEqual(
+      ActivityTabLayout.preferredContainerWidth(
+        tabCount: 3, notchWidth: 209, minimumWidth: 520, maximumWidth: 1_000),
+      520)
+  }
+
+  func testPreferredWidthGrowsToFitEveryCataloguedTab() {
+    XCTAssertEqual(
+      ActivityTabLayout.preferredContainerWidth(
+        tabCount: 12, notchWidth: 209, minimumWidth: 520, maximumWidth: 1_000),
+      809)
+  }
+
+  func testScreenLimitFallsBackToOverflow() {
+    let containerWidth = ActivityTabLayout.preferredContainerWidth(
+      tabCount: 12, notchWidth: 209, minimumWidth: 520, maximumWidth: 600)
+    let stripWidth = ActivityTabLayout.leftStripWidth(
+      containerWidth: containerWidth, horizontalPadding: 12, notchWidth: 209, spacing: 4,
+      minimum: 20)
+    let capacity = ActivityTabLayout.controlCapacity(
+      width: stripWidth, controlWidth: 20, spacing: 4)
+    let result = ActivityTabLayout.split(
+      tabIDs: ids(12), selectedID: "home", controlCapacity: capacity)
+
+    XCTAssertEqual(containerWidth, 600)
+    XCTAssertEqual(capacity, 7)
+    XCTAssertEqual(result.visibleIDs.count, 6)
+    XCTAssertEqual(result.overflowIDs.count, 6)
   }
 }

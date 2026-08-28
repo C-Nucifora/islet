@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The expanded island: a bounded switcher row above the selected content. Home and at most three
-/// priority activities stay visible; everything else is available from an explicit overflow menu.
+/// The expanded island: a switcher row above the selected content. Its width follows the live tab
+/// count; overflow appears only when the available screen width cannot hold every activity.
 struct ExpandedContainerView: View {
   /// The physical notch's size, so the switcher can flank it in the top band.
   let notchSize: CGSize
@@ -19,8 +19,8 @@ struct ExpandedContainerView: View {
       + center.expandedActivities.map { ($0.id, $0.tabIcon) }
   }
 
-  /// The left ear has a hard physical width. Keep Home plus three activities at most, replacing
-  /// the last priority slot with the current selection when it came from overflow.
+  /// Tabs that fit in the dynamically sized left ear. If the screen imposes a limit, the selected
+  /// overflow tab replaces the last visible slot.
   private var visibleTabs: [(id: String, icon: String)] {
     tabLayout.visibleIDs.compactMap { id in tabs.first { $0.id == id } }
   }
@@ -92,18 +92,23 @@ struct ExpandedContainerView: View {
       selection = "shelf"
       Task { @MainActor in shelf.consumePresentationRequest(request) }
     }
+    .onChange(of: tabs.map(\.id), initial: true) { _, ids in
+      vm.setExpandedWidth(
+        ActivityTabLayout.preferredContainerWidth(
+          tabCount: ids.count, notchWidth: notchSize.width,
+          minimumWidth: Metrics.expandedSize.width, maximumWidth: vm.maximumExpandedWidth))
+    }
   }
 
-  private static let chipWidth: CGFloat = 20
+  private static let chipWidth = ActivityTabLayout.controlWidth
   private static let chipHeight: CGFloat = 20
-  private static let rowSpacing: CGFloat = 4
-  private static let rowPadding: CGFloat = 12
+  private static let rowSpacing = ActivityTabLayout.spacing
+  private static let rowPadding = ActivityTabLayout.horizontalPadding
 
-  /// Width the bounded switcher gets in the left ear. The 520pt island leaves room for four
-  /// controls beside a 296pt hardware notch, so Home and three activities remain directly visible.
+  /// Width the switcher gets in the left ear after the island has followed the live tab count.
   private var tabStripWidth: CGFloat {
     ActivityTabLayout.leftStripWidth(
-      containerWidth: Metrics.expandedSize.width, horizontalPadding: Self.rowPadding,
+      containerWidth: vm.expandedWidth, horizontalPadding: Self.rowPadding,
       notchWidth: notchSize.width, spacing: Self.rowSpacing, minimum: Self.chipWidth)
   }
 
