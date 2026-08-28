@@ -29,7 +29,7 @@ enum T3ClientError: Error, LocalizedError, Sendable {
     case .responseTooLarge: "T3 Code returned more data than Islet accepts."
     case .requestTimedOut: "T3 Code did not finish the request before the deadline."
     case .untrustedLocalEndpoint:
-      "The local endpoint is not owned by the signed T3 Code process. Pairing was not attempted."
+      "The local endpoint is not owned by a trusted T3 Code app or CLI process. Pairing was not attempted."
     case .unauthorized: "This T3 Code credential is no longer authorized."
     case .http(let status): "T3 Code returned HTTP \(status)."
     }
@@ -223,7 +223,8 @@ struct T3Client: Sendable {
     let totalDeadline = max(0.1, request.timeoutInterval)
     return try await withThrowingTaskGroup(of: BoundedResponse.self) { group in
       group.addTask {
-        let (bytes, response) = try await session.bytes(for: request)
+        let (bytes, response) = try await session.bytes(
+          for: request, delegate: T3NoRedirectDelegate.shared)
         guard let http = response as? HTTPURLResponse else {
           throw T3ClientError.invalidResponse
         }
@@ -263,6 +264,20 @@ struct T3Client: Sendable {
       return "\(escapedKey)=\(escapedValue)"
     }.joined(separator: "&")
     return Data(body.utf8)
+  }
+}
+
+private final class T3NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+  static let shared = T3NoRedirectDelegate()
+
+  func urlSession(
+    _ session: URLSession,
+    task: URLSessionTask,
+    willPerformHTTPRedirection response: HTTPURLResponse,
+    newRequest request: URLRequest,
+    completionHandler: @escaping (URLRequest?) -> Void
+  ) {
+    completionHandler(nil)
   }
 }
 
@@ -324,7 +339,9 @@ enum T3LocalDiscovery {
       (fileInfo.st_mode & (S_IWGRP | S_IWOTH)) == 0,
       let data = try? Data(contentsOf: runtimeURL),
       let runtime = runtime(from: data), let port = runtime.endpoint.baseURL.port,
-      isSignedT3Code(processID: runtime.processID),
+      processIsOwnedByCurrentUser(runtime.processID),
+      (isSignedT3Code(processID: runtime.processID)
+        || isT3CLI(processID: runtime.processID)),
       process(runtime.processID, ownsListeningTCPPort: port)
     else { return nil }
     return runtime
@@ -348,6 +365,121 @@ enum T3LocalDiscovery {
       let requirement
     else { return false }
     return SecCodeCheckValidity(code, flags, requirement) == errSecSuccess
+  }
+
+  nonisolated static func acceptsT3CLILaunch(
+    executablePath: String,
+    arguments: [String],
+    entryPointPath: String,
+    packageName: String,
+    declaredBin: String
+  ) -> Bool {
+    let executable = URL(fileURLWithPath: executablePath).standardizedFileURL
+    let entryPoint = URL(fileURLWithPath: entryPointPath).standardizedFileURL
+    let packageRoot = entryPoint.deletingLastPathComponent().deletingLastPathComponent()
+    guard executable.lastPathComponent == "node",
+      packageName == "t3",
+      packageRoot.lastPathComponent == "t3",
+      packageRoot.deletingLastPathComponent().lastPathComponent == "node_modules"
+    else { return false }
+
+    let declaredEntryPoint = packageRoot.appendingPathComponent(declaredBin).standardizedFileURL
+    guard declaredEntryPoint.path == entryPoint.path,
+      let entryPointIndex = arguments.firstIndex(where: {
+        URL(fileURLWithPath: $0).standardizedFileURL.path == entryPoint.path
+      }),
+      arguments.indices.contains(entryPointIndex + 1),
+      arguments[entryPointIndex + 1] == "serve"
+    else { return false }
+    return true
+  }
+
+  nonisolated private static func isT3CLI(processID: Int32) -> Bool {
+    guard let executablePath = processPath(processID),
+      let arguments = processArguments(processID),
+      let entryPointArgument = arguments.first(where: { $0.hasSuffix("/t3/dist/bin.mjs") })
+    else { return false }
+
+    let executable = URL(fileURLWithPath: executablePath).resolvingSymlinksInPath()
+    let entryPoint = URL(fileURLWithPath: entryPointArgument).resolvingSymlinksInPath()
+    let packageRoot = entryPoint.deletingLastPathComponent().deletingLastPathComponent()
+    let manifestURL = packageRoot.appendingPathComponent("package.json")
+    guard secureRegularFile(executable.path),
+      secureRegularFile(entryPoint.path),
+      secureRegularFile(manifestURL.path),
+      let data = try? Data(contentsOf: manifestURL),
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      let packageName = object["name"] as? String,
+      let declaredBin = (object["bin"] as? String)
+        ?? (object["bin"] as? [String: String])?["t3"]
+    else { return false }
+
+    return acceptsT3CLILaunch(
+      executablePath: executable.path,
+      arguments: arguments,
+      entryPointPath: entryPoint.path,
+      packageName: packageName,
+      declaredBin: declaredBin)
+  }
+
+  nonisolated private static func processIsOwnedByCurrentUser(_ processID: Int32) -> Bool {
+    var info = proc_bsdinfo()
+    let size = MemoryLayout<proc_bsdinfo>.stride
+    let result = withUnsafeMutablePointer(to: &info) {
+      proc_pidinfo(processID, PROC_PIDTBSDINFO, 0, $0, Int32(size))
+    }
+    return result == size && info.pbi_uid == getuid()
+  }
+
+  nonisolated private static func processPath(_ processID: Int32) -> String? {
+    var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+    let count = proc_pidpath(processID, &buffer, UInt32(buffer.count))
+    guard count > 0 else { return nil }
+    let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+    return String(decoding: bytes, as: UTF8.self)
+  }
+
+  nonisolated private static func processArguments(_ processID: Int32) -> [String]? {
+    var mib = [CTL_KERN, KERN_PROCARGS2, processID]
+    var size = 0
+    guard sysctl(&mib, u_int(mib.count), nil, &size, nil, 0) == 0,
+      size > MemoryLayout<Int32>.size
+    else { return nil }
+
+    var buffer = [UInt8](repeating: 0, count: size)
+    guard sysctl(&mib, u_int(mib.count), &buffer, &size, nil, 0) == 0 else { return nil }
+    let argumentCount = buffer.withUnsafeBytes { $0.load(as: Int32.self) }
+    guard argumentCount > 0 else { return nil }
+
+    var index = MemoryLayout<Int32>.size
+    func consumeString() -> String? {
+      guard index < size else { return nil }
+      let start = index
+      while index < size, buffer[index] != 0 { index += 1 }
+      guard index < size else { return nil }
+      let value = String(decoding: buffer[start..<index], as: UTF8.self)
+      index += 1
+      return value
+    }
+
+    guard consumeString() != nil else { return nil }
+    while index < size, buffer[index] == 0 { index += 1 }
+    var arguments: [String] = []
+    for _ in 0..<argumentCount {
+      guard let argument = consumeString() else { return nil }
+      arguments.append(argument)
+    }
+    return arguments
+  }
+
+  nonisolated private static func secureRegularFile(_ path: String) -> Bool {
+    var fileInfo = stat()
+    guard lstat(path, &fileInfo) == 0,
+      (fileInfo.st_mode & S_IFMT) == S_IFREG,
+      fileInfo.st_uid == 0 || fileInfo.st_uid == getuid(),
+      (fileInfo.st_mode & (S_IWGRP | S_IWOTH)) == 0
+    else { return false }
+    return true
   }
 
   nonisolated private static func process(

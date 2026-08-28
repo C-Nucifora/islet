@@ -131,6 +131,8 @@ enum T3AgentPhase: String, Codable, Sendable {
 }
 
 struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
+  private static let maximumFutureClockSkew: TimeInterval = 5 * 60
+
   let environmentID: String
   let threadID: String
   let title: String
@@ -189,7 +191,7 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
     }
     if thread.session?.status == "error" || thread.latestTurn?.state == "error" {
       let updated = parseDate(thread.updatedAt) ?? .distantPast
-      return now.timeIntervalSince(updated) < 30 * 60 ? .failed : nil
+      return isRecent(updated, now: now, retention: 30 * 60) ? .failed : nil
     }
     if ["starting", "running"].contains(thread.session?.status ?? "")
       || thread.latestTurn?.state == "running" || thread.backgroundLiveness == "working"
@@ -199,16 +201,20 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
     if thread.backgroundLiveness == "monitoring" { return .monitoring }
 
     let updated = parseDate(thread.updatedAt) ?? .distantPast
-    let age = now.timeIntervalSince(updated)
     let completedTurn = thread.latestTurn?.state == "completed"
       || (thread.latestTurn?.state == "interrupted" && thread.latestTurn?.completedAt != nil)
     let readySession = ["ready", "idle"].contains(thread.session?.status ?? "")
     if completedTurn || readySession,
-      thread.settledAt == nil, age < 10 * 60
+      thread.settledAt == nil, isRecent(updated, now: now, retention: 10 * 60)
     {
       return .finished
     }
     return nil
+  }
+
+  private static func isRecent(_ date: Date, now: Date, retention: TimeInterval) -> Bool {
+    let age = now.timeIntervalSince(date)
+    return age >= -maximumFutureClockSkew && age < retention
   }
 
   private static func parseDate(_ value: String) -> Date? {
