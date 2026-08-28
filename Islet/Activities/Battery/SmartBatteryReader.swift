@@ -35,6 +35,10 @@ enum SmartBatteryReader {
       let props = IORegistryReader.properties(matching: "AppleSmartBattery", keys: keys)
     else { return nil }
 
+    // IOReport is sampled only after confirming this Mac has an internal battery. It is a private,
+    // optional estimate, so failure never prevents the public/IOKit battery snapshot from landing.
+    let cpuPowerWatts = CPUPowerReader.shared.readWatts()
+
     // The registry dict is primary: it carries the description ("pd charger") and the negotiated
     // PD ladder, which the public IOPS dict strips down to little more than the wattage — showing
     // a bare "50 W" charger tile with no tooltip. IOPS remains the fallback for the moment right
@@ -46,6 +50,7 @@ enum SmartBatteryReader {
       adapter: adapter,
       powerSource: primaryPowerSource(),
       lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
+    metrics.cpuPowerWatts = cpuPowerWatts
     if includeStable { metrics.inputPortType = PowerConnectorReader.activeInputPortType() }
 
     return metrics.hasAny ? metrics : nil

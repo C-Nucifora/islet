@@ -121,6 +121,7 @@ enum PowerSmoothing {
     out.systemVoltageIn = blend(previous: old.systemVoltageIn, sample: new.systemVoltageIn)
     out.systemCurrentIn = blend(previous: old.systemCurrentIn, sample: new.systemCurrentIn)
     out.systemLoadWatts = blend(previous: old.systemLoadWatts, sample: new.systemLoadWatts)
+    out.cpuPowerWatts = blend(previous: old.cpuPowerWatts, sample: new.cpuPowerWatts)
     out.batteryPowerWatts = blend(previous: old.batteryPowerWatts, sample: new.batteryPowerWatts)
     out.adapterLossWatts = blend(previous: old.adapterLossWatts, sample: new.adapterLossWatts)
     out.usbPowerOutputs = new.usbPowerOutputs.map { sample in

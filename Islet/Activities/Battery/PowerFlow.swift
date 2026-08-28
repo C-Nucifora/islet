@@ -28,7 +28,9 @@ enum PowerInputKind: Equatable {
     if port.contains("magsafe") || description.contains("magsafe") { return .magSafe }
     if port.contains("usb-c") || port.contains("usb c") { return .usbC }
     if metrics.adapterIsWireless == true { return .wireless }
-    if !metrics.pdLadder.isEmpty || description.contains("usb") || description.contains("pd charger") {
+    if !metrics.pdLadder.isEmpty || description.contains("usb")
+      || description.contains("pd charger")
+    {
       return .usbC
     }
     return .adapter
@@ -37,11 +39,14 @@ enum PowerInputKind: Equatable {
 
 /// A balanced, display-ready view of instantaneous power. Battery discharge moves to the input
 /// side, battery charge moves to the output side, and per-port USB output is subtracted from the
-/// aggregate SystemLoad to leave the Mac's own draw.
+/// aggregate SystemLoad to leave the Mac's own draw. An optional CPU estimate subdivides that draw
+/// without changing the graph's total.
 struct PowerFlowSnapshot: Equatable {
   let adapterInputWatts: Double?
   let batteryInputWatts: Double?
   let macUseWatts: Double?
+  let cpuUseWatts: Double?
+  let restOfMacWatts: Double?
   let batteryChargeWatts: Double?
   let usbOutputs: [USBPowerOutput]
   let scaleWatts: Double
@@ -64,7 +69,16 @@ struct PowerFlowSnapshot: Equatable {
 
     adapterInputWatts = adapter
     batteryInputWatts = batteryIn
-    macUseWatts = totalSystemUse.map { max(0, $0 - usbTotal) }
+    let macUse = totalSystemUse.map { max(0, $0 - usbTotal) }
+    macUseWatts = macUse
+    if let macUse, let reportedCPU = Self.positive(metrics?.cpuPowerWatts) {
+      let cpu = min(macUse, reportedCPU)
+      cpuUseWatts = cpu
+      restOfMacWatts = max(0, macUse - cpu)
+    } else {
+      cpuUseWatts = nil
+      restOfMacWatts = nil
+    }
     batteryChargeWatts = batteryCharge
     usbOutputs = outputs
 
