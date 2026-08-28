@@ -282,6 +282,27 @@ final class PulseTests: XCTestCase {
     XCTAssertFalse(PulseServer.canAcceptConnection(activeCount: -1))
   }
 
+  func testTerminalPipelineFailureStaysBehindAcceptedCommands() async {
+    let pipeline = PulseCommandPipeline()
+    let command = Data("accepted".utf8)
+    let failure = PulseResponse.failure(
+      "connection command limit exceeded", code: .commandLimitExceeded)
+    pipeline.yield(command)
+    pipeline.terminate(failure)
+
+    var iterator = pipeline.stream.makeAsyncIterator()
+    guard case .command(let received)? = await iterator.next() else {
+      return XCTFail("Expected the accepted command first")
+    }
+    XCTAssertEqual(received, command)
+    guard case .terminal(let response)? = await iterator.next() else {
+      return XCTFail("Expected the terminal response second")
+    }
+    XCTAssertEqual(response, failure)
+    let end = await iterator.next()
+    XCTAssertNil(end)
+  }
+
   private func command(_ operation: PulseOperation, _ payload: PulsePayload) -> PulseCommand {
     PulseCommand(token: "test", operation: operation, activity: payload, id: nil)
   }

@@ -25,19 +25,42 @@ enum T3CredentialStore {
 
   private static var cachedTokens: [String: String]?
 
-  static func load(credentialID: String, legacyEnvironmentID: String? = nil) throws -> String? {
-    var tokens = try loadVault()
-    if let token = tokens[credentialID] { return token }
-    guard let legacyEnvironmentID, let token = tokens[legacyEnvironmentID] else { return nil }
+  static func load(credentialID: String) throws -> String? {
+    try loadVault()[credentialID]
+  }
 
-    // Same-service schema upgrade only: older nedlane builds keyed credentials by the server's
-    // environment id. Endpoint-scoped keys prevent two machines with a duplicated id from sharing
-    // or overwriting one another. This never reads another bundle/service identity.
-    tokens[credentialID] = token
-    tokens.removeValue(forKey: legacyEnvironmentID)
-    try persist(tokens)
-    cachedTokens = tokens
+  /// Local T3 is constrained to loopback, so an endpoint-port change can safely carry the token
+  /// for the same environment forward. Collapse old port-scoped and ID-only entries at the same
+  /// time so runtime restarts cannot leave live bearer tokens accumulating in the vault.
+  static func loadLocal(credentialID: String, environmentID: String) throws -> String? {
+    let tokens = try loadVault()
+    let migration = migratingLocalCredential(
+      in: tokens, credentialID: credentialID, environmentID: environmentID)
+    guard let token = migration.token else { return nil }
+    guard migration.tokens != tokens else { return token }
+
+    try persist(migration.tokens)
+    cachedTokens = migration.tokens
     return token
+  }
+
+  nonisolated static func migratingLocalCredential(
+    in tokens: [String: String], credentialID: String, environmentID: String
+  ) -> (tokens: [String: String], token: String?) {
+    var migrated = tokens
+    let prefix = "local|\(environmentID)|"
+    let obsoleteIDs = migrated.keys.filter {
+      $0 == environmentID || ($0.hasPrefix(prefix) && $0 != credentialID)
+    }
+    let oldScopedIDs = obsoleteIDs.filter { $0.hasPrefix(prefix) }.sorted()
+    let token = migrated[credentialID]
+      ?? oldScopedIDs.compactMap { migrated[$0] }.first
+      ?? migrated[environmentID]
+    guard let token else { return (migrated, nil) }
+
+    migrated[credentialID] = token
+    for id in obsoleteIDs { migrated.removeValue(forKey: id) }
+    return (migrated, token)
   }
 
   static func save(_ token: String, credentialID: String) throws {
@@ -48,8 +71,16 @@ enum T3CredentialStore {
   }
 
   static func delete(credentialID: String) throws {
+    try delete(credentialIDs: [credentialID])
+  }
+
+  static func delete(credentialIDs: Set<String>) throws {
     var tokens = try loadVault()
-    guard tokens.removeValue(forKey: credentialID) != nil else { return }
+    var changed = false
+    for credentialID in credentialIDs {
+      changed = tokens.removeValue(forKey: credentialID) != nil || changed
+    }
+    guard changed else { return }
     try persist(tokens)
     cachedTokens = tokens
   }
