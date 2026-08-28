@@ -147,9 +147,10 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     guard let profile = profiles.first(where: { $0.id == environmentID }) else { return }
     let credentialKey = Self.remoteMonitorKey(profile.id)
     do {
-      try T3CredentialStore.delete(
-        credentialID: Self.remoteCredentialID(
-          environmentID: profile.id, baseURL: profile.baseURL))
+      try T3CredentialStore.delete(credentialIDs: [
+        Self.remoteCredentialID(environmentID: profile.id, baseURL: profile.baseURL),
+        profile.id,
+      ])
       updateCredentialError(nil, for: credentialKey)
     } catch {
       updateCredentialError(error, for: credentialKey)
@@ -227,8 +228,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         let descriptor = try await T3Client(endpoint: endpoint, token: nil).fetchDescriptor()
         let credentialID = Self.localCredentialID(
           environmentID: descriptor.environmentId, baseURL: endpoint.baseURL.absoluteString)
-        var token = try T3CredentialStore.load(
-          credentialID: credentialID, legacyEnvironmentID: descriptor.environmentId)
+        var token = try T3CredentialStore.loadLocal(
+          credentialID: credentialID, environmentID: descriptor.environmentId)
         if token == nil {
           let pairingCredential = try await T3LocalPairingMinting.mint()
           token = try await T3Client(endpoint: endpoint, token: nil)
@@ -243,6 +244,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       } catch is CancellationError {
         return
       } catch T3ClientError.unauthorized {
+        guard !Task.isCancelled else { return }
         failures += 1
         if let descriptor = try? await T3Client(endpoint: endpoint, token: nil).fetchDescriptor() {
           do {
@@ -281,15 +283,18 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     while !Task.isCancelled {
       do {
         let descriptor = try await T3Client(endpoint: endpoint, token: nil).fetchDescriptor()
+        try Task.checkCancellation()
         guard descriptor.environmentId == profile.id else {
           throw T3ClientError.environmentIdentityConflict
         }
         let credentialID = Self.remoteCredentialID(
           environmentID: profile.id, baseURL: profile.baseURL)
-        let token = try T3CredentialStore.load(
-          credentialID: credentialID, legacyEnvironmentID: profile.id)
+        // ID-only legacy credentials have no trustworthy endpoint origin. Never send one to a
+        // saved remote; the user must pair that endpoint again to establish a scoped credential.
+        let token = try T3CredentialStore.load(credentialID: credentialID)
         updateCredentialError(nil, for: monitorKey)
         guard let token else {
+          try Task.checkCancellation()
           upsert(snapshot(profile, descriptor: descriptor, state: .needsPairing, agents: []))
           try? await Task.sleep(for: .seconds(10))
           continue
@@ -300,6 +305,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       } catch is CancellationError {
         return
       } catch T3ClientError.unauthorized {
+        guard !Task.isCancelled else { return }
         failures += 1
         upsert(snapshot(profile, descriptor: nil, state: .needsPairing, agents: []))
       } catch {
@@ -326,6 +332,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     let client = T3Client(endpoint: endpoint, token: token)
     while !Task.isCancelled {
       let shell = try await client.fetchShell()
+      try Task.checkCancellation()
       // A successful response ends the outage. Without this callback, a later unrelated failure
       // resumed at the old exponential-backoff ceiling even after days of healthy polling.
       onConnected()
