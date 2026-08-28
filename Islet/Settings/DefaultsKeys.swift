@@ -19,6 +19,30 @@ enum HapticStrength: String, CaseIterable, Codable, Sendable {
   }
 }
 
+/// Maps the push-distance slider onto physical cursor travel. A logarithmic curve gives the short
+/// end more resolution, where a few points materially change how the notch feels, while preserving
+/// the full useful range for users who prefer a deliberate push.
+enum PushDistanceScale {
+  static let minimum = 20.0
+  static let maximum = 1_000.0
+
+  static func distance(for sliderPosition: Double) -> Double {
+    let position = min(max(sliderPosition, 0), 1)
+    return minimum * pow(maximum / minimum, position)
+  }
+
+  static func sliderPosition(for distance: Double) -> Double {
+    let clamped = min(max(distance, minimum), maximum)
+    return log(clamped / minimum) / log(maximum / minimum)
+  }
+
+  static func roundedDistance(for sliderPosition: Double) -> Double {
+    let raw = distance(for: sliderPosition)
+    let increment = raw < 100 ? 2.0 : (raw < 300 ? 4.0 : 8.0)
+    return (raw / increment).rounded() * increment
+  }
+}
+
 /// Controls how aggressively Islet refreshes sources that can wake the CPU or radios.
 ///
 /// Automatic follows macOS Low Power Mode. Low Energy is an explicit always-constrained profile;
@@ -112,8 +136,8 @@ extension Defaults.Keys {
   static let hudStyle = Key<HUDStyle>("hudStyle", default: .bar)
   static let calendarEnabled = Key<Bool>("calendarEnabled", default: true)
   static let calendarLeadMinutes = Key<Int>("calendarLeadMinutes", default: 10)
+  static let hiddenCalendarIDs = Key<[String]>("hiddenCalendarIDs", default: [])
   static let remindersEnabled = Key<Bool>("remindersEnabled", default: true)
-  static let airpodsEnabled = Key<Bool>("airpodsEnabled", default: false)
   static let showOnAllDisplays = Key<Bool>("showOnAllDisplays", default: false)
   static let hideInFullscreen = Key<Bool>("hideInFullscreen", default: false)
   static let launchAtLogin = Key<Bool>("launchAtLogin", default: false)
@@ -121,9 +145,10 @@ extension Defaults.Keys {
   static let disabledActivities = Key<[String]>("disabledActivities", default: [])
   static let clipboardEnabled = Key<Bool>("clipboardEnabled", default: false)
   static let portsEnabled = Key<Bool>("portsEnabled", default: true)
-  /// Event sources the user has switched off. Absent means on — every source ships enabled, and a
-  /// disabled source is fully stopped rather than merely silenced.
-  static let disabledEventSources = Key<[String]>("disabledEventSources", default: [])
+  /// Event sources the user has switched off. Inferred sources start off because they can be late
+  /// or ambiguous; a user can explicitly enable the ones they find useful.
+  static let disabledEventSources = Key<[String]>(
+    "disabledEventSources", default: ["airdropOut", "airdropIn", "focus", "vpn"])
   static let systemEnabled = Key<Bool>("systemEnabled", default: true)
   /// Off: the System tab appears only while `SystemPresenceGate` is hot. On: it is always in the
   /// switcher, which is how you look at an idle machine's stats.

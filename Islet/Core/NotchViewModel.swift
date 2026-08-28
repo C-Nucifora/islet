@@ -28,7 +28,10 @@ final class NotchViewModel: ObservableObject {
   private var mode: InteractionMode { modeOverride ?? Defaults[.interactionMode] }
   private var barrierPushDistance: CGFloat {
     barrierPushDistanceOverride
-      ?? CGFloat(min(max(Defaults[.barrierPushDistance], 80), 480))
+      ?? CGFloat(
+        min(
+          max(Defaults[.barrierPushDistance], PushDistanceScale.minimum),
+          PushDistanceScale.maximum))
   }
 
   private var wasInside = false

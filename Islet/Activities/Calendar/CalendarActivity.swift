@@ -4,6 +4,12 @@ import Defaults
 import EventKit
 import SwiftUI
 
+struct CalendarChoice: Identifiable, Equatable, Sendable {
+  let id: String
+  let title: String
+  let colorHex: String?
+}
+
 @MainActor
 final class CalendarActivity: NotchActivity, ObservableObject {
   enum LoadState: Equatable {
@@ -21,6 +27,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   @Published private(set) var authorization = EventKitPermissionState(
     EKEventStore.authorizationStatus(for: .event))
   @Published private(set) var loadState: LoadState = .idle
+  @Published private(set) var availableCalendars: [CalendarChoice] = []
 
   /// Compatibility for existing views. New permission UI should render `authorization` so denied,
   /// restricted, write-only, and not-yet-requested states are not conflated.
@@ -53,11 +60,16 @@ final class CalendarActivity: NotchActivity, ObservableObject {
           Task { await self?.requestAccess() }
         } else {
           self?.events = []
+          self?.availableCalendars = []
           self?.loadState = .idle
           self?.activationDate = nil
           self?.objectWillChange.send()
         }
       }
+      .store(in: &cancellables)
+    Defaults.publisher(.hiddenCalendarIDs)
+      .dropFirst()
+      .sink { [weak self] _ in Task { await self?.reload() } }
       .store(in: &cancellables)
     // A grant made in System Settings happens out of process. Refresh as soon as the user returns
     // so the dashboard does not keep showing stale "Calendar access off" state.
@@ -87,6 +99,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
     timer = nil
     cancellables.removeAll()
     events = []
+    availableCalendars = []
     loadState = .idle
     activationDate = nil
     lastReloadDate = nil
@@ -134,6 +147,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
       await reload()
     } else if isRunning {
       events = []
+      availableCalendars = []
       loadState = .idle
     }
   }
@@ -145,16 +159,25 @@ final class CalendarActivity: NotchActivity, ObservableObject {
     authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
     guard authorization.canRead else {
       events = []
+      availableCalendars = []
       loadState = .idle
       return
     }
+    availableCalendars = store.calendars(for: .event)
+      .map {
+        CalendarChoice(
+          id: $0.calendarIdentifier, title: $0.title,
+          colorHex: ColorHex.string(from: $0.cgColor))
+      }
+      .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     loadState = .loading
     reloadGeneration += 1
     let generation = reloadGeneration
     let now = Date()
     let interval = CalendarLogic.agendaInterval(containing: now)
+    let hiddenCalendarIDs = Set(Defaults[.hiddenCalendarIDs])
     let mapped = await Task.detached(priority: .utility) {
-      Self.queryEvents(in: interval)
+      Self.queryEvents(in: interval, hiddenCalendarIDs: hiddenCalendarIDs)
     }.value
     guard generation == reloadGeneration, isRunning, Defaults[.calendarEnabled] else { return }
     let wasActive = isActive
@@ -168,10 +191,16 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   /// EventKit's synchronous event query can traverse a large database. A dedicated store is created
   /// and reduced entirely on a utility executor so no EKEvent crosses actors and island animation
   /// never waits on the query.
-  nonisolated private static func queryEvents(in interval: DateInterval) -> [AgendaEvent] {
+  nonisolated private static func queryEvents(
+    in interval: DateInterval, hiddenCalendarIDs: Set<String>
+  ) -> [AgendaEvent] {
     let store = EKEventStore()
+    let calendars = store.calendars(for: .event).filter {
+      !hiddenCalendarIDs.contains($0.calendarIdentifier)
+    }
+    guard !calendars.isEmpty else { return [] }
     let predicate = store.predicateForEvents(
-      withStart: interval.start, end: interval.end, calendars: nil)
+      withStart: interval.start, end: interval.end, calendars: calendars)
     return store.events(matching: predicate).map { event in
       AgendaEvent(
         id: "\(event.calendarItemIdentifier)|\(event.startDate.timeIntervalSinceReferenceDate)",

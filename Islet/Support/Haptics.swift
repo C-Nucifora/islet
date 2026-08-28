@@ -18,7 +18,10 @@ enum Haptics {
 
   /// One decisive release at the exact movement threshold where the island snaps open. The
   /// level-change pattern is the firmest single macOS pulse; generic can feel like a double beat.
-  static func barrierSnap() { perform(.levelChange) }
+  static func barrierSnap() {
+    guard Defaults[.hapticsEnabled], Defaults[.hapticStrength] != .off else { return }
+    NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+  }
 
   private static func resolved(
     _ requested: NSHapticFeedbackManager.FeedbackPattern, strength: HapticStrength
