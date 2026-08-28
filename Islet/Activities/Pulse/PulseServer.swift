@@ -133,12 +133,12 @@ final class PulseServer: ObservableObject {
         case .command(let data):
           guard self.process(data, on: connection, id: id) else { break commandLoop }
         case .terminal(let response):
-          self.send(response, on: connection, closeAfterSend: true)
+          self.send(response, on: connection)
           break commandLoop
         }
       }
       pipeline.finish()
-      self.detachConnection(id)
+      self.finishConnectionAfterResponses(connection, id: id)
     }
     authenticationTasks[id] = Task { @MainActor [weak self, weak connection] in
       try? await Task.sleep(for: Self.authenticationTimeout)
@@ -223,10 +223,15 @@ final class PulseServer: ObservableObject {
           .failure("message exceeds \(Self.maximumMessageBytes) bytes", code: .messageTooLarge))
         return
       }
-      if error != nil || complete {
+      if error != nil {
         connection.cancel()
         pipeline.finish()
         Task { @MainActor in self.removeConnection(id) }
+      } else if complete {
+        // A peer half-close ends input only. Keep the connection counted and writable until the
+        // pipeline has processed every accepted command and Network.framework has flushed the
+        // matching responses.
+        pipeline.finish()
       } else {
         self.receive(
           on: connection, id: id, pipeline: pipeline, buffer: next,
@@ -246,7 +251,7 @@ final class PulseServer: ObservableObject {
       guard Self.securelyMatches(command.token, token) else {
         send(
           .failure("unauthorized", code: .unauthorized, requestID: command.requestID),
-          on: connection, closeAfterSend: true)
+          on: connection)
         return false
       }
       markAuthenticated(id)
@@ -255,29 +260,35 @@ final class PulseServer: ObservableObject {
           .failure(
             "provider command rate exceeded; retry later", code: .rateLimited,
             requestID: command.requestID),
-          on: connection, closeAfterSend: true)
+          on: connection)
         return false
       }
-      send(PulseCenter.shared.apply(command), on: connection)
+      send(PulseCenter.shared.applyIfEnabled(command), on: connection)
       return true
     } catch {
       send(
         .failure("invalid command: \(error.localizedDescription)", code: .invalidCommand),
-        on: connection,
-        closeAfterSend: true)
+        on: connection)
       return false
     }
   }
 
-  nonisolated private func send(
-    _ response: PulseResponse, on connection: NWConnection, closeAfterSend: Bool = false
-  ) {
+  nonisolated private func send(_ response: PulseResponse, on connection: NWConnection) {
     let encoder = JSONEncoder()
     guard var data = try? encoder.encode(response) else { return }
     data.append(0x0A)
-    connection.send(content: data, completion: .contentProcessed { _ in
-      if closeAfterSend { connection.cancel() }
-    })
+    connection.send(content: data, completion: .contentProcessed { _ in })
+  }
+
+  private func finishConnectionAfterResponses(
+    _ connection: NWConnection, id: ObjectIdentifier
+  ) {
+    connection.send(
+      content: nil, contentContext: .finalMessage, isComplete: true,
+      completion: .contentProcessed { [weak self, weak connection] _ in
+        connection?.cancel()
+        Task { @MainActor in self?.detachConnection(id) }
+      })
   }
 
   private func loadOrCreateToken() throws -> String {

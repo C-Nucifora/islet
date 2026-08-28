@@ -133,10 +133,8 @@ struct T3SettingsSection: View {
 
   var body: some View {
     Section("T3 Code agents") {
-      LabeledContent("Activity") {
-        Text(enabled ? "On" : "Off").foregroundStyle(.secondary)
-      }
-      Text("Provider-neutral monitoring for every connected T3 Code machine. Pairing is read-only and credentials stay in Keychain.")
+      Toggle("Monitor T3 Code", isOn: $enabled)
+      Text("Provider-neutral monitoring for every connected T3 Code machine. Local and remote machines require an explicit pairing link. Credentials stay in Keychain.")
         .font(.caption2).foregroundStyle(.secondary)
       machineRows
       HStack {

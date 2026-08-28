@@ -303,6 +303,36 @@ final class PulseTests: XCTestCase {
     XCTAssertNil(end)
   }
 
+  func testHalfClosedPipelineDrainsAcceptedCommandsBeforeEnding() async {
+    let pipeline = PulseCommandPipeline()
+    let command = Data("accepted-before-eof".utf8)
+    pipeline.yield(command)
+    pipeline.finish()
+
+    var iterator = pipeline.stream.makeAsyncIterator()
+    guard case .command(let received)? = await iterator.next() else {
+      return XCTFail("Expected the accepted command after input EOF")
+    }
+    XCTAssertEqual(received, command)
+    let end = await iterator.next()
+    XCTAssertNil(end)
+  }
+
+  @MainActor
+  func testDisabledPulseRejectsAndDoesNotRetainPrivatePayload() {
+    let center = PulseCenter()
+    let payload = PulsePayload(
+      id: "private", source: "shortcuts", title: "Private title", subtitle: "Private details",
+      symbol: nil, accentHex: nil, progress: 0.5, state: .progress, priority: .normal,
+      expiresAt: nil, actions: nil)
+
+    let response = center.applyIfEnabled(command(.update, payload), featureEnabled: false)
+
+    XCTAssertFalse(response.ok)
+    XCTAssertEqual(response.errorCode, .featureDisabled)
+    XCTAssertEqual(center.retainedItemCount, 0)
+  }
+
   private func command(_ operation: PulseOperation, _ payload: PulsePayload) -> PulseCommand {
     PulseCommand(token: "test", operation: operation, activity: payload, id: nil)
   }
