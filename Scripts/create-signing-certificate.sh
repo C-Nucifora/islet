@@ -7,7 +7,7 @@
 # app and silently drops Accessibility, Calendar, Reminders and the rest. You re-grant forever.
 #
 # Signing with one certificate makes the requirement
-#     identifier "dev.cnucifora.Islet" and certificate root = H"<cert hash>"
+#     identifier "dev.nedlane.Islet" and certificate root = H"<cert hash>"
 # which is identical across rebuilds, so grants persist.
 #
 # Self-signed is enough — TCC only needs the requirement to be stable, not the certificate to be
@@ -21,15 +21,15 @@
 # Toggling one of those on grants the *old* requirement and the new build stays untrusted, which
 # looks exactly like the fix not working. Clear them first:
 #
-#     tccutil reset Accessibility dev.cnucifora.Islet
+#     tccutil reset Accessibility dev.nedlane.Islet
 #
 # then add /Applications/Islet.app in System Settings. Repeat per service as needed
 # (Calendar, Reminders, Bluetooth, Location).
 #
-# To undo:  security delete-certificate -c "Islet Dev"
+# To undo:  security delete-certificate -c "Islet Local Development"
 set -euo pipefail
 
-NAME="Islet Dev"
+NAME="Islet Local Development"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
 if security find-identity -v -p codesigning | grep -q "\"$NAME\""; then
@@ -47,7 +47,7 @@ prompt             = no
 x509_extensions    = ext
 
 [ dn ]
-CN = Islet Dev
+CN = Islet Local Development
 O  = Islet
 C  = AU
 

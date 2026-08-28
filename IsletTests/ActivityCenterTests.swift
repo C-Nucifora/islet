@@ -58,19 +58,9 @@ final class ActivityCenterTests: XCTestCase {
     XCTAssertNil(center.primaryActivity)
   }
 
-  func testActivityLifecyclePolicyStopsHiddenAndFeatureDisabledActivities() {
-    XCTAssertTrue(
-      ActivityLifecyclePolicy.shouldRun(
-        activityID: "battery", featureEnabled: true, disabledActivities: []))
-    XCTAssertFalse(
-      ActivityLifecyclePolicy.shouldRun(
-        activityID: "battery", featureEnabled: false, disabledActivities: []))
-    XCTAssertFalse(
-      ActivityLifecyclePolicy.shouldRun(
-        activityID: "battery", featureEnabled: true, disabledActivities: ["battery"]))
-    XCTAssertFalse(
-      ActivityLifecyclePolicy.shouldRun(
-        activityID: "nowPlaying", disabledActivities: ["nowPlaying"]))
+  func testActivityLifecyclePolicyUsesFeatureStateRatherThanVisibility() {
+    XCTAssertTrue(ActivityLifecyclePolicy.shouldRun(featureEnabled: true))
+    XCTAssertFalse(ActivityLifecyclePolicy.shouldRun(featureEnabled: false))
   }
 
   func testTieBrokenByRecency() {

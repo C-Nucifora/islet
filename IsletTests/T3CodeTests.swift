@@ -54,6 +54,47 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(agents[0].planStep, "Wire the API")
   }
 
+  func testDuplicateProjectIDsDoNotCrashAgentDerivation() throws {
+    let json = """
+      {
+        "snapshotSequence": 1,
+        "projects": [
+          {"id":"duplicate","title":"First","workspaceRoot":"/tmp/first"},
+          {"id":"duplicate","title":"Second","workspaceRoot":"/tmp/second"}
+        ],
+        "threads": [{
+          "id":"t1","projectId":"duplicate","title":"Work",
+          "modelSelection":{"instanceId":"provider","model":"model"},
+          "runtimeMode":"auto","interactionMode":"default","branch":null,
+          "worktreePath":"/tmp/first","latestTurn":{"turnId":"turn1","state":"running",
+          "requestedAt":null,"startedAt":null,"completedAt":null},
+          "createdAt":null,"updatedAt":"2026-08-28T00:00:00.000Z","archivedAt":null,
+          "settledAt":null,"session":{"status":"running","providerName":null,
+          "providerInstanceId":"provider","lastError":null},"latestUserMessageAt":null,
+          "hasPendingApprovals":false,"hasPendingUserInput":false,
+          "hasActionableProposedPlan":false,"backgroundLiveness":null,"planProgress":null
+        }],
+        "updatedAt":"2026-08-28T00:00:00.000Z"
+      }
+      """
+    let shell = try JSONDecoder().decode(T3ShellSnapshot.self, from: Data(json.utf8))
+
+    let agents = T3AgentSnapshot.activeAgents(
+      in: shell, environmentID: "machine", now: Date(timeIntervalSince1970: 1_788_000_000))
+
+    XCTAssertEqual(agents.first?.project, "First")
+  }
+
+  func testLocalDiscoveryRequiresASuccessfulT3Descriptor() {
+    let descriptor = Data(
+      #"{"environmentId":"machine","label":"This Mac","platform":null,"serverVersion":"1"}"#
+        .utf8)
+    XCTAssertTrue(T3LocalDiscovery.acceptsDiscoveryResponse(data: descriptor, statusCode: 200))
+    XCTAssertFalse(T3LocalDiscovery.acceptsDiscoveryResponse(data: descriptor, statusCode: 404))
+    XCTAssertFalse(
+      T3LocalDiscovery.acceptsDiscoveryResponse(data: Data(#"{"error":"not found"}"#.utf8), statusCode: 200))
+  }
+
   func testPollingPolicySlowsInBackgroundAndLowPowerMode() {
     XCTAssertEqual(
       T3CodeActivity.pollInterval(busy: true, expanded: true, lowPowerMode: false), 3)
@@ -101,5 +142,27 @@ final class T3CodeTests: XCTestCase {
       state: .connected, agents: [])
     let current = [snapshot]
     XCTAssertEqual(T3CodeActivity.upserting(snapshot, into: current), current)
+  }
+
+  func testLocalAndRemoteEnvironmentIdentityCannotCollide() {
+    XCTAssertEqual(T3CodeActivity.localSnapshotID("same"), "local|same")
+    XCTAssertEqual(
+      T3CodeActivity.remoteSnapshotID(
+        environmentID: "same", baseURL: "https://mini.example.com/api?ignored=yes"),
+      "remote|same|https://mini.example.com/")
+    XCTAssertNotEqual(
+      T3CodeActivity.localCredentialID(
+        environmentID: "same", baseURL: "http://127.0.0.1:3773"),
+      T3CodeActivity.remoteCredentialID(
+        environmentID: "same", baseURL: "http://127.0.0.1:3773"))
+  }
+
+  func testLocalPairingCommandUsesAnInstalledT3ExecutableWithoutNpx() {
+    let paths = T3LocalPairingMinting.candidateExecutablePaths(
+      environment: ["PATH": "/custom/bin:/second/bin"])
+    XCTAssertEqual(Array(paths.prefix(2)), ["/custom/bin/t3", "/second/bin/t3"])
+    XCTAssertTrue(paths.contains("/custom/bin/t3"))
+    XCTAssertTrue(paths.contains("/second/bin/t3"))
+    XCTAssertFalse(paths.contains { $0.contains("npx") || $0.contains("latest") })
   }
 }

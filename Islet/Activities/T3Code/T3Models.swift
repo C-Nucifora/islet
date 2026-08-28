@@ -151,7 +151,11 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
     environmentID: String,
     now: Date = Date()
   ) -> [Self] {
-    let projects = Dictionary(uniqueKeysWithValues: shell.projects.map { ($0.id, $0.title) })
+    // The shell snapshot is server-controlled. Keep the first project for a duplicated id rather
+    // than using `Dictionary(uniqueKeysWithValues:)`, which traps and takes down the app.
+    let projects = shell.projects.reduce(into: [String: String]()) { projects, project in
+      if projects[project.id] == nil { projects[project.id] = project.title }
+    }
     return shell.threads.compactMap { thread in
       guard thread.archivedAt == nil,
         let phase = phase(for: thread, now: now)

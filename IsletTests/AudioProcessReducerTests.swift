@@ -33,7 +33,7 @@ final class AudioProcessReducerTests: XCTestCase {
 
   func testIsletItselfIsDropped() {
     XCTAssertTrue(
-      reduce([Raw(bundleID: "dev.cnucifora.Islet", pid: 19449, isPlayingOutput: true)]).isEmpty)
+      reduce([Raw(bundleID: "dev.nedlane.Islet", pid: 19449, isPlayingOutput: true)]).isEmpty)
   }
 
   func testDenylistAppliesAfterHelperCollapsing() {

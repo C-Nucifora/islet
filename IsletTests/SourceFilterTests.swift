@@ -6,7 +6,7 @@ final class SourceFilterTests: XCTestCase {
   func testDenylistedBundlesAreHidden() {
     for bundleID in [
       "systemsoundserverd", "com.apple.PowerChime", "com.apple.controlcenter",
-      "dev.cnucifora.Islet",
+      "dev.nedlane.Islet",
     ] {
       XCTAssertNil(
         SourceFilter.rank(bundleID: bundleID, mode: .auto, priorityList: []),

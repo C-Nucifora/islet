@@ -159,6 +159,12 @@ struct IsletApp: App {
         .frame(width: 18, height: 16)
         .accessibilityLabel("Islet")
     }
+    .commands {
+      CommandGroup(replacing: .appSettings) {
+        Button("Settings…") { SettingsOpener.open() }
+          .keyboardShortcut(",", modifiers: .command)
+      }
+    }
   }
 }
 

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum T3ClientError: Error, LocalizedError, Sendable {
@@ -5,11 +6,13 @@ enum T3ClientError: Error, LocalizedError, Sendable {
   case unsupportedScheme
   case credentialsInURL
   case insecureRemoteHTTP
+  case environmentIdentityConflict
   case missingPairingToken
   case invalidResponse
   case unauthorized
   case http(Int)
   case tokenMintFailed(String)
+  case tokenMintTimedOut
 
   var errorDescription: String? {
     switch self {
@@ -17,11 +20,14 @@ enum T3ClientError: Error, LocalizedError, Sendable {
     case .unsupportedScheme: "T3 Code endpoints must use HTTP or HTTPS."
     case .credentialsInURL: "Usernames and passwords are not allowed in an endpoint URL."
     case .insecureRemoteHTTP: "Remote T3 Code machines must use HTTPS."
+    case .environmentIdentityConflict:
+      "That T3 Code machine reports an identity already used by a different endpoint."
     case .missingPairingToken: "The pairing link has no one-time token."
     case .invalidResponse: "T3 Code returned an unreadable response."
     case .unauthorized: "This T3 Code credential is no longer authorized."
     case .http(let status): "T3 Code returned HTTP \(status)."
     case .tokenMintFailed(let message): message
+    case .tokenMintTimedOut: "T3 Code did not issue a local pairing token within 15 seconds."
     }
   }
 }
@@ -205,9 +211,17 @@ enum T3LocalDiscovery {
     var request = URLRequest(url: endpoint.url(".well-known/t3/environment"))
     request.timeoutInterval = 1.5
     do {
-      let (_, response) = try await URLSession.shared.data(for: request)
-      return (response as? HTTPURLResponse).map { (200..<500).contains($0.statusCode) } ?? false
+      let (data, response) = try await URLSession.shared.data(for: request)
+      guard let http = response as? HTTPURLResponse else { return false }
+      return acceptsDiscoveryResponse(data: data, statusCode: http.statusCode)
     } catch { return false }
+  }
+
+  /// A listening port is T3 Code only when its public descriptor succeeds and decodes. Treating a
+  /// 404 from an unrelated service as reachable would suppress the runtime-file fallback.
+  nonisolated static func acceptsDiscoveryResponse(data: Data, statusCode: Int) -> Bool {
+    (200..<300).contains(statusCode)
+      && (try? JSONDecoder().decode(T3EnvironmentDescriptor.self, from: data)) != nil
   }
 
   private static func runtimePort() -> Int? {
@@ -226,16 +240,15 @@ enum T3LocalPairingMinting {
   }
 
   static func mint() async throws -> String {
-    try await Task.detached(priority: .utility) {
+    let worker = Task.detached(priority: .utility) {
       let process = Process()
-      let environment = ProcessInfo.processInfo.environment
-      let requestedShell = environment["SHELL"] ?? "/bin/zsh"
-      let shell = FileManager.default.isExecutableFile(atPath: requestedShell)
-        ? requestedShell : "/bin/zsh"
-      process.executableURL = URL(fileURLWithPath: shell)
+      guard let executable = executableURL() else {
+        throw T3ClientError.tokenMintFailed(
+          "The T3 Code command-line tool is not installed. Install it or pair this Mac from T3 Code, then reconnect.")
+      }
+      process.executableURL = executable
       process.arguments = [
-        "-lic",
-        "if command -v t3 >/dev/null 2>&1; then exec t3 auth pairing create --json --ttl 2m --label Islet; else exec npx -y t3@latest auth pairing create --json --ttl 2m --label Islet; fi",
+        "auth", "pairing", "create", "--json", "--ttl", "2m", "--label", "Islet",
       ]
       process.standardInput = FileHandle.nullDevice
       let stdout = Pipe()
@@ -245,11 +258,37 @@ enum T3LocalPairingMinting {
       do { try process.run() } catch {
         throw T3ClientError.tokenMintFailed("Could not run the T3 Code pairing command.")
       }
-      process.waitUntilExit()
-      let output = String(
-        data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-      let error = String(
-        data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+      defer { if process.isRunning { terminate(process) } }
+
+      // Drain both pipes while the child runs. Waiting first can deadlock once either pipe fills.
+      let stdoutHandle = SendableFileHandle(stdout.fileHandleForReading)
+      let stderrHandle = SendableFileHandle(stderr.fileHandleForReading)
+      let stdoutTask = Task.detached(priority: .utility) {
+        stdoutHandle.value.readDataToEndOfFile()
+      }
+      let stderrTask = Task.detached(priority: .utility) {
+        stderrHandle.value.readDataToEndOfFile()
+      }
+      let deadline = ProcessInfo.processInfo.systemUptime + 15
+      while process.isRunning {
+        if Task.isCancelled {
+          terminate(process)
+          _ = await stdoutTask.value
+          _ = await stderrTask.value
+          throw CancellationError()
+        }
+        if ProcessInfo.processInfo.systemUptime >= deadline {
+          terminate(process)
+          _ = await stdoutTask.value
+          _ = await stderrTask.value
+          throw T3ClientError.tokenMintTimedOut
+        }
+        try await Task.sleep(for: .milliseconds(50))
+      }
+      let outputData = await stdoutTask.value
+      let errorData = await stderrTask.value
+      let output = String(data: outputData, encoding: .utf8) ?? ""
+      let error = String(data: errorData, encoding: .utf8) ?? ""
       guard process.terminationStatus == 0 else {
         let detail = error.trimmingCharacters(in: .whitespacesAndNewlines)
         throw T3ClientError.tokenMintFailed(
@@ -260,6 +299,43 @@ enum T3LocalPairingMinting {
         !credential.isEmpty
       else { throw T3ClientError.tokenMintFailed("T3 Code returned no local pairing token.") }
       return credential
-    }.value
+    }
+    return try await withTaskCancellationHandler {
+      try await worker.value
+    } onCancel: {
+      worker.cancel()
+    }
   }
+
+  nonisolated static func candidateExecutablePaths(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> [String] {
+    let fromPath = (environment["PATH"] ?? "")
+      .split(separator: ":")
+      .map { String($0) + "/t3" }
+    var seen: Set<String> = []
+    return (fromPath + ["/opt/homebrew/bin/t3", "/usr/local/bin/t3"])
+      .filter { seen.insert($0).inserted }
+  }
+
+  private static func executableURL() -> URL? {
+    candidateExecutablePaths().first {
+      FileManager.default.isExecutableFile(atPath: $0)
+    }.map(URL.init(fileURLWithPath:))
+  }
+
+  private static func terminate(_ process: Process) {
+    guard process.isRunning else { return }
+    process.terminate()
+    let deadline = ProcessInfo.processInfo.systemUptime + 0.25
+    while process.isRunning, ProcessInfo.processInfo.systemUptime < deadline {
+      Thread.sleep(forTimeInterval: 0.01)
+    }
+    if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+  }
+}
+
+private final class SendableFileHandle: @unchecked Sendable {
+  let value: FileHandle
+  init(_ value: FileHandle) { self.value = value }
 }
