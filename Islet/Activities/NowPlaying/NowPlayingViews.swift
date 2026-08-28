@@ -194,7 +194,6 @@ struct ExpandedPlayerView: View {
       .help(pb.supportsSkip15 ? "Back 15 seconds" : "Previous track")
       .accessibilityLabel(pb.supportsSkip15 ? "Back 15 seconds" : "Previous track")
       Button {
-        Haptics.perform()
         MediaRemoteCommands.shared.togglePlayPause()
       } label: {
         Image(systemName: pb.isPlaying ? "pause.fill" : "play.fill").font(.title2)

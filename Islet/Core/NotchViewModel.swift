@@ -202,11 +202,7 @@ final class NotchViewModel: ObservableObject {
     guard next != state else { return }
     let opening = order(next) > order(state)
     if next.isExpanded, !state.isExpanded {
-      if event == .pushThresholdCrossed {
-        Haptics.barrierSnap()
-      } else {
-        Haptics.perform(.levelChange)
-      }
+      if event == .pushThresholdCrossed { Haptics.barrierSnap() }
       resetBarrier()
     }
     updatePanelFrame(for: next)  // widen the window before the content animates into it
