@@ -198,15 +198,15 @@ final class ClipboardModel: ObservableObject {
   @discardableResult
   func copyBack(_ item: ClipboardItem) -> Bool {
     let pb = NSPasteboard.general
-    pb.clearContents()
-    let succeeded: Bool
-    switch item.kind {
-    case .text(let s): succeeded = pb.setString(s, forType: .string)
-    case .fileURL(let url): succeeded = pb.writeObjects([url as NSURL])
-    case .image(let payload):
-      succeeded = pb.setData(
-        payload.data,
-        forType: NSPasteboard.PasteboardType(rawValue: payload.pasteboardTypeRawValue))
+    let succeeded = ClipboardPasteboardTransaction.replace(on: pb) {
+      switch item.kind {
+      case .text(let s): pb.setString(s, forType: .string)
+      case .fileURL(let url): pb.writeObjects([url as NSURL])
+      case .image(let payload):
+        pb.setData(
+          payload.data,
+          forType: NSPasteboard.PasteboardType(rawValue: payload.pasteboardTypeRawValue))
+      }
     }
     guard succeeded else {
       lastWriteError = "Couldn’t restore that clipboard item."
@@ -244,6 +244,27 @@ final class ClipboardModel: ObservableObject {
       return ClipboardItem.ImagePayload(data: data, pasteboardTypeRawValue: type.rawValue)
     }
     return nil
+  }
+}
+
+enum ClipboardPasteboardTransaction {
+  /// NSPasteboard requires clearing before a write. Clone the current items first and restore them
+  /// if the replacement is rejected so a failed history action never destroys the user's clipboard.
+  static func replace(on pasteboard: NSPasteboard, write: () -> Bool) -> Bool {
+    let previous = (pasteboard.pasteboardItems ?? []).map { source in
+      let copy = NSPasteboardItem()
+      for type in source.types {
+        if let data = source.data(forType: type) { copy.setData(data, forType: type) }
+      }
+      return copy
+    }
+    pasteboard.clearContents()
+    guard write() else {
+      pasteboard.clearContents()
+      if !previous.isEmpty { _ = pasteboard.writeObjects(previous) }
+      return false
+    }
+    return true
   }
 }
 

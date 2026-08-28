@@ -236,11 +236,18 @@ final class PulseTests: XCTestCase {
 
   func testTokenWideRateLimiterDoesNotResetWhenAConnectionWouldReconnect() {
     var limiter = PulseRateLimiter(limit: 2, window: 60)
-    let start = Date(timeIntervalSince1970: 1_000)
+    let start: TimeInterval = 1_000
     XCTAssertTrue(limiter.accepts(start))
-    XCTAssertTrue(limiter.accepts(start.addingTimeInterval(1)))
-    XCTAssertFalse(limiter.accepts(start.addingTimeInterval(2)))
-    XCTAssertTrue(limiter.accepts(start.addingTimeInterval(61)))
+    XCTAssertTrue(limiter.accepts(start + 1))
+    XCTAssertFalse(limiter.accepts(start + 2))
+    XCTAssertTrue(limiter.accepts(start + 61))
+  }
+
+  func testRateLimiterRecoversIfItsMonotonicClockMovesBackward() {
+    var limiter = PulseRateLimiter(limit: 1, window: 60)
+    XCTAssertTrue(limiter.accepts(1_000))
+    XCTAssertFalse(limiter.accepts(1_001))
+    XCTAssertTrue(limiter.accepts(10))
   }
 
   private func command(_ operation: PulseOperation, _ payload: PulsePayload) -> PulseCommand {

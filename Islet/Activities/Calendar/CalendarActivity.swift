@@ -31,6 +31,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   private var cancellables: Set<AnyCancellable> = []
   private var isRunning = false
   private var lastReloadDate: Date?
+  private var reloadGeneration = 0
 
   var isActive: Bool {
     guard Defaults[.calendarEnabled], let next = nextEvent else { return false }
@@ -82,6 +83,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   func stop() {
     guard isRunning else { return }
     isRunning = false
+    reloadGeneration += 1
     timer = nil
     cancellables.removeAll()
     events = []
@@ -91,10 +93,9 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   }
 
   func requestAccess() async {
-    guard isRunning, Defaults[.calendarEnabled] else { return }
     authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
     if authorization.canRead {
-      await reload()
+      if isRunning, Defaults[.calendarEnabled] { await reload() }
       return
     }
     events = []
@@ -103,11 +104,9 @@ final class CalendarActivity: NotchActivity, ObservableObject {
     guard authorization == .notDetermined else { return }
     do {
       let granted = try await store.requestFullAccessToEvents()
-      guard isRunning, Defaults[.calendarEnabled] else { return }
       authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
-      if granted, authorization.canRead { await reload() }
+      if granted, authorization.canRead, isRunning, Defaults[.calendarEnabled] { await reload() }
     } catch {
-      guard isRunning, Defaults[.calendarEnabled] else { return }
       authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
       loadState = .failed(error.localizedDescription)
       Log.app.error("Calendar access error: \(error.localizedDescription)")
@@ -130,11 +129,10 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   }
 
   func refreshAuthorization() async {
-    guard isRunning, Defaults[.calendarEnabled] else { return }
     authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
-    if authorization.canRead {
+    if authorization.canRead, isRunning, Defaults[.calendarEnabled] {
       await reload()
-    } else {
+    } else if isRunning {
       events = []
       loadState = .idle
     }
@@ -151,19 +149,14 @@ final class CalendarActivity: NotchActivity, ObservableObject {
       return
     }
     loadState = .loading
+    reloadGeneration += 1
+    let generation = reloadGeneration
     let now = Date()
     let interval = CalendarLogic.agendaInterval(containing: now)
-    let predicate = store.predicateForEvents(
-      withStart: interval.start, end: interval.end, calendars: nil)
-    let ekEvents = store.events(matching: predicate)
-    let mapped = ekEvents.map { ek in
-      AgendaEvent(
-        id: "\(ek.calendarItemIdentifier)|\(ek.startDate.timeIntervalSinceReferenceDate)",
-        title: ek.title ?? "Untitled",
-        start: ek.startDate, end: ek.endDate, isAllDay: ek.isAllDay,
-        calendarColorHex: ColorHex.string(from: ek.calendar?.cgColor),
-        joinURL: Self.joinURL(from: ek))
-    }
+    let mapped = await Task.detached(priority: .utility) {
+      Self.queryEvents(in: interval)
+    }.value
+    guard generation == reloadGeneration, isRunning, Defaults[.calendarEnabled] else { return }
     let wasActive = isActive
     events = CalendarLogic.display(events: mapped, now: now, interval: interval)
     lastReloadDate = now
@@ -172,8 +165,25 @@ final class CalendarActivity: NotchActivity, ObservableObject {
     if wasActive, !isActive { activationDate = nil }
   }
 
+  /// EventKit's synchronous event query can traverse a large database. A dedicated store is created
+  /// and reduced entirely on a utility executor so no EKEvent crosses actors and island animation
+  /// never waits on the query.
+  nonisolated private static func queryEvents(in interval: DateInterval) -> [AgendaEvent] {
+    let store = EKEventStore()
+    let predicate = store.predicateForEvents(
+      withStart: interval.start, end: interval.end, calendars: nil)
+    return store.events(matching: predicate).map { event in
+      AgendaEvent(
+        id: "\(event.calendarItemIdentifier)|\(event.startDate.timeIntervalSinceReferenceDate)",
+        title: event.title ?? "Untitled",
+        start: event.startDate, end: event.endDate, isAllDay: event.isAllDay,
+        calendarColorHex: ColorHex.string(from: event.calendar?.cgColor),
+        joinURL: joinURL(from: event))
+    }
+  }
+
   /// Pull a video-call link from the event's URL or notes.
-  static func joinURL(from event: EKEvent) -> URL? {
+  nonisolated static func joinURL(from event: EKEvent) -> URL? {
     if let url = event.url, Self.isMeetingLink(url) { return url }
     let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     for text in [event.location, event.structuredLocation?.title, event.notes].compactMap({ $0 }) {

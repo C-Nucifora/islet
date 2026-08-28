@@ -3,47 +3,135 @@ import Defaults
 import SwiftUI
 
 private enum SettingsCategory: String, CaseIterable, Identifiable {
-  case overview = "Overview"
+  case general = "General"
   case activities = "Activities"
-  case events = "Events"
-  case appearance = "Appearance & Interaction"
-  case permissions = "Permissions"
+  case notifications = "Notifications"
   case integrations = "Integrations"
+  case privacy = "Privacy & Permissions"
   case advanced = "Advanced"
 
   var id: Self { self }
 
   init(destination: SettingsDestination) {
     switch destination {
-    case .overview: self = .overview
+    case .overview, .appearance: self = .general
     case .activities: self = .activities
-    case .events: self = .events
-    case .appearance: self = .appearance
-    case .permissions: self = .permissions
+    case .events: self = .notifications
+    case .permissions: self = .privacy
     case .integrations: self = .integrations
     case .advanced: self = .advanced
     }
   }
   var icon: String {
     switch self {
-    case .overview: "house"
+    case .general: "gear"
     case .activities: "rectangle.stack"
-    case .events: "sparkles"
-    case .appearance: "paintbrush"
-    case .permissions: "lock.shield"
+    case .notifications: "bell.badge"
     case .integrations: "point.3.connected.trianglepath.dotted"
+    case .privacy: "lock.shield"
     case .advanced: "gearshape.2"
     }
   }
   var searchTerms: String {
     switch self {
-    case .overview: "general launch login displays fullscreen recording health status"
-    case .activities: "tabs order battery calendar reminders clipboard ports airpods audio hud timer shelf system iphone continuity live activities"
-    case .events: "usb wifi bluetooth airdrop vpn focus screenshot sleep power volume display notifications"
-    case .appearance: "hover click expand collapse haptics media player order menu interaction"
-    case .permissions: "calendar reminders accessibility privacy grant denied restricted"
+    case .general: "launch login displays fullscreen recording hover click haptics energy"
+    case .activities: "tabs order battery calendar reminders clipboard ports airpods audio hud timer shelf system media iphone continuity live activities"
+    case .notifications: "events usb wifi bluetooth airdrop vpn focus screenshot sleep power volume display"
     case .integrations: "t3 code agents remote media spotify music pulse api cli providers history rules focus shortcuts"
-    case .advanced: "cpu gpu memory disk network thermal metrics clipboard diagnostics defaults reset"
+    case .privacy: "calendar reminders accessibility privacy grant denied restricted clipboard"
+    case .advanced: "diagnostics identity version defaults reset"
+    }
+  }
+}
+
+private enum SettingsDetailPage: String, CaseIterable, Identifiable {
+  case startupDisplays
+  case interaction
+  case energy
+  case activityOrder
+  case calendarReminders
+  case nowPlaying
+  case systemMetrics
+  case clipboard
+  case systemHUD
+  case eventSources
+  case t3Code
+  case pulse
+  case permissions
+  case diagnostics
+  case reset
+
+  var id: Self { self }
+
+  var title: String {
+    switch self {
+    case .startupDisplays: "Startup & Displays"
+    case .interaction: "Interaction"
+    case .energy: "Energy"
+    case .activityOrder: "Activity Lineup"
+    case .calendarReminders: "Calendar & Reminders"
+    case .nowPlaying: "Now Playing"
+    case .systemMetrics: "System Metrics"
+    case .clipboard: "Clipboard"
+    case .systemHUD: "System HUD"
+    case .eventSources: "Event Sources"
+    case .t3Code: "T3 Code"
+    case .pulse: "Pulse Providers"
+    case .permissions: "App Permissions"
+    case .diagnostics: "Diagnostics"
+    case .reset: "Reset"
+    }
+  }
+
+  var icon: String {
+    switch self {
+    case .startupDisplays: "macwindow.on.rectangle"
+    case .interaction: "cursorarrow.motionlines"
+    case .energy: "leaf"
+    case .activityOrder: "list.number"
+    case .calendarReminders: "calendar.badge.clock"
+    case .nowPlaying: "music.note"
+    case .systemMetrics: "cpu"
+    case .clipboard: "doc.on.clipboard"
+    case .systemHUD: "slider.horizontal.3"
+    case .eventSources: "bell.badge"
+    case .t3Code: "terminal.fill"
+    case .pulse: "waveform.path.ecg"
+    case .permissions: "lock.shield"
+    case .diagnostics: "stethoscope"
+    case .reset: "arrow.counterclockwise"
+    }
+  }
+
+  var category: SettingsCategory {
+    switch self {
+    case .startupDisplays, .interaction, .energy: .general
+    case .activityOrder, .calendarReminders, .nowPlaying, .systemMetrics, .clipboard, .systemHUD:
+      .activities
+    case .eventSources: .notifications
+    case .t3Code, .pulse: .integrations
+    case .permissions: .privacy
+    case .diagnostics, .reset: .advanced
+    }
+  }
+
+  var searchTerms: String {
+    switch self {
+    case .startupDisplays: "launch login screen display fullscreen recording multiple monitors"
+    case .interaction: "hover push squeeze snap distance click pin collapse haptic strength notch"
+    case .energy: "battery low power live polling performance"
+    case .activityOrder: "enable disable stop hide tabs priority reorder"
+    case .calendarReminders: "agenda countdown meetings due snooze permission"
+    case .nowPlaying: "music spotify player bundle priority media"
+    case .systemMetrics: "cpu gpu memory disk network thermal sparkline"
+    case .clipboard: "history secrets pause privacy copy"
+    case .systemHUD: "volume brightness media keys accessibility bar gauge"
+    case .eventSources: "usb wifi bluetooth airdrop vpn focus screenshot sleep power display"
+    case .t3Code: "agents provider remote pairing machine"
+    case .pulse: "api cli providers token history delivery"
+    case .permissions: "calendar reminders accessibility privacy diagnostics"
+    case .diagnostics: "bundle signing version copy support"
+    case .reset: "restore defaults layout presentation"
     }
   }
 }
@@ -75,10 +163,15 @@ struct SettingsView: View {
   @ObservedObject private var permissions = PermissionCenter.shared
   @ObservedObject private var hud = HUDController.shared
   @ObservedObject private var continuity = ContinuityMonitor.shared
+  @ObservedObject private var clipboard = ClipboardModel.shared
+  @ObservedObject private var nowPlaying = AppState.nowPlaying
+  @ObservedObject private var t3Code = AppState.t3Code
 
   @Default(.interactionMode) private var mode
   @Default(.hoverCollapseTimeout) private var collapseTimeout
   @Default(.hapticsEnabled) private var haptics
+  @Default(.hapticStrength) private var hapticStrength
+  @Default(.barrierPushDistance) private var barrierPushDistance
   @Default(.hideFromScreenRecording) private var hideFromRecording
   @Default(.mediaSourceMode) private var sourceMode
   @Default(.mediaPriorityList) private var priorityList
@@ -104,9 +197,11 @@ struct SettingsView: View {
   @Default(.continuityAlwaysVisible) private var continuityAlwaysVisible
   @Default(.continuitySneaks) private var continuitySneaks
   @Default(.pulseEnabled) private var pulseEnabled
+  @Default(.t3CodeEnabled) private var t3CodeEnabled
   @Default(.energyMode) private var energyMode
 
   @State private var selection: SettingsCategory?
+  @State private var detailPage: SettingsDetailPage?
   @State private var searchText = ""
   @State private var newBundleID = ""
   @State private var confirmingRestore = false
@@ -117,6 +212,7 @@ struct SettingsView: View {
 
   init(destination: SettingsDestination = .overview) {
     _selection = State(initialValue: SettingsCategory(destination: destination))
+    _detailPage = State(initialValue: Self.defaultDetailPage(for: destination))
   }
 
   private var filteredCategories: [SettingsCategory] {
@@ -127,16 +223,72 @@ struct SettingsView: View {
     }
   }
 
+  private var filteredDetailPages: [SettingsDetailPage] {
+    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard !query.isEmpty else { return [] }
+    return SettingsDetailPage.allCases.filter {
+      $0.title.lowercased().contains(query) || $0.searchTerms.contains(query)
+    }
+  }
+
   private var filteredPulseHistory: [PulseHistoryEntry] {
     pulse.history.filter(pulseHistoryFilter.includes)
   }
 
-  private func enabled(_ id: String) -> Binding<Bool> {
+  private func activityEnabled(_ id: String) -> Binding<Bool> {
     Binding(
-      get: { !disabledActivities.contains(id) },
+      get: { !disabledActivities.contains(id) && featureEnabled(id) },
       set: { on in
         if on { disabledActivities.removeAll { $0 == id } }
         else if !disabledActivities.contains(id) { disabledActivities.append(id) }
+        setFeatureEnabled(on, id: id)
+      })
+  }
+
+  private func featureEnabled(_ id: String) -> Bool {
+    switch id {
+    case "battery": batteryEnabled
+    case "calendar": calendarEnabled
+    case "clipboard": clipboardEnabled
+    case "ports": portsEnabled
+    case "system": systemEnabled
+    case "t3Code": t3CodeEnabled
+    case "pulse": pulseEnabled
+    default: true
+    }
+  }
+
+  private func setFeatureEnabled(_ enabled: Bool, id: String) {
+    switch id {
+    case "battery": batteryEnabled = enabled
+    case "calendar": calendarEnabled = enabled
+    case "clipboard": clipboardEnabled = enabled
+    case "ports": portsEnabled = enabled
+    case "system": systemEnabled = enabled
+    case "t3Code": t3CodeEnabled = enabled
+    case "pulse": pulseEnabled = enabled
+    default: break
+    }
+  }
+
+  private var hapticStrengthBinding: Binding<HapticStrength> {
+    Binding(
+      get: { haptics ? hapticStrength : .off },
+      set: { value in
+        hapticStrength = value == .off ? .medium : value
+        haptics = value != .off
+      })
+  }
+
+  private var hapticStrengthLevelBinding: Binding<Double> {
+    Binding(
+      get: {
+        let value = hapticStrengthBinding.wrappedValue
+        return Double(HapticStrength.allCases.firstIndex(of: value) ?? 0)
+      },
+      set: { level in
+        let index = min(max(Int(level.rounded()), 0), HapticStrength.allCases.count - 1)
+        hapticStrengthBinding.wrappedValue = HapticStrength.allCases[index]
       })
   }
 
@@ -164,16 +316,45 @@ struct SettingsView: View {
         ForEach(filteredCategories) { category in
           Label(category.rawValue, systemImage: category.icon).tag(category)
         }
+        if !filteredDetailPages.isEmpty {
+          Section("Settings") {
+            ForEach(filteredDetailPages) { page in
+              Button {
+                selection = page.category
+                detailPage = page
+                searchText = ""
+              } label: {
+                Label(page.title, systemImage: page.icon)
+              }
+              .buttonStyle(.plain)
+            }
+          }
+        }
       }
       .navigationTitle("Islet")
       .navigationSplitViewColumnWidth(min: 190, ideal: 215, max: 260)
       .searchable(text: $searchText, placement: .sidebar, prompt: "Search settings")
       .overlay {
-        if filteredCategories.isEmpty { ContentUnavailableView.search(text: searchText) }
+        if filteredCategories.isEmpty, filteredDetailPages.isEmpty {
+          ContentUnavailableView.search(text: searchText)
+        }
       }
     } detail: {
-      categoryView
-        .navigationTitle((selection ?? .overview).rawValue)
+      Group {
+        if let detailPage { detailView(detailPage) } else { categoryView }
+      }
+      .navigationTitle(detailPage?.title ?? (selection ?? .general).rawValue)
+      .toolbar {
+        if detailPage != nil {
+          ToolbarItem(placement: .navigation) {
+            Button {
+              detailPage = nil
+            } label: {
+              Label("Back", systemImage: "chevron.left")
+            }
+          }
+        }
+      }
     }
     .frame(minWidth: 760, minHeight: 560)
     .onChange(of: searchText) { _, _ in
@@ -182,6 +363,9 @@ struct SettingsView: View {
       {
         selection = first
       }
+    }
+    .onChange(of: selection) { _, _ in
+      if detailPage?.category != selection { detailPage = nil }
     }
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) {
       _ in refreshPermissionState()
@@ -192,6 +376,7 @@ struct SettingsView: View {
         let destination = SettingsDestination(rawValue: rawValue)
       else { return }
       selection = SettingsCategory(destination: destination)
+      detailPage = Self.defaultDetailPage(for: destination)
       searchText = ""
     }
     .confirmationDialog(
@@ -223,58 +408,116 @@ struct SettingsView: View {
   }
 
   @ViewBuilder private var categoryView: some View {
-    switch selection ?? .overview {
-    case .overview: overviewForm
-    case .activities: activitiesForm
-    case .events: eventsForm
-    case .appearance: appearanceForm
-    case .permissions: permissionsForm
-    case .integrations: integrationsForm
-    case .advanced: advancedForm
+    switch selection ?? .general {
+    case .general:
+      settingsLanding(
+        "Control how Islet starts, appears, responds, and balances freshness with battery life.",
+        pages: [.startupDisplays, .interaction, .energy])
+    case .activities:
+      settingsLanding(
+        "Choose what belongs in the island, then configure only the activities that need extra options.",
+        pages: [.activityOrder, .calendarReminders, .nowPlaying, .systemMetrics, .clipboard, .systemHUD])
+    case .notifications:
+      settingsLanding(
+        "Choose which system changes deserve a brief island notification. Disabled sources stop observing.",
+        pages: [.eventSources])
+    case .integrations:
+      settingsLanding(
+        "Connect external tools without mixing their credentials and operational controls into everyday settings.",
+        pages: [.t3Code, .pulse])
+    case .privacy:
+      settingsLanding(
+        "Review every macOS permission Islet can request and recover access without enabling background monitoring.",
+        pages: [.permissions])
+    case .advanced:
+      settingsLanding(
+        "Support information and narrowly scoped reset actions live here.",
+        pages: [.diagnostics, .reset])
     }
   }
 
-  private var overviewForm: some View {
+  @ViewBuilder private func detailView(_ page: SettingsDetailPage) -> some View {
+    switch page {
+    case .startupDisplays: startupDisplaysForm
+    case .interaction: interactionForm
+    case .energy: energyForm
+    case .activityOrder: activityOrderForm
+    case .calendarReminders: calendarRemindersForm
+    case .nowPlaying: nowPlayingForm
+    case .systemMetrics: systemMetricsForm
+    case .clipboard: clipboardForm
+    case .systemHUD: systemHUDForm
+    case .eventSources: eventsForm
+    case .t3Code: t3Form
+    case .pulse: pulseForm
+    case .permissions: permissionsForm
+    case .diagnostics: diagnosticsForm
+    case .reset: resetForm
+    }
+  }
+
+  private static func defaultDetailPage(for destination: SettingsDestination) -> SettingsDetailPage? {
+    switch destination {
+    case .overview: nil
+    case .activities: .activityOrder
+    case .events: .eventSources
+    case .appearance: .interaction
+    case .permissions: .permissions
+    case .integrations: nil
+    case .advanced: .diagnostics
+    }
+  }
+
+  private func settingsLanding(
+    _ introduction: String, pages: [SettingsDetailPage]
+  ) -> some View {
     Form {
-      Section("Setup health") {
-        PermissionStatusRow(
-          title: "Calendar", icon: "calendar", status: calendarEnabled ? eventStatusText : "Off",
-          color: calendarEnabled ? eventStatusColor : .secondary)
-        PermissionStatusRow(
-          title: "Reminders", icon: "checklist",
-          status: remindersEnabled ? reminderStatusText : "Off",
-          color: remindersEnabled ? reminderStatusColor : .secondary)
-        PermissionStatusRow(
-          title: "HUD replacement", icon: "slider.horizontal.3",
-          status: hudEnabled ? hud.eventTapStatus.summary : "Off",
-          color: !hudEnabled ? .secondary : (hud.eventTapStatus == .active ? .green : .orange))
-        PermissionStatusRow(
-          title: "Pulse", icon: "waveform.path.ecg",
-          status: pulseServer.isRunning ? "Listening locally" : "Stopped",
-          color: pulseServer.isRunning ? .green : .secondary)
-      }
-      Section("General") {
-        Toggle("Launch at login", isOn: $launchAtLogin)
-        Toggle("Show on all displays", isOn: $showOnAllDisplays)
-        Toggle("Hide when an app is fullscreen", isOn: $hideInFullscreen)
-        Toggle("Hide from screen recordings", isOn: $hideFromRecording)
-      }
+      Section { Text(introduction).foregroundStyle(.secondary) }
       Section {
-        Text("Use the sidebar to manage activities, permissions, integrations and advanced metrics without one long scrolling page.")
-          .foregroundStyle(.secondary)
+        ForEach(pages) { page in
+          Button { detailPage = page } label: {
+            HStack(spacing: 12) {
+              Image(systemName: page.icon)
+                .font(.title3).foregroundStyle(.tint).frame(width: 28)
+              Text(page.title).foregroundStyle(.primary)
+              Spacer()
+              Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+        }
       }
     }
     .formStyle(.grouped)
   }
 
-  private var activitiesForm: some View {
+  private var startupDisplaysForm: some View {
     Form {
-      Section("Activity visibility") {
-        Text("Drag to choose priority order. Disabled activities are hidden from the island.")
+      Section("Startup") {
+        Toggle("Launch at login", isOn: $launchAtLogin)
+      }
+      Section("Displays") {
+        Toggle("Show on all displays", isOn: $showOnAllDisplays)
+        Toggle("Hide when an app is fullscreen", isOn: $hideInFullscreen)
+        Toggle("Hide from screen recordings", isOn: $hideFromRecording)
+      }
+      Section {
+        Text("Screen-recording privacy hides Islet's panels from capture; it does not change what activities collect while enabled.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+    .formStyle(.grouped)
+  }
+
+  private var activityOrderForm: some View {
+    Form {
+      Section("Activity lineup") {
+        Text("Drag to set priority. Turning an activity off removes it from the island and stops its monitor or local server when it owns one.")
           .font(.caption).foregroundStyle(.secondary)
         List {
           ForEach(ActivityCatalog.mergedOrder(activityOrder), id: \.self) { id in
-            Toggle(isOn: enabled(id)) {
+            Toggle(isOn: activityEnabled(id)) {
               Label(ActivityCatalog.name(for: id), systemImage: ActivityCatalog.icon(for: id))
             }
           }
@@ -286,18 +529,11 @@ struct SettingsView: View {
         }
         .frame(minHeight: 210, idealHeight: 260)
       }
-      Section("Built-in activities") {
-        Toggle("Battery & charging", isOn: $batteryEnabled)
-        Toggle("Calendar", isOn: $calendarEnabled)
-        if calendarEnabled {
-          Stepper("Countdown lead: \(calendarLeadMinutes) min", value: $calendarLeadMinutes, in: 5...60, step: 5)
-        }
+      Section("Related services") {
         Toggle("Reminders", isOn: $remindersEnabled)
-        Toggle("Clipboard history", isOn: $clipboardEnabled)
-        Toggle("Ports", isOn: $portsEnabled)
+        Text("Reminders appear on Home rather than as a separate tab, so their switch lives here instead of the lineup.")
+          .font(.caption).foregroundStyle(.secondary)
         Toggle("AirPods & audio devices", isOn: $airpodsEnabled)
-        Toggle("System stats", isOn: $systemEnabled)
-        if systemEnabled { Toggle("Always show System tab", isOn: $systemAlwaysVisible) }
         Toggle("iPhone Live Activities", isOn: $continuityEnabled)
         if continuityEnabled {
           Toggle("Always show iPhone tab", isOn: $continuityAlwaysVisible)
@@ -308,20 +544,6 @@ struct SettingsView: View {
             "Shows the Live Activities macOS exposes in Control Center. Available detail varies by app."
           )
           .font(.caption2).foregroundStyle(.secondary)
-        }
-      }
-      Section("System HUD") {
-        Toggle("Replace volume and brightness HUD", isOn: $hudEnabled)
-        if hudEnabled {
-          Picker("Style", selection: $hudStyle) {
-            Text("Bar").tag(HUDStyle.bar)
-            Text("Gauge").tag(HUDStyle.gauge)
-          }
-          if !hud.accessibilityTrusted {
-            Label("Accessibility permission is required", systemImage: "exclamationmark.triangle")
-              .foregroundStyle(.orange)
-            Button("Review permission…") { selection = .permissions }
-          }
         }
       }
     }
@@ -354,7 +576,7 @@ struct SettingsView: View {
     .formStyle(.grouped)
   }
 
-  private var appearanceForm: some View {
+  private var interactionForm: some View {
     Form {
       Section("Open the island") {
         Picker("Expand", selection: $mode) {
@@ -362,15 +584,50 @@ struct SettingsView: View {
           Text("Click to pin").tag(InteractionMode.clickToPin)
         }
         if mode == .hover {
-          Text("Move upward into the notch until the island snaps open.")
+          Text("Move upward into the notch and keep pushing against the top edge until the island snaps open.")
+            .font(.caption).foregroundStyle(.secondary)
+          LabeledContent("Push distance") {
+            HStack(spacing: 10) {
+              Text("Short").font(.caption).foregroundStyle(.secondary)
+              Slider(value: $barrierPushDistance, in: 80...480, step: 16)
+                .frame(minWidth: 220)
+              Text("Long").font(.caption).foregroundStyle(.secondary)
+            }
+          }
+          Text("Current push distance: \(Int(barrierPushDistance)) points")
             .font(.caption).foregroundStyle(.secondary)
           LabeledContent("Collapse after: \(collapseTimeout, format: .number.precision(.fractionLength(1)))s") {
             Slider(value: $collapseTimeout, in: 0.2...3.0, step: 0.1).frame(minWidth: 180)
           }
         }
-        Toggle("Haptic feedback", isOn: $haptics)
       }
-      Section("Now Playing priority") {
+      Section("Haptic feedback") {
+        LabeledContent("Strength") {
+          HStack(spacing: 10) {
+            Text("Off").font(.caption).foregroundStyle(.secondary)
+            Slider(
+              value: hapticStrengthLevelBinding, in: 0...3, step: 1,
+              onEditingChanged: { editing in
+                if !editing, hapticStrengthBinding.wrappedValue != .off {
+                  Haptics.perform(.levelChange)
+                }
+              })
+              .frame(minWidth: 220)
+            Text("Strong").font(.caption).foregroundStyle(.secondary)
+          }
+        }
+        Text("Current strength: \(hapticStrengthBinding.wrappedValue.title)")
+          .font(.caption).foregroundStyle(.secondary)
+        Text("macOS exposes semantic haptic patterns rather than raw motor amplitude. Light, Medium, and Strong choose progressively firmer system patterns.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+    .formStyle(.grouped)
+  }
+
+  private var nowPlayingForm: some View {
+    Form {
+      Section("Primary player") {
         Picker("Primary player", selection: $sourceMode) {
           Text("Whatever is playing").tag(MediaSourceMode.auto)
           Text("My order").tag(MediaSourceMode.prioritized)
@@ -394,6 +651,144 @@ struct SettingsView: View {
           }
         }
       }
+      Section("Status") {
+        LabeledContent("Media adapter") {
+          Text(nowPlaying.adapterStatus).foregroundStyle(.secondary)
+        }
+        Text("Now Playing uses a private MediaRemote compatibility adapter and may need updates after major macOS releases.")
+          .font(.caption).foregroundStyle(.orange)
+      }
+    }
+    .formStyle(.grouped)
+  }
+
+  private var calendarRemindersForm: some View {
+    Form {
+      Section("Calendar") {
+        LabeledContent("Activity") {
+          Text(calendarEnabled ? "On" : "Off").foregroundStyle(.secondary)
+        }
+        Text("Enable or disable Calendar from Activity Lineup so visibility and EventKit monitoring stay in sync.")
+          .font(.caption).foregroundStyle(.secondary)
+        if calendarEnabled {
+          Stepper(
+            "Show countdown \(calendarLeadMinutes) minutes before",
+            value: $calendarLeadMinutes, in: 5...60, step: 5)
+        }
+        Button("Manage Calendar permission…") {
+          selection = .privacy
+          detailPage = .permissions
+        }
+      }
+      Section("Reminders") {
+        Toggle("Show incomplete reminders on Home", isOn: $remindersEnabled)
+        Text("Reminder monitoring stops when this is off. Permission can still be reviewed separately.")
+          .font(.caption).foregroundStyle(.secondary)
+        Button("Manage Reminders permission…") {
+          selection = .privacy
+          detailPage = .permissions
+        }
+      }
+    }
+    .formStyle(.grouped)
+  }
+
+  private var systemMetricsForm: some View {
+    Form {
+      Section("Visibility") {
+        LabeledContent("System activity") {
+          Text(systemEnabled ? "On" : "Off").foregroundStyle(.secondary)
+        }
+        Text("Enable or disable System from Activity Lineup. When enabled, it can appear only under sustained load or stay available at all times.")
+          .font(.caption).foregroundStyle(.secondary)
+        if systemEnabled {
+          Toggle("Always show System in the activity switcher", isOn: $systemAlwaysVisible)
+        }
+      }
+      if systemEnabled {
+        Section("Metric presentation") {
+          ForEach(SystemMetricKind.allCases, id: \.self) { kind in
+            Picker(kind.displayName, selection: styleBinding(kind)) {
+              ForEach(MetricDisplayStyle.allCases, id: \.self) { style in
+                Text(style.displayName).tag(style)
+              }
+            }
+          }
+          Text("Thermal has no numeric history; sparkline styles render its current state as text.")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+      }
+    }
+    .formStyle(.grouped)
+  }
+
+  private var clipboardForm: some View {
+    Form {
+      Section("Clipboard history") {
+        LabeledContent("Activity") {
+          Text(clipboardEnabled ? "On" : "Off").foregroundStyle(.secondary)
+        }
+        Text("Enable or disable Clipboard from Activity Lineup. Turning it off stops polling and immediately clears retained history.")
+          .font(.caption).foregroundStyle(.secondary)
+        if clipboardEnabled {
+          Toggle(
+            "Pause capture", isOn: Binding(
+              get: { clipboard.isPaused },
+              set: { clipboard.setPaused($0) }))
+          Button("Clear clipboard history") { clipboard.clear() }
+        }
+      }
+      Section("Privacy") {
+        Label(
+          "History remains in memory and is cleared at quit. Concealed and transient items plus common credential formats are filtered on a best-effort basis.",
+          systemImage: "lock.shield")
+          .font(.caption).foregroundStyle(.orange)
+      }
+    }
+    .formStyle(.grouped)
+  }
+
+  private var systemHUDForm: some View {
+    Form {
+      Section("Media-key HUD") {
+        Toggle("Replace the volume and brightness HUD", isOn: $hudEnabled)
+        if hudEnabled {
+          Picker("Style", selection: $hudStyle) {
+            Text("Bar").tag(HUDStyle.bar)
+            Text("Gauge").tag(HUDStyle.gauge)
+          }
+          PermissionStatusRow(
+            title: "Accessibility", icon: "accessibility",
+            status: hud.eventTapStatus.summary,
+            color: hud.eventTapStatus == .active ? .green : .orange)
+          if !hud.accessibilityTrusted {
+            Button("Review Accessibility permission…") {
+              selection = .privacy
+              detailPage = .permissions
+            }
+          }
+        }
+      }
+      Section {
+        Text("If Islet cannot safely change the active device or display, it passes the media key back to macOS and leaves the system HUD intact.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+    .formStyle(.grouped)
+  }
+
+  private var energyForm: some View {
+    Form {
+      Section("Energy policy") {
+        Picker("Mode", selection: $energyMode) {
+          Text("Automatic").tag(EnergyMode.automatic)
+          Text("Low Energy").tag(EnergyMode.lowEnergy)
+          Text("Live").tag(EnergyMode.live)
+        }
+        Text(energyModeDetail)
+          .font(.caption)
+          .foregroundStyle(energyMode == .live ? .orange : .secondary)
+      }
     }
     .formStyle(.grouped)
   }
@@ -403,8 +798,11 @@ struct SettingsView: View {
       Section("Calendar") {
         PermissionStatusRow(title: "Calendar access", icon: "calendar", status: eventStatusText, color: eventStatusColor)
         Text("Used to show today's agenda, countdowns and meeting links.").font(.caption).foregroundStyle(.secondary)
-        permissionButtons(status: calendar.authorization, pane: .calendars) {
-          Task { await calendar.recoverAccess() }
+        permissionButtons(status: permissions.diagnostics.calendar, pane: .calendars) {
+          Task {
+            await calendar.recoverAccess()
+            permissions.refresh()
+          }
         }
       }
       Section("Reminders") {
@@ -434,11 +832,26 @@ struct SettingsView: View {
     .formStyle(.grouped)
   }
 
-  private var integrationsForm: some View {
+  private var t3Form: some View {
     Form {
-      T3SettingsSection(activity: AppState.t3Code)
+      T3SettingsSection(activity: t3Code)
+      if let error = t3Code.lastCredentialError {
+        Section("Credential error") {
+          Label(error, systemImage: "exclamationmark.triangle.fill")
+            .foregroundStyle(.orange)
+        }
+      }
+      Section {
+        Text("Enable or disable the T3 Code activity from Activity Lineup. Pairing and machine controls remain here so credentials are never mixed with presentation settings.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+    .formStyle(.grouped)
+  }
+
+  private var pulseForm: some View {
+    Form {
       Section("Pulse providers") {
-        Toggle("Enable local Pulse providers", isOn: $pulseEnabled)
         PermissionStatusRow(
           title: "Local activity API", icon: "waveform.path.ecg",
           status: pulseServer.lastError ?? (pulseServer.isRunning ? "Listening on 127.0.0.1:47717" : "Stopped"),
@@ -462,6 +875,8 @@ struct SettingsView: View {
         Text(pulse.deliveryProfile.detail)
           .font(.caption).foregroundStyle(.secondary)
         Text("Pulse lets local scripts and tools publish bounded progress, alerts and actions. Connections are loopback-only and authenticated with a private token. Delivery profiles last until Islet quits.")
+          .font(.caption).foregroundStyle(.secondary)
+        Text("Enable or disable Pulse from Activity Lineup. Turning it off closes the listener and disconnects providers.")
           .font(.caption).foregroundStyle(.secondary)
         HStack {
           Button("Quick Actions…") { QuickActionsOpener.open() }
@@ -525,43 +940,12 @@ struct SettingsView: View {
           }
         }
       }
-      Section("Media") {
-        LabeledContent("Media adapter") {
-          Text(AppState.nowPlaying.adapterStatus).foregroundStyle(.secondary)
-        }
-        Text("Player priority and bundle IDs are configured in Appearance & Interaction.")
-          .font(.caption).foregroundStyle(.secondary)
-      }
     }
     .formStyle(.grouped)
   }
 
-  private var advancedForm: some View {
+  private var diagnosticsForm: some View {
     Form {
-      Section("System metric presentation") {
-        Toggle("System stats tab", isOn: $systemEnabled)
-        if systemEnabled {
-          Toggle("Always show the tab", isOn: $systemAlwaysVisible)
-          Text("When off, System appears only after sustained high CPU or thermal pressure.")
-            .font(.caption).foregroundStyle(.secondary)
-          ForEach(SystemMetricKind.allCases, id: \.self) { kind in
-            Picker(kind.displayName, selection: styleBinding(kind)) {
-              ForEach(MetricDisplayStyle.allCases, id: \.self) { style in
-                Text(style.displayName).tag(style)
-              }
-            }
-          }
-          Text("Thermal has no history; sparkline styles show its state as text.")
-            .font(.caption).foregroundStyle(.secondary)
-        }
-      }
-      Section("Clipboard privacy") {
-        Toggle("Clipboard history", isOn: $clipboardEnabled)
-        if clipboardEnabled {
-          Label("Concealed and transient pasteboard items plus common secret formats are filtered on a best-effort basis. History stays in memory only and is cleared when Islet quits.", systemImage: "lock.shield")
-            .font(.caption).foregroundStyle(.orange)
-        }
-      }
       Section("Diagnostics") {
         LabeledContent("Bundle identifier") {
           Text(Bundle.main.bundleIdentifier ?? "Unknown").textSelection(.enabled)
@@ -569,19 +953,25 @@ struct SettingsView: View {
         LabeledContent("Version") { Text(versionText).foregroundStyle(.secondary) }
         Button("Copy diagnostics") { copyDiagnostics() }
       }
-      Section("Energy & responsiveness") {
-        Picker("Energy mode", selection: $energyMode) {
-          Text("Automatic").tag(EnergyMode.automatic)
-          Text("Low Energy").tag(EnergyMode.lowEnergy)
-          Text("Live").tag(EnergyMode.live)
-        }
-        Text(energyModeDetail)
-          .font(.caption)
-          .foregroundStyle(energyMode == .live ? .orange : .secondary)
+      Section("Integration health") {
+        PermissionStatusRow(
+          title: "T3 Code credentials", icon: "key.fill",
+          status: t3Code.lastCredentialError ?? "Available",
+          color: t3Code.lastCredentialError == nil ? .green : .orange)
+        PermissionStatusRow(
+          title: "Pulse", icon: "waveform.path.ecg",
+          status: pulseServer.lastError ?? (pulseServer.isRunning ? "Listening" : "Stopped"),
+          color: pulseServer.lastError == nil ? (pulseServer.isRunning ? .green : .secondary) : .red)
       }
-      Section("Defaults") {
+    }
+    .formStyle(.grouped)
+  }
+
+  private var resetForm: some View {
+    Form {
+      Section("Interface defaults") {
         Button("Restore interface defaults…", role: .destructive) { confirmingRestore = true }
-        Text("Keeps permissions, paired T3 machines, feature enablement and activity data.")
+        Text("Resets interaction, haptics, presentation styles, player priority, and activity order. Enabled activities, permissions, paired machines, and activity data are kept.")
           .font(.caption).foregroundStyle(.secondary)
       }
     }
@@ -598,9 +988,9 @@ struct SettingsView: View {
     }
   }
 
-  private var eventStatusText: String { calendar.authorization.summary }
+  private var eventStatusText: String { permissions.diagnostics.calendar.summary }
   private var reminderStatusText: String { permissions.diagnostics.reminders.summary }
-  private var eventStatusColor: Color { authorizationColor(calendar.authorization) }
+  private var eventStatusColor: Color { authorizationColor(permissions.diagnostics.calendar) }
   private var reminderStatusColor: Color { authorizationColor(permissions.diagnostics.reminders) }
 
   private func authorizationColor(_ status: EventKitPermissionState) -> Color {
@@ -615,7 +1005,6 @@ struct SettingsView: View {
   private func refreshPermissionState() {
     hud.refreshPermissionStatus()
     permissions.refresh()
-    Task { await calendar.refreshAuthorization() }
   }
 
   private var versionText: String {
@@ -657,10 +1046,11 @@ struct SettingsView: View {
     mode = .hover
     collapseTimeout = 0.5
     haptics = true
+    hapticStrength = .medium
+    barrierPushDistance = 288
     sourceMode = .auto
     priorityList = ["com.spotify.client", "com.apple.Music"]
     activityOrder = ActivityCatalog.defaultOrder
-    disabledActivities = []
     systemAlwaysVisible = false
     metricStyles = [:]
     hudStyle = .bar
