@@ -36,7 +36,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
   var searchTerms: String {
     switch self {
     case .general: "launch login displays fullscreen recording hover click haptics energy"
-    case .activities: "tabs order battery calendar reminders clipboard ports audio hud timer shelf system media"
+    case .activities: "tabs order battery calendar reminders clipboard ports audio hud timer shelf system media iphone continuity live activities"
     case .notifications: "events usb wifi bluetooth airdrop vpn focus screenshot sleep power volume display"
     case .integrations: "t3 code agents remote media spotify music pulse api cli providers history rules focus shortcuts"
     case .privacy: "calendar reminders accessibility privacy grant denied restricted clipboard"
@@ -61,6 +61,7 @@ private enum SettingsDetailPage: String, CaseIterable, Identifiable {
   case activityOrder
   case calendarReminders
   case nowPlaying
+  case continuity
   case systemMetrics
   case clipboard
   case systemHUD
@@ -81,6 +82,7 @@ private enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .activityOrder: "Activity Lineup"
     case .calendarReminders: "Calendar & Reminders"
     case .nowPlaying: "Now Playing"
+    case .continuity: "iPhone Live Activities"
     case .systemMetrics: "System Metrics"
     case .clipboard: "Clipboard"
     case .systemHUD: "System HUD"
@@ -101,6 +103,7 @@ private enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .activityOrder: "Choose, order, and disable island activities"
     case .calendarReminders: "Calendars, countdowns, and Home reminders"
     case .nowPlaying: "Select the primary player when several are active"
+    case .continuity: "Show iPhone activity presence exposed by macOS"
     case .systemMetrics: "Visibility and metric presentation"
     case .clipboard: "Retention behavior and privacy boundaries"
     case .systemHUD: "Volume and brightness overlay replacement"
@@ -121,6 +124,7 @@ private enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .activityOrder: "list.number"
     case .calendarReminders: "calendar.badge.clock"
     case .nowPlaying: "music.note"
+    case .continuity: "iphone.gen3"
     case .systemMetrics: "cpu"
     case .clipboard: "doc.on.clipboard"
     case .systemHUD: "slider.horizontal.3"
@@ -136,7 +140,8 @@ private enum SettingsDetailPage: String, CaseIterable, Identifiable {
   var category: SettingsCategory {
     switch self {
     case .startupDisplays, .interaction, .energy: .general
-    case .activityOrder, .calendarReminders, .nowPlaying, .systemMetrics, .clipboard, .systemHUD:
+    case .activityOrder, .calendarReminders, .nowPlaying, .continuity, .systemMetrics, .clipboard,
+      .systemHUD:
       .activities
     case .eventSources: .notifications
     case .t3Code, .pulse: .integrations
@@ -153,6 +158,7 @@ private enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .activityOrder: "enable disable stop hide tabs priority reorder"
     case .calendarReminders: "agenda countdown meetings due snooze permission"
     case .nowPlaying: "music spotify player bundle priority media"
+    case .continuity: "iphone live activities control center accessibility announce remote"
     case .systemMetrics: "cpu gpu memory disk network thermal sparkline"
     case .clipboard: "history secrets pause privacy copy"
     case .systemHUD: "volume brightness media keys accessibility bar gauge"
@@ -192,6 +198,7 @@ struct SettingsView: View {
   @ObservedObject private var pulseServer = PulseServer.shared
   @ObservedObject private var permissions = PermissionCenter.shared
   @ObservedObject private var hud = HUDController.shared
+  @ObservedObject private var continuity = ContinuityMonitor.shared
   @ObservedObject private var nowPlaying = AppState.nowPlaying
   @ObservedObject private var t3Code = AppState.t3Code
   @ObservedObject private var launchAtLoginStatus = LaunchAtLoginStatus.shared
@@ -225,6 +232,9 @@ struct SettingsView: View {
   @Default(.pulseEnabled) private var pulseEnabled
   @Default(.t3CodeEnabled) private var t3CodeEnabled
   @Default(.energyMode) private var energyMode
+  @Default(.continuityEnabled) private var continuityEnabled
+  @Default(.continuityAlwaysVisible) private var continuityAlwaysVisible
+  @Default(.continuitySneaks) private var continuitySneaks
 
   @State private var selection: SettingsCategory?
   @State private var detailPage: SettingsDetailPage?
@@ -285,6 +295,7 @@ struct SettingsView: View {
     case "system": systemEnabled
     case "t3Code": t3CodeEnabled
     case "pulse": pulseEnabled
+    case "continuity": continuityEnabled
     default: true
     }
   }
@@ -298,6 +309,7 @@ struct SettingsView: View {
     case "system": systemEnabled = enabled
     case "t3Code": t3CodeEnabled = enabled
     case "pulse": pulseEnabled = enabled
+    case "continuity": continuityEnabled = enabled
     default: break
     }
   }
@@ -519,7 +531,10 @@ struct SettingsView: View {
     case .activities:
       settingsLanding(
         "Choose what belongs in the island, then configure only the activities that need extra options.",
-        pages: [.activityOrder, .calendarReminders, .nowPlaying, .systemMetrics, .clipboard, .systemHUD])
+        pages: [
+          .activityOrder, .calendarReminders, .nowPlaying, .continuity, .systemMetrics,
+          .clipboard, .systemHUD,
+        ])
     case .notifications:
       settingsLanding(
         "Choose which system changes deserve a brief island notification. Disabled sources stop observing.",
@@ -547,6 +562,7 @@ struct SettingsView: View {
     case .activityOrder: activityOrderForm
     case .calendarReminders: calendarRemindersForm
     case .nowPlaying: nowPlayingForm
+    case .continuity: continuityForm
     case .systemMetrics: systemMetricsForm
     case .clipboard: clipboardForm
     case .systemHUD: systemHUDForm
@@ -740,14 +756,14 @@ struct SettingsView: View {
                 }
               })
               .frame(minWidth: 220)
-            Button("Test") { Haptics.perform(.generic) }
+            Button("Test") { Haptics.performDelayedTest() }
               .disabled(hapticStrengthBinding.wrappedValue == .off)
             Text("Strong").font(.caption).foregroundStyle(.secondary)
           }
         }
         Text("Current strength: \(hapticStrengthBinding.wrappedValue.title)")
           .font(.caption).foregroundStyle(.secondary)
-        Text("macOS exposes semantic haptic patterns rather than raw motor amplitude. The final push-through snap is always one strongest single pulse—never a double pulse.")
+        Text("Push-through plays one contact pulse and one final snap—no middle pulse. The final snap is always one strongest single pulse, never a double pulse.")
           .font(.caption).foregroundStyle(.secondary)
       }
     }
@@ -887,6 +903,39 @@ struct SettingsView: View {
     .formStyle(.grouped)
   }
 
+  private var continuityForm: some View {
+    Form {
+      Section("iPhone Live Activities") {
+        Toggle("Show iPhone Live Activities", isOn: $continuityEnabled)
+        Text("Islet reads the Live Activity app identities that macOS already exposes through Control Centre. Activity contents remain on your iPhone.")
+          .font(.caption).foregroundStyle(.secondary)
+        if continuityEnabled {
+          PermissionStatusRow(
+            title: "Availability", icon: "iphone.gen3",
+            status: continuityStatusText, color: continuityStatusColor)
+          Text(continuity.availability.explanation)
+            .font(.caption).foregroundStyle(.secondary)
+          LabeledContent("Detected now") {
+            Text("\(continuity.cards.count)").monospacedDigit().foregroundStyle(.secondary)
+          }
+          Toggle("Keep iPhone in the activity switcher when idle", isOn: $continuityAlwaysVisible)
+          Toggle("Announce when a Live Activity starts or ends", isOn: $continuitySneaks)
+          if continuity.availability == .needsAccessibility {
+            HStack {
+              Button("Request Accessibility access") { AccessibilityPermission.prompt() }
+              Button("Open Accessibility Settings") { permissions.open(.accessibility) }
+            }
+          }
+        }
+      }
+      Section("Limits") {
+        Text("macOS shares which apps have Live Activities, but not the full phone-side content. Available detail therefore varies by app.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+    .formStyle(.grouped)
+  }
+
   private var clipboardForm: some View {
     Form {
       Section("Clipboard history") {
@@ -996,13 +1045,15 @@ struct SettingsView: View {
       }
       Section("Accessibility") {
         PermissionStatusRow(
-          title: "Media-key HUD", icon: "keyboard",
-          status: hud.accessibilityTrusted ? hud.eventTapStatus.summary : "Not allowed",
-          color: hud.accessibilityTrusted ? (hud.eventTapStatus == .active ? .green : .orange) : .red)
-        Text("Required only when Islet replaces the system volume and brightness HUD.")
+          title: "Accessibility access", icon: "accessibility",
+          status: permissions.diagnostics.accessibilityGranted ? "Allowed" : "Not allowed",
+          color: permissions.diagnostics.accessibilityGranted ? .green : .red)
+        Text("Used only when the media-key HUD or iPhone Live Activities feature is enabled.")
           .font(.caption).foregroundStyle(.secondary)
         HStack {
-          if !hud.accessibilityTrusted { Button("Request access") { hud.promptForAccessibility() } }
+          if !permissions.diagnostics.accessibilityGranted {
+            Button("Request access") { AccessibilityPermission.prompt() }
+          }
           Button("Open Accessibility Settings") { permissions.open(.accessibility) }
         }
       }
@@ -1204,6 +1255,25 @@ struct SettingsView: View {
   private var reminderStatusText: String { permissions.diagnostics.reminders.summary }
   private var eventStatusColor: Color { authorizationColor(permissions.diagnostics.calendar) }
   private var reminderStatusColor: Color { authorizationColor(permissions.diagnostics.reminders) }
+
+  private var continuityStatusText: String {
+    switch continuity.availability {
+    case .needsAccessibility: "Needs Accessibility"
+    case .unsupported: "Unavailable"
+    case .systemDisabled: "Off in macOS"
+    case .waiting: "Waiting"
+    case .active: "Active"
+    }
+  }
+
+  private var continuityStatusColor: Color {
+    switch continuity.availability {
+    case .active: .green
+    case .waiting: .secondary
+    case .needsAccessibility, .systemDisabled: .orange
+    case .unsupported: .red
+    }
+  }
 
   private func authorizationColor(_ status: EventKitPermissionState) -> Color {
     switch status {

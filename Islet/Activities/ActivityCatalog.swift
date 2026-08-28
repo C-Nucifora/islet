@@ -13,6 +13,7 @@ enum ActivityCatalog {
     ("calendar", "Calendar", "calendar"),
     ("battery", "Battery", "battery.100percent.bolt"),
     ("system", "System", "cpu"),
+    ("continuity", "iPhone", "iphone.gen3"),
   ]
 
   static var defaultOrder: [String] { orderable.map(\.id) }
@@ -22,6 +23,7 @@ enum ActivityCatalog {
   /// tests a way to catch a newly catalogued activity that nobody starts or deliberately exempts.
   static let lifecycleManagedIDs: Set<String> = [
     "pulse", "t3Code", "nowPlaying", "clipboard", "ports", "calendar", "battery", "system",
+    "continuity",
   ]
 
   /// These are intentionally resident when hidden. Timer owns no background polling and must keep
