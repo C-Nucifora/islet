@@ -39,8 +39,8 @@ final class HUDKeyTests: XCTestCase {
   func testVolumeShiftPreservesPerChannelBalance() {
     let shifted = VolumeControlLayout.shiftedValues(
       [1: 0.4, 2: 0.6], reference: 0.4, target: 0.5)
-    XCTAssertEqual(shifted[1], 0.5)
-    XCTAssertEqual(shifted[2], 0.7)
+    XCTAssertEqual(shifted[1] ?? -1, 0.5, accuracy: 1e-6)
+    XCTAssertEqual(shifted[2] ?? -1, 0.7, accuracy: 1e-6)
   }
 
   func testBrightnessClassification() {

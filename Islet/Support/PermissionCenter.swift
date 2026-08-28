@@ -147,13 +147,21 @@ final class PermissionCenter: ObservableObject {
   private static func signingInformation() -> (
     identifier: String, team: String, identity: String, cdHash: String
   ) {
-    var code: SecCode?
-    guard SecCodeCopySelf(kSecCSDefaultFlags, &code) == errSecSuccess, let code else {
+    guard let executableURL = Bundle.main.executableURL else {
+      return ("Unavailable", "Unavailable", "Unavailable", "Unavailable")
+    }
+    let defaultFlags = SecCSFlags(rawValue: 0)
+    var code: SecStaticCode?
+    guard
+      SecStaticCodeCreateWithPath(executableURL as CFURL, defaultFlags, &code) == errSecSuccess,
+      let code
+    else {
       return ("Unavailable", "Unavailable", "Unavailable", "Unavailable")
     }
     var rawInformation: CFDictionary?
+    let informationFlags = SecCSFlags(rawValue: kSecCSSigningInformation)
     guard
-      SecCodeCopySigningInformation(code, kSecCSSigningInformation, &rawInformation)
+      SecCodeCopySigningInformation(code, informationFlags, &rawInformation)
         == errSecSuccess,
       let information = rawInformation as? [String: Any]
     else {
