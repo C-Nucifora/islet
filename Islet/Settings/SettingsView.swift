@@ -2,7 +2,7 @@ import AppKit
 import Defaults
 import SwiftUI
 
-private enum SettingsCategory: String, CaseIterable, Identifiable {
+enum SettingsCategory: String, CaseIterable, Identifiable {
   case general = "General"
   case activities = "Activities"
   case notifications = "Notifications"
@@ -54,7 +54,7 @@ private enum SystemMetricPreset: String, CaseIterable, Identifiable {
   var id: Self { self }
 }
 
-private enum SettingsDetailPage: String, CaseIterable, Identifiable {
+enum SettingsDetailPage: String, CaseIterable, Identifiable {
   case startupDisplays
   case interaction
   case energy
@@ -150,25 +150,138 @@ private enum SettingsDetailPage: String, CaseIterable, Identifiable {
     }
   }
 
-  var searchTerms: String {
-    switch self {
-    case .startupDisplays: "launch login screen display fullscreen recording multiple monitors"
-    case .interaction: "hover push squeeze snap distance click pin collapse haptic strength notch"
-    case .energy: "battery low power live polling performance"
-    case .activityOrder: "enable disable stop hide tabs priority reorder"
-    case .calendarReminders: "agenda countdown meetings due snooze permission"
-    case .nowPlaying: "music spotify player bundle priority media"
-    case .continuity: "iphone live activities control center accessibility announce remote"
-    case .systemMetrics: "cpu gpu memory disk network thermal sparkline"
-    case .clipboard: "history secrets pause privacy copy"
-    case .systemHUD: "volume brightness media keys accessibility bar gauge"
-    case .eventSources: "usb wifi bluetooth airdrop vpn focus screenshot sleep power display"
-    case .t3Code: "agents provider remote pairing machine"
-    case .pulse: "api cli providers token history delivery"
-    case .permissions: "calendar reminders accessibility privacy diagnostics"
-    case .diagnostics: "bundle signing version copy support"
-    case .reset: "restore defaults layout presentation"
+  var searchableContent: [String] {
+    let pageContent = [title, subtitle]
+    return switch self {
+    case .startupDisplays:
+      pageContent + [
+        "Startup", "Launch Islet at login", "Login item status", "Run setup again",
+        "Displays", "Show Islet on every display", "Hide Islet while an app is fullscreen",
+        "screen multiple monitors",
+      ]
+    case .interaction:
+      pageContent + [
+        "Open the island", "Expand", "Push through", "Click to pin", "Push distance",
+        "Collapse after", "Haptic feedback", "Strength", "Test haptics",
+        "hover squeeze snap top edge notch",
+      ]
+    case .energy:
+      pageContent + [
+        "Energy use", "Mode", "Automatic", "Low Energy", "Live", "Low Power Mode",
+        "refresh rates hidden activity remote T3 polling performance battery",
+      ]
+    case .activityOrder:
+      pageContent + [
+        "Activities", "Drag to reorder", "Home", "Reminders",
+        "show hide enable disable stop tabs priority activity switcher",
+      ] + ActivityCatalog.orderable.flatMap { [$0.id, $0.name] }
+    case .calendarReminders:
+      pageContent + [
+        "Calendar", "Activity", "Upcoming-event countdown", "Calendars shown in Islet",
+        "Manage Calendar permission", "Reminders", "Show incomplete reminders on Home",
+        "Manage Reminders permission", "agenda meetings due snooze complete meeting links",
+      ]
+    case .nowPlaying:
+      pageContent + [
+        "Primary player", "Whatever is playing", "My order", "Add Detected Player",
+        "Add Other App by Bundle Identifier", "music Spotify Apple Music media priority",
+      ]
+    case .continuity:
+      pageContent + [
+        "iPhone Live Activities", "Show iPhone Live Activities", "Availability", "Detected now",
+        "Keep iPhone in the activity switcher when idle",
+        "Announce when a Live Activity starts or ends", "Request Accessibility access",
+        "Open Accessibility Settings", "Control Centre remote app names",
+      ]
+    case .systemMetrics:
+      pageContent + [
+        "Visibility", "System activity", "Always show System in the activity switcher",
+        "Metric presentation", "Presentation", "Compact", "Balanced", "Detailed", "Custom",
+        "Customize individual metrics", "current value recent graph state labels",
+      ] + SystemMetricKind.allCases.map(\.displayName)
+        + MetricDisplayStyle.allCases.map(\.displayName)
+    case .clipboard:
+      pageContent + [
+        "Clipboard history", "Activity", "Pause and Clear", "Quick Actions", "Privacy",
+        "history stays in memory", "concealed items credential formats sensitive text secrets copy",
+      ]
+    case .systemHUD:
+      pageContent + [
+        "Media-key HUD", "Replace the volume and brightness HUD", "Style", "Bar", "Gauge",
+        "Test Volume", "Test Brightness", "Accessibility", "Review Accessibility permission",
+        "active device display media keys",
+      ]
+    case .eventSources:
+      pageContent + [
+        "Activity notifications", "brief alerts system changes", "enable disable source observing",
+      ] + SourceCatalog.all.flatMap { [$0.id, $0.name] }
+        + SystemEventTier.allCases.map(\.label)
+    case .t3Code:
+      pageContent + [
+        "T3 Code agents", "Monitor T3 Code", "Paste a T3 Code pairing link", "Add machine",
+        "Allow plain HTTP for this pairing", "Reconnect now", "Remove machine", "This Mac",
+        "remote paired machines pairing credentials Keychain HTTPS Tailscale credential error",
+      ]
+    case .pulse:
+      pageContent + [
+        "Pulse providers", "Local activity API", "Pulse items", "Authentication",
+        "Shared bearer token", "Quick Actions", "Reveal token folder", "Dismiss visible",
+        "Rotate provider token", "Provider examples", "Allow Mute Revoke Policy",
+        "Other sources seen this session", "Pulse history", "Show session history",
+        "History filter", "All Accepted Filtered Rejected", "Clear history",
+        "source result priority time local scripts CLI access token delivery",
+      ]
+    case .permissions:
+      pageContent + [
+        "Screen recording", "Hide Islet from screen recordings", "Calendar access",
+        "Reminders access", "Accessibility access", "Request access", "Open System Settings",
+        "Nearby devices and networks", "Location for Wi-Fi names", "Open Location Settings",
+        "Bluetooth devices", "Open Bluetooth Privacy Settings", "Local network",
+        "Open Local Network Settings", "Refresh permission status",
+        "agenda countdowns meeting links media keys HUD iPhone Live Activities privacy diagnostics",
+      ]
+    case .diagnostics:
+      pageContent + [
+        "Diagnostics", "Bundle identifier", "Version", "Energy mode", "Copy diagnostics",
+        "Open logs folder", "Quit Islet", "Integration health", "Media adapter",
+        "T3 Code credentials", "Pulse", "Media-key HUD", "signing support status",
+      ]
+    case .reset:
+      pageContent + [
+        "Appearance and interaction", "Restore appearance and interaction", "Reset defaults",
+        "notch haptics HUD style player order activity order metric styles layout presentation",
+      ]
     }
+  }
+
+  func matchesSearch(_ query: String) -> Bool {
+    SettingsSearch.matches(query, in: searchableContent)
+  }
+}
+
+enum SettingsSearch {
+  static func matches(_ query: String, in content: [String]) -> Bool {
+    let queryTokens = words(in: query)
+    guard !queryTokens.isEmpty else { return true }
+
+    let searchableText = content.joined(separator: " ")
+    let searchableWords = words(in: searchableText).joined(separator: " ")
+    let compactSearchableText = searchableText.unicodeScalars
+      .filter { CharacterSet.alphanumerics.contains($0) }
+      .map(String.init)
+      .joined()
+      .lowercased()
+
+    return queryTokens.allSatisfy {
+      searchableWords.contains($0) || compactSearchableText.contains($0)
+    }
+  }
+
+  private static func words(in text: String) -> [String] {
+    text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .lowercased()
+      .components(separatedBy: CharacterSet.alphanumerics.inverted)
+      .filter { !$0.isEmpty }
   }
 }
 
@@ -263,9 +376,7 @@ struct SettingsView: View {
   private var filteredDetailPages: [SettingsDetailPage] {
     let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard !query.isEmpty else { return [] }
-    return SettingsDetailPage.allCases.filter {
-      $0.title.lowercased().contains(query) || $0.searchTerms.contains(query)
-    }
+    return SettingsDetailPage.allCases.filter { $0.matchesSearch(query) }
   }
 
   private var filteredPulseHistory: [PulseHistoryEntry] {
@@ -423,7 +534,14 @@ struct SettingsView: View {
                 navigate(to: page)
                 searchText = ""
               } label: {
-                Label(page.title, systemImage: page.icon)
+                Label {
+                  VStack(alignment: .leading, spacing: 1) {
+                    Text(page.title)
+                    Text(page.subtitle).font(.caption).foregroundStyle(.secondary)
+                  }
+                } icon: {
+                  Image(systemName: page.icon)
+                }
               }
               .buttonStyle(.plain)
             }
