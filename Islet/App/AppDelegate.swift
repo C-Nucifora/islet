@@ -36,7 +36,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       Log.app.info("Launched as a test host; skipping monitor startup")
       return
     }
-    DefaultsMigration.migrateFromOriginalBundleIfNeeded()
     Task { @MainActor in
       // Bring a persisted activity order forward before anything renders from it: entries added to
       // the catalogue after the order was first written would otherwise be missing from Settings.
