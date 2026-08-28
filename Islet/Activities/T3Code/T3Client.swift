@@ -385,11 +385,9 @@ enum T3LocalDiscovery {
 
     let declaredEntryPoint = packageRoot.appendingPathComponent(declaredBin).standardizedFileURL
     guard declaredEntryPoint.path == entryPoint.path,
-      let entryPointIndex = arguments.firstIndex(where: {
-        URL(fileURLWithPath: $0).standardizedFileURL.path == entryPoint.path
-      }),
-      arguments.indices.contains(entryPointIndex + 1),
-      arguments[entryPointIndex + 1] == "serve"
+      arguments.indices.contains(2),
+      URL(fileURLWithPath: arguments[1]).standardizedFileURL.path == entryPoint.path,
+      arguments[2] == "serve"
     else { return false }
     return true
   }
@@ -397,11 +395,12 @@ enum T3LocalDiscovery {
   nonisolated private static func isT3CLI(processID: Int32) -> Bool {
     guard let executablePath = processPath(processID),
       let arguments = processArguments(processID),
-      let entryPointArgument = arguments.first(where: { $0.hasSuffix("/t3/dist/bin.mjs") })
+      arguments.indices.contains(1),
+      arguments[1].hasSuffix("/t3/dist/bin.mjs")
     else { return false }
 
     let executable = URL(fileURLWithPath: executablePath).resolvingSymlinksInPath()
-    let entryPoint = URL(fileURLWithPath: entryPointArgument).resolvingSymlinksInPath()
+    let entryPoint = URL(fileURLWithPath: arguments[1]).resolvingSymlinksInPath()
     let packageRoot = entryPoint.deletingLastPathComponent().deletingLastPathComponent()
     let manifestURL = packageRoot.appendingPathComponent("package.json")
     guard secureRegularFile(executable.path),
