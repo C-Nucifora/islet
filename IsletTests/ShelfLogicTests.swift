@@ -1,9 +1,19 @@
 import AppKit
+import Darwin
 import XCTest
 
 @testable import Islet
 
 final class ShelfLogicTests: XCTestCase {
+  private enum CopyFailure: Error { case expected }
+
+  private actor CopyProbe {
+    private var started = false
+
+    func markStarted() { started = true }
+    func hasStarted() -> Bool { started }
+  }
+
   func testShelfHasBoundedCapacity() {
     XCTAssertEqual(ShelfModel.maximumItemCount, 100)
     XCTAssertTrue(ShelfLogic.hasCapacity(currentCount: 99, pendingCount: 0, maximum: 100))
@@ -119,5 +129,79 @@ final class ShelfLogicTests: XCTestCase {
     XCTAssertEqual(model.lastError, "Shelf is full (\(ShelfModel.maximumItemCount) items).")
     XCTAssertEqual(model.items.filter { $0.name == "first.txt" }.count, 1)
     XCTAssertFalse(model.items.contains { $0.name == "second.txt" })
+  }
+
+  @MainActor
+  func testOverlappingDropBatchesShareOneErrorResult() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let failing = temporaryRoot.appendingPathComponent("failing.txt")
+    let succeeding = temporaryRoot.appendingPathComponent("succeeding.txt")
+    try FileManager.default.createDirectory(
+      at: temporaryRoot, withIntermediateDirectories: true)
+    try Data("fail".utf8).write(to: failing)
+    try Data("succeed".utf8).write(to: succeeding)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      copyItem: { source, destination in
+        if source.lastPathComponent == "failing.txt" { return .failure(CopyFailure.expected) }
+        return await Task.detached(priority: .utility) {
+          Result { try FileManager.default.copyItem(at: source, to: destination) }
+        }.value
+      })
+    XCTAssertTrue(model.importDroppedURLs([failing]))
+    XCTAssertTrue(model.importDroppedURLs([succeeding]))
+
+    for _ in 0..<200 where model.pendingImportCount > 0 {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+
+    XCTAssertEqual(model.pendingImportCount, 0)
+    XCTAssertEqual(model.items.map(\.name), ["succeeding.txt"])
+    XCTAssertEqual(model.lastError, "Couldn’t add failing.txt.")
+  }
+
+  @MainActor
+  func testClearInvalidatesAnImportAlreadyCopying() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("pending.txt")
+    try FileManager.default.createDirectory(
+      at: temporaryRoot, withIntermediateDirectories: true)
+    try Data("pending".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+    let probe = CopyProbe()
+
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      copyItem: { source, destination in
+        await probe.markStarted()
+        return await Task.detached(priority: .utility) { () -> Result<Void, Error> in
+          usleep(150_000)
+          return Result { try FileManager.default.copyItem(at: source, to: destination) }
+        }.value
+      })
+    XCTAssertTrue(model.importDroppedURLs([source]))
+    for _ in 0..<100 {
+      if await probe.hasStarted() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let copyStarted = await probe.hasStarted()
+    XCTAssertTrue(copyStarted)
+
+    await model.clear()
+    XCTAssertEqual(model.pendingImportCount, 0)
+    XCTAssertTrue(model.items.isEmpty)
+    try await Task.sleep(for: .milliseconds(250))
+
+    XCTAssertTrue(model.items.isEmpty)
+    let remaining =
+      (try? FileManager.default.contentsOfDirectory(
+        at: shelfDirectory, includingPropertiesForKeys: nil)) ?? []
+    XCTAssertTrue(remaining.isEmpty)
   }
 }

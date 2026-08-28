@@ -56,7 +56,7 @@ struct NotchGeometry: Equatable {
   /// count. The island always hangs off the top edge, so height changes move only the bottom edge.
   func expandedRect(width: CGFloat = Metrics.expandedSize.width, height: CGFloat) -> CGRect {
     CGRect(
-      x: screenFrame.midX - width / 2,
+      x: notchRect.midX - width / 2,
       y: screenFrame.maxY - height,
       width: width, height: height)
   }
@@ -66,7 +66,7 @@ struct NotchGeometry: Equatable {
   func panelFrame(width: CGFloat = Metrics.expandedSize.width, height: CGFloat) -> CGRect {
     let w = width + Metrics.earMargin * 2
     let h = height + Metrics.shadowPadding
-    return CGRect(x: screenFrame.midX - w / 2, y: screenFrame.maxY - h, width: w, height: h)
+    return CGRect(x: notchRect.midX - w / 2, y: screenFrame.maxY - h, width: w, height: h)
   }
 
   /// Panel frame while collapsed. A window swallows every mouse event inside its frame, so the

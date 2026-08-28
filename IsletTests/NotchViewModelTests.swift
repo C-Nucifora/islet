@@ -250,6 +250,17 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertTrue(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 864, y: 880)))
   }
 
+  func testTransparentMarginsStayIgnoredUntilTheClosingPanelShrinks() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    vm.handleMouseDown(CGPoint(x: 100, y: 500))
+
+    XCTAssertEqual(vm.state, .closed)
+    XCTAssertEqual(vm.panelFrame, expandedPanel(vm))
+    XCTAssertFalse(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 864, y: 1110)))
+    XCTAssertTrue(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 1_250, y: 1_000)))
+  }
+
   func testWidthShrinkPastStationaryCursorSchedulesCollapse() async throws {
     let savedTimeout = Defaults[.hoverCollapseTimeout]
     Defaults[.hoverCollapseTimeout] = 0.01
@@ -414,5 +425,29 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertFalse(
       EventMonitors.isInTopInteractionBand(
         CGPoint(x: 100, y: secondary.maxY), screenFrames: [secondary]))
+  }
+
+  func testPointerPassthroughForwardsOnlyTheTopBandAndItsFirstExit() {
+    let frame = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+    let desktop = CGPoint(x: 864, y: 500)
+    XCTAssertFalse(
+      EventMonitors.shouldForwardTopBandMovement(
+        desktop, screenFrames: [frame], wasInTopInteractionBand: false))
+    XCTAssertTrue(
+      EventMonitors.shouldForwardTopBandMovement(
+        desktop, screenFrames: [frame], wasInTopInteractionBand: true))
+  }
+
+  func testDisabledShelfDoesNotForwardMonitorDrivenFileDrags() {
+    let frame = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+    let notch = CGPoint(x: 864, y: 1110)
+    XCTAssertFalse(
+      EventMonitors.shouldForwardFileDrag(
+        notch, screenFrames: [frame], shelfAvailable: false,
+        wasInTopInteractionBand: false))
+    XCTAssertTrue(
+      EventMonitors.shouldForwardFileDrag(
+        notch, screenFrames: [frame], shelfAvailable: true,
+        wasInTopInteractionBand: false))
   }
 }

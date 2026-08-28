@@ -16,20 +16,38 @@ final class ShelfModel: ObservableObject {
   static let shared = ShelfModel()
   nonisolated static let maximumItemCount = 100
 
+  private struct ImportBatch {
+    let urls: [URL]
+    let generation: UInt
+  }
+
+  typealias CopyItem = @Sendable (URL, URL) async -> Result<Void, Error>
+
   @Published private(set) var items: [ShelfItem] = []
   @Published private(set) var lastError: String?
   @Published private var dropState = ShelfDropState()
   @Published private(set) var presentationRequest: UUID?
 
   private let dir: URL
+  private let copyItem: CopyItem
   private var reservedDestinations: Set<URL> = []
+  private var importQueue: [ImportBatch] = []
+  private var importWorker: Task<Void, Never>?
+  private var importGeneration: UInt = 0
 
-  init(directory: URL? = nil) {
+  init(directory: URL? = nil, copyItem: CopyItem? = nil) {
     let base =
       directory
       ?? FileManager.default.urls(
         for: .applicationSupportDirectory, in: .userDomainMask
       )[0].appendingPathComponent("Islet/Shelf", isDirectory: true)
+    self.copyItem =
+      copyItem
+      ?? { source, destination in
+        await Task.detached(priority: .utility) {
+          Result { try FileManager.default.copyItem(at: source, to: destination) }
+        }.value
+      }
     try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
     dir = base
     load()
@@ -76,8 +94,12 @@ final class ShelfModel: ObservableObject {
   }
 
   private func add(
-    _ source: URL, updatesLastError: Bool
+    _ source: URL, updatesLastError: Bool,
+    expectedImportGeneration: UInt? = nil
   ) async -> (item: ShelfItem?, error: String?) {
+    if let expectedImportGeneration, expectedImportGeneration != importGeneration {
+      return (nil, nil)
+    }
     guard
       ShelfLogic.hasCapacity(
         currentCount: items.count, pendingCount: reservedDestinations.count,
@@ -99,10 +121,17 @@ final class ShelfModel: ObservableObject {
     }
 
     let dest = reserveDestination(named: source.lastPathComponent)
-    let result: Result<Void, Error> = await Task.detached(priority: .utility) {
-      Result { try FileManager.default.copyItem(at: source, to: dest) }
-    }.value
+    let result = await copyItem(source, dest)
     reservedDestinations.remove(dest)
+
+    if let expectedImportGeneration, expectedImportGeneration != importGeneration {
+      if case .success = result {
+        await Task.detached(priority: .utility) {
+          try? FileManager.default.removeItem(at: dest)
+        }.value
+      }
+      return (nil, nil)
+    }
 
     switch result {
     case .success:
@@ -141,6 +170,7 @@ final class ShelfModel: ObservableObject {
   }
 
   func clear() async {
+    cancelPendingImports()
     let current = items
     let removedIDs: Set<UUID> = await Task.detached(priority: .utility) {
       var removed: Set<UUID> = []
@@ -215,21 +245,49 @@ final class ShelfModel: ObservableObject {
     guard !fileURLs.isEmpty else { return false }
 
     dropState.beginImports(fileURLs.count)
-    Task { @MainActor in
-      var firstError: String?
-      for url in fileURLs {
-        let result = await add(url, updatesLastError: false)
+    importQueue.append(ImportBatch(urls: fileURLs, generation: importGeneration))
+    startImportWorkerIfNeeded()
+    return true
+  }
+
+  private func startImportWorkerIfNeeded() {
+    guard importWorker == nil, !importQueue.isEmpty else { return }
+    let generation = importGeneration
+    importWorker = Task { [weak self] in
+      await self?.drainImportQueue(generation: generation)
+    }
+  }
+
+  private func drainImportQueue(generation: UInt) async {
+    var firstError: String?
+    while generation == importGeneration, !Task.isCancelled, !importQueue.isEmpty {
+      let batch = importQueue.removeFirst()
+      guard batch.generation == generation else { continue }
+      for url in batch.urls {
+        guard generation == importGeneration, !Task.isCancelled else { return }
+        let result = await add(
+          url, updatesLastError: false, expectedImportGeneration: generation)
+        guard generation == importGeneration, !Task.isCancelled else { return }
         if firstError == nil, let error = result.error {
           firstError = error
           lastError = error
         }
         dropState.finishImport()
       }
-      lastError = firstError
     }
-    return true
+    guard generation == importGeneration else { return }
+    lastError = firstError
+    importWorker = nil
+    startImportWorkerIfNeeded()
   }
 
+  private func cancelPendingImports() {
+    importGeneration &+= 1
+    importQueue.removeAll()
+    importWorker?.cancel()
+    importWorker = nil
+    dropState.cancelImports()
+  }
 }
 
 struct ShelfDropState: Equatable {
@@ -255,6 +313,10 @@ struct ShelfDropState: Equatable {
   mutating func finishImport() {
     guard pendingImportCount > 0 else { return }
     pendingImportCount -= 1
+  }
+
+  mutating func cancelImports() {
+    pendingImportCount = 0
   }
 }
 

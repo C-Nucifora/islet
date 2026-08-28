@@ -98,7 +98,8 @@ final class NotchViewModel: ObservableObject {
   /// hosting view during animation. Only the rendered island inside that window should take mouse
   /// events; transparent margins must behave like the menu bar or app beneath them.
   func shouldIgnorePanelMouseEvents(at location: CGPoint) -> Bool {
-    state.isExpanded && !region(expandedRect, contains: location)
+    let interactiveRect = state.isExpanded ? expandedRect : targetPanelFrame(for: state)
+    return !region(interactiveRect, contains: location)
   }
 
   /// `CGRect.contains` excludes its maximum edges. The pointer can legitimately clamp to the

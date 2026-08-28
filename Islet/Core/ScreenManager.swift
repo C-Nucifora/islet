@@ -182,6 +182,7 @@ final class ScreenManager {
       let dropZoneID = UUID()
       panel.acceptsFileDrops = {
         ActivityCenter.shared.isAvailableInExpandedSwitcher("shelf")
+          && !vm.shouldIgnorePanelMouseEvents(at: NSEvent.mouseLocation)
       }
       panel.fileDragTargetChanged = { targeted in
         ShelfModel.shared.setDropTarget(dropZoneID, active: targeted)
