@@ -17,8 +17,6 @@ enum Metrics {
   static let barrierStretch: CGFloat = 24
   /// Point in the push where the trackpad acknowledges contact with the barrier.
   static let barrierContactProgress: CGFloat = 0.25
-  /// A second tactile gate near the end makes sustained pressure feel progressively firmer.
-  static let barrierStrainProgress: CGFloat = 0.65
   /// The panel grows to this depth only while the barrier is engaged, so the elastic body is not
   /// clipped while the closed island still keeps its small click footprint.
   static let barrierPanelDepth: CGFloat = peekGrowth + barrierStretch + islandMargin
