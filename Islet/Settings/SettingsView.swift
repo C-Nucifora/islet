@@ -7,7 +7,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
   case activities = "Activities"
   case notifications = "Notifications"
   case integrations = "Integrations"
-  case privacy = "Privacy & Permissions"
+  case privacy = "Privacy"
   case advanced = "Advanced"
 
   var id: Self { self }
@@ -413,7 +413,7 @@ struct SettingsView: View {
       }
       .navigationTitle("Islet")
       .navigationSplitViewColumnWidth(min: 220, ideal: 235, max: 280)
-      .searchable(text: $searchText, placement: .sidebar, prompt: "Search settings")
+      .searchable(text: $searchText, placement: .sidebar, prompt: "Search")
       .overlay {
         if filteredCategories.isEmpty, filteredDetailPages.isEmpty {
           ContentUnavailableView.search(text: searchText)
