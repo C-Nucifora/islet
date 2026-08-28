@@ -91,6 +91,13 @@ final class BatteryMonitor: ObservableObject {
       CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .defaultMode)
       self.runLoopSource = nil
     }
+    // A stopped private monitor must not replay its last snapshot when BatteryActivity subscribes
+    // again. The first fresh sample becomes a baseline, so charger/low-battery transitions that
+    // occurred while the feature was disabled are not announced after restart.
+    state = nil
+    metrics = nil
+    peripherals = []
+    lastStableRead = nil
   }
 
   private func setFastMetrics(_ live: Bool) {

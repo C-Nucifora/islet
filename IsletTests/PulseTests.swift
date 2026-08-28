@@ -172,7 +172,8 @@ final class PulseTests: XCTestCase {
     let now = Date(timeIntervalSince1970: 1_000)
     for index in 0..<(PulseCenter.maximumHistoryEntries + 25) {
       let payload = PulsePayload(
-        id: "item-\(index)", source: "cli", title: "Private title \(index)",
+        id: "item-\(index % PulseCenter.maximumItems)", source: "cli",
+        title: "Private title \(index)",
         subtitle: "Private subtitle \(index)", symbol: nil, accentHex: nil, progress: nil,
         state: .active, priority: .normal, expiresAt: nil, actions: nil)
       XCTAssertTrue(center.apply(command(.show, payload), now: now).ok)
@@ -182,7 +183,7 @@ final class PulseTests: XCTestCase {
     let entry = try XCTUnwrap(center.history.first)
     XCTAssertEqual(entry.source, "cli")
     XCTAssertEqual(entry.operation, .show)
-    XCTAssertEqual(entry.result, .shown)
+    XCTAssertEqual(entry.result, .updated)
   }
 
   @MainActor
@@ -248,6 +249,37 @@ final class PulseTests: XCTestCase {
     XCTAssertTrue(limiter.accepts(1_000))
     XCTAssertFalse(limiter.accepts(1_001))
     XCTAssertTrue(limiter.accepts(10))
+  }
+
+  @MainActor
+  func testCapacityRejectionDoesNotReportAnImmediatelyEvictedItemAsShown() throws {
+    let center = PulseCenter()
+    let now = Date(timeIntervalSince1970: 1_000)
+    for index in 0..<PulseCenter.maximumItems {
+      let payload = PulsePayload(
+        id: "high-\(index)", source: "tests", title: "High \(index)", subtitle: nil,
+        symbol: nil, accentHex: nil, progress: nil, state: .active, priority: .high,
+        expiresAt: nil, actions: nil)
+      XCTAssertTrue(center.apply(command(.show, payload), now: now).ok)
+    }
+
+    let low = PulsePayload(
+      id: "low", source: "tests", title: "Low", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .low,
+      expiresAt: nil, actions: nil)
+    let response = center.apply(command(.show, low), now: now.addingTimeInterval(1))
+
+    XCTAssertFalse(response.ok)
+    XCTAssertEqual(response.errorCode, .capacityExceeded)
+    XCTAssertFalse(center.items.contains { $0.id == "low" })
+    XCTAssertEqual(center.history.first?.result, .evicted)
+  }
+
+  func testPulseConnectionAdmissionIsConcurrentRatherThanLifetimeBounded() {
+    XCTAssertTrue(PulseServer.canAcceptConnection(activeCount: 0))
+    XCTAssertTrue(PulseServer.canAcceptConnection(activeCount: 15))
+    XCTAssertFalse(PulseServer.canAcceptConnection(activeCount: 16))
+    XCTAssertFalse(PulseServer.canAcceptConnection(activeCount: -1))
   }
 
   private func command(_ operation: PulseOperation, _ payload: PulsePayload) -> PulseCommand {
