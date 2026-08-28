@@ -120,6 +120,27 @@ final class T3CodeTests: XCTestCase {
         from: Data(#"{"origin":"http://example.com:3773","pid":123,"port":3773}"#.utf8)))
   }
 
+  func testStandardHomebrewT3ServeProcessShapeIsAccepted() {
+    XCTAssertTrue(
+      T3LocalDiscovery.acceptsT3CLILaunch(
+        executablePath: "/opt/homebrew/Cellar/node/24.6.0/bin/node",
+        arguments: [
+          "/opt/homebrew/bin/node",
+          "/opt/homebrew/lib/node_modules/t3/dist/bin.mjs",
+          "serve",
+        ],
+        entryPointPath: "/opt/homebrew/lib/node_modules/t3/dist/bin.mjs",
+        packageName: "t3",
+        declaredBin: "dist/bin.mjs"))
+    XCTAssertFalse(
+      T3LocalDiscovery.acceptsT3CLILaunch(
+        executablePath: "/opt/homebrew/Cellar/node/24.6.0/bin/node",
+        arguments: ["node", "/tmp/t3/dist/bin.mjs", "serve"],
+        entryPointPath: "/tmp/t3/dist/bin.mjs",
+        packageName: "t3",
+        declaredBin: "dist/bin.mjs"))
+  }
+
   func testT3ResponseGrowthIsBounded() {
     XCTAssertTrue(
       T3Client.acceptsResponseGrowth(
@@ -158,6 +179,37 @@ final class T3CodeTests: XCTestCase {
     } catch {
       XCTFail("Expected responseTooLarge, got \(error)")
     }
+  }
+
+  func testT3ClientRejectsRedirectsBeforeReplayingPairingCredential() async throws {
+    let session = Self.testSession()
+    defer { session.invalidateAndCancel() }
+    let endpoint = try T3Endpoint(URL(string: "https://redirect.t3-unit.test")!)
+
+    do {
+      _ = try await T3Client(endpoint: endpoint, token: nil, session: session)
+        .exchange(pairingCredential: "one-time-secret")
+      XCTFail("Expected the redirect to be rejected")
+    } catch T3ClientError.http(307) {
+    } catch {
+      XCTFail("Expected the original redirect response, got \(error)")
+    }
+  }
+
+  func testFutureDatedFailedAgentIsRejected() {
+    let now = Date(timeIntervalSince1970: 1_788_000_000)
+    let shell = Self.shell(
+      updatedAt: now.addingTimeInterval(24 * 60 * 60), sessionStatus: "error",
+      turnState: "error")
+    XCTAssertTrue(T3AgentSnapshot.activeAgents(in: shell, environmentID: "machine", now: now).isEmpty)
+  }
+
+  func testFutureDatedFinishedAgentIsRejected() {
+    let now = Date(timeIntervalSince1970: 1_788_000_000)
+    let shell = Self.shell(
+      updatedAt: now.addingTimeInterval(24 * 60 * 60), sessionStatus: "ready",
+      turnState: "completed")
+    XCTAssertTrue(T3AgentSnapshot.activeAgents(in: shell, environmentID: "machine", now: now).isEmpty)
   }
 
   func testPollingPolicySlowsInBackgroundAndLowPowerMode() {
@@ -254,6 +306,33 @@ final class T3CodeTests: XCTestCase {
     configuration.protocolClasses = [T3TestURLProtocol.self]
     return URLSession(configuration: configuration)
   }
+
+  private static func shell(
+    updatedAt: Date, sessionStatus: String, turnState: String
+  ) -> T3ShellSnapshot {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let timestamp = formatter.string(from: updatedAt)
+    return T3ShellSnapshot(
+      snapshotSequence: 1,
+      projects: [T3ProjectShell(id: "project", title: "Project", workspaceRoot: nil)],
+      threads: [
+        T3ThreadShell(
+          id: "thread", projectId: "project", title: "Thread",
+          modelSelection: T3ModelSelection(instanceId: "provider", model: "model"),
+          runtimeMode: nil, interactionMode: nil, branch: nil, worktreePath: nil,
+          latestTurn: T3LatestTurn(
+            turnId: "turn", state: turnState, requestedAt: nil, startedAt: nil,
+            completedAt: turnState == "completed" ? timestamp : nil),
+          createdAt: nil, updatedAt: timestamp, archivedAt: nil, settledAt: nil,
+          session: T3Session(
+            status: sessionStatus, providerName: nil, providerInstanceId: "provider",
+            lastError: nil),
+          latestUserMessageAt: nil, hasPendingApprovals: false, hasPendingUserInput: false,
+          hasActionableProposedPlan: false, backgroundLiveness: nil, planProgress: nil)
+      ],
+      updatedAt: timestamp)
+  }
 }
 
 private final class T3TestURLProtocol: URLProtocol, @unchecked Sendable {
@@ -274,6 +353,27 @@ private final class T3TestURLProtocol: URLProtocol, @unchecked Sendable {
         url: url, statusCode: 200, httpVersion: "HTTP/1.1",
         headerFields: ["Content-Length": String(T3Client.maximumResponseBytes + 1)])!
       client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocolDidFinishLoading(self)
+      return
+    }
+    if url.host == "redirect.t3-unit.test" {
+      let response = HTTPURLResponse(
+        url: url, statusCode: 307, httpVersion: "HTTP/1.1",
+        headerFields: ["Location": "http://plaintext.t3-unit.test/capture"])!
+      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocolDidFinishLoading(self)
+      return
+    }
+    if url.host == "plaintext.t3-unit.test" {
+      let body = Data(
+        #"{"access_token":"stolen","token_type":"Bearer","expires_in":3600,"scope":"orchestration:read"}"#
+          .utf8)
+      let response = HTTPURLResponse(
+        url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+        headerFields: ["Content-Type": "application/json"]
+      )!
+      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocol(self, didLoad: body)
       client?.urlProtocolDidFinishLoading(self)
       return
     }
