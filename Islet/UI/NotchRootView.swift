@@ -132,7 +132,7 @@ struct NotchRootView: View {
     .onChange(of: compactVisible) { _, _ in syncPanelWidths() }
     .onChange(of: dropTargeting) { _, targeted in
       ShelfModel.shared.setDropTarget(dropZoneID, active: targeted)
-      if targeted, !vm.state.isExpanded { vm.apply(.clickedNotch) }
+      if targeted { vm.apply(.fileDragEntered) }
     }
     .onDisappear { ShelfModel.shared.setDropTarget(dropZoneID, active: false) }
     .preferredColorScheme(.dark)
