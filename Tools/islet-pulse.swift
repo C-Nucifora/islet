@@ -28,7 +28,7 @@ private struct Response: Decodable {
 private final class PulseClient: @unchecked Sendable {
   private let connection = NWConnection(
     host: "127.0.0.1", port: NWEndpoint.Port(rawValue: 47_717)!, using: .tcp)
-  private let queue = DispatchQueue(label: "dev.cnucifora.Islet.pulse-cli", qos: .utility)
+  private let queue = DispatchQueue(label: "dev.islet.pulse-cli", qos: .utility)
   private let semaphore = DispatchSemaphore(value: 0)
   private let lock = NSLock()
   private var complete = false

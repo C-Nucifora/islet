@@ -20,7 +20,7 @@ enum T3CredentialStoreError: Error, LocalizedError {
 /// remote T3 environments Islet watches.
 @MainActor
 enum T3CredentialStore {
-  private static let service = "dev.cnucifora.islet.t3-code"
+  static let service = "dev.islet"
   private static let vaultAccount = "read-only-environment-tokens-v1"
 
   private static var cachedTokens: [String: String]?

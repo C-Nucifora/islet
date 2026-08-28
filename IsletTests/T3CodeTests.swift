@@ -4,6 +4,10 @@ import XCTest
 
 @MainActor
 final class T3CodeTests: XCTestCase {
+  func testCredentialVaultUsesTheAppIdentity() {
+    XCTAssertEqual(T3CredentialStore.service, "dev.islet")
+  }
+
   func testParsesHostedPairingLink() throws {
     let target = try T3PairingTarget.parse(
       "https://app.t3.codes/pair?host=https%3A%2F%2Fmini.example.com%3A44342%2F#token=once")

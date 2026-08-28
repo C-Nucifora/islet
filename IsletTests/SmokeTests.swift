@@ -6,6 +6,10 @@ import XCTest
 final class SmokeTests: XCTestCase {
   func testTruth() { XCTAssertTrue(true) }
 
+  func testAppUsesTheProjectIdentity() {
+    XCTAssertEqual(Bundle.main.bundleIdentifier, "dev.islet")
+  }
+
   func testNotchMarkUsesAThinHorizonAndCenteredNotch() {
     let path = IsletNotchMarkShape().path(in: CGRect(x: 0, y: 0, width: 18, height: 16))
 
