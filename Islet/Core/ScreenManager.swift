@@ -67,6 +67,11 @@ private final class PanelInstance {
     Log.app.notice("Panel on \(self.screenUUID, privacy: .public) moved; re-asserting its frame")
     reassert()
   }
+
+  func updateMousePassthrough(at location: CGPoint = NSEvent.mouseLocation) {
+    let shouldIgnore = viewModel.shouldIgnorePanelMouseEvents(at: location)
+    if panel.ignoresMouseEvents != shouldIgnore { panel.ignoresMouseEvents = shouldIgnore }
+  }
 }
 
 /// One notch panel per active screen, keyed by display UUID. Rebuilds on display changes;
@@ -175,6 +180,9 @@ final class ScreenManager {
       let vm = NotchViewModel(geometry: geometry)
       let panel = NotchPanel(frame: vm.panelFrame)
       let dropZoneID = UUID()
+      panel.acceptsFileDrops = {
+        ActivityCenter.shared.isAvailableInExpandedSwitcher("shelf")
+      }
       panel.fileDragTargetChanged = { targeted in
         ShelfModel.shared.setDropTarget(dropZoneID, active: targeted)
         if targeted { vm.apply(.fileDragEntered) }
@@ -191,11 +199,21 @@ final class ScreenManager {
 
       let inst = PanelInstance(screenUUID: uuid, panel: panel, viewModel: vm)
       inst.syncActualFrame()  // seed from the window we just placed, before anything is drawn
+      inst.updateMousePassthrough()
       // The panel only claims the space the island actually occupies, so the rest of the menu bar
       // stays clickable; it grows on expand and back down on collapse.
       vm.$panelFrame
         .removeDuplicates()
         .sink { [weak inst] frame in inst?.apply(frame) }
+        .store(in: &inst.cancellables)
+      Publishers.CombineLatest3(vm.$state, vm.$expandedWidth, vm.$expandedHeight)
+        .sink { [weak inst] _ in inst?.updateMousePassthrough() }
+        .store(in: &inst.cancellables)
+      EventMonitors.shared.pointerMovement
+        .sink { [weak inst] location in inst?.updateMousePassthrough(at: location) }
+        .store(in: &inst.cancellables)
+      EventMonitors.shared.fileDragMovement
+        .sink { [weak inst] location in inst?.updateMousePassthrough(at: location) }
         .store(in: &inst.cancellables)
       NotificationCenter.default
         .publisher(for: NSWindow.didMoveNotification, object: panel)

@@ -71,21 +71,31 @@ final class ShelfModel: ObservableObject {
   /// hover/click animation while FileManager performs disk I/O.
   @discardableResult
   func add(_ source: URL) async -> Bool {
+    let result = await add(source, updatesLastError: true)
+    return result.error == nil
+  }
+
+  private func add(
+    _ source: URL, updatesLastError: Bool
+  ) async -> (item: ShelfItem?, error: String?) {
     guard
       ShelfLogic.hasCapacity(
         currentCount: items.count, pendingCount: reservedDestinations.count,
         maximum: Self.maximumItemCount)
     else {
-      lastError = "Shelf is full (\(Self.maximumItemCount) items)."
-      return false
+      let error = "Shelf is full (\(Self.maximumItemCount) items)."
+      if updatesLastError { lastError = error }
+      return (nil, error)
     }
     guard source.isFileURL else {
-      lastError = "Only files and folders can be added."
-      return false
+      let error = "Only files and folders can be added."
+      if updatesLastError { lastError = error }
+      return (nil, error)
     }
     guard FileManager.default.fileExists(atPath: source.path) else {
-      lastError = "That item is no longer available."
-      return false
+      let error = "That item is no longer available."
+      if updatesLastError { lastError = error }
+      return (nil, error)
     }
 
     let dest = reserveDestination(named: source.lastPathComponent)
@@ -96,17 +106,18 @@ final class ShelfModel: ObservableObject {
 
     switch result {
     case .success:
-      lastError = nil
+      if updatesLastError { lastError = nil }
       let item = ShelfItem(id: UUID(), url: dest, name: dest.lastPathComponent, thumbnail: nil)
       items.append(item)
       generateThumbnail(id: item.id, url: item.url)
-      return true
+      return (item, nil)
     case .failure(let error):
       // A file can disappear between Finder producing its drag payload and the async copy. Give a
       // useful, non-technical error while retaining the detailed failure in the log.
-      lastError = "Couldn’t add \(source.lastPathComponent)."
+      let message = "Couldn’t add \(source.lastPathComponent)."
+      if updatesLastError { lastError = message }
       Log.app.error("Shelf copy failed: \(error.localizedDescription)")
-      return false
+      return (nil, message)
     }
   }
 
@@ -204,12 +215,17 @@ final class ShelfModel: ObservableObject {
     guard !fileURLs.isEmpty else { return false }
 
     dropState.beginImports(fileURLs.count)
-    for url in fileURLs {
-      Task { @MainActor [weak self] in
-        guard let self else { return }
-        defer { self.dropState.finishImport() }
-        await self.add(url)
+    Task { @MainActor in
+      var firstError: String?
+      for url in fileURLs {
+        let result = await add(url, updatesLastError: false)
+        if firstError == nil, let error = result.error {
+          firstError = error
+          lastError = error
+        }
+        dropState.finishImport()
       }
+      lastError = firstError
     }
     return true
   }

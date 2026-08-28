@@ -1,3 +1,4 @@
+import Defaults
 import XCTest
 
 @testable import Islet
@@ -238,6 +239,46 @@ final class NotchViewModelTests: XCTestCase {
     vm.setExpandedWidth(vm.maximumExpandedWidth + 100)
     XCTAssertEqual(vm.expandedWidth, vm.maximumExpandedWidth)
     XCTAssertEqual(vm.panelFrame, panel)
+  }
+
+  func testTransparentExpandedPanelMarginsIgnoreMouseEvents() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+
+    XCTAssertFalse(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 864, y: 1000)))
+    XCTAssertTrue(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 1_250, y: 1_000)))
+    XCTAssertTrue(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 864, y: 880)))
+  }
+
+  func testWidthShrinkPastStationaryCursorSchedulesCollapse() async throws {
+    let savedTimeout = Defaults[.hoverCollapseTimeout]
+    Defaults[.hoverCollapseTimeout] = 0.01
+    defer { Defaults[.hoverCollapseTimeout] = savedTimeout }
+    let vm = makeVM()
+    vm.handleFileDragMoved(CGPoint(x: 864, y: 1110))
+    vm.setExpandedWidth(700)
+    vm.handleMouseMoved(CGPoint(x: 1_150, y: 1_000))
+    XCTAssertEqual(vm.state, .expanded(pinned: false))
+
+    vm.setExpandedWidth(Metrics.expandedSize.width)
+    try await Task.sleep(for: .milliseconds(50))
+
+    XCTAssertEqual(vm.state, .closed)
+  }
+
+  func testWidthGrowthAroundStationaryCursorCancelsPendingCollapse() async throws {
+    let savedTimeout = Defaults[.hoverCollapseTimeout]
+    Defaults[.hoverCollapseTimeout] = 0.03
+    defer { Defaults[.hoverCollapseTimeout] = savedTimeout }
+    let vm = makeVM()
+    vm.handleFileDragMoved(CGPoint(x: 864, y: 1110))
+    vm.handleMouseMoved(CGPoint(x: 1_150, y: 1_000))
+    XCTAssertEqual(vm.state, .expanded(pinned: false))
+
+    vm.setExpandedWidth(700)
+    try await Task.sleep(for: .milliseconds(80))
+
+    XCTAssertEqual(vm.state, .expanded(pinned: false))
   }
 
   /// The height tier drives the drawn island and the hit region ONLY. The panel holds the tallest

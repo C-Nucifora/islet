@@ -95,6 +95,10 @@ final class ActivityCenter: ObservableObject {
 
   var primaryActivity: (any NotchActivity)? { activeActivities.first }
 
+  func isAvailableInExpandedSwitcher(_ id: String) -> Bool {
+    expandedActivities.contains { $0.id == id }
+  }
+
   private func sorted(
     _ candidates: [any NotchActivity], order: [String]
   ) -> [any NotchActivity] {

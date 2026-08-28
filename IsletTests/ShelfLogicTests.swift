@@ -89,4 +89,35 @@ final class ShelfLogicTests: XCTestCase {
     XCTAssertEqual(model.items.map(\.name), ["appkit-drop.txt"])
     XCTAssertEqual(try String(contentsOf: model.items[0].url, encoding: .utf8), "appkit drop")
   }
+
+  @MainActor
+  func testBatchDropPreservesCapacityFailureAfterAnotherFileSucceeds() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: shelfDirectory, withIntermediateDirectories: true)
+    for index in 0..<(ShelfModel.maximumItemCount - 1) {
+      FileManager.default.createFile(
+        atPath: shelfDirectory.appendingPathComponent("existing-\(index).txt").path,
+        contents: Data())
+    }
+    let first = temporaryRoot.appendingPathComponent("first.txt")
+    let second = temporaryRoot.appendingPathComponent("second.txt")
+    try Data("first".utf8).write(to: first)
+    try Data("second".utf8).write(to: second)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(directory: shelfDirectory)
+    XCTAssertTrue(model.importDroppedURLs([first, second]))
+    for _ in 0..<200 where model.pendingImportCount > 0 {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+
+    XCTAssertEqual(model.pendingImportCount, 0)
+    XCTAssertEqual(model.items.count, ShelfModel.maximumItemCount)
+    XCTAssertEqual(model.lastError, "Shelf is full (\(ShelfModel.maximumItemCount) items).")
+    XCTAssertEqual(model.items.filter { $0.name == "first.txt" }.count, 1)
+    XCTAssertFalse(model.items.contains { $0.name == "second.txt" })
+  }
 }

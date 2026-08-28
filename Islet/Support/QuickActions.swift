@@ -19,7 +19,8 @@ struct IsletQuickAction: Identifiable {
         perform: { ScreenManager.shared.viewModel?.apply(.clickedNotch) }),
       .init(
         id: "shelf-open", title: "Open File Shelf", detail: "View files held in Islet",
-        symbol: "tray.full.fill", keywords: "files drop drag tray open", isAvailable: { true },
+        symbol: "tray.full.fill", keywords: "files drop drag tray open",
+        isAvailable: { ActivityCenter.shared.isAvailableInExpandedSwitcher("shelf") },
         perform: {
           ShelfModel.shared.requestPresentation()
           let viewModel = ScreenManager.shared.viewModel

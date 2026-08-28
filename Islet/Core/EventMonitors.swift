@@ -44,6 +44,9 @@ final class EventMonitors {
 
   let mouseMovement = CurrentValueSubject<MouseMovement, Never>(
     MouseMovement(location: .zero, deviceDeltaY: 0))
+  /// Every pointer move, including in click-to-pin mode. The oversized expanded hosting window
+  /// uses this to pass events through wherever no island is drawn.
+  let pointerMovement = CurrentValueSubject<CGPoint, Never>(.zero)
   let fileDragMovement = PassthroughSubject<CGPoint, Never>()
   let mouseDown = PassthroughSubject<CGPoint, Never>()
 
@@ -52,6 +55,7 @@ final class EventMonitors {
   private var downMonitor: PairedMonitor?
   private var interactionModeCancellable: AnyCancellable?
   private var wasInTopInteractionBand = false
+  private var forwardsHoverMovement = false
 
   func start() {
     guard downMonitor == nil else { return }
@@ -66,6 +70,18 @@ final class EventMonitors {
     }
     fileDragMonitor = fileDrag
     fileDrag.start()
+    let move = PairedMonitor(mask: [.mouseMoved, .leftMouseDragged]) { [weak self] event in
+      guard let self else { return }
+      let location = NSEvent.mouseLocation
+      self.pointerMovement.send(location)
+      // A Finder drag hovering over the notch opens the Shelf immediately. Do not also feed the
+      // same event into the ordinary hover barrier.
+      if event.type == .leftMouseDragged, Self.dragPasteboardContainsFileURLs() { return }
+      guard self.forwardsHoverMovement else { return }
+      self.forwardMovementIfRelevant(event, location: location)
+    }
+    movementMonitor = move
+    move.start()
     interactionModeCancellable = Defaults.publisher(.interactionMode)
       .sink { [weak self] change in
         Task { @MainActor in self?.setMovementMonitoring(change.newValue == .hover) }
@@ -85,30 +101,14 @@ final class EventMonitors {
   }
 
   private func setMovementMonitoring(_ enabled: Bool) {
-    if enabled {
-      guard movementMonitor == nil else { return }
-      let move = PairedMonitor(mask: [.mouseMoved, .leftMouseDragged]) { [weak self] event in
-        guard let self else { return }
-        // A Finder drag hovering over the notch opens the Shelf immediately. Do not also feed the
-        // same event into the ordinary hover barrier, which would enter `.peek` and make the file
-        // appear to require an upward push.
-        if event.type == .leftMouseDragged, Self.dragPasteboardContainsFileURLs() { return }
-        self.forwardMovementIfRelevant(event)
-      }
-      movementMonitor = move
-      move.start()
-    } else {
-      if movementMonitor != nil {
-        // Resolve any hover-owned peek/unpinned expansion before removing the only producer that
-        // can deliver an exit. Without this, changing to click-to-pin while peeking can strand the
-        // island in `.peek` until the next click.
-        mouseMovement.send(
-          MouseMovement(location: CGPoint(x: -1_000_000, y: -1_000_000), deviceDeltaY: 0))
-      }
-      movementMonitor?.stop()
-      movementMonitor = nil
+    if !enabled, forwardsHoverMovement {
+      // Resolve any hover-owned peek/unpinned expansion before stopping hover delivery. The
+      // underlying pointer monitor stays active because window passthrough needs it in both modes.
+      mouseMovement.send(
+        MouseMovement(location: CGPoint(x: -1_000_000, y: -1_000_000), deviceDeltaY: 0))
       wasInTopInteractionBand = false
     }
+    forwardsHoverMovement = enabled
   }
 
   nonisolated static func pasteboardContainsFileURLs(_ pasteboard: NSPasteboard) -> Bool {
@@ -120,8 +120,7 @@ final class EventMonitors {
     pasteboardContainsFileURLs(NSPasteboard(name: .drag))
   }
 
-  private func forwardMovementIfRelevant(_ event: NSEvent) {
-    let location = NSEvent.mouseLocation
+  private func forwardMovementIfRelevant(_ event: NSEvent, location: CGPoint) {
     let isRelevant = Self.isInTopInteractionBand(
       location, screenFrames: NSScreen.screens.map(\.frame))
     // Forward the first event outside the band as well. That is the event that tells an expanded

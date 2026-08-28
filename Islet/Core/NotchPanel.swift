@@ -4,6 +4,7 @@ import AppKit
 /// so clicks reach the app underneath, which also prevents a SwiftUI `.onDrop` from being targeted.
 /// AppKit's window-level drag destination remains active in both collapsed and expanded states.
 final class NotchPanel: NSPanel, NSDraggingDestination {
+  var acceptsFileDrops: (() -> Bool)?
   var fileDragTargetChanged: ((Bool) -> Void)?
   var fileURLsDropped: (([URL]) -> Bool)?
   private var isFileDragTargeted = false
@@ -70,7 +71,7 @@ final class NotchPanel: NSPanel, NSDraggingDestination {
   /// Internal entry points keep the pasteboard handling testable without synthesizing a private
   /// AppKit dragging session.
   func fileDragOperation(for pasteboard: NSPasteboard) -> NSDragOperation {
-    guard !Self.fileURLs(from: pasteboard).isEmpty else {
+    guard acceptsFileDrops?() ?? true, !Self.fileURLs(from: pasteboard).isEmpty else {
       setFileDragTargeted(false)
       return []
     }
@@ -79,6 +80,10 @@ final class NotchPanel: NSPanel, NSDraggingDestination {
   }
 
   func performFileDrop(from pasteboard: NSPasteboard) -> Bool {
+    guard acceptsFileDrops?() ?? true else {
+      setFileDragTargeted(false)
+      return false
+    }
     let urls = Self.fileURLs(from: pasteboard)
     let accepted = !urls.isEmpty && (fileURLsDropped?(urls) ?? false)
     setFileDragTargeted(false)

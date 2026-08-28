@@ -80,6 +80,17 @@ final class ActivityCenterTests: XCTestCase {
 
     Defaults[.disabledActivities] = ["shelf"]
     XCTAssertTrue(center.expandedActivities.isEmpty)
+    XCTAssertFalse(center.isAvailableInExpandedSwitcher("shelf"))
+  }
+
+  func testHiddenShelfQuickActionIsUnavailable() {
+    let saved = Defaults[.disabledActivities]
+    defer { Defaults[.disabledActivities] = saved }
+    Defaults[.disabledActivities] = ["shelf"]
+
+    let action = IsletQuickAction.all.first { $0.id == "shelf-open" }
+    XCTAssertNotNil(action)
+    XCTAssertFalse(action?.isAvailable() ?? true)
   }
 
   func testActivityLifecyclePolicyUsesFeatureStateRatherThanVisibility() {

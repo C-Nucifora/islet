@@ -94,6 +94,13 @@ final class NotchViewModel: ObservableObject {
     state.isExpanded ? expandedRect.union(geometry.hitRect) : geometry.hitRect
   }
 
+  /// The expanded AppKit window is deliberately fixed at its maximum size to avoid resizing a
+  /// hosting view during animation. Only the rendered island inside that window should take mouse
+  /// events; transparent margins must behave like the menu bar or app beneath them.
+  func shouldIgnorePanelMouseEvents(at location: CGPoint) -> Bool {
+    state.isExpanded && !region(expandedRect, contains: location)
+  }
+
   /// `CGRect.contains` excludes its maximum edges. The pointer can legitimately clamp to the
   /// display's exact `maxY`, so nudge that coordinate one representable value back onto the screen
   /// before hit-testing. Without this, reaching the top resets the barrier before raw deltas can
@@ -205,6 +212,7 @@ final class NotchViewModel: ObservableObject {
   func setExpandedHeight(_ height: CGFloat) {
     guard height != expandedHeight else { return }
     withAnimation(Motion.gated(Motion.opening)) { expandedHeight = height }
+    reconcileHoverContainment()
   }
 
   /// Sets the width requested by the current tab count. The panel already reserves
@@ -213,6 +221,20 @@ final class NotchViewModel: ObservableObject {
     let clamped = min(maximumExpandedWidth, max(Metrics.expandedSize.width, ceil(width)))
     guard clamped != expandedWidth else { return }
     withAnimation(Motion.gated(Motion.opening)) { expandedWidth = clamped }
+    reconcileHoverContainment()
+  }
+
+  /// A tab-count change can move the island edge past a stationary cursor without producing a
+  /// mouse event. Treat that geometry change like the corresponding exit or re-entry.
+  private func reconcileHoverContainment() {
+    let inside = region(hoverRegion, contains: lastMouseLocation)
+    guard inside != wasInside else { return }
+    wasInside = inside
+    if inside {
+      collapseTask?.cancel()
+    } else if case .expanded(false) = state {
+      scheduleCollapse()
+    }
   }
 
   /// Grows the panel immediately so nothing is ever clipped mid-animation, but defers shrinking

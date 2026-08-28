@@ -56,4 +56,27 @@ final class NotchPanelDropTests: XCTestCase {
     XCTAssertTrue(targetChanges.isEmpty)
     panel.close()
   }
+
+  func testFileDropIsRejectedWhenShelfIsUnavailable() throws {
+    let panel = NotchPanel(frame: CGRect(x: 0, y: 0, width: 300, height: 50))
+    panel.acceptsFileDrops = { false }
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: temporaryRoot, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+    let source = temporaryRoot.appendingPathComponent("hidden-shelf-drop.txt")
+    try Data("drop".utf8).write(to: source)
+    let pasteboard = try pasteboard(containing: [source])
+    var handedOff = false
+    panel.fileURLsDropped = { _ in
+      handedOff = true
+      return true
+    }
+
+    XCTAssertEqual(panel.fileDragOperation(for: pasteboard), [])
+    XCTAssertFalse(panel.performFileDrop(from: pasteboard))
+    XCTAssertFalse(handedOff)
+    panel.close()
+  }
 }
