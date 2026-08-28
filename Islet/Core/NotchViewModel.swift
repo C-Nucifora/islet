@@ -40,7 +40,7 @@ final class NotchViewModel: ObservableObject {
   private var compactTrailingWidth: CGFloat = 0
   private var barrierTravel: CGFloat = 0
   private var upwardDeviceDeltaSign: CGFloat?
-  private var barrierHapticStage = 0
+  private var didPlayBarrierContactHaptic = false
   private var collapseTask: Task<Void, Never>?
   private var shrinkTask: Task<Void, Never>?
   private var cancellables: Set<AnyCancellable> = []
@@ -259,7 +259,7 @@ final class NotchViewModel: ObservableObject {
     barrierTravel = 0
     upwardDeviceDeltaSign = nil
     barrierProgress = 0
-    barrierHapticStage = 0
+    didPlayBarrierContactHaptic = false
   }
 
   private func updateBarrier(
@@ -288,18 +288,15 @@ final class NotchViewModel: ObservableObject {
     let progress = barrierTravel / barrierPushDistance
     if progress != barrierProgress { barrierProgress = progress }
 
-    // A fast flick may cross both marks in one event. In that case the snap alone is clearer than
-    // two simultaneous pulses; normal deliberate pressure still gets contact, then release.
+    // A fast flick may reach the threshold in one event. In that case the snap alone is clearer
+    // than two simultaneous pulses; normal deliberate pressure gets exactly contact, then release.
     if progress >= 1 {
       apply(.pushThresholdCrossed)
       return
     }
-    if barrierHapticStage < 2, progress >= Metrics.barrierStrainProgress {
-      barrierHapticStage = 2
-      Haptics.barrierResistance(strong: true)
-    } else if barrierHapticStage < 1, progress >= Metrics.barrierContactProgress {
-      barrierHapticStage = 1
-      Haptics.barrierResistance(strong: false)
+    if !didPlayBarrierContactHaptic, progress >= Metrics.barrierContactProgress {
+      didPlayBarrierContactHaptic = true
+      Haptics.barrierContact()
     }
   }
 
@@ -307,7 +304,7 @@ final class NotchViewModel: ObservableObject {
     barrierTravel = 0
     upwardDeviceDeltaSign = nil
     barrierProgress = 0
-    barrierHapticStage = 0
+    didPlayBarrierContactHaptic = false
   }
 
   private func scheduleCollapse() {

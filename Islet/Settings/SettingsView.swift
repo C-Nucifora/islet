@@ -756,14 +756,14 @@ struct SettingsView: View {
                 }
               })
               .frame(minWidth: 220)
-            Button("Test") { Haptics.perform(.generic) }
+            Button("Test") { Haptics.performDelayedTest() }
               .disabled(hapticStrengthBinding.wrappedValue == .off)
             Text("Strong").font(.caption).foregroundStyle(.secondary)
           }
         }
         Text("Current strength: \(hapticStrengthBinding.wrappedValue.title)")
           .font(.caption).foregroundStyle(.secondary)
-        Text("macOS exposes semantic haptic patterns rather than raw motor amplitude. The final push-through snap is always one strongest single pulse—never a double pulse.")
+        Text("Push-through plays one contact pulse and one final snap—no middle pulse. The final snap is always one strongest single pulse, never a double pulse.")
           .font(.caption).foregroundStyle(.secondary)
       }
     }
