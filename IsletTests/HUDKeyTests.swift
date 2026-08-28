@@ -55,6 +55,52 @@ final class HUDKeyTests: XCTestCase {
     XCTAssertEqual(HUDMath.stepped(0.5, up: true, divisor: 4), 0.5 + 1.0 / 64.0, accuracy: 1e-6)
   }
 
+  func testBrightnessTargetFollowsThePointerToTheExternalDisplay() {
+    let displays = [
+      BrightnessDisplayTarget(
+        displayID: 1, frame: CGRect(x: 0, y: 0, width: 1728, height: 1117)),
+      BrightnessDisplayTarget(
+        displayID: 42, frame: CGRect(x: 1728, y: 0, width: 1920, height: 1080)),
+    ]
+
+    XCTAssertEqual(
+      BrightnessTargetResolver.displayID(
+        at: CGPoint(x: 2200, y: 500), displays: displays),
+      42)
+  }
+
+  func testBrightnessAdjustmentUsesTheRequestedDisplay() {
+    var readDisplayIDs: [CGDirectDisplayID] = []
+    var writtenDisplayID: CGDirectDisplayID?
+    var writtenLevel: Float?
+
+    let level = BrightnessController.adjustBrightness(
+      displayID: 42, up: true, divisor: 1,
+      read: { displayID in
+        readDisplayIDs.append(displayID)
+        return 0.5
+      },
+      write: { displayID, level in
+        writtenDisplayID = displayID
+        writtenLevel = level
+        return true
+      })
+
+    XCTAssertEqual(readDisplayIDs, [42])
+    XCTAssertEqual(writtenDisplayID, 42)
+    XCTAssertEqual(writtenLevel ?? -1, 0.5 + 1.0 / 16.0, accuracy: 1e-6)
+    XCTAssertEqual(level ?? -1, 0.5 + 1.0 / 16.0, accuracy: 1e-6)
+  }
+
+  func testBrightnessAdjustmentFailsWhenTheDisplayRejectsTheWrite() {
+    let level = BrightnessController.adjustBrightness(
+      displayID: 42, up: true, divisor: 1,
+      read: { _ in 0.5 },
+      write: { _, _ in false })
+
+    XCTAssertNil(level)
+  }
+
   func testOnlySuccessfulKeyDownConsumesMatchingKeyUp() {
     var state = HUDKeyConsumptionState()
     XCTAssertFalse(state.recordKeyDown(.volumeUp, applied: false))

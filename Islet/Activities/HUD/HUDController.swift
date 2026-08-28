@@ -214,12 +214,15 @@ final class HUDController: ObservableObject {
       let level = VolumeController.readVolume() ?? 0
       return .init(kind: .volume, level: muted ? 0 : level, isMuted: muted)
     case .brightnessUp, .brightnessDown:
-      guard let current = BrightnessController.readBrightness() else { return nil }
-      let target = HUDMath.stepped(
-        current, up: key == .brightnessUp,
-        divisor: divisor)
-      guard BrightnessController.setBrightness(target),
-        let actual = BrightnessController.readBrightness()
+      let displays = NSScreen.screens.compactMap { screen -> BrightnessDisplayTarget? in
+        guard let displayID = screen.displayID else { return nil }
+        return BrightnessDisplayTarget(displayID: displayID, frame: screen.frame)
+      }
+      guard
+        let displayID = BrightnessTargetResolver.displayID(
+          at: NSEvent.mouseLocation, displays: displays),
+        let actual = BrightnessController.adjustBrightness(
+          displayID: displayID, up: key == .brightnessUp, divisor: divisor)
       else { return nil }
       return .init(kind: .brightness, level: actual, isMuted: false)
     }
@@ -231,7 +234,7 @@ final class HUDController: ObservableObject {
     case .volumeUp, .volumeDown:
       "The current output device has no writable volume control or rejected the change."
     case .brightnessUp, .brightnessDown:
-      "The current display has no software brightness control or rejected the change."
+      "The display under the pointer has no software brightness control or rejected the change."
     }
   }
 
