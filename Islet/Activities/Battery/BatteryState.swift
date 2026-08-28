@@ -1,6 +1,6 @@
 import Foundation
 
-struct BatteryState: Equatable {
+struct BatteryState: Equatable, Sendable {
   var percent: Int = 100
   var isCharging = false
   var onAC = false

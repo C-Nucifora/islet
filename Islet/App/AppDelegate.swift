@@ -1,9 +1,17 @@
 import AppKit
+import Combine
 import Defaults
+
+enum ActivityLifecyclePolicy {
+  /// Activity lineup visibility is presentation state. Providers stop only when their actual
+  /// feature switch is disabled, so hiding Calendar cannot empty the Home agenda (and hiding any
+  /// other activity cannot silently shut down a shared monitor).
+  static func shouldRun(featureEnabled: Bool = true) -> Bool { featureEnabled }
+}
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
   private var launchAtLoginObserver: Defaults.Observation?
-  private var didBecomeActiveObserver: NSObjectProtocol?
+  private var activityLifecycleCancellables: Set<AnyCancellable> = []
 
   /// True when the app is running only as XCTest's host process. Every monitor below talks to real
   /// hardware — CoreWLAN, IOBluetooth, Spotlight, the Downloads folder — and several of them prompt
@@ -35,26 +43,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       EventMonitors.shared.start()
       ScreenManager.shared.start()
       ActivityCenter.shared.register(AppState.demoActivity)
-      AppState.nowPlaying.start()
       ActivityCenter.shared.register(AppState.nowPlaying)
-      AppState.battery.start()
       ActivityCenter.shared.register(AppState.battery)
-      AppState.calendar.start()
       ActivityCenter.shared.register(AppState.calendar)
       ActivityCenter.shared.register(AppState.timer)
       AppState.shelf.start()
       ActivityCenter.shared.register(AppState.shelf)
-      AppState.clipboard.start()
       ActivityCenter.shared.register(AppState.clipboard)
-      AppState.ports.start()
       ActivityCenter.shared.register(AppState.ports)
-      AppState.system.start()
       ActivityCenter.shared.register(AppState.system)
-      AppState.continuity.start()
+      ActivityCenter.shared.register(AppState.t3Code)
+      ActivityCenter.shared.register(AppState.pulse)
       ActivityCenter.shared.register(AppState.continuity)
+      #if DEBUG
+        let registeredIDs = Set(ActivityCenter.shared.activities.map(\.id))
+        let missingIDs = Set(ActivityCatalog.defaultOrder).subtracting(registeredIDs)
+        assert(
+          missingIDs.isEmpty,
+          "ActivityCatalog entries are not registered in AppDelegate: \(missingIDs.sorted())")
+      #endif
+      configureActivityLifecycles()
       RemindersProvider.shared.start()
-      AudioDeviceMonitor.shared.start()
-      AppState.eventSources.forEach { SystemEventBus.shared.register($0) }
+      for source in AppState.eventSources { SystemEventBus.shared.register(source) }
       SystemEventBus.shared.startEnabled()
       SneakQueue.shared.isSuspended = {
         ScreenManager.shared.viewModel?.state.isExpanded ?? false
@@ -65,12 +75,121 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in LaunchAtLogin.apply(change.newValue) }
       }
     }
-    // The HUD tap needs Accessibility; if the grant lands while running, start it on reactivation.
-    didBecomeActiveObserver = NotificationCenter.default.addObserver(
-      forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
-    ) { _ in
-      MainActor.assumeIsolated { HUDController.shared.start() }
-    }
     Log.app.info("Islet launched")
+  }
+
+  func applicationWillTerminate(_ notification: Notification) {
+    guard !isRunningTests else { return }
+    // AppKit invokes this delegate on the main thread. Media shutdown is intentionally synchronous:
+    // otherwise the app can exit before the watcher's serial queue terminates its helper process.
+    MainActor.assumeIsolated {
+      AppState.nowPlaying.stop()
+      AppState.battery.stop()
+      AppState.calendar.stop()
+      AppState.clipboard.stop()
+      AppState.ports.stop()
+      AppState.system.stop()
+      AppState.t3Code.stop()
+      AppState.pulse.stop()
+      AppState.continuity.stop()
+      RemindersProvider.shared.stop()
+      AudioDeviceMonitor.shared.stop()
+      HUDController.shared.stop()
+      SystemEventBus.shared.stopAll()
+      EventMonitors.shared.stop()
+      ScreenManager.shared.stop()
+      activityLifecycleCancellables.removeAll()
+    }
+    launchAtLoginObserver = nil
+  }
+
+  @MainActor
+  private func configureActivityLifecycles() {
+    Defaults.publisher(.batteryEnabled)
+      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
+      .store(in: &activityLifecycleCancellables)
+    Defaults.publisher(.calendarEnabled)
+      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
+      .store(in: &activityLifecycleCancellables)
+    Defaults.publisher(.portsEnabled)
+      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
+      .store(in: &activityLifecycleCancellables)
+    Defaults.publisher(.clipboardEnabled)
+      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
+      .store(in: &activityLifecycleCancellables)
+    Defaults.publisher(.systemEnabled)
+      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
+      .store(in: &activityLifecycleCancellables)
+    Defaults.publisher(.t3CodeEnabled)
+      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
+      .store(in: &activityLifecycleCancellables)
+    Defaults.publisher(.pulseEnabled)
+      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
+      .store(in: &activityLifecycleCancellables)
+    Defaults.publisher(.continuityEnabled)
+      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
+      .store(in: &activityLifecycleCancellables)
+    Defaults.publisher(.airpodsEnabled)
+      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
+      .store(in: &activityLifecycleCancellables)
+    Defaults.publisher(.disabledEventSources)
+      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
+      .store(in: &activityLifecycleCancellables)
+    reconcileActivityLifecycles()
+  }
+
+  @MainActor
+  private func reconcileActivityLifecycles() {
+    if ActivityLifecyclePolicy.shouldRun() {
+      AppState.nowPlaying.start()
+    } else {
+      AppState.nowPlaying.stop()
+    }
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.batteryEnabled]) {
+      AppState.battery.start()
+    } else {
+      AppState.battery.stop()
+    }
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.calendarEnabled]) {
+      AppState.calendar.start()
+    } else {
+      AppState.calendar.stop()
+    }
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.portsEnabled]) {
+      AppState.ports.start()
+    } else {
+      AppState.ports.stop()
+    }
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.clipboardEnabled]) {
+      AppState.clipboard.start()
+    } else {
+      AppState.clipboard.stop()
+    }
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.systemEnabled]) {
+      AppState.system.start()
+    } else {
+      AppState.system.stop()
+    }
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.t3CodeEnabled]) {
+      AppState.t3Code.start()
+    } else {
+      AppState.t3Code.stop()
+    }
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.pulseEnabled]) {
+      AppState.pulse.start()
+    } else {
+      AppState.pulse.stop()
+    }
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.continuityEnabled]) {
+      AppState.continuity.start()
+    } else {
+      AppState.continuity.stop()
+    }
+    let audioDeviceEventsEnabled = !Defaults[.disabledEventSources].contains("audiodevice")
+    if Defaults[.airpodsEnabled], audioDeviceEventsEnabled {
+      AudioDeviceMonitor.shared.start()
+    } else {
+      AudioDeviceMonitor.shared.stop()
+    }
   }
 }

@@ -38,11 +38,23 @@ struct BurstCoalescer {
 
   var isHolding: Bool { heldCount > 0 }
 
+  /// Drops both a pending summary and the recent-event threshold history while preserving this
+  /// instance's configured window/capacity. Lifecycle shutdown uses this so an event held before
+  /// sleep/termination cannot be delivered after the bus is started again.
+  mutating func reset() {
+    recentTimes.removeAll(keepingCapacity: true)
+    held.removeAll(keepingCapacity: true)
+    heldCount = 0
+  }
+
   mutating func accept(_ event: SystemEvent, at now: TimeInterval) -> Decision {
     // An alert is never swallowed by a burst — low battery during docking is exactly when it
     // matters. It also does not count towards the burst, so it cannot trigger one on its own.
     guard event.urgency != .alert else { return .pass(event) }
 
+    // Callers should provide a monotonic clock. Still recover defensively if a test or future
+    // caller supplies wall-clock time that jumps backwards instead of retaining a burst forever.
+    if let last = recentTimes.last, now < last { reset() }
     recentTimes.removeAll { now - $0 > window }
     recentTimes.append(now)
 
@@ -74,7 +86,7 @@ struct BurstCoalescer {
     return SystemEvent(
       sourceID: "burst",
       icon: "square.stack.3d.up.fill",
-      title: "\(count) system events",
+      title: count == 1 ? "1 system event" : "\(count) system events",
       subtitle: subtitle,
       accentHex: EventAccent.info,
       motion: .generic,

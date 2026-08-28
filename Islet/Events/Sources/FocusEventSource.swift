@@ -15,8 +15,9 @@ final class FocusEventSource: SystemEventSource {
   let tier = SystemEventTier.heuristic
 
   private var source: DispatchSourceFileSystemObject?
-  private var descriptor: CInt = -1
+  private var directorySource: DispatchSourceFileSystemObject?
   private var lastActive: String?
+  private var running = false
 
   private var assertionsURL: URL {
     FileManager.default.homeDirectoryForCurrentUser
@@ -24,53 +25,87 @@ final class FocusEventSource: SystemEventSource {
   }
 
   func start() {
-    guard source == nil else { return }
+    guard !running else { return }
+    running = true
     lastActive = Self.activeFocus(at: assertionsURL)
-    watch()
+    watchFileOrDirectory()
   }
 
   func stop() {
+    running = false
     // The fd is closed by the source's cancellation handler, never here: cancel() is asynchronous,
     // and closing the descriptor while the source may still be draining is a documented fd-reuse
     // race — a recycled descriptor number could belong to anyone by the time the source lets go.
     source?.cancel()
     source = nil
-    descriptor = -1
+    directorySource?.cancel()
+    directorySource = nil
     lastActive = nil
   }
 
-  private func watch() {
+  private func watchFileOrDirectory() {
+    guard running else { return }
+    if !watchFile() { watchDirectory() }
+  }
+
+  /// Returns false when the file is not present yet. In that case the parent directory is watched
+  /// without polling, so enabling Focus for the first time after Islet launches starts working.
+  @discardableResult
+  private func watchFile() -> Bool {
     let fd = open(assertionsURL.path, O_EVTONLY)
-    guard fd >= 0 else {
-      // The file only exists once a Focus has been used at least once. Nothing to watch yet —
-      // fail quiet rather than retrying on a timer.
-      Log.app.notice("Focus assertions file not present; Focus events unavailable")
-      return
-    }
-    descriptor = fd
+    guard fd >= 0 else { return false }
     let s = DispatchSource.makeFileSystemObjectSource(
       fileDescriptor: fd, eventMask: [.write, .delete, .rename], queue: .main)
     s.setEventHandler { [weak self] in
       MainActor.assumeIsolated {
         guard let self else { return }
+        guard self.running else { return }
         // A rewrite replaces the file, which invalidates the descriptor — re-arm on the new inode.
         self.check()
         self.rearmIfReplaced(s)
       }
     }
     // Owns the close. `fd` is captured by value, so cancellation closes exactly the descriptor
-    // this source was watching regardless of what `descriptor` holds by then.
+    // this source was watching even after a replacement watch has opened another one.
     s.setCancelHandler { close(fd) }
     source = s
     s.resume()
+    return true
   }
 
   private func rearmIfReplaced(_ s: DispatchSourceFileSystemObject) {
     guard s.data.contains(.delete) || s.data.contains(.rename) else { return }
     source?.cancel()  // its cancellation handler closes the old fd
     source = nil
-    descriptor = -1
-    watch()
+    watchFileOrDirectory()
+  }
+
+  /// Atomic rewrites briefly remove `Assertions.json`; watching only its old inode made that brief
+  /// gap permanent. A vnode watch on the directory is callback-driven and adds no polling wake-up.
+  private func watchDirectory() {
+    guard directorySource == nil else { return }
+    let directory = assertionsURL.deletingLastPathComponent()
+    let fd = open(directory.path, O_EVTONLY)
+    guard fd >= 0 else {
+      Log.app.notice("Focus assertions directory not present; Focus events unavailable")
+      return
+    }
+    let s = DispatchSource.makeFileSystemObjectSource(
+      fileDescriptor: fd, eventMask: [.write, .delete, .rename], queue: .main)
+    s.setEventHandler { [weak self] in
+      MainActor.assumeIsolated {
+        guard let self, self.running,
+          FileManager.default.fileExists(atPath: self.assertionsURL.path)
+        else { return }
+        self.directorySource?.cancel()
+        self.directorySource = nil
+        self.check()
+        self.watchFileOrDirectory()
+      }
+    }
+    s.setCancelHandler { close(fd) }
+    directorySource = s
+    s.resume()
   }
 
   private func check() {

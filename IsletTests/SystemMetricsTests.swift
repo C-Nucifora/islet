@@ -4,6 +4,43 @@ import XCTest
 
 final class SystemMetricsTests: XCTestCase {
 
+  func testSamplingCadenceUsesASlowBackgroundBudget() {
+    XCTAssertEqual(SystemMetricsMonitor.liveInterval, 1)
+    XCTAssertGreaterThanOrEqual(SystemMetricsMonitor.backgroundInterval, 15)
+    XCTAssertGreaterThan(
+      SystemMetricsMonitor.lowPowerBackgroundInterval,
+      SystemMetricsMonitor.backgroundInterval)
+  }
+
+  func testEnergyProfilesAreOrderedAndAutomaticFollowsLowPowerMode() {
+    let automatic = EnergyPolicy(mode: .automatic, systemLowPowerMode: false)
+    let automaticLowPower = EnergyPolicy(mode: .automatic, systemLowPowerMode: true)
+    let lowEnergy = EnergyPolicy(mode: .lowEnergy, systemLowPowerMode: false)
+    let live = EnergyPolicy(mode: .live, systemLowPowerMode: true)
+
+    XCTAssertLessThan(
+      live.systemInterval(viewIsLive: true), automatic.systemInterval(viewIsLive: true))
+    XCTAssertGreaterThan(
+      lowEnergy.systemInterval(viewIsLive: false), automatic.systemInterval(viewIsLive: false))
+    XCTAssertEqual(automaticLowPower.systemInterval(viewIsLive: false), 30)
+    XCTAssertTrue(automaticLowPower.isConstrained)
+    XCTAssertFalse(automaticLowPower.allowsRemotePolling)
+    XCTAssertTrue(live.allowsRemotePolling)
+  }
+
+  func testLowEnergySlowsBatteryAndT3EvenWhenMacOSLowPowerModeIsOff() {
+    let automatic = EnergyPolicy(mode: .automatic, systemLowPowerMode: false)
+    let lowEnergy = EnergyPolicy(mode: .lowEnergy, systemLowPowerMode: false)
+
+    XCTAssertGreaterThan(
+      lowEnergy.batteryInterval(viewIsLive: true),
+      automatic.batteryInterval(viewIsLive: true))
+    XCTAssertEqual(lowEnergy.t3PollInterval(busy: true, expanded: true), 30)
+    XCTAssertGreaterThan(
+      lowEnergy.tunnelPollingInterval, automatic.tunnelPollingInterval)
+    XCTAssertFalse(lowEnergy.allowsRemotePolling)
+  }
+
   // MARK: - Contract types
 
   func testMetricKindRawValuesAreStable() {

@@ -4,6 +4,7 @@ enum ActivityPriority: Int, Comparable {
   case ambient = 0
   case media = 1
   case timer = 2  // a running countdown is time-sensitive — it takes the primary slot
+  case agent = 3  // an agent working or waiting for the user should stay visible
 
   static func < (l: Self, r: Self) -> Bool { l.rawValue < r.rawValue }
 }

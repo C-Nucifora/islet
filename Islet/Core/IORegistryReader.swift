@@ -17,6 +17,28 @@ enum IORegistryReader {
     return properties(of: service)
   }
 
+  /// A deliberately narrow property read for registry nodes that expose very large diagnostic
+  /// blobs. `AppleSmartBattery`, for example, includes calibration tables and controller dumps
+  /// that Islet never displays. Fetching only the requested keys avoids bridging and allocating
+  /// those blobs on every live telemetry sample.
+  static func properties(matching serviceName: String, keys: [String]) -> [String: Any]? {
+    let service = IOServiceGetMatchingService(
+      kIOMainPortDefault, IOServiceMatching(serviceName))
+    guard service != 0 else { return nil }
+    defer { IOObjectRelease(service) }
+
+    var result: [String: Any] = [:]
+    result.reserveCapacity(keys.count)
+    for key in keys {
+      guard
+        let value = IORegistryEntryCreateCFProperty(
+          service, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
+      else { continue }
+      result[key] = value
+    }
+    return result
+  }
+
   /// The same, for every matching service node. `IOBlockStorageDriver` returns several, so the
   /// caller has to decide whether to filter or sum them.
   static func allProperties(matching serviceName: String) -> [[String: Any]] {

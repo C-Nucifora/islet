@@ -53,4 +53,51 @@ final class CalendarLogicTests: XCTestCase {
     XCTAssertEqual(CalendarLogic.countdownText(to: now.addingTimeInterval(7200), now: now), "2h")
     XCTAssertEqual(CalendarLogic.countdownText(to: now.addingTimeInterval(-5), now: now), "now")
   }
+
+  func testAgendaIntervalUsesCalendarDayBoundary() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Australia/Brisbane"))
+    let interval = CalendarLogic.agendaInterval(containing: now, calendar: calendar)
+    XCTAssertEqual(interval.start, calendar.startOfDay(for: now))
+    XCTAssertEqual(interval.end, calendar.date(byAdding: .day, value: 1, to: interval.start))
+  }
+
+  func testDisplayDropsEndedEventsAndOrdersAllDayFirst() {
+    let interval = DateInterval(start: now.addingTimeInterval(-3600), duration: 86_400)
+    let events = [
+      event("future", startOffset: 600),
+      event("ended", startOffset: -1800, duration: 60),
+      event("all-day", startOffset: -3600, duration: 86_400, allDay: true),
+    ]
+    XCTAssertEqual(
+      CalendarLogic.display(events: events, now: now, interval: interval).map(\.title),
+      ["all-day", "future"])
+  }
+
+  func testMeetingLinksRecognizeGenericCorporateJoinRoutes() throws {
+    XCTAssertTrue(
+      CalendarActivity.isMeetingLink(
+        try XCTUnwrap(URL(string: "https://collab.example.org/meeting/team-sync"))))
+    XCTAssertTrue(
+      CalendarActivity.isMeetingLink(
+        try XCTUnwrap(URL(string: "https://video.example.org/r/opaque-token"))))
+    XCTAssertTrue(
+      CalendarActivity.isMeetingLink(
+        try XCTUnwrap(URL(string: "facetime://person@example.com"))))
+  }
+
+  func testMeetingLinksRejectOrdinaryAndSpoofedWebLinks() throws {
+    XCTAssertFalse(
+      CalendarActivity.isMeetingLink(
+        try XCTUnwrap(URL(string: "https://example.org/project/status"))))
+    XCTAssertFalse(
+      CalendarActivity.isMeetingLink(
+        try XCTUnwrap(URL(string: "https://zoom.us.attacker.example/path"))))
+    XCTAssertFalse(
+      CalendarActivity.isMeetingLink(
+        try XCTUnwrap(URL(string: "javascript:alert(1)"))))
+    XCTAssertFalse(
+      CalendarActivity.isMeetingLink(
+        try XCTUnwrap(URL(string: "http://meet.example.org/join/123"))))
+  }
 }

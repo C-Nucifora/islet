@@ -1,10 +1,16 @@
 import AppKit
 
 extension NSScreen {
+  /// Quartz display id behind this screen. Keep the conversion in one place: AppKit screen frames
+  /// use a bottom-left coordinate system, while CGWindow bounds and CGDisplayBounds use Quartz's
+  /// top-left display coordinates.
+  var displayID: CGDirectDisplayID? {
+    (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+  }
+
   var isBuiltin: Bool {
-    guard let n = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
-    else { return false }
-    return CGDisplayIsBuiltin(n.uint32Value) == 1
+    guard let displayID else { return false }
+    return CGDisplayIsBuiltin(displayID) == 1
   }
 
   static var builtin: NSScreen? { screens.first { $0.isBuiltin } }
@@ -16,8 +22,8 @@ extension NSScreen {
 
   /// Stable identifier that survives display reconfiguration (unlike NSScreen identity).
   var displayUUID: String? {
-    guard let n = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
-      let uuid = CGDisplayCreateUUIDFromDisplayID(n.uint32Value)?.takeRetainedValue()
+    guard let displayID,
+      let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue()
     else { return nil }
     return CFUUIDCreateString(nil, uuid) as String
   }

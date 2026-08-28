@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The expanded island: a slim switcher row (one chip per active activity, plus a Home chip for
-/// the calendar/reminders dashboard and a Settings gear) above the selected content.
+/// The expanded island: a bounded switcher row above the selected content. Home and at most three
+/// priority activities stay visible; everything else is available from an explicit overflow menu.
 struct ExpandedContainerView: View {
   /// The physical notch's size, so the switcher can flank it in the top band.
   let notchSize: CGSize
@@ -11,15 +11,29 @@ struct ExpandedContainerView: View {
   @ObservedObject private var shelf = ShelfModel.shared
   /// nil selection means the dashboard ("Home"); otherwise an activity id.
   @State private var selection: String? = nil
-  /// Keeps the selected chip visible when the strip is wider than the left ear.
-  @State private var scrolledTab: String?
-
   private static let homeTab = "\u{0000}home"  // sentinel id for the dashboard chip
 
   /// Tabs shown, left to right: Home, then each active activity.
   private var tabs: [(id: String, icon: String)] {
     [(Self.homeTab, "square.grid.2x2.fill")]
       + center.activeActivities.map { ($0.id, $0.tabIcon) }
+  }
+
+  /// The left ear has a hard physical width. Keep Home plus three activities at most, replacing
+  /// the last priority slot with the current selection when it came from overflow.
+  private var visibleTabs: [(id: String, icon: String)] {
+    tabLayout.visibleIDs.compactMap { id in tabs.first { $0.id == id } }
+  }
+
+  private var overflowTabs: [(id: String, icon: String)] {
+    tabLayout.overflowIDs.compactMap { id in tabs.first { $0.id == id } }
+  }
+
+  private var tabLayout: ActivityTabLayout.Result {
+    ActivityTabLayout.split(
+      tabIDs: tabs.map(\.id), selectedID: effectiveSelection,
+      controlCapacity: ActivityTabLayout.controlCapacity(
+        width: tabStripWidth, controlWidth: Self.chipWidth, spacing: Self.rowSpacing))
   }
 
   /// The effective selection: the stored one if still valid, else a sensible default
@@ -62,57 +76,56 @@ struct ExpandedContainerView: View {
         .padding(.horizontal, Self.rowPadding)
     }
     .onChange(of: effectiveSelection, initial: true) { _, id in
-      scrolledTab = id
       // Only the drawn island resizes; the panel already holds the tallest tier while expanded.
       // Making the panel follow this crashed the app — see NotchViewModel.targetPanelFrame.
       vm.setExpandedHeight(selectedHeight)
     }
   }
 
-  private static let chipWidth: CGFloat = 22
+  private static let chipWidth: CGFloat = 20
   private static let chipHeight: CGFloat = 20
-  private static let rowSpacing: CGFloat = 6
+  private static let rowSpacing: CGFloat = 4
   private static let rowPadding: CGFloat = 12
 
-  /// Width the tab strip gets in the left ear: the expanded row, minus its own horizontal padding,
-  /// the notch gap, the two spacings flanking that gap, and the settings gear. On a 14" MBP that
-  /// is 480 − 24 − 296 − 12 − 22 = 126pt, which fits five chips. Eight already overflowed it at
-  /// the old 26pt, and Phase 4 adds a ninth — so the strip scrolls rather than squeezing.
+  /// Width the bounded switcher gets in the left ear. Five compact controls (Home, three tabs and
+  /// overflow) require 116pt, fitting the 126pt reference ear without crossing the physical notch.
   private var tabStripWidth: CGFloat {
-    let usable = Metrics.expandedSize.width - Self.rowPadding * 2
-    return max(
-      Self.chipWidth, usable - notchSize.width - Self.rowSpacing * 2 - Self.chipWidth)
+    ActivityTabLayout.leftStripWidth(
+      containerWidth: Metrics.expandedSize.width, horizontalPadding: Self.rowPadding,
+      notchWidth: notchSize.width, spacing: Self.rowSpacing, minimum: Self.chipWidth)
   }
 
   private var switcherBar: some View {
     HStack(spacing: Self.rowSpacing) {
-      ScrollView(.horizontal) {
-        HStack(spacing: Self.rowSpacing) {
-          ForEach(tabs, id: \.id) { tab in
-            let selected = tab.id == effectiveSelection
-            Button {
-              Haptics.perform(.alignment)
-              selection = tab.id
-            } label: {
-              Image(systemName: tab.icon)
-                .font(.caption)
-                .frame(width: Self.chipWidth, height: Self.chipHeight)
-                .background(
-                  RoundedRectangle(cornerRadius: 6)
-                    .fill(.white.opacity(selected ? 0.22 : 0.06))
-                )
-                .foregroundStyle(selected ? .white : .secondary)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(
-              tab.id == Self.homeTab ? "Home" : ActivityCatalog.name(for: tab.id))
-          }
+      HStack(spacing: Self.rowSpacing) {
+        ForEach(visibleTabs, id: \.id) { tab in
+          tabButton(tab)
         }
-        .scrollTargetLayout()
+        if !overflowTabs.isEmpty {
+          Menu {
+            ForEach(overflowTabs, id: \.id) { tab in
+              Button {
+                Haptics.perform(.alignment)
+                selection = tab.id
+              } label: {
+                Label(ActivityCatalog.name(for: tab.id), systemImage: tab.icon)
+              }
+            }
+          } label: {
+            Image(systemName: "ellipsis")
+              .font(.caption.weight(.semibold))
+              .frame(width: Self.chipWidth, height: Self.chipHeight)
+              .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+              .foregroundStyle(.secondary)
+          }
+          .menuStyle(.borderlessButton)
+          .menuIndicator(.hidden)
+          .fixedSize()
+          .accessibilityLabel("More activities")
+          .accessibilityHint("Shows \(overflowTabs.count) additional activities")
+        }
       }
-      .scrollIndicators(.hidden)
-      .scrollPosition(id: $scrolledTab, anchor: .center)
-      .frame(width: tabStripWidth)
+      .frame(width: tabStripWidth, alignment: .leading)
       // Gap for the physical notch, keeping tabs in the left ear and the gear in the right ear.
       Spacer(minLength: notchSize.width)
       Button {
@@ -127,6 +140,26 @@ struct ExpandedContainerView: View {
       .buttonStyle(.plain)
       .accessibilityLabel("Settings")
     }
+  }
+
+  private func tabButton(_ tab: (id: String, icon: String)) -> some View {
+    let selected = tab.id == effectiveSelection
+    return Button {
+      Haptics.perform(.alignment)
+      selection = tab.id
+    } label: {
+      Image(systemName: tab.icon)
+        .font(.caption)
+        .frame(width: Self.chipWidth, height: Self.chipHeight)
+        .background(
+          RoundedRectangle(cornerRadius: 6)
+            .fill(.white.opacity(selected ? 0.22 : 0.06))
+        )
+        .foregroundStyle(selected ? .white : .secondary)
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(tab.id == Self.homeTab ? "Home" : ActivityCatalog.name(for: tab.id))
+    .accessibilityAddTraits(selected ? .isSelected : [])
   }
 
   @ViewBuilder private var content: some View {

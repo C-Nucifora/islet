@@ -77,12 +77,15 @@ struct NotchGeometry: Equatable {
   /// Each flank is sized from its own compact slot rather than the wider of the two: the slots are
   /// rarely the same width (a HUD is an icon against a 70pt bar), and mirroring the wider one just
   /// moves the invisible dead-click strip to the narrow side.
-  func collapsedPanelFrame(compactLeading: CGFloat = 0, compactTrailing: CGFloat = 0) -> CGRect {
+  func collapsedPanelFrame(
+    compactLeading: CGFloat = 0, compactTrailing: CGFloat = 0,
+    depth: CGFloat = Metrics.collapsedDepth
+  ) -> CGRect {
     // Beyond the body the shape's top corners flare outward by their radius.
     let edge = Metrics.closedOversize + Metrics.closedRadii.top + Metrics.islandMargin
     let left = notchSize.width / 2 + compactLeading + edge
     let right = notchSize.width / 2 + compactTrailing + edge
-    let h = notchSize.height + Metrics.collapsedDepth
+    let h = notchSize.height + depth
     return CGRect(
       x: notchRect.midX - left, y: screenFrame.maxY - h, width: left + right, height: h)
   }

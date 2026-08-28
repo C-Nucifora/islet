@@ -5,10 +5,12 @@ import XCTest
 final class RemindersLogicTests: XCTestCase {
   let now = Date(timeIntervalSince1970: 1_000_000)
 
-  func item(_ id: String, due: TimeInterval? = nil, priority: Int = 0) -> ReminderItem {
+  func item(
+    _ id: String, due: TimeInterval? = nil, hasDueTime: Bool = true, priority: Int = 0
+  ) -> ReminderItem {
     ReminderItem(
       id: id, title: id, dueDate: due.map { now.addingTimeInterval($0) },
-      priority: priority, listColorHex: nil)
+      hasDueTime: hasDueTime, priority: priority, listColorHex: nil)
   }
 
   func testDatedBeforeUndated() {
@@ -35,5 +37,60 @@ final class RemindersLogicTests: XCTestCase {
     XCTAssertTrue(RemindersLogic.isOverdue(item("x", due: -60), now: now))
     XCTAssertFalse(RemindersLogic.isOverdue(item("y", due: 60), now: now))
     XCTAssertFalse(RemindersLogic.isOverdue(item("z"), now: now))
+  }
+
+  func testDateOnlyReminderIsNotOverdueDuringItsDueDay() {
+    let start = Calendar.current.startOfDay(for: now)
+    let item = ReminderItem(
+      id: "all-day", title: "all-day", dueDate: start, hasDueTime: false, priority: 0,
+      listColorHex: nil)
+    XCTAssertFalse(RemindersLogic.isOverdue(item, now: now))
+  }
+
+  func testDueDateUsesDeclaredTimeZone() throws {
+    var components = DateComponents()
+    components.calendar = Calendar(identifier: .gregorian)
+    components.timeZone = try XCTUnwrap(TimeZone(identifier: "Australia/Brisbane"))
+    components.year = 2026
+    components.month = 8
+    components.day = 28
+    components.hour = 9
+    components.minute = 30
+    let resolved = try XCTUnwrap(RemindersLogic.dueDate(from: components))
+    XCTAssertEqual(
+      components.calendar?.dateComponents(in: components.timeZone!, from: resolved).hour, 9)
+  }
+
+  func testDateOnlyComponentsDoNotInventMidnightAsAnExplicitTime() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let components = RemindersLogic.dueComponents(for: now, hasTime: false, calendar: calendar)
+    XCTAssertNotNil(components.year)
+    XCTAssertNotNil(components.month)
+    XCTAssertNotNil(components.day)
+    XCTAssertNil(components.hour)
+    XCTAssertNil(components.minute)
+  }
+
+  func testOneHourSnoozeUsesCalendarArithmetic() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Australia/Brisbane"))
+    let result = try XCTUnwrap(
+      RemindersLogic.snoozeDate(.oneHour, from: now, calendar: calendar))
+    XCTAssertEqual(calendar.dateComponents([.minute], from: now, to: result).minute, 60)
+  }
+
+  func testTomorrowMorningSnoozeIsNineAMOnNextCalendarDay() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Australia/Brisbane"))
+    let result = try XCTUnwrap(
+      RemindersLogic.snoozeDate(.tomorrowMorning, from: now, calendar: calendar))
+    XCTAssertEqual(
+      calendar.startOfDay(for: result),
+      calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)))
+    let components = calendar.dateComponents([.hour, .minute, .second], from: result)
+    XCTAssertEqual(components.hour, 9)
+    XCTAssertEqual(components.minute, 0)
+    XCTAssertEqual(components.second, 0)
   }
 }

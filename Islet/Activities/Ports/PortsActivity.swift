@@ -13,11 +13,14 @@ final class PortsActivity: NotchActivity, ObservableObject {
 
   private let monitor = PortMonitor.shared
   private var cancellables: Set<AnyCancellable> = []
+  private var isMonitoring = false
 
   var isActive: Bool { Defaults[.portsEnabled] && !monitor.devices.isEmpty }
 
   func start() {
-    monitor.start()
+    guard !isMonitoring else { return }
+    guard monitor.start(owner: id) else { return }
+    isMonitoring = true
     monitor.objectWillChange
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
@@ -27,6 +30,15 @@ final class PortsActivity: NotchActivity, ObservableObject {
         self.objectWillChange.send()
       }
       .store(in: &cancellables)
+  }
+
+  func stop() {
+    guard isMonitoring else { return }
+    isMonitoring = false
+    cancellables.removeAll()
+    monitor.stop(owner: id)
+    activationDate = nil
+    objectWillChange.send()
   }
 
   var compactLeading: AnyView {

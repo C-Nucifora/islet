@@ -58,6 +58,31 @@ final class ActivityCenterTests: XCTestCase {
     XCTAssertNil(center.primaryActivity)
   }
 
+  func testActivityLifecyclePolicyUsesFeatureStateRatherThanVisibility() {
+    XCTAssertTrue(ActivityLifecyclePolicy.shouldRun(featureEnabled: true))
+    XCTAssertFalse(ActivityLifecyclePolicy.shouldRun(featureEnabled: false))
+  }
+
+  func testAlwaysShowSystemInvalidatesTheActiveActivityCache() async {
+    let savedEnabled = Defaults[.systemEnabled]
+    let savedAlwaysVisible = Defaults[.systemAlwaysVisible]
+    defer {
+      Defaults[.systemEnabled] = savedEnabled
+      Defaults[.systemAlwaysVisible] = savedAlwaysVisible
+    }
+    Defaults[.systemEnabled] = true
+    Defaults[.systemAlwaysVisible] = false
+
+    let center = ActivityCenter()
+    center.register(SystemActivity())
+    XCTAssertTrue(center.activeActivities.isEmpty)
+
+    Defaults[.systemAlwaysVisible] = true
+    await Task.yield()
+
+    XCTAssertEqual(center.activeActivities.map(\.id), ["system"])
+  }
+
   func testTieBrokenByRecency() {
     let center = ActivityCenter()
     let a = Fake(id: "a", priority: .ambient, active: true)
@@ -76,7 +101,7 @@ final class ActivityCenterTests: XCTestCase {
   func testMergedOrderAppendsCatalogueEntriesTheStoredOrderPredates() {
     let preSystem = ["timer", "nowPlaying", "shelf", "clipboard", "ports", "calendar", "battery"]
     let merged = ActivityCatalog.mergedOrder(preSystem)
-    XCTAssertEqual(merged, preSystem + ["system", "continuity"])
+    XCTAssertEqual(merged, preSystem + ["pulse", "t3Code", "system", "continuity"])
   }
 
   func testMergedOrderPreservesTheUsersOrderingAndUnknownIDs() {
@@ -90,7 +115,15 @@ final class ActivityCenterTests: XCTestCase {
   func testMergedOrderIsIdempotent() {
     let once = ActivityCatalog.mergedOrder(["battery"])
     XCTAssertEqual(ActivityCatalog.mergedOrder(once), once)
-    XCTAssertEqual(ActivityCatalog.mergedOrder(ActivityCatalog.defaultOrder),
-                   ActivityCatalog.defaultOrder)
+    XCTAssertEqual(
+      ActivityCatalog.mergedOrder(ActivityCatalog.defaultOrder), ActivityCatalog.defaultOrder)
+  }
+
+  func testEveryCataloguedActivityHasALifecycleClassification() {
+    XCTAssertEqual(
+      Set(ActivityCatalog.defaultOrder),
+      ActivityCatalog.lifecycleManagedIDs.union(ActivityCatalog.persistentLifecycleIDs))
+    XCTAssertTrue(
+      ActivityCatalog.lifecycleManagedIDs.isDisjoint(with: ActivityCatalog.persistentLifecycleIDs))
   }
 }

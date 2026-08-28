@@ -1,4 +1,5 @@
 import Combine
+import Defaults
 import Foundation
 
 /// Which tunnel interfaces exist right now.
@@ -40,7 +41,8 @@ enum TunnelInterfaces {
 /// up", never "VPN connected", because Islet genuinely cannot tell the difference.
 ///
 /// There is no notification for interface changes that does not involve SystemConfiguration
-/// dynamic-store plumbing, so this polls. `getifaddrs` measured at 0.024 ms; at 5s that is free.
+/// dynamic-store plumbing, so this polls. `getifaddrs` measured at 0.024 ms; the shared energy
+/// policy still stretches its cadence because avoiding needless timer wake-ups matters on battery.
 @MainActor
 final class VPNEventSource: SystemEventSource {
   let id = "vpn"
@@ -48,18 +50,36 @@ final class VPNEventSource: SystemEventSource {
   let tier = SystemEventTier.heuristic
 
   private var timer: AnyCancellable?
+  private var policyCancellables: Set<AnyCancellable> = []
   private var known: [String] = []
 
   func start() {
     guard timer == nil else { return }
     known = TunnelInterfaces.current()  // baseline: a tunnel already up is not news
-    timer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
-      .sink { [weak self] _ in self?.check() }
+    Defaults.publisher(.energyMode)
+      .dropFirst()
+      .sink { [weak self] _ in self?.restartTimer() }
+      .store(in: &policyCancellables)
+    NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.restartTimer() }
+      .store(in: &policyCancellables)
+    restartTimer()
   }
 
   func stop() {
     timer = nil
+    policyCancellables.removeAll()
     known = []
+  }
+
+  private func restartTimer() {
+    let policy = EnergyPolicy(
+      mode: Defaults[.energyMode],
+      systemLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
+    timer = Timer.publish(
+      every: policy.tunnelPollingInterval, on: .main, in: .common
+    ).autoconnect().sink { [weak self] _ in self?.check() }
   }
 
   private func check() {
