@@ -14,7 +14,7 @@ struct ShelfItem: Identifiable, Equatable, Sendable {
 @MainActor
 final class ShelfModel: ObservableObject {
   static let shared = ShelfModel()
-  static let maximumItemCount = 100
+  nonisolated static let maximumItemCount = 100
 
   @Published private(set) var items: [ShelfItem] = []
   @Published private(set) var lastError: String?

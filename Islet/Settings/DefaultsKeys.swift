@@ -47,8 +47,8 @@ struct EnergyPolicy: Equatable, Sendable {
 
   func batteryInterval(viewIsLive: Bool) -> TimeInterval {
     switch mode {
-    case .live: viewIsLive ? 3 : 15
-    case .lowEnergy: viewIsLive ? 30 : 120
+    case .live: return viewIsLive ? 3 : 15
+    case .lowEnergy: return viewIsLive ? 30 : 120
     case .automatic:
       if systemLowPowerMode { return viewIsLive ? 30 : 120 }
       return viewIsLive ? 12 : 60
@@ -65,8 +65,8 @@ struct EnergyPolicy: Equatable, Sendable {
 
   func systemInterval(viewIsLive: Bool) -> TimeInterval {
     switch mode {
-    case .live: viewIsLive ? 0.5 : 5
-    case .lowEnergy: viewIsLive ? 3 : 45
+    case .live: return viewIsLive ? 0.5 : 5
+    case .lowEnergy: return viewIsLive ? 3 : 45
     case .automatic:
       if systemLowPowerMode { return viewIsLive ? 3 : 30 }
       return viewIsLive ? 1 : 20
