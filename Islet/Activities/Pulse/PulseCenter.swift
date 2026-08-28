@@ -1,4 +1,5 @@
 import Combine
+import Defaults
 import Foundation
 
 @MainActor
@@ -24,6 +25,18 @@ final class PulseCenter: ObservableObject {
   var primary: PulseItem? { items.first }
   var retainedItemCount: Int { storedItems.count }
   var hiddenItemCount: Int { max(0, storedItems.count - items.count) }
+
+  @discardableResult
+  func applyIfEnabled(
+    _ command: PulseCommand, now: Date = Date(), featureEnabled: Bool = Defaults[.pulseEnabled]
+  ) -> PulseResponse {
+    guard featureEnabled else {
+      return .failure(
+        "Pulse is disabled in Islet Settings", code: .featureDisabled,
+        requestID: command.requestID)
+    }
+    return apply(command, now: now)
+  }
 
   @discardableResult
   func apply(_ command: PulseCommand, now: Date = Date()) -> PulseResponse {

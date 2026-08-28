@@ -382,6 +382,7 @@ struct PulseCommand: Codable, Sendable {
 }
 
 enum PulseErrorCode: String, Codable, Sendable {
+  case featureDisabled
   case unauthorized
   case invalidCommand
   case validationFailed
