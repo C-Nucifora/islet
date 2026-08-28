@@ -5,8 +5,7 @@ import SwiftUI
 struct ExpandedContainerView: View {
   /// The physical notch's size, so the switcher can flank it in the top band.
   let notchSize: CGSize
-  /// Size tiers are reported to and observed from the view model so the switcher recalculates as
-  /// soon as its expanded width changes.
+  /// Size tiers are reported to the view model, whose screen-clamped maximum width is observed.
   @ObservedObject var vm: NotchViewModel
   @ObservedObject private var center = ActivityCenter.shared
   @ObservedObject private var shelf = ShelfModel.shared
@@ -94,10 +93,7 @@ struct ExpandedContainerView: View {
       Task { @MainActor in shelf.consumePresentationRequest(request) }
     }
     .onChange(of: tabs.map(\.id), initial: true) { _, ids in
-      vm.setExpandedWidth(
-        ActivityTabLayout.preferredContainerWidth(
-          tabCount: ids.count, notchWidth: notchSize.width,
-          minimumWidth: Metrics.expandedSize.width, maximumWidth: vm.maximumExpandedWidth))
+      vm.setExpandedWidth(preferredExpandedWidth(tabCount: ids.count))
     }
   }
 
@@ -106,11 +102,20 @@ struct ExpandedContainerView: View {
   private static let rowSpacing = ActivityTabLayout.spacing
   private static let rowPadding = ActivityTabLayout.horizontalPadding
 
-  /// Width the switcher gets in the left ear after the island has followed the live tab count.
+  /// Width the switcher gets from the same tab count that requests the island width. Reading the
+  /// view model here creates a two-pass race on first presentation: the switcher can retain the
+  /// collapsed-width capacity even after the island accepts the wider request.
   private var tabStripWidth: CGFloat {
     ActivityTabLayout.leftStripWidth(
-      containerWidth: vm.expandedWidth, horizontalPadding: Self.rowPadding,
+      containerWidth: preferredExpandedWidth(tabCount: tabs.count),
+      horizontalPadding: Self.rowPadding,
       notchWidth: notchSize.width, spacing: Self.rowSpacing, minimum: Self.chipWidth)
+  }
+
+  private func preferredExpandedWidth(tabCount: Int) -> CGFloat {
+    ActivityTabLayout.preferredContainerWidth(
+      tabCount: tabCount, notchWidth: notchSize.width,
+      minimumWidth: Metrics.expandedSize.width, maximumWidth: vm.maximumExpandedWidth)
   }
 
   private var switcherBar: some View {

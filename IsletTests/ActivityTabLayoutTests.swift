@@ -66,6 +66,25 @@ final class ActivityTabLayoutTests: XCTestCase {
     XCTAssertTrue(result.overflowIDs.isEmpty)
   }
 
+  func testPreferredWidthFitsAllSevenTabsBesideHardwareNotch() {
+    let containerWidth = ActivityTabLayout.preferredContainerWidth(
+      tabCount: 7, notchWidth: 296, minimumWidth: Metrics.expandedSize.width,
+      maximumWidth: 1_000)
+    let stripWidth = ActivityTabLayout.leftStripWidth(
+      containerWidth: containerWidth, horizontalPadding: 12, notchWidth: 296, spacing: 4,
+      minimum: 20)
+    let capacity = ActivityTabLayout.controlCapacity(
+      width: stripWidth, controlWidth: 20, spacing: 4)
+    let result = ActivityTabLayout.split(
+      tabIDs: ids(7), selectedID: "home", controlCapacity: capacity)
+
+    XCTAssertEqual(containerWidth, 656)
+    XCTAssertEqual(stripWidth, 164)
+    XCTAssertEqual(capacity, 7)
+    XCTAssertEqual(result.visibleIDs, ids(7))
+    XCTAssertTrue(result.overflowIDs.isEmpty)
+  }
+
   func testPreferredWidthShrinksToTheMinimumWithFewTabs() {
     XCTAssertEqual(
       ActivityTabLayout.preferredContainerWidth(
