@@ -150,7 +150,7 @@ final class RemindersProvider: ObservableObject {
           let hasDueTime =
             dueComponents?.hour != nil || dueComponents?.minute != nil
             || dueComponents?.second != nil
-          ReminderItem(
+          return ReminderItem(
             id: r.calendarItemIdentifier,
             title: r.title ?? "Untitled",
             dueDate: RemindersLogic.dueDate(from: dueComponents),
