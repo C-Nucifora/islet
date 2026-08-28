@@ -30,7 +30,7 @@ final class NotchViewModelTests: XCTestCase {
   }
 
   func testUpwardPushStretchesPeekBeforeOpening() {
-    let vm = makeVM()
+    let vm = makeVM(barrierPushDistance: 288)
     vm.handleMouseMoved(CGPoint(x: 864, y: 1082))
     vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -34)
     vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -110)

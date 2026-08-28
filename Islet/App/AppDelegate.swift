@@ -128,9 +128,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     Defaults.publisher(.pulseEnabled)
       .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
       .store(in: &activityLifecycleCancellables)
-    Defaults.publisher(.airpodsEnabled)
-      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
-      .store(in: &activityLifecycleCancellables)
     Defaults.publisher(.disabledEventSources)
       .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
       .store(in: &activityLifecycleCancellables)
@@ -205,7 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       AppState.pulse.stop()
     }
     let audioDeviceEventsEnabled = !Defaults[.disabledEventSources].contains("audiodevice")
-    if Defaults[.airpodsEnabled], audioDeviceEventsEnabled {
+    if audioDeviceEventsEnabled {
       AudioDeviceMonitor.shared.start()
     } else {
       AudioDeviceMonitor.shared.stop()

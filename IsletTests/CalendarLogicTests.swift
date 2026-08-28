@@ -46,6 +46,11 @@ final class CalendarLogicTests: XCTestCase {
     XCTAssertFalse(CalendarLogic.shouldCountdown(event: e, now: now, leadMinutes: 10))
   }
 
+  func testCountdownCanBeDisabled() {
+    let e = event("m", startOffset: 60)
+    XCTAssertFalse(CalendarLogic.shouldCountdown(event: e, now: now, leadMinutes: 0))
+  }
+
   func testCountdownText() {
     XCTAssertEqual(CalendarLogic.countdownText(to: now.addingTimeInterval(480), now: now), "8m")
     XCTAssertEqual(CalendarLogic.countdownText(to: now.addingTimeInterval(3000), now: now), "50m")
