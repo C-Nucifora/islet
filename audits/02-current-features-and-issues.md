@@ -230,3 +230,69 @@ a claim that macOS permissions or hardware behavior have been exercised on a rel
 - `git diff --check` passed and no merge markers were present.
 - No Xcode build, test build, signing, installation, app launch, permission prompt, commit, or staging
   operation was performed.
+
+## Third features/issues loop — implementation addendum
+
+This source-only pass was completed on 28 August 2026. It concentrated on lifecycle races,
+failure-state clarity, protocol integrity, and small user-facing actions that were still absent after
+the second loop. As requested, it did not build, sign, install, or launch Islet.
+
+### Additional fixes and features implemented
+
+- Fullscreen detection now takes one window-server snapshot and evaluates windows in each display's
+  Quartz coordinate space. This avoids repeated global queries and fixes multi-display origin
+  assumptions. Activity lifecycle catalogue coverage is now exact and checked against launch
+  registration in Debug builds.
+- System-event delivery now has an explicit running state, monotonic timing, and resettable burst
+  coalescing. Late callbacks after shutdown are ignored, reconfiguration cannot leak a pending burst,
+  and peripheral battery baselines are removed when devices disconnect.
+- Battery refreshes coalesce a notification received during an in-flight sample instead of dropping
+  it, and the smart-battery reader distinguishes the internal battery from attached UPS devices.
+  T3 removes duplicate remote profiles, namespaces cancellation handles, and resets reconnect
+  backoff after healthy responses.
+- Focus observation watches the containing directory so first creation and atomic file replacement
+  recover without restarting Islet. Shelf and Now Playing start/stop paths are now idempotent, and
+  media-adapter records are bounded whether or not they include a newline.
+- Calendar work is lifecycle-guarded, EventKit change storms are debounced, and rendered occurrences
+  have stable identity. Reminders expose loading and actionable failure states, discard stale
+  EventKit callbacks, and add calendar-correct **In 1 Hour** and **Tomorrow Morning** snooze actions.
+- Clipboard concealment checks are case-insensitive, cover additional high-confidence credential
+  formats, preserve the actual PNG/TIFF representation, and show pasteboard write failures. Audio
+  reconnects through a no-device interval are detected.
+- HUD decoding rejects unknown key states, zero-level bars render correctly, accessible values are
+  announced, and CoreAudio prefers a writable master volume element so changing volume does not
+  overwrite channel balance. Timer labels and invalid durations are sanitized, paused-zero timers
+  complete correctly, and countdown values have spoken duration text.
+- Pulse now rejects cross-source identifier overwrites and out-of-range progress, supports guarded
+  `end` operations, request/response correlation, stable error codes, strict unknown-field checks,
+  fractional ISO-8601 dates, and a token-wide rolling rate limit that survives reconnects. Token
+  rotation atomically replaces the credential and disconnects every provider with an explicit
+  Settings confirmation.
+- The Pulse UI distinguishes visible from retained/filtered work, exposes delivery and stack actions,
+  filters payload-free session history, and adds Shortcuts actions for stable event IDs, progress
+  updates, and guarded completion. Settings deep links and Quick Actions now route directly to the
+  relevant integration page.
+
+### Issues intentionally still open
+
+- Stable Developer ID signing, Hardened Runtime, notarization, updates, and the resulting macOS
+  permission identity remain distribution decisions. Source changes cannot make grants portable
+  between differently signed development builds.
+- Fullscreen detection is still a heuristic based on visible, layer-zero, screen-sized windows.
+  There is no supported API that reports every application's Space/fullscreen intent directly.
+- Focus continues to depend on Apple's undocumented Assertions file, and MediaRemote and
+  DisplayServices remain private integrations with OS-update and distribution risk.
+- Pulse uses one user-level bearer token. Source names are routing labels, not authenticated process
+  identities; rotating the token revokes every provider rather than one independently credentialed
+  provider.
+- EventKit, media keys, audio routes, display geometry, clipboard interoperability, and permission
+  recovery still need a signed on-device verification pass. Frontend parsing cannot establish that
+  those framework and hardware paths behave correctly at runtime.
+
+### Third-loop validation
+
+- Swift frontend parsing passed for every changed or new Swift source file.
+- Changed JSON files passed `jq` validation, the shell provider example passed `bash -n`, and the
+  standalone Pulse CLI passed Swift frontend parsing.
+- `git diff --check` passed and no conflict markers were present.
+- No Xcode build, test build, signing, installation, app launch, or permission prompt was performed.
