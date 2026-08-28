@@ -61,6 +61,9 @@ final class ActivityCenterTests: XCTestCase {
   func testActivityLifecyclePolicyUsesFeatureStateRatherThanVisibility() {
     XCTAssertTrue(ActivityLifecyclePolicy.shouldRun(featureEnabled: true))
     XCTAssertFalse(ActivityLifecyclePolicy.shouldRun(featureEnabled: false))
+    XCTAssertTrue(ActivityLifecyclePolicy.stopsFeatureWhenHidden("clipboard"))
+    XCTAssertTrue(ActivityLifecyclePolicy.stopsFeatureWhenHidden("pulse"))
+    XCTAssertFalse(ActivityLifecyclePolicy.stopsFeatureWhenHidden("calendar"))
   }
 
   func testAlwaysShowSystemInvalidatesTheActiveActivityCache() async {

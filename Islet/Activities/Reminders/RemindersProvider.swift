@@ -36,7 +36,7 @@ final class RemindersProvider: ObservableObject {
   func start() {
     guard !isRunning else { return }
     isRunning = true
-    if Defaults[.remindersEnabled] { Task { await requestAccess() } }
+    if Defaults[.remindersEnabled] { Task { await refreshAuthorization() } }
     Defaults.publisher(.remindersEnabled)
       .dropFirst()
       .sink { [weak self] change in
@@ -46,7 +46,7 @@ final class RemindersProvider: ObservableObject {
           self?.loadState = .idle
           return
         }
-        Task { await self?.requestAccess() }
+        Task { await self?.refreshAuthorization() }
       }
       .store(in: &cancellables)
     // Reflect grants made in System Settings immediately after the app becomes active again.
@@ -76,28 +76,27 @@ final class RemindersProvider: ObservableObject {
   }
 
   func requestAccess() async {
-    guard isRunning, Defaults[.remindersEnabled] else { return }
     hasRequestedAccess = true
     authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
     if authorization.canRead {
-      observeStoreChanges()
-      await reload()
+      if isRunning, Defaults[.remindersEnabled] {
+        observeStoreChanges()
+        await reload()
+      }
       return
     }
     reminders = []
     guard authorization == .notDetermined else { return }
     do {
       let granted = try await store.requestFullAccessToReminders()
-      guard isRunning, Defaults[.remindersEnabled] else { return }
       authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
-      if granted, authorization.canRead {
+      if granted, authorization.canRead, isRunning, Defaults[.remindersEnabled] {
         observeStoreChanges()
         await reload()
       } else {
         loadState = .idle
       }
     } catch {
-      guard isRunning, Defaults[.remindersEnabled] else { return }
       authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
       loadState = .failed(error.localizedDescription)
       Log.app.error("Reminders access error: \(error.localizedDescription)")
@@ -114,12 +113,11 @@ final class RemindersProvider: ObservableObject {
   }
 
   func refreshAuthorization() async {
-    guard isRunning, Defaults[.remindersEnabled] else { return }
     authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
-    if authorization.canRead {
+    if authorization.canRead, isRunning, Defaults[.remindersEnabled] {
       observeStoreChanges()
       await reload()
-    } else {
+    } else if isRunning {
       reloadGeneration += 1
       reminders = []
       loadState = .idle

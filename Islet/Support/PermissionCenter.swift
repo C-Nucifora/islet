@@ -1,6 +1,8 @@
 import AppKit
 import ApplicationServices
 import Combine
+import CoreBluetooth
+import CoreLocation
 import EventKit
 import Security
 
@@ -64,6 +66,24 @@ enum EventKitPermissionState: Equatable, Sendable {
   }
 }
 
+enum PlatformPermissionState: Equatable, Sendable {
+  case notDetermined
+  case granted
+  case denied
+  case restricted
+  case unavailable
+
+  var summary: String {
+    switch self {
+    case .notDetermined: "Not requested"
+    case .granted: "Allowed"
+    case .denied: "Denied"
+    case .restricted: "Restricted"
+    case .unavailable: "Unavailable"
+    }
+  }
+}
+
 struct PermissionDiagnosticsSnapshot: Equatable, Sendable {
   var capturedAt: Date
   var appPath: String
@@ -78,6 +98,8 @@ struct PermissionDiagnosticsSnapshot: Equatable, Sendable {
   var accessibilityGranted: Bool
   var calendar: EventKitPermissionState
   var reminders: EventKitPermissionState
+  var location: PlatformPermissionState
+  var bluetooth: PlatformPermissionState
 
   var text: String {
     [
@@ -93,6 +115,8 @@ struct PermissionDiagnosticsSnapshot: Equatable, Sendable {
       "Accessibility: \(accessibilityGranted ? "Granted" : "Not granted")",
       "Calendars: \(calendar.summary)",
       "Reminders: \(reminders.summary)",
+      "Location: \(location.summary)",
+      "Bluetooth: \(bluetooth.summary)",
     ].joined(separator: "\n")
   }
 }
@@ -100,14 +124,17 @@ struct PermissionDiagnosticsSnapshot: Equatable, Sendable {
 /// Read-only permission and code-identity diagnostics for Settings and support reports. Merely
 /// accessing this model never prompts for TCC access.
 @MainActor
-final class PermissionCenter: ObservableObject {
+final class PermissionCenter: NSObject, ObservableObject, CLLocationManagerDelegate {
   static let shared = PermissionCenter()
 
   @Published private(set) var diagnostics: PermissionDiagnosticsSnapshot
+  private let locationManager = CLLocationManager()
   private var activeObserver: NSObjectProtocol?
 
-  private init() {
+  private override init() {
     diagnostics = Self.capture()
+    super.init()
+    locationManager.delegate = self
     activeObserver = NotificationCenter.default.addObserver(
       forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
     ) { [weak self] _ in
@@ -121,6 +148,14 @@ final class PermissionCenter: ObservableObject {
 
   func open(_ pane: SystemSettingsPrivacyPane) {
     pane.open()
+  }
+
+  func requestLocationAccess() {
+    locationManager.requestWhenInUseAuthorization()
+  }
+
+  nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    Task { @MainActor [weak self] in self?.refresh() }
   }
 
   private static func capture() -> PermissionDiagnosticsSnapshot {
@@ -141,7 +176,29 @@ final class PermissionCenter: ObservableObject {
       codeDirectoryHash: signing.cdHash,
       accessibilityGranted: AXIsProcessTrusted(),
       calendar: EventKitPermissionState(EKEventStore.authorizationStatus(for: .event)),
-      reminders: EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder)))
+      reminders: EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder)),
+      location: locationPermissionState(),
+      bluetooth: bluetoothPermissionState())
+  }
+
+  private static func locationPermissionState() -> PlatformPermissionState {
+    switch CLLocationManager().authorizationStatus {
+    case .notDetermined: .notDetermined
+    case .restricted: .restricted
+    case .denied: .denied
+    case .authorizedAlways, .authorizedWhenInUse: .granted
+    @unknown default: .unavailable
+    }
+  }
+
+  private static func bluetoothPermissionState() -> PlatformPermissionState {
+    switch CBManager.authorization {
+    case .notDetermined: .notDetermined
+    case .restricted: .restricted
+    case .denied: .denied
+    case .allowedAlways: .granted
+    @unknown default: .unavailable
+    }
   }
 
   private static func signingInformation() -> (

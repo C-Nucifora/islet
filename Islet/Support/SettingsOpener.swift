@@ -8,6 +8,7 @@ enum SettingsDestination: String, Sendable {
   case appearance
   case permissions
   case integrations
+  case pulse
   case advanced
 }
 
@@ -34,14 +35,20 @@ enum SettingsOpener {
     }
     let hosting = NSHostingController(rootView: SettingsView(destination: destination ?? .overview))
     let win = NSWindow(contentViewController: hosting)
-    win.title = "Islet Settings"
-    win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+    win.title = "Settings"
+    win.styleMask = [.titled, .closable, .resizable]
     win.setContentSize(NSSize(width: 860, height: 650))
     win.contentMinSize = NSSize(width: 760, height: 560)
     win.setFrameAutosaveName("IsletSettingsWindow")
     win.isReleasedWhenClosed = false
     if !win.setFrameUsingName("IsletSettingsWindow") { win.center() }
     win.makeKeyAndOrderFront(nil)
+    win.standardWindowButton(.miniaturizeButton)?.isEnabled = false
+    win.standardWindowButton(.zoomButton)?.isEnabled = false
     window = win
+  }
+
+  static func setTitle(_ title: String) {
+    window?.title = title
   }
 }

@@ -57,7 +57,7 @@ struct PortsView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Label("Connected — \(monitor.devices.count)", systemImage: "cable.connector")
+      Label("\(monitor.devices.count) connected", systemImage: "cable.connector")
         .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
       if monitor.devices.isEmpty {
         Text("No USB devices").font(.caption).foregroundStyle(.secondary)

@@ -69,7 +69,7 @@ struct ExpandedContainerView: View {
           .padding(.horizontal, 14)
           .padding(.bottom, 12)
       }
-      // Switcher tabs (left ear) and settings gear (right ear) live in the notch band, flanking
+      // Switcher tabs and controls live in the notch band, flanking
       // the hardware notch.
       switcherBar
         .frame(height: notchSize.height)
@@ -87,8 +87,8 @@ struct ExpandedContainerView: View {
   private static let rowSpacing: CGFloat = 4
   private static let rowPadding: CGFloat = 12
 
-  /// Width the bounded switcher gets in the left ear. Five compact controls (Home, three tabs and
-  /// overflow) require 116pt, fitting the 126pt reference ear without crossing the physical notch.
+  /// Width the bounded switcher gets in the left ear. The 520pt island leaves room for four
+  /// controls beside a 296pt hardware notch, so Home and three activities remain directly visible.
   private var tabStripWidth: CGFloat {
     ActivityTabLayout.leftStripWidth(
       containerWidth: Metrics.expandedSize.width, horizontalPadding: Self.rowPadding,
@@ -105,7 +105,6 @@ struct ExpandedContainerView: View {
           Menu {
             ForEach(overflowTabs, id: \.id) { tab in
               Button {
-                Haptics.perform(.alignment)
                 selection = tab.id
               } label: {
                 Label(ActivityCatalog.name(for: tab.id), systemImage: tab.icon)
@@ -126,10 +125,19 @@ struct ExpandedContainerView: View {
         }
       }
       .frame(width: tabStripWidth, alignment: .leading)
-      // Gap for the physical notch, keeping tabs in the left ear and the gear in the right ear.
+      // Gap for the physical notch, keeping tabs in the left ear and controls in the right ear.
       Spacer(minLength: notchSize.width)
       Button {
-        Haptics.perform()
+        QuickActionsOpener.open()
+      } label: {
+        Image(systemName: "bolt.fill")
+          .font(.caption)
+          .frame(width: Self.chipWidth, height: Self.chipHeight)
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Quick Actions")
+      Button {
         SettingsOpener.open()
       } label: {
         Image(systemName: "gearshape.fill")
@@ -145,7 +153,6 @@ struct ExpandedContainerView: View {
   private func tabButton(_ tab: (id: String, icon: String)) -> some View {
     let selected = tab.id == effectiveSelection
     return Button {
-      Haptics.perform(.alignment)
       selection = tab.id
     } label: {
       Image(systemName: tab.icon)

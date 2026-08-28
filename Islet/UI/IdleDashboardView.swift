@@ -132,7 +132,6 @@ struct IdleDashboardView: View {
           ForEach(reminders.reminders) { item in
             HStack(spacing: 6) {
               Button {
-                Haptics.perform(.levelChange)
                 withAnimation(Motion.gated(.snappy)) { reminders.complete(item) }
               } label: {
                 // Circle tinted with the reminder list's colour (like Reminders.app).
@@ -156,7 +155,6 @@ struct IdleDashboardView: View {
               Menu {
                 ForEach(RemindersLogic.SnoozePreset.allCases, id: \.self) { preset in
                   Button(preset.title) {
-                    Haptics.perform(.alignment)
                     _ = reminders.snooze(item, preset: preset)
                   }
                 }
