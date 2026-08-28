@@ -53,7 +53,7 @@ struct T3CodeExpandedView: View {
 
   private var connectionSummary: String {
     let connected = activity.environments.filter { $0.state == .connected }.count
-    return connected == 0 ? "Open T3 Code or add a machine in Settings" : "Watching \(connected) machine\(connected == 1 ? "" : "s")"
+    return connected == 0 ? "Open T3 Code or add a machine in Settings" : "Connected to \(connected) machine\(connected == 1 ? "" : "s")"
   }
 
   private func environmentGroup(_ environment: T3EnvironmentSnapshot) -> some View {
@@ -136,7 +136,7 @@ struct T3SettingsSection: View {
       LabeledContent("Activity") {
         Text(enabled ? "On" : "Off").foregroundStyle(.secondary)
       }
-      Text("Provider-neutral monitoring for every connected T3 Code machine. Pairing is read-only and credentials stay in Keychain.")
+      Text("Shows active agents from each paired T3 Code machine. Islet cannot control agents, and pairing credentials stay in Keychain.")
         .font(.caption2).foregroundStyle(.secondary)
       machineRows
       HStack {
@@ -147,7 +147,7 @@ struct T3SettingsSection: View {
       if pairingUsesPlainHTTP {
         Toggle("Allow plain HTTP for this pairing", isOn: $allowInsecureHTTP)
           .font(.caption)
-        Text("Plain HTTP exposes the pairing credential on the network. Use it only for a trusted local connection; HTTPS or Tailscale is recommended.")
+        Text("Plain HTTP exposes the pairing credential. Use it only on a network you trust. HTTPS and Tailscale encrypt the connection.")
           .font(.caption2).foregroundStyle(.orange)
       }
       if let statusMessage {

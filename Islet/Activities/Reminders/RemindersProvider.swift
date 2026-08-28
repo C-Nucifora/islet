@@ -36,7 +36,7 @@ final class RemindersProvider: ObservableObject {
   func start() {
     guard !isRunning else { return }
     isRunning = true
-    if Defaults[.remindersEnabled] { Task { await requestAccess() } }
+    if Defaults[.remindersEnabled] { Task { await refreshAuthorization() } }
     Defaults.publisher(.remindersEnabled)
       .dropFirst()
       .sink { [weak self] change in
@@ -46,7 +46,7 @@ final class RemindersProvider: ObservableObject {
           self?.loadState = .idle
           return
         }
-        Task { await self?.requestAccess() }
+        Task { await self?.refreshAuthorization() }
       }
       .store(in: &cancellables)
     // Reflect grants made in System Settings immediately after the app becomes active again.

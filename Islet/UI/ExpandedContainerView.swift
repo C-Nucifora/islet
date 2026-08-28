@@ -69,7 +69,7 @@ struct ExpandedContainerView: View {
           .padding(.horizontal, 14)
           .padding(.bottom, 12)
       }
-      // Switcher tabs (left ear) and settings gear (right ear) live in the notch band, flanking
+      // Switcher tabs and controls live in the notch band, flanking
       // the hardware notch.
       switcherBar
         .frame(height: notchSize.height)
@@ -126,8 +126,19 @@ struct ExpandedContainerView: View {
         }
       }
       .frame(width: tabStripWidth, alignment: .leading)
-      // Gap for the physical notch, keeping tabs in the left ear and the gear in the right ear.
+      // Gap for the physical notch, keeping tabs in the left ear and controls in the right ear.
       Spacer(minLength: notchSize.width)
+      Button {
+        Haptics.perform()
+        QuickActionsOpener.open()
+      } label: {
+        Image(systemName: "bolt.fill")
+          .font(.caption)
+          .frame(width: Self.chipWidth, height: Self.chipHeight)
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Quick Actions")
       Button {
         Haptics.perform()
         SettingsOpener.open()

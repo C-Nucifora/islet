@@ -1,4 +1,3 @@
-import CoreLocation
 import CoreWLAN
 import Foundation
 
@@ -8,8 +7,8 @@ import Foundation
 /// main actor before touching the bus.
 ///
 /// **The name costs a permission.** On macOS 14+ `CWInterface.ssid()` returns nil without Location
-/// authorisation. Connect and disconnect are free; only the *name* is gated. Islet asks once, and
-/// degrades to a nameless "Wi-Fi connected" when refused — the event still fires.
+/// authorisation. Connect and disconnect are free; only the *name* is gated. Without access, Islet
+/// uses a nameless "Wi-Fi connected" event.
 @MainActor
 final class WiFiEventSource: NSObject, SystemEventSource, CWEventDelegate {
   let id = "wifi"
@@ -17,10 +16,8 @@ final class WiFiEventSource: NSObject, SystemEventSource, CWEventDelegate {
   let tier = SystemEventTier.extended
 
   private let client = CWWiFiClient.shared()
-  private let location = CLLocationManager()
   private var running = false
   private var lastSSID: String?
-  private var askedForLocation = false
 
   func start() {
     guard !running else { return }
@@ -56,17 +53,7 @@ final class WiFiEventSource: NSObject, SystemEventSource, CWEventDelegate {
 
   // MARK: - Reporting
 
-  /// Asked lazily, on the first link change rather than at launch: prompting for Location the
-  /// moment Islet starts is both hostile and pointless, since the name is only needed once you
-  /// actually join a network. A refusal is permanent and simply leaves `ssid()` returning nil.
-  private func requestNameAccessIfNeeded() {
-    guard !askedForLocation, location.authorizationStatus == .notDetermined else { return }
-    askedForLocation = true
-    location.requestWhenInUseAuthorization()
-  }
-
   private func linkChanged() {
-    requestNameAccessIfNeeded()
     let ssid = client.interface()?.ssid()
     guard ssid != lastSSID else { return }
     let previous = lastSSID

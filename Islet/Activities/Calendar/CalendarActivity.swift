@@ -51,13 +51,13 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   func start() {
     guard !isRunning else { return }
     isRunning = true
-    if Defaults[.calendarEnabled] { Task { await requestAccess() } }
+    if Defaults[.calendarEnabled] { Task { await refreshAuthorization() } }
     // Request/refresh when the feature is toggled on; clear when off.
     Defaults.publisher(.calendarEnabled)
       .dropFirst()
       .sink { [weak self] change in
         if change.newValue {
-          Task { await self?.requestAccess() }
+          Task { await self?.refreshAuthorization() }
         } else {
           self?.events = []
           self?.availableCalendars = []

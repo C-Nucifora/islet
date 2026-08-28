@@ -174,7 +174,7 @@ struct BatteryExpandedView: View {
       VStack(spacing: 6) {
         Image(systemName: "bolt.horizontal.circle")
           .font(.system(size: 24, weight: .light)).foregroundStyle(.secondary)
-        Text("Waiting for live power telemetry").font(.caption.weight(.semibold))
+        Text("Waiting for power data").font(.caption.weight(.semibold))
         Text(
           onAC
             ? "Power is connected; the next hardware sample will populate the flow."
