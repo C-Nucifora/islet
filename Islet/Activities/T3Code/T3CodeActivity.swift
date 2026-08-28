@@ -187,8 +187,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       let endpoint = await T3LocalDiscovery.endpoint()
       do {
         let descriptor = try await T3Client(endpoint: endpoint, token: nil).fetchDescriptor()
-        var token = T3CredentialStore.load(
-          environmentID: descriptor.environmentId, migrateLegacy: false)
+        var token = T3CredentialStore.load(environmentID: descriptor.environmentId)
         if token == nil {
           let pairingCredential = try await T3LocalPairingMinting.mint()
           token = try await T3Client(endpoint: endpoint, token: nil)
