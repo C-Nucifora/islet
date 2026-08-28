@@ -21,6 +21,7 @@ final class NotchPanelDropTests: XCTestCase {
     let source = temporaryRoot.appendingPathComponent("notch-panel-drop.txt")
     try Data("drop".utf8).write(to: source)
     let pasteboard = try pasteboard(containing: [source])
+    XCTAssertTrue(EventMonitors.pasteboardContainsFileURLs(pasteboard))
     var targetChanges: [Bool] = []
     var droppedURLs: [URL] = []
     panel.fileDragTargetChanged = { targetChanges.append($0) }
@@ -46,6 +47,7 @@ final class NotchPanelDropTests: XCTestCase {
     let pasteboard = NSPasteboard(name: .init("NotchPanelDropTests-\(UUID().uuidString)"))
     pasteboard.clearContents()
     pasteboard.setString("not a file", forType: .string)
+    XCTAssertFalse(EventMonitors.pasteboardContainsFileURLs(pasteboard))
     var targetChanges: [Bool] = []
     panel.fileDragTargetChanged = { targetChanges.append($0) }
 

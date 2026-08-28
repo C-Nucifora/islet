@@ -44,9 +44,11 @@ final class EventMonitors {
 
   let mouseMovement = CurrentValueSubject<MouseMovement, Never>(
     MouseMovement(location: .zero, deviceDeltaY: 0))
+  let fileDragMovement = PassthroughSubject<CGPoint, Never>()
   let mouseDown = PassthroughSubject<CGPoint, Never>()
 
   private var movementMonitor: PairedMonitor?
+  private var fileDragMonitor: PairedMonitor?
   private var downMonitor: PairedMonitor?
   private var interactionModeCancellable: AnyCancellable?
   private var wasInTopInteractionBand = false
@@ -58,6 +60,12 @@ final class EventMonitors {
     }
     downMonitor = down
     down.start()
+    let fileDrag = PairedMonitor(mask: [.leftMouseDragged]) { [weak self] _ in
+      guard Self.dragPasteboardContainsFileURLs() else { return }
+      self?.fileDragMovement.send(NSEvent.mouseLocation)
+    }
+    fileDragMonitor = fileDrag
+    fileDrag.start()
     interactionModeCancellable = Defaults.publisher(.interactionMode)
       .sink { [weak self] change in
         Task { @MainActor in self?.setMovementMonitoring(change.newValue == .hover) }
@@ -68,6 +76,8 @@ final class EventMonitors {
   func stop() {
     movementMonitor?.stop()
     movementMonitor = nil
+    fileDragMonitor?.stop()
+    fileDragMonitor = nil
     downMonitor?.stop()
     downMonitor = nil
     interactionModeCancellable = nil
@@ -79,6 +89,10 @@ final class EventMonitors {
       guard movementMonitor == nil else { return }
       let move = PairedMonitor(mask: [.mouseMoved, .leftMouseDragged]) { [weak self] event in
         guard let self else { return }
+        // A Finder drag hovering over the notch opens the Shelf immediately. Do not also feed the
+        // same event into the ordinary hover barrier, which would enter `.peek` and make the file
+        // appear to require an upward push.
+        if event.type == .leftMouseDragged, Self.dragPasteboardContainsFileURLs() { return }
         self.forwardMovementIfRelevant(event)
       }
       movementMonitor = move
@@ -95,6 +109,15 @@ final class EventMonitors {
       movementMonitor = nil
       wasInTopInteractionBand = false
     }
+  }
+
+  nonisolated static func pasteboardContainsFileURLs(_ pasteboard: NSPasteboard) -> Bool {
+    pasteboard.canReadObject(
+      forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+  }
+
+  private nonisolated static func dragPasteboardContainsFileURLs() -> Bool {
+    pasteboardContainsFileURLs(NSPasteboard(name: .drag))
   }
 
   private func forwardMovementIfRelevant(_ event: NSEvent) {

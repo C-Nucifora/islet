@@ -69,6 +69,9 @@ final class NotchViewModel: ObservableObject {
     EventMonitors.shared.mouseDown
       .sink { [weak self] p in self?.handleMouseDown(p) }
       .store(in: &cancellables)
+    EventMonitors.shared.fileDragMovement
+      .sink { [weak self] p in self?.handleFileDragMoved(p) }
+      .store(in: &cancellables)
   }
 
   /// Widest island needed for every catalogued activity, clamped to the current screen.
@@ -123,6 +126,24 @@ final class NotchViewModel: ObservableObject {
       apply(.hoverExited)
       if case .expanded(false) = state { scheduleCollapse() }
     }
+  }
+
+  /// File drags use the normal collapsed notch hit area, but bypass the pressure barrier. AppKit's
+  /// drop destination then follows the panel as it expands and handles the payload itself.
+  func handleFileDragMoved(_ location: CGPoint) {
+    lastMouseLocation = location
+    let inside = region(hoverRegion, contains: location)
+    if inside {
+      wasInside = true
+      collapseTask?.cancel()
+      if !state.isExpanded { apply(.fileDragEntered) }
+      return
+    }
+    guard wasInside else { return }
+    wasInside = false
+    resetBarrier()
+    apply(.hoverExited)
+    if case .expanded(false) = state { scheduleCollapse() }
   }
 
   func handleMouseDown(_ location: CGPoint) {

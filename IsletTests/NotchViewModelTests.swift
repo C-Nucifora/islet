@@ -27,6 +27,46 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(vm.state, .peek)
   }
 
+  func testFileDragIntoCollapsedNotchExpandsFullyWithoutPush() {
+    let vm = makeVM()
+    XCTAssertEqual(vm.panelFrame, vm.geometry.collapsedPanelFrame())
+    vm.handleFileDragMoved(CGPoint(x: 864, y: 1060))
+    XCTAssertEqual(vm.state, .closed)
+    XCTAssertEqual(vm.panelFrame, vm.geometry.collapsedPanelFrame())
+
+    vm.handleFileDragMoved(CGPoint(x: 864, y: 1110))
+
+    XCTAssertEqual(vm.state, .expanded(pinned: false))
+    XCTAssertEqual(vm.panelFrame, expandedPanel(vm))
+    XCTAssertEqual(vm.barrierProgress, 0)
+  }
+
+  func testFileDragExpandsWhenPointerWasAlreadyHoveringTheNotch() {
+    let vm = makeVM()
+    let notchPoint = CGPoint(x: 864, y: 1110)
+    vm.handleMouseMoved(notchPoint)
+    XCTAssertEqual(vm.state, .peek)
+
+    vm.handleFileDragMoved(notchPoint)
+
+    XCTAssertEqual(vm.state, .expanded(pinned: false))
+    XCTAssertEqual(vm.barrierProgress, 0)
+  }
+
+  func testFileDragReenteringTheNotchExpandsAgainWithoutPush() {
+    let vm = makeVM()
+    let notchPoint = CGPoint(x: 864, y: 1110)
+    vm.handleFileDragMoved(notchPoint)
+    vm.handleFileDragMoved(CGPoint(x: 100, y: 500))
+    vm.apply(.collapseTimeoutElapsed)
+    XCTAssertEqual(vm.state, .closed)
+
+    vm.handleFileDragMoved(notchPoint)
+
+    XCTAssertEqual(vm.state, .expanded(pinned: false))
+    XCTAssertEqual(vm.barrierProgress, 0)
+  }
+
   func testHoverPeekPanelMakesRoomForTheFullBarrierStretch() {
     let vm = makeVM()
     vm.handleMouseMoved(CGPoint(x: 864, y: 1082))
