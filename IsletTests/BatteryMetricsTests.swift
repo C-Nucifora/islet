@@ -29,6 +29,19 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertFalse(o.hasAny)
   }
 
+  func testInternalBatterySelectionDoesNotMistakeAUPSForTheMacBattery() {
+    let descriptions: [[String: Any]] = [
+      ["Type": "UPS", "Name": "Desk UPS"],
+      ["Type": "InternalBattery", "Name": "MacBook Battery"],
+    ]
+    let selected = IOPSPowerSourceSelector.internalBattery(in: descriptions)
+    XCTAssertEqual(selected?["Name"] as? String, "MacBook Battery")
+  }
+
+  func testInternalBatterySelectionReturnsNilOnADesktopWithOnlyAUPS() {
+    XCTAssertNil(IOPSPowerSourceSelector.internalBattery(in: [["Type": "UPS"]]))
+  }
+
   func testPDProfileComputesWatts() {
     let rung = PDProfile(index: 4, volts: 20.0, amps: 1.49)
     XCTAssertEqual(rung.id, 4)
@@ -298,6 +311,88 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertNil(m.adapterLossWatts)
   }
 
+  func testUSBPowerOutputParsesPerPortMilliunits() throws {
+    var m = BatteryMetrics()
+    BatteryMetricsParser.applyPowerOutputs(
+      &m,
+      from: [
+        "PowerOutDetails": [
+          ["PortIndex": 2, "Watts": 7078, "AdapterVoltage": 5202, "Current": 1360],
+          ["PortIndex": 1, "Watts": 2490, "AdapterVoltage": 4980, "Current": 500],
+        ] as [[String: Any]]
+      ])
+
+    XCTAssertEqual(m.usbPowerOutputs.map(\.portIndex), [1, 2])
+    XCTAssertEqual(try XCTUnwrap(m.usbPowerOutputs.first).watts, 2.49, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(m.usbPowerOutputs.last).watts, 7.078, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(m.usbPowerOutputs.last?.volts), 5.202, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(m.usbPowerOutputs.last?.amps), 1.36, accuracy: 0.0001)
+  }
+
+  func testUSBPowerOutputDropsZeroAndMalformedEntries() {
+    var m = BatteryMetrics()
+    BatteryMetricsParser.applyPowerOutputs(
+      &m,
+      from: [
+        "PowerOutDetails": [
+          ["PortIndex": 1, "Watts": 0],
+          ["PortIndex": 2],
+          ["Watts": 5000],
+        ] as [[String: Any]]
+      ])
+    XCTAssertTrue(m.usbPowerOutputs.isEmpty)
+  }
+
+  // MARK: - Power-flow model
+
+  func testPowerFlowSplitsMacUSBAndBatteryCharging() throws {
+    var m = BatteryMetrics()
+    m.systemPowerInWatts = 60
+    m.systemLoadWatts = 35
+    m.batteryPowerWatts = 25
+    m.usbPowerOutputs = [
+      USBPowerOutput(portIndex: 2, watts: 5, volts: 5, amps: 1)
+    ]
+
+    let flow = PowerFlowSnapshot(metrics: m)
+    XCTAssertEqual(try XCTUnwrap(flow.adapterInputWatts), 60, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(flow.macUseWatts), 30, accuracy: 0.0001)
+    XCTAssertEqual(flow.usbOutputWatts, 5, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(flow.batteryChargeWatts), 25, accuracy: 0.0001)
+    XCTAssertEqual(flow.scaleWatts, 60, accuracy: 0.0001)
+    XCTAssertEqual(flow.proportion(of: 30), 0.5, accuracy: 0.0001)
+  }
+
+  func testPowerFlowShowsBatterySupplementingAnUndersizedAdapter() throws {
+    var m = BatteryMetrics()
+    m.systemPowerInWatts = 28.407
+    m.systemLoadWatts = 34.122
+    m.batteryPowerWatts = -5.715
+
+    let flow = PowerFlowSnapshot(metrics: m)
+    XCTAssertEqual(try XCTUnwrap(flow.adapterInputWatts), 28.407, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(flow.batteryInputWatts), 5.715, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(flow.macUseWatts), 34.122, accuracy: 0.0001)
+    XCTAssertNil(flow.batteryChargeWatts)
+    XCTAssertEqual(flow.scaleWatts, 34.122, accuracy: 0.0001)
+  }
+
+  func testPowerInputKindUsesTheMeasuredPortBeforeAdapterFallbacks() {
+    var magSafe = BatteryMetrics()
+    magSafe.inputPortType = "MagSafe 3"
+    magSafe.adapterDescription = "pd charger"
+    XCTAssertEqual(PowerInputKind.detect(from: magSafe), .magSafe)
+
+    var usbC = BatteryMetrics()
+    usbC.inputPortType = "USB-C"
+    XCTAssertEqual(PowerInputKind.detect(from: usbC), .usbC)
+
+    var genericPD = BatteryMetrics()
+    genericPD.adapterDescription = "pd charger"
+    XCTAssertEqual(PowerInputKind.detect(from: genericPD), .usbC)
+    XCTAssertEqual(PowerInputKind.detect(from: BatteryMetrics()), .adapter)
+  }
+
   // MARK: - Charge state
 
   func testChargeStateFlags() {
@@ -349,6 +444,17 @@ final class BatteryMetricsTests: XCTestCase {
         onAC: true, isCharging: true, fullyCharged: false, batteryWatts: 30.0,
         notChargingReason: 0),
       "Charging")
+  }
+
+  func testInstantBatteryDischargeOverridesNominalChargingState() {
+    // IOPS may still say IsCharging while the adapter supplies 9.150 W, the system consumes
+    // 9.346 W, and BatteryPower is -0.196 W. The graph correctly puts that battery flow on the
+    // input side, so the headline must not describe the same sample as charging.
+    XCTAssertEqual(
+      PowerStatus.text(
+        onAC: true, isCharging: true, fullyCharged: false, batteryWatts: -0.196,
+        notChargingReason: 0),
+      "Adapter can't keep up")
   }
 
   func testStatusCharged() {
@@ -480,6 +586,8 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertEqual(PowerFormat.watts(0), "+0.0 W")
     XCTAssertEqual(PowerFormat.wattsUnsigned(34.122), "34.1 W")
     XCTAssertEqual(PowerFormat.wattsUnsigned(0.696), "0.7 W")
+    XCTAssertEqual(PowerFormat.percentage(0.834), "83%")
+    XCTAssertEqual(PowerFormat.percentage(2), "100%")
   }
 
   func testAmpsVoltsAndTemperature() {

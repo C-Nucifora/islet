@@ -22,6 +22,11 @@
 	<string>1</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Islet shows a brief animation when a Bluetooth device connects or disconnects, and reads the battery level of connected Apple peripherals.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
@@ -32,6 +37,8 @@
 	<string></string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Islet shows the name of the Wi-Fi network you join. macOS requires location access to read network names; deny this and Islet will simply say 'Wi-Fi connected'.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Islet connects to T3 Code on your Macs to show active agents in the notch.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Islet shows your reminders in the notch and lets you complete them.</string>
 	<key>NSRemindersUsageDescription</key>

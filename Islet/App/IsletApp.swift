@@ -43,6 +43,8 @@ enum AppState {
   static let ports = PortsActivity()
   static let system = SystemActivity()
   static let continuity = ContinuityActivity()
+  static let t3Code = T3CodeActivity()
+  static let pulse = PulseActivity()
 
   /// Every system-event source, in catalogue order. Sources that only re-shape an existing
   /// producer's output — battery, timer, track change, audio device — are not listed: those emit
@@ -75,6 +77,10 @@ struct IsletApp: App {
 
   var body: some Scene {
     MenuBarExtra {
+      Button("Quick Actions…") { QuickActionsOpener.open() }
+        .keyboardShortcut("k")
+      Button("Show Islet") { ScreenManager.shared.viewModel?.apply(.clickedNotch) }
+      Divider()
       Button("Settings…") { SettingsOpener.open() }
         .keyboardShortcut(",")
       Menu("Start Timer") {
@@ -88,7 +94,20 @@ struct IsletApp: App {
         Divider()
         Button("Cancel timer") { AppState.timer.cancel() }
       }
-      Menu("Debug") {
+      Menu("Pulse") {
+        Picker("Delivery", selection: PulseProfileBinding.profile) {
+          ForEach(PulseDeliveryProfile.allCases) { profile in
+            Text(profile.title).tag(profile)
+          }
+        }
+        Divider()
+        Button("Dismiss All Retained Items") { PulseCenter.shared.removeAll() }
+          .disabled(PulseCenter.shared.retainedItemCount == 0)
+        Button("Provider Settings…") { SettingsOpener.open(destination: .integrations) }
+        Button("Reveal Token Folder") { NSWorkspace.shared.open(PulsePaths.supportDirectory) }
+      }
+      #if DEBUG
+        Menu("Debug") {
         Button("Toggle demo activity") {
           AppState.demoActivity.isActive.toggle()
         }
@@ -129,7 +148,8 @@ struct IsletApp: App {
         Button("HUD: brightness") {
           HUDController.shared.debugPresent(.init(kind: .brightness, level: 0.35, isMuted: false))
         }
-      }
+        }
+      #endif
       Divider()
       Button("Quit Islet") { NSApplication.shared.terminate(nil) }
         .keyboardShortcut("q")
@@ -139,5 +159,16 @@ struct IsletApp: App {
         .frame(width: 18, height: 16)
         .accessibilityLabel("Islet")
     }
+  }
+}
+
+/// A small binding keeps the menu declarative without introducing a second owner for Pulse state.
+/// MenuBarExtra rebuilds when opened, so its checkmark reflects the current session profile.
+@MainActor
+private enum PulseProfileBinding {
+  static var profile: Binding<PulseDeliveryProfile> {
+    Binding(
+      get: { PulseCenter.shared.deliveryProfile },
+      set: { PulseCenter.shared.deliveryProfile = $0 })
   }
 }

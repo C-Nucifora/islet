@@ -93,4 +93,34 @@ final class BurstCoalescerTests: XCTestCase {
     XCTAssertEqual(summary?.title, "48 system events")  // the count is exact ...
     XCTAssertEqual(summary?.subtitle?.contains("+45"), true)  // ... even though only 5 were kept
   }
+
+  func testResetDropsHeldEventsAndRecentThresholdHistory() {
+    var c = BurstCoalescer(window: 2.5, threshold: 3)
+    _ = c.accept(event("usb", "Keyboard"), at: 0)
+    _ = c.accept(event("display", "Studio"), at: 0.2)
+    _ = c.accept(event("volume", "Backup"), at: 0.4)
+    XCTAssertTrue(c.isHolding)
+
+    c.reset()
+    XCTAssertFalse(c.isHolding)
+    XCTAssertNil(c.flush(at: 10))
+    XCTAssertEqual(c.accept(event("usb", "Mouse"), at: 10), .pass(event("usb", "Mouse")))
+  }
+
+  func testBackwardsClockInputStartsAFreshWindow() {
+    var c = BurstCoalescer(window: 2.5, threshold: 3)
+    _ = c.accept(event("usb", "Keyboard"), at: 100)
+    _ = c.accept(event("display", "Studio"), at: 100.2)
+    XCTAssertEqual(
+      c.accept(event("volume", "Backup"), at: 20), .pass(event("volume", "Backup")))
+    XCTAssertFalse(c.isHolding)
+  }
+
+  func testSingleHeldEventUsesSingularSummaryTitle() {
+    var c = BurstCoalescer(window: 2.5, threshold: 3)
+    _ = c.accept(event("usb", "Keyboard"), at: 0)
+    _ = c.accept(event("display", "Studio"), at: 0.2)
+    _ = c.accept(event("volume", "Backup"), at: 0.4)
+    XCTAssertEqual(c.flush(at: 3)?.title, "1 system event")
+  }
 }

@@ -2,7 +2,7 @@ import AppKit
 import QuickLookThumbnailing
 import SwiftUI
 
-struct ShelfItem: Identifiable, Equatable {
+struct ShelfItem: Identifiable, Equatable, Sendable {
   let id: UUID
   let url: URL
   let name: String
@@ -14,12 +14,15 @@ struct ShelfItem: Identifiable, Equatable {
 @MainActor
 final class ShelfModel: ObservableObject {
   static let shared = ShelfModel()
+  static let maximumItemCount = 100
 
   @Published private(set) var items: [ShelfItem] = []
+  @Published private(set) var lastError: String?
   /// True while a file drag is hovering the notch, so the UI can reveal the shelf.
   @Published var isDragActive = false
 
   private let dir: URL
+  private var reservedDestinations: Set<URL> = []
 
   init() {
     let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -45,41 +48,102 @@ final class ShelfModel: ObservableObject {
       ?? .distantPast
   }
 
+  /// Copies a dropped item away from the main actor. Large files should never freeze the notch's
+  /// hover/click animation while FileManager performs disk I/O.
   @discardableResult
-  func add(_ source: URL) -> Bool {
-    let dest = dir.appendingPathComponent(uniqueName(source.lastPathComponent))
-    do {
-      try FileManager.default.copyItem(at: source, to: dest)
+  func add(_ source: URL) async -> Bool {
+    guard
+      ShelfLogic.hasCapacity(
+        currentCount: items.count, pendingCount: reservedDestinations.count,
+        maximum: Self.maximumItemCount)
+    else {
+      lastError = "Shelf is full (\(Self.maximumItemCount) items)."
+      return false
+    }
+    guard source.isFileURL else {
+      lastError = "Only files and folders can be added."
+      return false
+    }
+    guard FileManager.default.fileExists(atPath: source.path) else {
+      lastError = "That item is no longer available."
+      return false
+    }
+
+    let dest = reserveDestination(named: source.lastPathComponent)
+    let result: Result<Void, Error> = await Task.detached(priority: .utility) {
+      Result { try FileManager.default.copyItem(at: source, to: dest) }
+    }.value
+    reservedDestinations.remove(dest)
+
+    switch result {
+    case .success:
+      lastError = nil
       let item = ShelfItem(id: UUID(), url: dest, name: dest.lastPathComponent, thumbnail: nil)
       items.append(item)
       generateThumbnail(id: item.id, url: item.url)
       return true
-    } catch {
+    case .failure(let error):
+      // A file can disappear between Finder producing its drag payload and the async copy. Give a
+      // useful, non-technical error while retaining the detailed failure in the log.
+      lastError = "Couldn’t add \(source.lastPathComponent)."
       Log.app.error("Shelf copy failed: \(error.localizedDescription)")
       return false
     }
   }
 
-  func remove(_ item: ShelfItem) {
-    try? FileManager.default.removeItem(at: item.url)
-    items.removeAll { $0.id == item.id }
+  func remove(_ item: ShelfItem) async {
+    let result: Result<Void, Error> = await Task.detached(priority: .utility) {
+      Result { try FileManager.default.removeItem(at: item.url) }
+    }.value
+    switch result {
+    case .success:
+      items.removeAll { $0.id == item.id }
+      lastError = nil
+    case .failure(let error as CocoaError) where error.code == .fileNoSuchFile:
+      // Finder or another process may already have removed the persistent copy. The requested
+      // final state is still achieved, so do not strand a ghost tile on the Shelf.
+      items.removeAll { $0.id == item.id }
+      lastError = nil
+    case .failure(let error):
+      lastError = "Couldn’t remove \(item.name)."
+      Log.app.error("Shelf removal failed: \(error.localizedDescription)")
+    }
   }
 
-  func clear() {
-    for item in items { try? FileManager.default.removeItem(at: item.url) }
-    items = []
+  func clear() async {
+    let current = items
+    let removedIDs: Set<UUID> = await Task.detached(priority: .utility) {
+      var removed: Set<UUID> = []
+      for item in current {
+        do {
+          try FileManager.default.removeItem(at: item.url)
+          removed.insert(item.id)
+        } catch {
+          Log.app.error("Shelf clear failed for \(item.name): \(error.localizedDescription)")
+        }
+      }
+      return removed
+    }.value
+    items.removeAll { removedIDs.contains($0.id) }
+    lastError = items.isEmpty ? nil : "Some Shelf items couldn’t be removed."
   }
 
-  private func uniqueName(_ name: String) -> String {
+  func dismissError() { lastError = nil }
+
+  private func reserveDestination(named name: String) -> URL {
     var candidate = name
     var i = 1
     let stem = (name as NSString).deletingPathExtension
     let ext = (name as NSString).pathExtension
-    while FileManager.default.fileExists(atPath: dir.appendingPathComponent(candidate).path) {
+    while FileManager.default.fileExists(atPath: dir.appendingPathComponent(candidate).path)
+      || reservedDestinations.contains(dir.appendingPathComponent(candidate))
+    {
       candidate = ext.isEmpty ? "\(stem) \(i)" : "\(stem) \(i).\(ext)"
       i += 1
     }
-    return candidate
+    let destination = dir.appendingPathComponent(candidate)
+    reservedDestinations.insert(destination)
+    return destination
   }
 
   private func setThumbnail(_ data: Data, id: UUID) {
@@ -97,7 +161,7 @@ final class ShelfModel: ObservableObject {
         let rep = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request),
         let data = Self.pngData(from: rep.cgImage)
       else { return }
-      await MainActor.run { ShelfModel.shared.setThumbnail(data, id: id) }
+      await MainActor.run { [weak self] in self?.setThumbnail(data, id: id) }
     }
   }
 
@@ -114,5 +178,12 @@ final class ShelfModel: ObservableObject {
         if let url { add(url) }
       }
     }
+  }
+}
+
+enum ShelfLogic {
+  static func hasCapacity(currentCount: Int, pendingCount: Int, maximum: Int) -> Bool {
+    guard currentCount >= 0, pendingCount >= 0, maximum > 0 else { return false }
+    return currentCount + pendingCount < maximum
   }
 }

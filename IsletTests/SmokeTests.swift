@@ -35,3 +35,27 @@ final class SmokeTests: XCTestCase {
     XCTAssertFalse(path.contains(CGPoint(x: 28, y: 39), eoFill: false))
   }
 }
+
+final class ClipboardPrivacyTests: XCTestCase {
+  func testRejectsPasteboardsMarkedTransientOrConcealed() {
+    XCTAssertFalse(ClipboardPrivacyPolicy.permits(types: ["org.nspasteboard.TransientType"]))
+    XCTAssertFalse(ClipboardPrivacyPolicy.permits(types: ["org.nspasteboard.ConcealedType"]))
+    XCTAssertTrue(ClipboardPrivacyPolicy.permits(types: ["public.utf8-plain-text"]))
+  }
+
+  func testRejectsHighConfidenceSecrets() {
+    XCTAssertFalse(
+      ClipboardPrivacyPolicy.permits(
+        text: "-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----"))
+    XCTAssertFalse(ClipboardPrivacyPolicy.permits(text: "ghp_123456789012345678901234567890"))
+    XCTAssertFalse(
+      ClipboardPrivacyPolicy.permits(
+        text: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturevalue"))
+    XCTAssertFalse(ClipboardPrivacyPolicy.permits(text: "https://user:secret@example.com/path"))
+  }
+
+  func testOrdinaryTextAndShortCodesRemainCapturable() {
+    XCTAssertTrue(ClipboardPrivacyPolicy.permits(text: "A normal copied paragraph."))
+    XCTAssertTrue(ClipboardPrivacyPolicy.permits(text: "123456"))
+  }
+}

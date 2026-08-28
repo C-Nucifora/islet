@@ -16,13 +16,26 @@ final class SystemActivity: NotchActivity, ObservableObject {
   private let monitor = SystemMetricsMonitor.shared
   private var gate = SystemPresenceGate()
   private var cancellables: Set<AnyCancellable> = []
+  private var isMonitoring = false
 
   func start() {
+    guard !isMonitoring else { return }
+    isMonitoring = true
     monitor.start()
     monitor.$sample
       .receive(on: DispatchQueue.main)
       .sink { [weak self] sample in self?.handle(sample) }
       .store(in: &cancellables)
+  }
+
+  func stop() {
+    guard isMonitoring else { return }
+    isMonitoring = false
+    monitor.stop()
+    cancellables.removeAll()
+    gate = SystemPresenceGate()
+    activationDate = nil
+    objectWillChange.send()
   }
 
   /// Republishes ONLY on a gate transition. A per-sample `objectWillChange` would push

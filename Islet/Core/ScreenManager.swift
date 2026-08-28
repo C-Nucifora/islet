@@ -91,6 +91,7 @@ final class ScreenManager {
   }
 
   func start() {
+    guard cancellables.isEmpty else { return }
     rebuild()
     NotificationCenter.default
       .publisher(for: NSApplication.didChangeScreenParametersNotification)
@@ -135,6 +136,16 @@ final class ScreenManager {
       .sink { [weak self] _ in Task { @MainActor in self?.updateFullscreenObserving() } }
       .store(in: &cancellables)
     updateFullscreenObserving()
+  }
+
+  func stop() {
+    fullscreenTimer = nil
+    cancellables.removeAll()
+    for instance in instances.values {
+      instance.cancellables.removeAll()
+      instance.panel.close()
+    }
+    instances.removeAll()
   }
 
   private func targetScreens() -> [NSScreen] {
@@ -211,10 +222,9 @@ final class ScreenManager {
 
   private func applyFullscreenVisibility() {
     guard Defaults[.hideInFullscreen] else { return }
+    let fullscreenDisplays = FullscreenDetector.fullscreenDisplayUUIDs()
     for inst in instances.values {
-      guard let screen = NSScreen.screens.first(where: { $0.displayUUID == inst.screenUUID })
-      else { continue }
-      let hidden = FullscreenDetector.hasFullscreenWindow(on: screen)
+      let hidden = fullscreenDisplays.contains(inst.screenUUID)
       // orderOut (not alpha 0) so the hidden panel's SwiftUI tree stops rendering entirely.
       if hidden, inst.panel.isVisible {
         inst.panel.orderOut(nil)

@@ -33,10 +33,13 @@ final class PeripheralEventSource: SystemEventSource {
   }
 
   private func check() {
-    for p in PeripheralBatteryReader.read() {
+    let peripherals = PeripheralBatteryReader.read()
+    var currentLevels: [String: Double] = [:]
+    currentLevels.reserveCapacity(peripherals.count)
+    for p in peripherals {
       let level = Double(p.percent)
+      currentLevels[p.id] = level
       let crossings = detector.crossings(from: lastLevels[p.id], to: level)
-      lastLevels[p.id] = level
       guard let lowest = crossings.min() else { continue }
       SystemEventBus.shared.emit(
         SystemEvent(
@@ -47,5 +50,8 @@ final class PeripheralEventSource: SystemEventSource {
           urgency: .alert, duration: 3,
           announcement: "\(p.name) battery at \(p.percent) percent"))
     }
+    // Forget disconnected devices. If the same hardware later reconnects, its new level becomes a
+    // fresh baseline instead of being compared with a stale value from hours or days earlier.
+    lastLevels = currentLevels
   }
 }

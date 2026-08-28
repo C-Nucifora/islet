@@ -3,9 +3,80 @@ import Foundation
 
 enum HUDStyle: String, CaseIterable, Codable { case bar, gauge }
 
+/// Controls how aggressively Islet refreshes sources that can wake the CPU or radios.
+///
+/// Automatic follows macOS Low Power Mode. Low Energy is an explicit always-constrained profile;
+/// Live keeps user-visible data especially fresh and is the only profile that overrides macOS Low
+/// Power Mode for optional remote polling.
+enum EnergyMode: String, CaseIterable, Codable, Sendable {
+  case automatic
+  case lowEnergy
+  case live
+}
+
+/// Pure cadence policy shared by the battery, system and T3 monitors. Keeping these decisions in
+/// one value makes profile changes atomic and lets tests cover the energy contract without
+/// starting timers or touching hardware.
+struct EnergyPolicy: Equatable, Sendable {
+  let mode: EnergyMode
+  let systemLowPowerMode: Bool
+
+  var isConstrained: Bool {
+    mode == .lowEnergy || (mode == .automatic && systemLowPowerMode)
+  }
+
+  var allowsRemotePolling: Bool {
+    mode == .live || !isConstrained
+  }
+
+  func batteryInterval(viewIsLive: Bool) -> TimeInterval {
+    switch mode {
+    case .live: viewIsLive ? 3 : 15
+    case .lowEnergy: viewIsLive ? 30 : 120
+    case .automatic:
+      if systemLowPowerMode { return viewIsLive ? 30 : 120 }
+      return viewIsLive ? 12 : 60
+    }
+  }
+
+  var batteryStableInterval: TimeInterval {
+    switch mode {
+    case .live: 2 * 60
+    case .lowEnergy: 10 * 60
+    case .automatic: systemLowPowerMode ? 10 * 60 : 5 * 60
+    }
+  }
+
+  func systemInterval(viewIsLive: Bool) -> TimeInterval {
+    switch mode {
+    case .live: viewIsLive ? 0.5 : 5
+    case .lowEnergy: viewIsLive ? 3 : 45
+    case .automatic:
+      if systemLowPowerMode { return viewIsLive ? 3 : 30 }
+      return viewIsLive ? 1 : 20
+    }
+  }
+
+  func t3PollInterval(busy: Bool, expanded: Bool) -> TimeInterval {
+    if isConstrained { return 30 }
+    if mode == .live {
+      if expanded { return busy ? 2 : 3 }
+      return busy ? 3 : 6
+    }
+    if expanded { return busy ? 3 : 5 }
+    return busy ? 5 : 12
+  }
+
+  var tunnelPollingInterval: TimeInterval {
+    if isConstrained { return 30 }
+    return mode == .live ? 2 : 10
+  }
+}
+
 extension InteractionMode: Defaults.Serializable {}
 extension MediaSourceMode: Defaults.Serializable {}
 extension HUDStyle: Defaults.Serializable {}
+extension EnergyMode: Defaults.Serializable {}
 
 extension Defaults.Keys {
   static let mediaSourceMode = Key<MediaSourceMode>("mediaSourceMode", default: .auto)
@@ -13,9 +84,9 @@ extension Defaults.Keys {
     "mediaPriorityList",
     default: ["com.spotify.client", "com.apple.Music"])
   static let interactionMode = Key<InteractionMode>("interactionMode", default: .hover)
-  static let hoverExpandDelay = Key<Double>("hoverExpandDelay", default: 0.3)
   static let hoverCollapseTimeout = Key<Double>("hoverCollapseTimeout", default: 0.5)
   static let hapticsEnabled = Key<Bool>("hapticsEnabled", default: true)
+  static let energyMode = Key<EnergyMode>("energyMode", default: .automatic)
   static let hideFromScreenRecording = Key<Bool>("hideFromScreenRecording", default: false)
   static let batteryEnabled = Key<Bool>("batteryEnabled", default: true)
   static let hudEnabled = Key<Bool>("hudEnabled", default: false)
@@ -47,4 +118,8 @@ extension Defaults.Keys {
   /// switcher so the empty state can explain why nothing is arriving. Mirrors `systemAlwaysVisible`.
   static let continuityAlwaysVisible = Key<Bool>("continuityAlwaysVisible", default: false)
   static let continuitySneaks = Key<Bool>("continuitySneaks", default: true)
+  static let t3CodeEnabled = Key<Bool>("t3CodeEnabled", default: true)
+  static let pulseEnabled = Key<Bool>("pulseEnabled", default: true)
+  static let t3RemoteEnvironments = Key<[T3EnvironmentProfile]>(
+    "t3RemoteEnvironments", default: [])
 }

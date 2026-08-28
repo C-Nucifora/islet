@@ -13,4 +13,20 @@ final class NowPlayingActivityTests: XCTestCase {
     XCTAssertNil(activity.playback)  // the shim the existing views read
     XCTAssertFalse(activity.isActive)
   }
+
+  func testElapsedPositionIsClampedToTrackBounds() {
+    var state = PlaybackState()
+    state.duration = 60
+    state.elapsed = -10
+    XCTAssertEqual(state.currentElapsed, 0)
+
+    state.elapsed = 90
+    XCTAssertEqual(state.currentElapsed, 60)
+  }
+
+  func testInvalidElapsedPositionFailsClosed() {
+    var state = PlaybackState()
+    state.elapsed = .nan
+    XCTAssertEqual(state.currentElapsed, 0)
+  }
 }

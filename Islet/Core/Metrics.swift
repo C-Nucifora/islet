@@ -10,6 +10,17 @@ enum Metrics {
   static let closedOversize: CGFloat = 2  // draw wider/taller than hardware
   static let hitSlop: CGFloat = 4  // hit target extends this far beyond notch
   static let peekGrowth: CGFloat = 4
+  /// Upward cursor travel needed to push through the hover barrier.
+  static let barrierPushDistance: CGFloat = 288
+  /// Extra downward stretch at maximum pressure, before the island snaps open.
+  static let barrierStretch: CGFloat = 24
+  /// Point in the push where the trackpad acknowledges contact with the barrier.
+  static let barrierContactProgress: CGFloat = 0.25
+  /// A second tactile gate near the end makes sustained pressure feel progressively firmer.
+  static let barrierStrainProgress: CGFloat = 0.65
+  /// The panel grows to this depth only while the barrier is engaged, so the elastic body is not
+  /// clipped while the closed island still keeps its small click footprint.
+  static let barrierPanelDepth: CGFloat = peekGrowth + barrierStretch + islandMargin
   static let fallbackNotchWidth: CGFloat = 200
   /// Breathing room between the drawn island and the panel edge that clips it, so fractional
   /// compact widths can't shave the outward corner flare.
