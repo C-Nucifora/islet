@@ -51,7 +51,7 @@ final class ScreenshotEventSource: SystemEventSource {
   func stop() {
     query?.stop()
     query = nil
-    observers.forEach { NotificationCenter.default.removeObserver($0) }
+    for observer in observers { NotificationCenter.default.removeObserver(observer) }
     observers.removeAll()
     gathered = false
   }

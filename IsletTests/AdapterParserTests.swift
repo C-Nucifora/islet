@@ -87,11 +87,13 @@ final class AdapterParserTests: XCTestCase {
 
   func testTwoSourcesParseToDistinctKeys() throws {
     let lines = try twoSourceLines()
-    guard case .nowPlaying(let safari, let safariState) =
-      AdapterParser.parse(line: lines[0], current: nil)
+    guard
+      case .nowPlaying(let safari, let safariState) =
+        AdapterParser.parse(line: lines[0], current: nil)
     else { return XCTFail("expected nowPlaying for Safari") }
-    guard case .nowPlaying(let spotify, let spotifyState) =
-      AdapterParser.parse(line: lines[2], current: nil)
+    guard
+      case .nowPlaying(let spotify, let spotifyState) =
+        AdapterParser.parse(line: lines[2], current: nil)
     else { return XCTFail("expected nowPlaying for Spotify") }
 
     XCTAssertNotEqual(safari, spotify)
@@ -113,11 +115,13 @@ final class AdapterParserTests: XCTestCase {
 
   func testDiffMergesOntoTheSourceItWasGivenAsCurrent() throws {
     let lines = try twoSourceLines()
-    guard case .nowPlaying(let spotify, let base) =
-      AdapterParser.parse(line: lines[2], current: nil)
+    guard
+      case .nowPlaying(let spotify, let base) =
+        AdapterParser.parse(line: lines[2], current: nil)
     else { return XCTFail("expected nowPlaying for Spotify") }
-    guard case .nowPlaying(let merged, let state) =
-      AdapterParser.parse(line: lines[3], current: base)
+    guard
+      case .nowPlaying(let merged, let state) =
+        AdapterParser.parse(line: lines[3], current: base)
     else { return XCTFail("expected nowPlaying after diff") }
     XCTAssertEqual(merged, spotify)  // the diff inherits the key it merged onto
     XCTAssertEqual(state.title, "Weird Fishes")

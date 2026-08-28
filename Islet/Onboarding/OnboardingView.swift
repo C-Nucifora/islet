@@ -200,9 +200,11 @@ private struct OnboardingView: View {
       }
       .frame(width: 132, height: 112)
       VStack(spacing: 8) {
-        Text("Islet puts timers, media controls and live system information around the MacBook notch.")
-          .font(.title3.weight(.medium))
-          .multilineTextAlignment(.center)
+        Text(
+          "Islet puts timers, media controls and live system information around the MacBook notch."
+        )
+        .font(.title3.weight(.medium))
+        .multilineTextAlignment(.center)
         Text("It has no Dock or menu-bar icon. Everything starts at the notch.")
           .foregroundStyle(.secondary)
           .multilineTextAlignment(.center)
@@ -220,10 +222,12 @@ private struct OnboardingView: View {
           Text("Click to open and pin").tag(InteractionMode.clickToPin)
         }
         .pickerStyle(.radioGroup)
-        Text(interactionMode == .hover
-          ? "Move the pointer into the notch, then keep pushing upward until Islet opens."
-          : "Click the notch to open Islet. Click outside it to close.")
-          .font(.caption).foregroundStyle(.secondary)
+        Text(
+          interactionMode == .hover
+            ? "Move the pointer into the notch, then keep pushing upward until Islet opens."
+            : "Click the notch to open Islet. Click outside it to close."
+        )
+        .font(.caption).foregroundStyle(.secondary)
       }
       Section("Startup") {
         Toggle("Launch Islet at login", isOn: $launchAtLogin)
@@ -246,13 +250,18 @@ private struct OnboardingView: View {
   }
 
   private func activityToggle(_ activity: OnboardingActivity) -> some View {
-    Toggle(isOn: Binding(
-      get: { selectedActivities.contains(activity.id) },
-      set: { enabled in
-        if enabled { selectedActivities.insert(activity.id) }
-        else { selectedActivities.remove(activity.id) }
-      }
-    )) {
+    Toggle(
+      isOn: Binding(
+        get: { selectedActivities.contains(activity.id) },
+        set: { enabled in
+          if enabled {
+            selectedActivities.insert(activity.id)
+          } else {
+            selectedActivities.remove(activity.id)
+          }
+        }
+      )
+    ) {
       HStack(spacing: 11) {
         Image(systemName: ActivityCatalog.icon(for: activity.id))
           .frame(width: 24).foregroundStyle(.tint)
@@ -271,8 +280,10 @@ private struct OnboardingView: View {
   private var permissionsPage: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 12) {
-        Text("Islet asks only for access used by the activities you chose. You can skip any request.")
-          .foregroundStyle(.secondary)
+        Text(
+          "Islet asks only for access used by the activities you chose. You can skip any request."
+        )
+        .foregroundStyle(.secondary)
 
         if selectedActivities.contains("calendar") {
           permissionRow(
@@ -289,7 +300,8 @@ private struct OnboardingView: View {
 
         Toggle(isOn: $remindersEnabled) {
           permissionLabel(
-            title: "Reminders", detail: "Shows incomplete reminders on Home and lets you complete them.",
+            title: "Reminders",
+            detail: "Shows incomplete reminders on Home and lets you complete them.",
             status: reminders.authorization.summary)
         }
         .toggleStyle(.checkbox)
@@ -308,7 +320,8 @@ private struct OnboardingView: View {
         if selectedActivities.contains("continuity") {
           permissionRow(
             title: "Accessibility",
-            detail: "Reads the app names macOS shows for iPhone Live Activities. Islet cannot read their contents.",
+            detail:
+              "Reads the app names macOS shows for iPhone Live Activities. Islet cannot read their contents.",
             status: permissions.diagnostics.accessibilityGranted ? "Allowed" : "Not allowed",
             actionTitle: permissions.diagnostics.accessibilityGranted ? nil : "Allow"
           ) {
@@ -318,7 +331,8 @@ private struct OnboardingView: View {
 
         permissionRow(
           title: "Wi-Fi network names",
-          detail: "Adds the network name to Wi-Fi connection alerts. The alert still works without access.",
+          detail:
+            "Adds the network name to Wi-Fi connection alerts. The alert still works without access.",
           status: permissions.diagnostics.location.summary,
           actionTitle: permissions.diagnostics.location == .notDetermined ? "Allow" : nil
         ) {
@@ -328,7 +342,8 @@ private struct OnboardingView: View {
         Toggle(isOn: $bluetoothEventsEnabled) {
           permissionLabel(
             title: "Bluetooth alerts",
-            detail: "Shows when Bluetooth devices connect or disconnect. macOS may ask for access after setup.",
+            detail:
+              "Shows when Bluetooth devices connect or disconnect. macOS may ask for access after setup.",
             status: bluetoothEventsEnabled ? "On" : "Off")
         }
         .toggleStyle(.checkbox)
@@ -342,7 +357,8 @@ private struct OnboardingView: View {
   }
 
   private func permissionRow(
-    title: String, detail: String, status: String, actionTitle: String?, action: @escaping () -> Void
+    title: String, detail: String, status: String, actionTitle: String?,
+    action: @escaping () -> Void
   ) -> some View {
     HStack(spacing: 16) {
       permissionLabel(title: title, detail: detail, status: status)
@@ -359,7 +375,8 @@ private struct OnboardingView: View {
         Text(title).font(.body.weight(.medium))
         Text(status).font(.caption).foregroundStyle(.secondary)
       }
-      Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+      Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(
+        horizontal: false, vertical: true)
     }
   }
 

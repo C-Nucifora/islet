@@ -46,7 +46,8 @@ enum LiveActivityCatalog {
         // One card per app: ControlCenter shows a single item per app, and a duplicate would
         // render twice under the same name with no way to tell them apart.
         guard seen.insert(bundleIdentifier).inserted else { return nil }
-        let name = item.appName.flatMap { $0.isEmpty ? nil : $0 }
+        let name =
+          item.appName.flatMap { $0.isEmpty ? nil : $0 }
           ?? LiveActivityAppStyle.name(forBundleIdentifier: bundleIdentifier)
         return LiveActivityCard(
           id: item.axIdentifier,

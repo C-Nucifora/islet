@@ -102,7 +102,7 @@ enum T3CredentialStore {
     let status = SecItemUpdate(key as CFDictionary, values as CFDictionary)
     if status == errSecItemNotFound {
       var addition = key
-      values.forEach { addition[$0.key] = $0.value }
+      for (key, value) in values { addition[key] = value }
       let addStatus = SecItemAdd(addition as CFDictionary, nil)
       guard addStatus == errSecSuccess else { throw T3CredentialStoreError.keychain(addStatus) }
     } else if status != errSecSuccess {

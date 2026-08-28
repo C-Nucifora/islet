@@ -92,7 +92,8 @@ final class T3CodeTests: XCTestCase {
     XCTAssertTrue(T3LocalDiscovery.acceptsDiscoveryResponse(data: descriptor, statusCode: 200))
     XCTAssertFalse(T3LocalDiscovery.acceptsDiscoveryResponse(data: descriptor, statusCode: 404))
     XCTAssertFalse(
-      T3LocalDiscovery.acceptsDiscoveryResponse(data: Data(#"{"error":"not found"}"#.utf8), statusCode: 200))
+      T3LocalDiscovery.acceptsDiscoveryResponse(
+        data: Data(#"{"error":"not found"}"#.utf8), statusCode: 200))
   }
 
   func testRuntimePortRejectsMalformedAndOutOfRangeValues() {
@@ -213,7 +214,8 @@ final class T3CodeTests: XCTestCase {
     let shell = Self.shell(
       updatedAt: now.addingTimeInterval(24 * 60 * 60), sessionStatus: "error",
       turnState: "error")
-    XCTAssertTrue(T3AgentSnapshot.activeAgents(in: shell, environmentID: "machine", now: now).isEmpty)
+    XCTAssertTrue(
+      T3AgentSnapshot.activeAgents(in: shell, environmentID: "machine", now: now).isEmpty)
   }
 
   func testFutureDatedFinishedAgentIsRejected() {
@@ -221,7 +223,8 @@ final class T3CodeTests: XCTestCase {
     let shell = Self.shell(
       updatedAt: now.addingTimeInterval(24 * 60 * 60), sessionStatus: "ready",
       turnState: "completed")
-    XCTAssertTrue(T3AgentSnapshot.activeAgents(in: shell, environmentID: "machine", now: now).isEmpty)
+    XCTAssertTrue(
+      T3AgentSnapshot.activeAgents(in: shell, environmentID: "machine", now: now).isEmpty)
   }
 
   func testPollingPolicySlowsInBackgroundAndLowPowerMode() {

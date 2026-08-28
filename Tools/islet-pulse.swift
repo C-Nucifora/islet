@@ -1,21 +1,20 @@
 #!/usr/bin/env swift
-
 import Darwin
 import Foundation
 import Network
 
 private let usage = """
-usage: islet-pulse end <id> [--source NAME]
-       islet-pulse <show|update|event> <id> <title> [subtitle] [options]
+  usage: islet-pulse end <id> [--source NAME]
+         islet-pulse <show|update|event> <id> <title> [subtitle] [options]
 
-options:
-  --source NAME            Stable provider source (default: cli)
-  --progress NUMBER        Progress from 0 through 1
-  --state STATE            active|progress|needsAction|succeeded|failed
-  --priority PRIORITY      low|normal|high|critical
-  --expires SECONDS        Expire after 2 through 86400 seconds
-  --action TITLE URL       Add an HTTP(S) action (up to three)
-""" + "\n"
+  options:
+    --source NAME            Stable provider source (default: cli)
+    --progress NUMBER        Progress from 0 through 1
+    --state STATE            active|progress|needsAction|succeeded|failed
+    --priority PRIORITY      low|normal|high|critical
+    --expires SECONDS        Expire after 2 through 86400 seconds
+    --action TITLE URL       Add an HTTP(S) action (up to three)
+  """ + "\n"
 
 private struct Response: Decodable {
   let ok: Bool
@@ -63,10 +62,12 @@ private final class PulseClient: @unchecked Sendable {
   private func sendOnce(_ payload: Data) {
     guard !sent else { return }
     sent = true
-    connection.send(content: payload, completion: .contentProcessed { [weak self] error in
-      guard let self else { return }
-      if let error { self.finish(1, error: "send failed: \(error)") } else { self.receive() }
-    })
+    connection.send(
+      content: payload,
+      completion: .contentProcessed { [weak self] error in
+        guard let self else { return }
+        if let error { self.finish(1, error: "send failed: \(error)") } else { self.receive() }
+      })
   }
 
   private func receive() {
@@ -110,7 +111,10 @@ private final class PulseClient: @unchecked Sendable {
 
   private func finish(_ code: Int32, error: String? = nil, output: Data? = nil) {
     lock.lock()
-    guard !complete else { lock.unlock(); return }
+    guard !complete else {
+      lock.unlock()
+      return
+    }
     complete = true
     exitCode = code
     lock.unlock()
@@ -122,49 +126,58 @@ private final class PulseClient: @unchecked Sendable {
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 if arguments == ["--help"] || arguments == ["-h"] {
-  FileHandle.standardOutput.write(Data(usage.utf8)); exit(0)
+  FileHandle.standardOutput.write(Data(usage.utf8))
+  exit(0)
 }
 let validOperations = Set(["show", "update", "event", "end"])
 guard arguments.count >= 2, validOperations.contains(arguments[0]) else {
-  FileHandle.standardError.write(Data(usage.utf8)); exit(64)
+  FileHandle.standardError.write(Data(usage.utf8))
+  exit(64)
 }
 let operation = arguments[0]
 let identifier = arguments[1].trimmingCharacters(in: .whitespacesAndNewlines)
 guard !identifier.isEmpty, identifier.count <= 128 else {
-  FileHandle.standardError.write(Data("id must contain 1...128 characters\n".utf8)); exit(64)
+  FileHandle.standardError.write(Data("id must contain 1...128 characters\n".utf8))
+  exit(64)
 }
 
 let requestID = UUID().uuidString
 var command: [String: Any] = ["operation": operation, "requestID": requestID]
 if operation == "end" {
   guard arguments.count == 2 || arguments.count == 4 else {
-    FileHandle.standardError.write(Data(usage.utf8)); exit(64)
+    FileHandle.standardError.write(Data(usage.utf8))
+    exit(64)
   }
   command["id"] = identifier
   if arguments.count == 4 {
     guard arguments[2] == "--source" else {
-      FileHandle.standardError.write(Data(usage.utf8)); exit(64)
+      FileHandle.standardError.write(Data(usage.utf8))
+      exit(64)
     }
     let source = arguments[3].trimmingCharacters(in: .whitespacesAndNewlines)
     guard !source.isEmpty, source.count <= 80 else {
-      FileHandle.standardError.write(Data("source must contain 1...80 characters\n".utf8)); exit(64)
+      FileHandle.standardError.write(Data("source must contain 1...80 characters\n".utf8))
+      exit(64)
     }
     command["source"] = source
   }
 } else {
   guard arguments.count >= 3 else {
-    FileHandle.standardError.write(Data("show/update/event requires a title\n".utf8)); exit(64)
+    FileHandle.standardError.write(Data("show/update/event requires a title\n".utf8))
+    exit(64)
   }
   let title = arguments[2].trimmingCharacters(in: .whitespacesAndNewlines)
   guard !title.isEmpty, title.count <= 180 else {
-    FileHandle.standardError.write(Data("title must contain 1...180 characters\n".utf8)); exit(64)
+    FileHandle.standardError.write(Data("title must contain 1...180 characters\n".utf8))
+    exit(64)
   }
   var activity: [String: Any] = ["id": identifier, "source": "cli", "title": title]
   var index = 3
   if index < arguments.count, !arguments[index].hasPrefix("--") {
     let subtitle = arguments[index].trimmingCharacters(in: .whitespacesAndNewlines)
     guard subtitle.count <= 240 else {
-      FileHandle.standardError.write(Data("subtitle exceeds 240 characters\n".utf8)); exit(64)
+      FileHandle.standardError.write(Data("subtitle exceeds 240 characters\n".utf8))
+      exit(64)
     }
     if !subtitle.isEmpty { activity["subtitle"] = subtitle }
     index += 1
@@ -175,11 +188,13 @@ if operation == "end" {
     switch option {
     case "--source":
       guard index + 1 < arguments.count else {
-        FileHandle.standardError.write(Data("--source requires a value\n".utf8)); exit(64)
+        FileHandle.standardError.write(Data("--source requires a value\n".utf8))
+        exit(64)
       }
       let source = arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines)
       guard !source.isEmpty, source.count <= 80 else {
-        FileHandle.standardError.write(Data("source must contain 1...80 characters\n".utf8)); exit(64)
+        FileHandle.standardError.write(Data("source must contain 1...80 characters\n".utf8))
+        exit(64)
       }
       activity["source"] = source
       index += 2
@@ -187,21 +202,24 @@ if operation == "end" {
       guard index + 1 < arguments.count, let progress = Double(arguments[index + 1]),
         progress.isFinite, (0...1).contains(progress)
       else {
-        FileHandle.standardError.write(Data("progress must be a number from 0 through 1\n".utf8)); exit(64)
+        FileHandle.standardError.write(Data("progress must be a number from 0 through 1\n".utf8))
+        exit(64)
       }
       activity["progress"] = progress
       index += 2
     case "--state":
       let allowed = Set(["active", "progress", "needsAction", "succeeded", "failed"])
       guard index + 1 < arguments.count, allowed.contains(arguments[index + 1]) else {
-        FileHandle.standardError.write(Data("invalid state\n".utf8)); exit(64)
+        FileHandle.standardError.write(Data("invalid state\n".utf8))
+        exit(64)
       }
       activity["state"] = arguments[index + 1]
       index += 2
     case "--priority":
       let allowed = Set(["low", "normal", "high", "critical"])
       guard index + 1 < arguments.count, allowed.contains(arguments[index + 1]) else {
-        FileHandle.standardError.write(Data("invalid priority\n".utf8)); exit(64)
+        FileHandle.standardError.write(Data("invalid priority\n".utf8))
+        exit(64)
       }
       activity["priority"] = arguments[index + 1]
       index += 2
@@ -209,7 +227,8 @@ if operation == "end" {
       guard index + 1 < arguments.count, let seconds = Double(arguments[index + 1]),
         seconds.isFinite, (2...86_400).contains(seconds)
       else {
-        FileHandle.standardError.write(Data("expiry must be from 2 through 86400 seconds\n".utf8)); exit(64)
+        FileHandle.standardError.write(Data("expiry must be from 2 through 86400 seconds\n".utf8))
+        exit(64)
       }
       activity["expiresAt"] = ISO8601DateFormatter().string(
         from: Date().addingTimeInterval(seconds))
@@ -221,14 +240,18 @@ if operation == "end" {
         let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme),
         components.host?.isEmpty == false, components.user == nil, components.password == nil
       else {
-        FileHandle.standardError.write(Data("action requires a title and safe HTTP(S) URL (maximum three)\n".utf8)); exit(64)
+        FileHandle.standardError.write(
+          Data("action requires a title and safe HTTP(S) URL (maximum three)\n".utf8))
+        exit(64)
       }
       guard url.absoluteString.count <= 2_048 else {
-        FileHandle.standardError.write(Data("action URL exceeds 2048 characters\n".utf8)); exit(64)
+        FileHandle.standardError.write(Data("action URL exceeds 2048 characters\n".utf8))
+        exit(64)
       }
       let actionTitle = arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines)
       guard !actionTitle.isEmpty, actionTitle.count <= 60 else {
-        FileHandle.standardError.write(Data("action title must contain 1...60 characters\n".utf8)); exit(64)
+        FileHandle.standardError.write(Data("action title must contain 1...60 characters\n".utf8))
+        exit(64)
       }
       actions.append([
         "id": "cli-\(actions.count + 1)", "title": actionTitle,
@@ -236,7 +259,8 @@ if operation == "end" {
       ])
       index += 3
     default:
-      FileHandle.standardError.write(Data("unknown option: \(option)\n\(usage)".utf8)); exit(64)
+      FileHandle.standardError.write(Data("unknown option: \(option)\n\(usage)".utf8))
+      exit(64)
     }
   }
   if !actions.isEmpty { activity["actions"] = actions }
@@ -257,7 +281,9 @@ guard
   let tokenData = Data(base64Encoded: token), tokenData.count == 32
 else {
   FileHandle.standardError.write(
-    Data("Islet Pulse token is missing, invalid, not owned by this user, or has unsafe permissions.\n".utf8))
+    Data(
+      "Islet Pulse token is missing, invalid, not owned by this user, or has unsafe permissions.\n"
+        .utf8))
   exit(69)
 }
 command["token"] = token
@@ -267,6 +293,7 @@ do {
   payload.append(0x0A)
   exit(PulseClient().run(payload: payload, requestID: requestID))
 } catch {
-  FileHandle.standardError.write(Data("could not encode command: \(error.localizedDescription)\n".utf8))
+  FileHandle.standardError.write(
+    Data("could not encode command: \(error.localizedDescription)\n".utf8))
   exit(70)
 }

@@ -114,12 +114,12 @@ struct T3PairingTarget: Equatable, Sendable {
   private static func formValues(_ encoded: String?) -> [String: String] {
     guard let encoded else { return [:] }
     return encoded.split(separator: "&").reduce(into: [String: String]()) { values, pair in
-        let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-        guard parts.count == 2 else { return }
-        let key = String(parts[0]).removingPercentEncoding ?? String(parts[0])
-        let value = String(parts[1]).removingPercentEncoding ?? String(parts[1])
-        values[key] = value
-      }
+      let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+      guard parts.count == 2 else { return }
+      let key = String(parts[0]).removingPercentEncoding ?? String(parts[0])
+      let value = String(parts[1]).removingPercentEncoding ?? String(parts[1])
+      values[key] = value
+    }
   }
 }
 
@@ -340,17 +340,18 @@ enum T3LocalDiscovery {
       let data = try? Data(contentsOf: runtimeURL),
       let runtime = runtime(from: data), let port = runtime.endpoint.baseURL.port,
       processIsOwnedByCurrentUser(runtime.processID),
-      (isSignedT3Code(processID: runtime.processID)
-        || isT3CLI(processID: runtime.processID)),
+      isSignedT3Code(processID: runtime.processID)
+        || isT3CLI(processID: runtime.processID),
       process(runtime.processID, ownsListeningTCPPort: port)
     else { return nil }
     return runtime
   }
 
   nonisolated private static func isSignedT3Code(processID: Int32) -> Bool {
-    let attributes = [
-      kSecGuestAttributePid as String: NSNumber(value: processID)
-    ] as CFDictionary
+    let attributes =
+      [
+        kSecGuestAttributePid as String: NSNumber(value: processID)
+      ] as CFDictionary
     let flags = SecCSFlags(rawValue: 0)
     var code: SecCode?
     guard SecCodeCopyGuestWithAttributes(nil, attributes, flags, &code) == errSecSuccess,
@@ -360,7 +361,7 @@ enum T3LocalDiscovery {
     var requirement: SecRequirement?
     let requirementText =
       "anchor apple generic and identifier \"com.t3tools.t3code\" and certificate leaf[subject.OU] = \"ARK85ZXQ4Z\""
-        as CFString
+      as CFString
     guard SecRequirementCreateWithString(requirementText, flags, &requirement) == errSecSuccess,
       let requirement
     else { return false }

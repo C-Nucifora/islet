@@ -228,12 +228,12 @@ final class NotchViewModel: ObservableObject {
     guard target != panelFrame, shrinkTask == nil else { return }
     shrinkTask = Self.debounce(
       for: Motion.panelShrinkDelay,
-      cleanup: { [weak self] in self?.shrinkTask = nil }
-    ) { [weak self] in
-      guard let self else { return }
-      let settled = self.targetPanelFrame(for: self.state)
-      if settled != self.panelFrame { self.panelFrame = settled }
-    }
+      cleanup: { [weak self] in self?.shrinkTask = nil },
+      body: { [weak self] in
+        guard let self else { return }
+        let settled = self.targetPanelFrame(for: self.state)
+        if settled != self.panelFrame { self.panelFrame = settled }
+      })
   }
 
   /// Cancels a pending shrink without scheduling a replacement. Exposed for tests: nothing in the
@@ -286,7 +286,7 @@ final class NotchViewModel: ObservableObject {
   private static func debounce(
     cancelling existing: Task<Void, Never>? = nil, for delay: Duration,
     cleanup: (@MainActor () -> Void)? = nil,
-    _ body: @escaping @MainActor () -> Void
+    body: @escaping @MainActor () -> Void
   ) -> Task<Void, Never> {
     existing?.cancel()
     return Task { @MainActor in
@@ -351,10 +351,10 @@ final class NotchViewModel: ObservableObject {
 
   private func scheduleCollapse() {
     collapseTask = Self.debounce(
-      cancelling: collapseTask, for: .seconds(Defaults[.hoverCollapseTimeout])
-    ) { [weak self] in
-      guard let self, !self.wasInside else { return }
-      self.apply(.collapseTimeoutElapsed)
-    }
+      cancelling: collapseTask, for: .seconds(Defaults[.hoverCollapseTimeout]),
+      body: { [weak self] in
+        guard let self, !self.wasInside else { return }
+        self.apply(.collapseTimeoutElapsed)
+      })
   }
 }

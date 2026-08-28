@@ -201,7 +201,8 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
     if thread.backgroundLiveness == "monitoring" { return .monitoring }
 
     let updated = parseDate(thread.updatedAt) ?? .distantPast
-    let completedTurn = thread.latestTurn?.state == "completed"
+    let completedTurn =
+      thread.latestTurn?.state == "completed"
       || (thread.latestTurn?.state == "interrupted" && thread.latestTurn?.completedAt != nil)
     let readySession = ["ready", "idle"].contains(thread.session?.status ?? "")
     if completedTurn || readySession,

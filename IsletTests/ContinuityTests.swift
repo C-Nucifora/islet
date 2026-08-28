@@ -95,9 +95,11 @@ final class LiveActivityCatalogTests: XCTestCase {
   }
 
   func testMissingAccessibilityNameFallsBackToTheBundleLeaf() {
-    XCTAssertEqual(cards([item("com.doordash.doordash.liveActivity", name: nil)]).first?.appName,
+    XCTAssertEqual(
+      cards([item("com.doordash.doordash.liveActivity", name: nil)]).first?.appName,
       "doordash")
-    XCTAssertEqual(cards([item("com.doordash.doordash.liveActivity", name: "")]).first?.appName,
+    XCTAssertEqual(
+      cards([item("com.doordash.doordash.liveActivity", name: "")]).first?.appName,
       "doordash")
   }
 
@@ -152,9 +154,9 @@ final class ContinuityAvailabilityTests: XCTestCase {
   }
 
   func testEveryStateExplainsItself() {
-    for state: ContinuityAvailability in
-      [.needsAccessibility, .unsupported, .systemDisabled, .waiting, .active]
-    {
+    for state: ContinuityAvailability in [
+      .needsAccessibility, .unsupported, .systemDisabled, .waiting, .active,
+    ] {
       XCTAssertFalse(state.explanation.isEmpty)
     }
   }
@@ -164,10 +166,12 @@ final class ControlCenterSettingsTests: XCTestCase {
   func testReadsTheEnabledFlag() {
     XCTAssertTrue(
       ControlCenterLiveActivitySettings.parse(
-        remoteEnabled: NSNumber(value: true), stateData: nil).remoteEnabled)
+        remoteEnabled: NSNumber(value: true), stateData: nil
+      ).remoteEnabled)
     XCTAssertFalse(
       ControlCenterLiveActivitySettings.parse(
-        remoteEnabled: NSNumber(value: false), stateData: nil).remoteEnabled)
+        remoteEnabled: NSNumber(value: false), stateData: nil
+      ).remoteEnabled)
   }
 
   func testSettingDisabledInTheJSONBlobWins() {
@@ -186,7 +190,8 @@ final class ControlCenterSettingsTests: XCTestCase {
   func testGarbageBlobDoesNotCrashOrFlipTheFlag() {
     XCTAssertTrue(
       ControlCenterLiveActivitySettings.parse(
-        remoteEnabled: NSNumber(value: true), stateData: Data([0xFF, 0x01])).remoteEnabled)
+        remoteEnabled: NSNumber(value: true), stateData: Data([0xFF, 0x01])
+      ).remoteEnabled)
   }
 }
 

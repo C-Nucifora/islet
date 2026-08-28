@@ -295,8 +295,10 @@ final class SystemMetricsTests: XCTestCase {
     // M3 Pro, where a .background-QoS spin saturates indices 0...5 and hw.perflevel1 is
     // "Efficiency". Ranges are returned most-performant-first for display.
     let clusters = CPUTopology.clusters(
-      perfLevels: [PerfLevel(name: "Performance", logicalCPUs: 6),
-                   PerfLevel(name: "Efficiency", logicalCPUs: 6)],
+      perfLevels: [
+        PerfLevel(name: "Performance", logicalCPUs: 6),
+        PerfLevel(name: "Efficiency", logicalCPUs: 6),
+      ],
       totalCores: 12)
     XCTAssertEqual(
       clusters,
@@ -310,8 +312,10 @@ final class SystemMetricsTests: XCTestCase {
 
   func testThreeLevelSplitAssignsFromLeastPerformant() {
     let clusters = CPUTopology.clusters(
-      perfLevels: [PerfLevel(name: "A", logicalCPUs: 4), PerfLevel(name: "B", logicalCPUs: 4),
-                   PerfLevel(name: "C", logicalCPUs: 4)],
+      perfLevels: [
+        PerfLevel(name: "A", logicalCPUs: 4), PerfLevel(name: "B", logicalCPUs: 4),
+        PerfLevel(name: "C", logicalCPUs: 4),
+      ],
       totalCores: 12)
     XCTAssertEqual(clusters.map(\.range), [8..<12, 4..<8, 0..<4])
     XCTAssertEqual(clusters.map(\.name), ["A", "B", "C"])
@@ -322,8 +326,10 @@ final class SystemMetricsTests: XCTestCase {
     // Degrade to total-only rather than mislabel half the cores.
     XCTAssertTrue(
       CPUTopology.clusters(
-        perfLevels: [PerfLevel(name: "Performance", logicalCPUs: 6),
-                     PerfLevel(name: "Efficiency", logicalCPUs: 4)],
+        perfLevels: [
+          PerfLevel(name: "Performance", logicalCPUs: 6),
+          PerfLevel(name: "Efficiency", logicalCPUs: 4),
+        ],
         totalCores: 12
       ).isEmpty)
   }
@@ -342,8 +348,10 @@ final class SystemMetricsTests: XCTestCase {
   func testZeroSizedLevelDegradesToNoSplit() {
     XCTAssertTrue(
       CPUTopology.clusters(
-        perfLevels: [PerfLevel(name: "Performance", logicalCPUs: 12),
-                     PerfLevel(name: "Efficiency", logicalCPUs: 0)],
+        perfLevels: [
+          PerfLevel(name: "Performance", logicalCPUs: 12),
+          PerfLevel(name: "Efficiency", logicalCPUs: 0),
+        ],
         totalCores: 12
       ).isEmpty)
   }

@@ -122,8 +122,10 @@ final class ScreenManager {
     Defaults.publisher(.hideFromScreenRecording)
       .sink { [weak self] change in
         Task { @MainActor in
-          self?.instances.values.forEach {
-            $0.panel.sharingType = change.newValue ? .none : .readOnly
+          if let instances = self?.instances.values {
+            for instance in instances {
+              instance.panel.sharingType = change.newValue ? .none : .readOnly
+            }
           }
         }
       }
@@ -155,7 +157,7 @@ final class ScreenManager {
   }
 
   func rebuild() {
-    instances.values.forEach { $0.panel.close() }
+    for instance in instances.values { instance.panel.close() }
     instances.removeAll()
 
     for screen in targetScreens() {
@@ -224,7 +226,9 @@ final class ScreenManager {
     } else {
       fullscreenTimer = nil
       // Restore any panel we hid.
-      instances.values.forEach { if !$0.panel.isVisible { $0.panel.orderFrontRegardless() } }
+      for instance in instances.values where !instance.panel.isVisible {
+        instance.panel.orderFrontRegardless()
+      }
     }
   }
 
