@@ -54,7 +54,6 @@ targets:
           # NSExceptionDomains. T3Endpoint still rejects remote HTTP unless the user explicitly
           # enables the insecure-transport option for that pairing.
           NSAllowsArbitraryLoads: true
-          NSAllowsLocalNetworking: true
   IsletTests:
     type: bundle.unit-test
     platform: macOS
