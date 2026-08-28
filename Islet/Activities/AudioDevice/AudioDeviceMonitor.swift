@@ -1,5 +1,4 @@
 import CoreAudio
-import Defaults
 import Foundation
 
 /// Watches the default output device and fires a connect sneak when it changes to a new device.
@@ -52,8 +51,6 @@ final class AudioDeviceMonitor {
     // Remember an interval with no output device. If the same headphones reconnect afterwards,
     // their numeric device ID may be reused and should still produce a fresh selection event.
     guard device != kAudioObjectUnknown else { return }
-    guard Defaults[.airpodsEnabled] else { return }
-
     let name = Self.deviceName(device) ?? "Audio device"
     SystemEventBus.shared.emit(
       SystemEvent(

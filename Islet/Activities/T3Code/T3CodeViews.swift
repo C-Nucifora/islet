@@ -129,6 +129,7 @@ struct T3SettingsSection: View {
   @State private var isPairing = false
   @State private var statusMessage: String?
   @State private var allowInsecureHTTP = false
+  @State private var pendingRemoval: T3EnvironmentProfile?
 
   var body: some View {
     Section("T3 Code agents") {
@@ -143,10 +144,12 @@ struct T3SettingsSection: View {
         Button(isPairing ? "Pairing…" : "Add") { pair() }
           .disabled(pairingLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPairing)
       }
-      Toggle("Allow plain HTTP for this pairing", isOn: $allowInsecureHTTP)
-        .font(.caption)
-      Text("Leave this off outside localhost. HTTPS or a private Tailscale endpoint is recommended.")
-        .font(.caption2).foregroundStyle(.secondary)
+      if pairingUsesPlainHTTP {
+        Toggle("Allow plain HTTP for this pairing", isOn: $allowInsecureHTTP)
+          .font(.caption)
+        Text("Plain HTTP exposes the pairing credential on the network. Use it only for a trusted local connection; HTTPS or Tailscale is recommended.")
+          .font(.caption2).foregroundStyle(.orange)
+      }
       if let statusMessage {
         Text(statusMessage).font(.caption2)
           .foregroundStyle(
@@ -155,6 +158,36 @@ struct T3SettingsSection: View {
       }
       Button("Reconnect now") { activity.reconnect() }.disabled(!enabled)
     }
+    .confirmationDialog(
+      "Remove this T3 Code machine?",
+      isPresented: Binding(
+        get: { pendingRemoval != nil },
+        set: { if !$0 { pendingRemoval = nil } }),
+      titleVisibility: .visible
+    ) {
+      if let profile = pendingRemoval {
+        Button("Remove \(profile.label)", role: .destructive) {
+          pendingRemoval = nil
+          remove(profile)
+        }
+      }
+      Button("Cancel", role: .cancel) { pendingRemoval = nil }
+    } message: {
+      Text("Its saved pairing credential will also be removed from Keychain.")
+    }
+  }
+
+  private var pairingUsesPlainHTTP: Bool {
+    let trimmed = pairingLink.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let link = URL(string: trimmed),
+      let components = URLComponents(url: link, resolvingAgainstBaseURL: false)
+    else { return false }
+    if link.host?.lowercased() == "app.t3.codes", link.path == "/pair",
+      let host = components.queryItems?.first(where: { $0.name == "host" })?.value
+    {
+      return URL(string: host)?.scheme?.lowercased() == "http"
+    }
+    return link.scheme?.lowercased() == "http"
   }
 
   @ViewBuilder private var machineRows: some View {
@@ -179,7 +212,7 @@ struct T3SettingsSection: View {
         Spacer()
         Text(snapshot?.state.label ?? (profile.enabled ? "Connecting" : "Off"))
           .font(.caption).foregroundStyle(connectionColor(snapshot?.state))
-        Button(role: .destructive) { remove(profile) } label: {
+        Button(role: .destructive) { pendingRemoval = profile } label: {
           Image(systemName: "trash")
         }
         .buttonStyle(.borderless).accessibilityLabel("Remove \(profile.label)")
