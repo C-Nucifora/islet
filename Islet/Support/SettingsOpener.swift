@@ -42,8 +42,8 @@ enum SettingsOpener {
     win.isReleasedWhenClosed = false
     if !win.setFrameUsingName("IsletSettingsWindow") { win.center() }
     win.makeKeyAndOrderFront(nil)
-    win.standardWindowButton(.miniaturizeButton)?.isHidden = true
-    win.standardWindowButton(.zoomButton)?.isHidden = true
+    win.standardWindowButton(.miniaturizeButton)?.isEnabled = false
+    win.standardWindowButton(.zoomButton)?.isEnabled = false
     window = win
   }
 
