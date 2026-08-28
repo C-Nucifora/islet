@@ -5,7 +5,7 @@ import Foundation
 import Network
 
 private let usage = """
-usage: islet-pulse end <id>
+usage: islet-pulse end <id> [--source NAME]
        islet-pulse <show|update|event> <id> <title> [subtitle] [options]
 
 options:
@@ -20,6 +20,8 @@ options:
 private struct Response: Decodable {
   let ok: Bool
   let error: String?
+  let errorCode: String?
+  let requestID: String?
 }
 
 /// Network callbacks run on a private serial queue. Completion is separately lock-protected so a
@@ -34,8 +36,10 @@ private final class PulseClient: @unchecked Sendable {
   private var exitCode: Int32 = 1
   private var sent = false  // queue-confined
   private var buffer = Data()  // queue-confined
+  private var expectedRequestID = ""
 
-  func run(payload: Data) -> Int32 {
+  func run(payload: Data, requestID: String) -> Int32 {
+    expectedRequestID = requestID
     connection.stateUpdateHandler = { [weak self] state in
       guard let self else { return }
       switch state {
@@ -89,9 +93,16 @@ private final class PulseClient: @unchecked Sendable {
   private func handleResponse(_ data: Data) {
     do {
       let response = try JSONDecoder().decode(Response.self, from: data)
+      guard response.requestID == expectedRequestID else {
+        finish(65, error: "Islet Pulse returned a response with the wrong requestID")
+        return
+      }
       var output = data
       output.append(0x0A)
-      finish(response.ok ? 0 : 65, error: response.ok ? nil : response.error, output: output)
+      let prefix = response.errorCode.map { "[\($0)] " } ?? ""
+      finish(
+        response.ok ? 0 : 65,
+        error: response.ok ? nil : prefix + (response.error ?? "command rejected"), output: output)
     } catch {
       finish(65, error: "invalid response from Islet Pulse: \(error.localizedDescription)")
     }
@@ -110,6 +121,9 @@ private final class PulseClient: @unchecked Sendable {
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
+if arguments == ["--help"] || arguments == ["-h"] {
+  FileHandle.standardOutput.write(Data(usage.utf8)); exit(0)
+}
 let validOperations = Set(["show", "update", "event", "end"])
 guard arguments.count >= 2, validOperations.contains(arguments[0]) else {
   FileHandle.standardError.write(Data(usage.utf8)); exit(64)
@@ -120,17 +134,30 @@ guard !identifier.isEmpty, identifier.count <= 128 else {
   FileHandle.standardError.write(Data("id must contain 1...128 characters\n".utf8)); exit(64)
 }
 
-var command: [String: Any] = ["operation": operation]
+let requestID = UUID().uuidString
+var command: [String: Any] = ["operation": operation, "requestID": requestID]
 if operation == "end" {
-  guard arguments.count == 2 else { FileHandle.standardError.write(Data(usage.utf8)); exit(64) }
+  guard arguments.count == 2 || arguments.count == 4 else {
+    FileHandle.standardError.write(Data(usage.utf8)); exit(64)
+  }
   command["id"] = identifier
+  if arguments.count == 4 {
+    guard arguments[2] == "--source" else {
+      FileHandle.standardError.write(Data(usage.utf8)); exit(64)
+    }
+    let source = arguments[3].trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !source.isEmpty, source.count <= 80 else {
+      FileHandle.standardError.write(Data("source must contain 1...80 characters\n".utf8)); exit(64)
+    }
+    command["source"] = source
+  }
 } else {
   guard arguments.count >= 3 else {
     FileHandle.standardError.write(Data("show/update/event requires a title\n".utf8)); exit(64)
   }
   let title = arguments[2].trimmingCharacters(in: .whitespacesAndNewlines)
-  guard !title.isEmpty else {
-    FileHandle.standardError.write(Data("title must not be empty\n".utf8)); exit(64)
+  guard !title.isEmpty, title.count <= 180 else {
+    FileHandle.standardError.write(Data("title must contain 1...180 characters\n".utf8)); exit(64)
   }
   var activity: [String: Any] = ["id": identifier, "source": "cli", "title": title]
   var index = 3
@@ -196,6 +223,9 @@ if operation == "end" {
       else {
         FileHandle.standardError.write(Data("action requires a title and safe HTTP(S) URL (maximum three)\n".utf8)); exit(64)
       }
+      guard url.absoluteString.count <= 2_048 else {
+        FileHandle.standardError.write(Data("action URL exceeds 2048 characters\n".utf8)); exit(64)
+      }
       let actionTitle = arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines)
       guard !actionTitle.isEmpty, actionTitle.count <= 60 else {
         FileHandle.standardError.write(Data("action title must contain 1...60 characters\n".utf8)); exit(64)
@@ -215,19 +245,27 @@ if operation == "end" {
 
 let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
   .appendingPathComponent("Islet", isDirectory: true)
+let tokenURL = support.appendingPathComponent("pulse-token")
+var tokenInfo = stat()
 guard
-  let token = try? String(contentsOf: support.appendingPathComponent("pulse-token"), encoding: .utf8)
+  lstat(tokenURL.path, &tokenInfo) == 0,
+  (tokenInfo.st_mode & S_IFMT) == S_IFREG,
+  tokenInfo.st_uid == getuid(),
+  (tokenInfo.st_mode & 0o077) == 0,
+  let token = try? String(contentsOf: tokenURL, encoding: .utf8)
     .trimmingCharacters(in: .whitespacesAndNewlines),
   let tokenData = Data(base64Encoded: token), tokenData.count == 32
 else {
-  FileHandle.standardError.write(Data("Islet Pulse has not created a valid token yet.\n".utf8)); exit(69)
+  FileHandle.standardError.write(
+    Data("Islet Pulse token is missing, invalid, not owned by this user, or has unsafe permissions.\n".utf8))
+  exit(69)
 }
 command["token"] = token
 
 do {
   var payload = try JSONSerialization.data(withJSONObject: command)
   payload.append(0x0A)
-  exit(PulseClient().run(payload: payload))
+  exit(PulseClient().run(payload: payload, requestID: requestID))
 } catch {
   FileHandle.standardError.write(Data("could not encode command: \(error.localizedDescription)\n".utf8))
   exit(70)

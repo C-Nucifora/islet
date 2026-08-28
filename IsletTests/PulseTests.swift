@@ -70,9 +70,50 @@ final class PulseTests: XCTestCase {
       expiresAt: nil, actions: nil)
     XCTAssertTrue(center.apply(command(.show, payload), now: now).ok)
     let response = center.apply(
-      PulseCommand(token: "test", operation: .end, activity: nil, id: "  build  "), now: now)
+      PulseCommand(
+        token: "test", operation: .end, activity: nil, id: "  build  ",
+        requestID: "request-1", source: "tests"), now: now)
     XCTAssertTrue(response.ok)
+    XCTAssertEqual(response.requestID, "request-1")
     XCTAssertTrue(center.items.isEmpty)
+  }
+
+  @MainActor
+  func testCrossSourceIdentifierCollisionAndMismatchedEndAreRejected() throws {
+    let center = PulseCenter()
+    let now = Date(timeIntervalSince1970: 1_000)
+    let first = PulsePayload(
+      id: "shared", source: "build", title: "Build", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    var second = first
+    second.source = "agent"
+
+    XCTAssertTrue(center.apply(command(.show, first), now: now).ok)
+    let collision = center.apply(command(.show, second), now: now)
+    XCTAssertFalse(collision.ok)
+    XCTAssertEqual(collision.errorCode, .identifierConflict)
+    XCTAssertEqual(center.items.first?.source, "build")
+
+    let mismatchedEnd = center.apply(
+      PulseCommand(
+        token: "test", operation: .end, activity: nil, id: "shared", source: "agent"),
+      now: now)
+    XCTAssertFalse(mismatchedEnd.ok)
+    XCTAssertEqual(mismatchedEnd.errorCode, .sourceMismatch)
+    XCTAssertEqual(center.items.map(\.id), ["shared"])
+  }
+
+  @MainActor
+  func testProgressOutsideProtocolRangeIsRejected() {
+    let center = PulseCenter()
+    let payload = PulsePayload(
+      id: "overflow", source: "tests", title: "Overflow", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: 1.01, state: .progress, priority: .normal,
+      expiresAt: nil, actions: nil)
+    let response = center.apply(command(.show, payload), now: Date(timeIntervalSince1970: 1_000))
+    XCTAssertFalse(response.ok)
+    XCTAssertEqual(response.errorCode, .validationFailed)
   }
 
   @MainActor
@@ -140,7 +181,6 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(center.history.count, PulseCenter.maximumHistoryEntries)
     let entry = try XCTUnwrap(center.history.first)
     XCTAssertEqual(entry.source, "cli")
-    XCTAssertNotNil(entry.itemID)
     XCTAssertEqual(entry.operation, .show)
     XCTAssertEqual(entry.result, .shown)
   }
@@ -172,8 +212,35 @@ final class PulseTests: XCTestCase {
       expiresAt: nil, actions: nil)
     XCTAssertFalse(center.apply(command(.show, payload), now: now).ok)
     XCTAssertEqual(center.history.first?.result, .rejected)
-    XCTAssertNil(center.history.first?.itemID)
     XCTAssertNil(center.history.first?.source)
+  }
+
+  func testWireValidatorRejectsUnknownFieldsAtEveryProtocolLevel() throws {
+    let valid = Data(
+      #"{"token":"token","operation":"show","activity":{"id":"id","source":"tests","title":"Title","actions":[{"id":"open","title":"Open","url":"https://example.com"}]}}"#.utf8)
+    XCTAssertNoThrow(try PulseWireValidator.validate(valid))
+
+    let unknownCommand = Data(#"{"token":"token","operation":"end","id":"id","typo":true}"#.utf8)
+    XCTAssertThrowsError(try PulseWireValidator.validate(unknownCommand))
+    let unknownAction = Data(
+      #"{"token":"token","operation":"show","activity":{"id":"id","source":"tests","title":"Title","actions":[{"id":"open","title":"Open","url":"https://example.com","script":"no"}]}}"#.utf8)
+    XCTAssertThrowsError(try PulseWireValidator.validate(unknownAction))
+  }
+
+  func testWireDecoderAcceptsFractionalISO8601Expiry() throws {
+    let data = Data(
+      #"{"token":"token","operation":"event","activity":{"id":"id","source":"tests","title":"Title","expiresAt":"2026-08-28T12:34:56.789Z"}}"#.utf8)
+    let command = try PulseWireCodec.decoder().decode(PulseCommand.self, from: data)
+    XCTAssertNotNil(command.activity?.expiresAt)
+  }
+
+  func testTokenWideRateLimiterDoesNotResetWhenAConnectionWouldReconnect() {
+    var limiter = PulseRateLimiter(limit: 2, window: 60)
+    let start = Date(timeIntervalSince1970: 1_000)
+    XCTAssertTrue(limiter.accepts(start))
+    XCTAssertTrue(limiter.accepts(start.addingTimeInterval(1)))
+    XCTAssertFalse(limiter.accepts(start.addingTimeInterval(2)))
+    XCTAssertTrue(limiter.accepts(start.addingTimeInterval(61)))
   }
 
   private func command(_ operation: PulseOperation, _ payload: PulsePayload) -> PulseCommand {

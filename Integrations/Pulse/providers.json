@@ -17,10 +17,10 @@
     },
     {
       "id": "github-actions",
-      "name": "GitHub Actions",
+      "name": "GitHub workflow watcher",
       "sources": ["github-actions", "github"],
       "capabilities": ["events", "progress", "webActions"],
-      "setup": "Use examples/github-actions.sh from a checked-out workflow."
+      "setup": "Use examples/github-actions.sh locally or on a self-hosted Mac runner."
     },
     {
       "id": "developer-tools",

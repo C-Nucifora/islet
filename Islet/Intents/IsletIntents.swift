@@ -100,6 +100,9 @@ struct PublishPulseEventIntent: AppIntent {
   @Parameter(title: "Title")
   var eventTitle: String
 
+  @Parameter(title: "Identifier")
+  var identifier: String?
+
   @Parameter(title: "Details")
   var details: String?
 
@@ -110,17 +113,76 @@ struct PublishPulseEventIntent: AppIntent {
   var seconds: Int
 
   @MainActor
-  func perform() async throws -> some IntentResult & ProvidesDialog {
-    let id = "intent-\(UUID().uuidString)"
+  func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<String> {
+    let suppliedID = identifier?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let id = suppliedID.flatMap { $0.isEmpty ? nil : $0 } ?? "intent-\(UUID().uuidString)"
     let payload = PulsePayload(
       id: id, source: "shortcuts", title: eventTitle, subtitle: details,
       symbol: "sparkles", accentHex: "#64D2FF", progress: nil, state: .active,
       priority: eventPriority.pulseValue, expiresAt: Date().addingTimeInterval(TimeInterval(seconds)),
       actions: nil)
-    let response = PulseCenter.shared.apply(
+    let center = PulseCenter.shared
+    let response = center.apply(
       PulseCommand(token: "", operation: .event, activity: payload, id: nil))
     guard response.ok else { throw PulseIntentError.rejected(response.error ?? "Unknown error") }
-    return .result(dialog: "Published to Islet.")
+    if center.items.contains(where: { $0.id == id }) {
+      return .result(value: id, dialog: "Published to Islet.")
+    }
+    return .result(
+      value: id, dialog: "Accepted by Islet, but hidden by the current Pulse delivery rules.")
+  }
+}
+
+struct UpdatePulseProgressIntent: AppIntent {
+  static let title: LocalizedStringResource = "Update Islet Pulse Progress"
+  static let description = IntentDescription(
+    "Creates or updates progress from Shortcuts under the Shortcuts provider source.")
+  static let openAppWhenRun = false
+
+  @Parameter(title: "Identifier")
+  var identifier: String
+
+  @Parameter(title: "Title")
+  var activityTitle: String
+
+  @Parameter(title: "Details")
+  var details: String?
+
+  @Parameter(title: "Progress", inclusiveRange: (0, 1))
+  var progress: Double
+
+  @Parameter(title: "Priority", default: .normal)
+  var activityPriority: PulseIntentPriority
+
+  @MainActor
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    let payload = PulsePayload(
+      id: identifier, source: "shortcuts", title: activityTitle, subtitle: details,
+      symbol: "chart.bar.fill", accentHex: "#64D2FF", progress: progress, state: .progress,
+      priority: activityPriority.pulseValue, expiresAt: nil, actions: nil)
+    let response = PulseCenter.shared.apply(
+      PulseCommand(token: "", operation: .update, activity: payload, id: nil))
+    guard response.ok else { throw PulseIntentError.rejected(response.error ?? "Unknown error") }
+    return .result(dialog: "Updated Pulse progress.")
+  }
+}
+
+struct EndPulseItemIntent: AppIntent {
+  static let title: LocalizedStringResource = "End an Islet Pulse Item"
+  static let description = IntentDescription(
+    "Ends a Pulse item created by the Shortcuts provider source.")
+  static let openAppWhenRun = false
+
+  @Parameter(title: "Identifier")
+  var identifier: String
+
+  @MainActor
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    let response = PulseCenter.shared.apply(
+      PulseCommand(
+        token: "", operation: .end, activity: nil, id: identifier, source: "shortcuts"))
+    guard response.ok else { throw PulseIntentError.rejected(response.error ?? "Unknown error") }
+    return .result(dialog: "Ended the Pulse item if it was active.")
   }
 }
 
@@ -185,13 +247,15 @@ struct SetPulseDeliveryProfileIntent: AppIntent {
 
 struct DismissPulseItemsIntent: AppIntent {
   static let title: LocalizedStringResource = "Dismiss Islet Pulse Items"
-  static let description = IntentDescription("Dismisses all currently visible Pulse provider items.")
+  static let description = IntentDescription(
+    "Dismisses all retained Pulse provider items, including currently filtered or muted state.")
   static let openAppWhenRun = false
 
   @MainActor
   func perform() async throws -> some IntentResult & ProvidesDialog {
-    let count = PulseCenter.shared.items.count
-    PulseCenter.shared.removeAll()
+    let center = PulseCenter.shared
+    let count = center.retainedItemCount
+    center.removeAll()
     return .result(dialog: count == 1 ? "Dismissed one Pulse item." : "Dismissed \(count) Pulse items.")
   }
 }
@@ -264,6 +328,16 @@ struct IsletShortcuts: AppShortcutsProvider {
       phrases: ["Dismiss Pulse in \(.applicationName)"],
       shortTitle: "Dismiss Pulse",
       systemImageName: "xmark.circle")
+    AppShortcut(
+      intent: UpdatePulseProgressIntent(),
+      phrases: ["Update Pulse progress in \(.applicationName)"],
+      shortTitle: "Update Progress",
+      systemImageName: "chart.bar.fill")
+    AppShortcut(
+      intent: EndPulseItemIntent(),
+      phrases: ["End a Pulse item in \(.applicationName)"],
+      shortTitle: "End Pulse Item",
+      systemImageName: "checkmark.circle")
     AppShortcut(
       intent: PauseClipboardHistoryIntent(),
       phrases: ["Pause clipboard history in \(.applicationName)"],

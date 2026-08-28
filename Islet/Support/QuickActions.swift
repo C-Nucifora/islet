@@ -38,12 +38,49 @@ struct IsletQuickAction: Identifiable {
         AppState.timer.cancel()
       },
       .init(
+        id: "timer-toggle",
+        title: AppState.timer.isPaused ? "Resume timer" : "Pause timer",
+        detail: AppState.timer.isPaused ? "Continue the current countdown" : "Hold the current countdown",
+        symbol: AppState.timer.isPaused ? "play.circle" : "pause.circle",
+        keywords: "timer hold continue", isAvailable: {
+          AppState.timer.isActive && !AppState.timer.finished
+        }
+      ) {
+        AppState.timer.togglePause()
+      },
+      .init(
+        id: "timer-add-5", title: "Add 5 minutes", detail: "Extend the current countdown",
+        symbol: "plus.circle", keywords: "timer extend more", isAvailable: {
+          AppState.timer.isActive && !AppState.timer.finished
+        }
+      ) {
+        AppState.timer.adjust(by: 5 * 60)
+      },
+      .init(
         id: "pulse-focus", title: "Focus Pulse", detail: "Allow high-priority and actionable updates",
         symbol: "scope", keywords: "filter rules profile notifications", isAvailable: {
           PulseCenter.shared.deliveryProfile != .focused
         }
       ) {
         PulseCenter.shared.deliveryProfile = .focused
+      },
+      .init(
+        id: "pulse-critical", title: "Critical Pulse only",
+        detail: "Allow only critical and failed provider updates",
+        symbol: "exclamationmark.shield", keywords: "filter rules profile urgent", isAvailable: {
+          PulseCenter.shared.deliveryProfile != .criticalOnly
+        }
+      ) {
+        PulseCenter.shared.deliveryProfile = .criticalOnly
+      },
+      .init(
+        id: "pulse-pause", title: "Pause Pulse delivery",
+        detail: "Retain provider state without showing new items",
+        symbol: "pause.circle", keywords: "filter rules profile mute notifications", isAvailable: {
+          PulseCenter.shared.deliveryProfile != .paused
+        }
+      ) {
+        PulseCenter.shared.deliveryProfile = .paused
       },
       .init(
         id: "pulse-resume", title: "Show all Pulse updates", detail: "Return to the Everything profile",
@@ -54,12 +91,21 @@ struct IsletQuickAction: Identifiable {
         PulseCenter.shared.deliveryProfile = .everything
       },
       .init(
-        id: "pulse-clear", title: "Dismiss all Pulse items", detail: "Clear the current provider stack",
+        id: "pulse-clear", title: "Dismiss all Pulse items",
+        detail: "Clear visible, filtered, and muted provider state",
         symbol: "xmark.circle", keywords: "end clear notifications", isAvailable: {
-          !PulseCenter.shared.items.isEmpty
+          PulseCenter.shared.retainedItemCount > 0
         }
       ) {
         PulseCenter.shared.removeAll()
+      },
+      .init(
+        id: "pulse-settings", title: "Open Pulse providers",
+        detail: "Review providers, routing rules, and payload-free history",
+        symbol: "point.3.connected.trianglepath.dotted",
+        keywords: "integration settings history sources token", isAvailable: { true }
+      ) {
+        SettingsOpener.open(destination: .integrations)
       },
       .init(
         id: "clipboard-pause", title: "Pause clipboard history",
@@ -92,7 +138,7 @@ struct IsletQuickAction: Identifiable {
         id: "settings", title: "Open Settings", detail: "Configure activities and integrations",
         symbol: "gearshape", keywords: "preferences configuration", isAvailable: { true }
       ) {
-        SettingsOpener.open()
+        SettingsOpener.open(destination: .overview)
       },
     ]
   }
@@ -105,6 +151,7 @@ enum QuickActionsOpener {
   static func open() {
     NSApp.activate(ignoringOtherApps: true)
     if let panel {
+      panel.contentViewController = NSHostingController(rootView: QuickActionsView())
       panel.makeKeyAndOrderFront(nil)
       return
     }
@@ -126,15 +173,16 @@ enum QuickActionsOpener {
 }
 
 private struct QuickActionsView: View {
+  @ObservedObject private var timer = AppState.timer
+  @ObservedObject private var pulse = PulseCenter.shared
+  @ObservedObject private var clipboard = ClipboardModel.shared
   @State private var query = ""
 
   private var actions: [IsletQuickAction] {
     let available = IsletQuickAction.all.filter { $0.isAvailable() }
     let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard !needle.isEmpty else { return available }
-    return available.filter {
-      "\($0.title) \($0.detail) \($0.keywords)".lowercased().contains(needle)
-    }
+    return available.filter { QuickActionSearch.matches(needle, action: $0) }
   }
 
   var body: some View {
@@ -208,5 +256,15 @@ private struct QuickActionsView: View {
   private func perform(_ action: IsletQuickAction) {
     QuickActionsOpener.close()
     action.perform()
+  }
+}
+
+enum QuickActionSearch {
+  @MainActor
+  static func matches(_ query: String, action: IsletQuickAction) -> Bool {
+    let searchable = "\(action.title) \(action.detail) \(action.keywords)".lowercased()
+    return query.split(whereSeparator: \.isWhitespace).allSatisfy {
+      searchable.contains(String($0))
+    }
   }
 }

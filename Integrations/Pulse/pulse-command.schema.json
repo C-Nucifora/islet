@@ -6,11 +6,34 @@
   "additionalProperties": false,
   "required": ["token", "operation"],
   "properties": {
-    "token": { "type": "string", "minLength": 1 },
+    "token": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9+/]{43}=$",
+      "description": "The current 32-byte shared bearer token encoded as Base64."
+    },
     "operation": { "enum": ["show", "update", "end", "event"] },
     "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "Optional source guard for end. Providers should always include it."
+    },
+    "requestID": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Optional correlation identifier echoed unchanged in the response."
+    },
     "activity": { "$ref": "#/$defs/activity" }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "operation": { "const": "end" } }, "required": ["operation"] },
+      "then": { "required": ["id"] },
+      "else": { "required": ["activity"] }
+    }
+  ],
   "$defs": {
     "activity": {
       "type": "object",
@@ -47,6 +70,30 @@
             }
           }
         }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "id": { "type": "string" },
+        "error": { "type": "string" },
+        "errorCode": {
+          "enum": [
+            "unauthorized",
+            "invalidCommand",
+            "validationFailed",
+            "sourceRevoked",
+            "identifierConflict",
+            "sourceMismatch",
+            "messageTooLarge",
+            "commandLimitExceeded",
+            "rateLimited"
+          ]
+        },
+        "requestID": { "type": "string" }
       }
     }
   }
