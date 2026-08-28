@@ -1034,7 +1034,10 @@ struct SettingsView: View {
       Section("Calendar") {
         PermissionStatusRow(title: "Calendar access", icon: "calendar", status: eventStatusText, color: eventStatusColor)
         Text("Used to show today's agenda, countdowns and meeting links.").font(.caption).foregroundStyle(.secondary)
-        permissionButtons(status: permissions.diagnostics.calendar, pane: .calendars) {
+        permissionButtons(
+          status: permissions.diagnostics.calendar, pane: .calendars,
+          requestEnabled: calendarEnabled
+        ) {
           Task {
             await calendar.recoverAccess()
             permissions.refresh()
@@ -1044,7 +1047,10 @@ struct SettingsView: View {
       Section("Reminders") {
         PermissionStatusRow(title: "Reminders access", icon: "checklist", status: reminderStatusText, color: reminderStatusColor)
         Text("Used to show and complete your incomplete reminders.").font(.caption).foregroundStyle(.secondary)
-        permissionButtons(status: permissions.diagnostics.reminders, pane: .reminders) {
+        permissionButtons(
+          status: permissions.diagnostics.reminders, pane: .reminders,
+          requestEnabled: remindersEnabled
+        ) {
           Task {
             await reminders.requestAccess()
             permissions.refresh()
@@ -1251,10 +1257,13 @@ struct SettingsView: View {
 
   @ViewBuilder private func permissionButtons(
     status: EventKitPermissionState, pane: SystemSettingsPrivacyPane,
+    requestEnabled: Bool = true,
     request: @escaping () -> Void
   ) -> some View {
     HStack {
-      if status == .notDetermined { Button("Request access", action: request) }
+      if status == .notDetermined {
+        Button("Request access", action: request).disabled(!requestEnabled)
+      }
       if status != .fullAccess { Button("Open System Settings") { permissions.open(pane) } }
     }
   }

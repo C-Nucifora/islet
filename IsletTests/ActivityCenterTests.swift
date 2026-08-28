@@ -66,6 +66,26 @@ final class ActivityCenterTests: XCTestCase {
     XCTAssertFalse(ActivityLifecyclePolicy.stopsFeatureWhenHidden("calendar"))
   }
 
+  func testAlwaysShowSystemInvalidatesTheActiveActivityCache() async {
+    let savedEnabled = Defaults[.systemEnabled]
+    let savedAlwaysVisible = Defaults[.systemAlwaysVisible]
+    defer {
+      Defaults[.systemEnabled] = savedEnabled
+      Defaults[.systemAlwaysVisible] = savedAlwaysVisible
+    }
+    Defaults[.systemEnabled] = true
+    Defaults[.systemAlwaysVisible] = false
+
+    let center = ActivityCenter()
+    center.register(SystemActivity())
+    XCTAssertTrue(center.activeActivities.isEmpty)
+
+    Defaults[.systemAlwaysVisible] = true
+    await Task.yield()
+
+    XCTAssertEqual(center.activeActivities.map(\.id), ["system"])
+  }
+
   func testTieBrokenByRecency() {
     let center = ActivityCenter()
     let a = Fake(id: "a", priority: .ambient, active: true)

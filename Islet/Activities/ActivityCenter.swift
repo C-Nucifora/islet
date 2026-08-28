@@ -31,6 +31,14 @@ final class ActivityCenter: ObservableObject {
         }
       }
       .store(in: &cancellables)
+    Defaults.publisher(.systemAlwaysVisible)
+      .sink { [weak self] _ in
+        Task { @MainActor in
+          self?.cacheInvalidated = true
+          self?.objectWillChange.send()
+        }
+      }
+      .store(in: &cancellables)
   }
 
   func register<T: NotchActivity & ObservableObject>(_ activity: T) {

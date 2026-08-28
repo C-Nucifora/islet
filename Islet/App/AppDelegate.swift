@@ -7,7 +7,6 @@ enum ActivityLifecyclePolicy {
   /// feature switch is disabled, so hiding Calendar cannot empty the Home agenda (and hiding any
   /// other activity cannot silently shut down a shared monitor).
   static func shouldRun(featureEnabled: Bool = true) -> Bool { featureEnabled }
-
   /// Clipboard polling and the Pulse listener retain or accept user/provider data solely for their
   /// corresponding activities. Their lineup toggles are therefore also their privacy switches.
   /// Shared providers such as Calendar stay independent because Home still consumes their data.

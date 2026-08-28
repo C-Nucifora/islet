@@ -18,7 +18,10 @@ final class PulseActivity: NotchActivity, ObservableObject {
   var activationDate: Date? { center.primary?.createdAt }
 
   func start() { PulseServer.shared.start() }
-  func stop() { PulseServer.shared.stop() }
+  func stop() {
+    PulseServer.shared.stop()
+    center.removeAll()
+  }
 
   var compactLeading: AnyView {
     AnyView(
