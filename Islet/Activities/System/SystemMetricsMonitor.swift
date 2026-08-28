@@ -1,16 +1,19 @@
 import Combine
+import Defaults
 import Foundation
 
 /// Samples every system source and publishes a snapshot plus a 60-entry history per series.
 ///
-/// Cadence follows the Phase 1.4 refcounted gate: 1 Hz while the System tab is on screen, 5 s
-/// otherwise. It never stops, because the ring has to outlive the view — opening the tab to an
-/// empty sparkline would defeat the point of having one.
+/// Cadence follows the refcounted view gate: 1 Hz while the System tab is on screen and a much
+/// slower history cadence otherwise. The owner stops it entirely when System is disabled.
 @MainActor
 final class SystemMetricsMonitor: ObservableObject {
   static let shared = SystemMetricsMonitor()
 
-  static let ringCapacity = 60
+  nonisolated static let ringCapacity = 60
+  nonisolated static let liveInterval: TimeInterval = 1
+  nonisolated static let backgroundInterval: TimeInterval = 20
+  nonisolated static let lowPowerBackgroundInterval: TimeInterval = 30
 
   @Published private(set) var sample = SystemMetricsSample()
   @Published private(set) var rings: [SystemMetricKind: MetricRing] = [:]
@@ -27,38 +30,73 @@ final class SystemMetricsMonitor: ObservableObject {
   private var clusters: [CPUCluster] = []
   private var isLive = false
   private var isSampling = false
+  private var isRunning = false
+  private var generation = 0
+  private var powerCancellable: AnyCancellable?
+  private var energyCancellable: AnyCancellable?
 
   func start() {
+    guard !isRunning else { return }
+    isRunning = true
+    generation += 1
     clusters = CPUTopology.current()
+    powerCancellable = NotificationCenter.default.publisher(
+      for: .NSProcessInfoPowerStateDidChange
+    ).receive(on: DispatchQueue.main).sink { [weak self] _ in
+      self?.energyPolicyDidChange()
+    }
+    energyCancellable = Defaults.publisher(.energyMode)
+      .dropFirst()
+      .sink { [weak self] _ in self?.energyPolicyDidChange() }
     restartTimer()
     tick()
+  }
+
+  func stop() {
+    guard isRunning else { return }
+    isRunning = false
+    generation += 1
+    timer = nil
+    powerCancellable = nil
+    energyCancellable = nil
+    previous = nil
+    previousDate = nil
+    isSampling = false
   }
 
   private func setLive(_ live: Bool) {
     guard live != isLive else { return }
     isLive = live
+    guard isRunning else { return }
     restartTimer()
     tick()  // don't make the user wait a whole interval for the first fast sample
   }
 
   private func restartTimer() {
-    let interval = isLive ? 1.0 : 5.0
+    guard isRunning else {
+      timer = nil
+      return
+    }
+    let interval = energyPolicy.systemInterval(viewIsLive: isLive)
     timer = Timer.publish(every: interval, on: .main, in: .common).autoconnect()
       .sink { [weak self] _ in self?.tick() }
   }
 
   private func tick() {
-    guard !isSampling else { return }
+    guard isRunning, !isSampling else { return }
     isSampling = true
+    let expectedGeneration = generation
     Task { [weak self] in
-      await self?.sampleOnce()
-      self?.isSampling = false
+      await self?.sampleOnce(expectedGeneration: expectedGeneration)
     }
   }
 
-  private func sampleOnce() async {
+  private func sampleOnce(expectedGeneration: Int) async {
     // ~0.10 ms of kernel calls. Off the main thread anyway: it runs during island animations.
     let raw = await Task.detached(priority: .utility) { RawCounters.read() }.value
+    guard isRunning, generation == expectedGeneration else {
+      return
+    }
     let now = Date()
     let next = systemMetricsSample(
       previous: previous, previousDate: previousDate, current: raw, currentDate: now,
@@ -67,6 +105,19 @@ final class SystemMetricsMonitor: ObservableObject {
     previousDate = now
     sample = next
     pushRings(next)
+    isSampling = false
+  }
+
+  private var energyPolicy: EnergyPolicy {
+    EnergyPolicy(
+      mode: Defaults[.energyMode],
+      systemLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
+  }
+
+  private func energyPolicyDidChange() {
+    guard isRunning else { return }
+    restartTimer()
+    tick()
   }
 
   private func pushRings(_ sample: SystemMetricsSample) {

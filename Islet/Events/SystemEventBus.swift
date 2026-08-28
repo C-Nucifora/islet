@@ -22,7 +22,7 @@ final class SystemEventBus: ObservableObject {
   private(set) var sources: [any SystemEventSource] = []
   private var coalescer = BurstCoalescer()
   private var flushTask: Task<Void, Never>?
-  private let startedAt = Date()
+  private var isRunning = false
 
   init(queue: SneakQueue?) {
     self.queue = queue
@@ -45,9 +45,19 @@ final class SystemEventBus: ObservableObject {
 
   /// Starts every source the user has left enabled. Called once at launch.
   func startEnabled() {
+    guard !isRunning else { return }
+    isRunning = true
     for source in sources where isEnabled(source.id) {
       source.start()
     }
+  }
+
+  func stopAll() {
+    isRunning = false
+    flushTask?.cancel()
+    flushTask = nil
+    coalescer.reset()
+    for source in sources { source.stop() }
   }
 
   // MARK: - Enable / disable
@@ -67,7 +77,14 @@ final class SystemEventBus: ObservableObject {
     }
     Defaults[.disabledEventSources] = disabled
 
-    if let source = sources.first(where: { $0.id == sourceID }) {
+    // A configuration boundary also invalidates an in-flight burst: otherwise a summary can name
+    // a source after the user has disabled it. Canceling the task and resetting both pieces keeps
+    // their lifecycle atomic.
+    flushTask?.cancel()
+    flushTask = nil
+    coalescer.reset()
+
+    if isRunning, let source = sources.first(where: { $0.id == sourceID }) {
       if enabled { source.start() } else { source.stop() }
     }
     objectWillChange.send()
@@ -80,8 +97,10 @@ final class SystemEventBus: ObservableObject {
   /// The enabled check is repeated here even though a disabled source is stopped: a source with an
   /// in-flight callback can emit once after `stop()` returns, and that event should not appear.
   func emit(_ event: SystemEvent) {
-    guard isEnabled(event.sourceID) else { return }
-    let now = Date().timeIntervalSince(startedAt)
+    guard isRunning, isEnabled(event.sourceID) else { return }
+    // Unlike Date, systemUptime does not jump when NTP or the user adjusts the wall clock. A
+    // backwards clock jump used to keep a held burst alive indefinitely.
+    let now = ProcessInfo.processInfo.systemUptime
     switch coalescer.accept(event, at: now) {
     case .pass(let passed):
       deliver(passed)
@@ -107,7 +126,7 @@ final class SystemEventBus: ObservableObject {
       while true {
         try? await Task.sleep(for: .milliseconds(400))
         guard let self, !Task.isCancelled else { return }
-        let now = Date().timeIntervalSince(self.startedAt)
+        let now = ProcessInfo.processInfo.systemUptime
         if let summary = self.coalescer.flush(at: now) {
           self.deliver(summary)
           self.flushTask = nil

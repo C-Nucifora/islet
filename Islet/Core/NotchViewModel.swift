@@ -18,31 +18,50 @@ final class NotchViewModel: ObservableObject {
   /// Height tier the currently selected tab asked for. Reported by `ExpandedContainerView`; drives
   /// the drawn island, the hover region, the click-inside test and the panel frame.
   @Published private(set) var expandedHeight: CGFloat = Metrics.expandedSize.height
+  /// Live 0...1 pressure against the hover barrier. The view turns this into elastic stretch.
+  @Published private(set) var barrierProgress: CGFloat = 0
   var preventAutoClose = false
 
   let geometry: NotchGeometry
   private let modeOverride: InteractionMode?
+  private let barrierPushDistanceOverride: CGFloat?
   private var mode: InteractionMode { modeOverride ?? Defaults[.interactionMode] }
+  private var barrierPushDistance: CGFloat {
+    barrierPushDistanceOverride
+      ?? CGFloat(
+        min(
+          max(Defaults[.barrierPushDistance], PushDistanceScale.minimum),
+          PushDistanceScale.maximum))
+  }
 
   private var wasInside = false
   private var lastMouseLocation: CGPoint = .zero
   private var compactLeadingWidth: CGFloat = 0
   private var compactTrailingWidth: CGFloat = 0
-  private var dwellTask: Task<Void, Never>?
+  private var barrierTravel: CGFloat = 0
+  private var upwardDeviceDeltaSign: CGFloat?
+  private var didPlayBarrierContactHaptic = false
   private var collapseTask: Task<Void, Never>?
   private var shrinkTask: Task<Void, Never>?
   private var cancellables: Set<AnyCancellable> = []
 
-  init(geometry: NotchGeometry, modeOverride: InteractionMode? = nil) {
+  init(
+    geometry: NotchGeometry, modeOverride: InteractionMode? = nil,
+    barrierPushDistanceOverride: CGFloat? = nil
+  ) {
     self.geometry = geometry
     self.modeOverride = modeOverride
+    self.barrierPushDistanceOverride = barrierPushDistanceOverride
     let initialFrame = geometry.collapsedPanelFrame()
     self.panelFrame = initialFrame
     self.actualPanelFrame = initialFrame
     // NSEvent monitors already deliver on the main thread, so no .receive(on:) hop is needed
     // (it would add a redundant async dispatch on every app-wide mouse move).
-    EventMonitors.shared.mouseLocation
-      .sink { [weak self] p in self?.handleMouseMoved(p) }
+    EventMonitors.shared.mouseMovement
+      .sink { [weak self] movement in
+        self?.handleMouseMoved(
+          movement.location, deviceDeltaY: movement.deviceDeltaY)
+      }
       .store(in: &cancellables)
     EventMonitors.shared.mouseDown
       .sink { [weak self] p in self?.handleMouseDown(p) }
@@ -57,17 +76,35 @@ final class NotchViewModel: ObservableObject {
     state.isExpanded ? expandedRect.union(geometry.hitRect) : geometry.hitRect
   }
 
-  func handleMouseMoved(_ location: CGPoint) {
+  /// `CGRect.contains` excludes its maximum edges. The pointer can legitimately clamp to the
+  /// display's exact `maxY`, so nudge that coordinate one representable value back onto the screen
+  /// before hit-testing. Without this, reaching the top resets the barrier before raw deltas can
+  /// carry the push any farther.
+  private func region(_ region: CGRect, contains location: CGPoint) -> Bool {
+    var hitLocation = location
+    if hitLocation.y >= geometry.screenFrame.maxY {
+      hitLocation.y = geometry.screenFrame.maxY.nextDown
+    }
+    return region.contains(hitLocation)
+  }
+
+  func handleMouseMoved(_ location: CGPoint, deviceDeltaY: CGFloat? = nil) {
+    let coordinateDeltaY = lastMouseLocation == .zero ? 0 : location.y - lastMouseLocation.y
     lastMouseLocation = location
-    let inside = hoverRegion.contains(location)
+    let inside = region(hoverRegion, contains: location)
+    if inside, wasInside {
+      updateBarrier(
+        at: location, coordinateDeltaY: coordinateDeltaY, deviceDeltaY: deviceDeltaY)
+      return
+    }
     guard inside != wasInside else { return }
     wasInside = inside
     if inside {
       collapseTask?.cancel()
       apply(.hoverEntered)
-      if state == .peek, mode == .hover { scheduleDwell() }
+      beginBarrier(at: location)
     } else {
-      dwellTask?.cancel()
+      resetBarrier()
       apply(.hoverExited)
       if case .expanded(false) = state { scheduleCollapse() }
     }
@@ -75,7 +112,7 @@ final class NotchViewModel: ObservableObject {
 
   func handleMouseDown(_ location: CGPoint) {
     lastMouseLocation = location
-    if geometry.hitRect.contains(location) {
+    if region(geometry.hitRect, contains: location) {
       apply(.clickedNotch)
     } else if state.isExpanded, expandedRect.contains(location) {
       apply(.clickedInsideExpanded)
@@ -110,10 +147,20 @@ final class NotchViewModel: ObservableObject {
     // `testTallPanelFrameContainsTheBaseOneAndItsIsland` pins the containment. Cost: while a
     // base-tier tab is open, the panel swallows a ~60pt strip below the island, which the
     // expanded island's full-frame black backdrop was already doing.
-    state.isExpanded
-      ? geometry.panelFrame(height: Metrics.tallExpandedHeight)
-      : geometry.collapsedPanelFrame(
+    switch state {
+    case .expanded:
+      geometry.panelFrame(height: Metrics.tallExpandedHeight)
+    case .peek where mode == .hover:
+      geometry.collapsedPanelFrame(
+        compactLeading: compactLeadingWidth, compactTrailing: compactTrailingWidth,
+        depth: Metrics.barrierPanelDepth)
+    case .peek:
+      geometry.collapsedPanelFrame(
         compactLeading: compactLeadingWidth, compactTrailing: compactTrailingWidth)
+    case .closed:
+      geometry.collapsedPanelFrame(
+        compactLeading: compactLeadingWidth, compactTrailing: compactTrailingWidth)
+    }
   }
 
   /// The selected tab's height tier, reported by `ExpandedContainerView`. Only the drawn island
@@ -154,8 +201,10 @@ final class NotchViewModel: ObservableObject {
       from: state, on: event, mode: mode, preventAutoClose: preventAutoClose)
     guard next != state else { return }
     let opening = order(next) > order(state)
-    if event == .hoverEntered, next == .peek { Haptics.tick() }
-    if next.isExpanded, !state.isExpanded { Haptics.perform(.levelChange) }  // firm tap on expand
+    if next.isExpanded, !state.isExpanded {
+      if event == .pushThresholdCrossed { Haptics.barrierSnap() }
+      resetBarrier()
+    }
     updatePanelFrame(for: next)  // widen the window before the content animates into it
     withAnimation(Motion.gated(opening ? Motion.opening : Motion.closing)) {
       state = next
@@ -168,7 +217,7 @@ final class NotchViewModel: ObservableObject {
       expandedHeight = Metrics.expandedSize.height
     }
     // hover-region may have changed shape; re-evaluate containment so exit fires correctly
-    wasInside = hoverRegion.contains(lastMouseLocation)
+    wasInside = region(hoverRegion, contains: lastMouseLocation)
   }
 
   private func order(_ s: NotchState) -> Int {
@@ -201,13 +250,57 @@ final class NotchViewModel: ObservableObject {
     }
   }
 
-  private func scheduleDwell() {
-    dwellTask = Self.debounce(
-      cancelling: dwellTask, for: .seconds(Defaults[.hoverExpandDelay])
-    ) { [weak self] in
-      guard let self, self.wasInside else { return }
-      self.apply(.hoverDwellElapsed)
+  private func beginBarrier(at location: CGPoint) {
+    guard state == .peek, mode == .hover else { return }
+    barrierTravel = 0
+    upwardDeviceDeltaSign = nil
+    barrierProgress = 0
+    didPlayBarrierContactHaptic = false
+  }
+
+  private func updateBarrier(
+    at location: CGPoint, coordinateDeltaY: CGFloat, deviceDeltaY: CGFloat?
+  ) {
+    guard state == .peek, mode == .hover else { return }
+
+    var upwardTravel = coordinateDeltaY
+    if let deviceDeltaY, abs(deviceDeltaY) > 0.01 {
+      // Calibrate the device-delta sign while the cursor can still move. Once it reaches the top
+      // edge, the screen coordinate clamps but device deltas continue, which creates the feeling
+      // of pressing into a barrier instead of running out of pixels.
+      if abs(coordinateDeltaY) > 0.01 {
+        upwardDeviceDeltaSign = coordinateDeltaY * deviceDeltaY >= 0 ? 1 : -1
+      }
+      // Core Graphics mouse Y deltas use device coordinates, where an upward movement is negative.
+      // If the barrier begins with the pointer already clamped, there is no coordinate movement to
+      // calibrate against, so use that native sign directly instead of dropping the input.
+      let sign = upwardDeviceDeltaSign ?? -1
+      if abs(coordinateDeltaY) > 0.01 || location.y >= geometry.screenFrame.maxY - 1
+      {
+        upwardTravel = deviceDeltaY * sign
+      }
     }
+    barrierTravel = min(max(barrierTravel + upwardTravel, 0), barrierPushDistance)
+    let progress = barrierTravel / barrierPushDistance
+    if progress != barrierProgress { barrierProgress = progress }
+
+    // A fast flick may reach the threshold in one event. In that case the snap alone is clearer
+    // than two simultaneous pulses; normal deliberate pressure gets exactly contact, then release.
+    if progress >= 1 {
+      apply(.pushThresholdCrossed)
+      return
+    }
+    if !didPlayBarrierContactHaptic, progress >= Metrics.barrierContactProgress {
+      didPlayBarrierContactHaptic = true
+      Haptics.barrierContact()
+    }
+  }
+
+  private func resetBarrier() {
+    barrierTravel = 0
+    upwardDeviceDeltaSign = nil
+    barrierProgress = 0
+    didPlayBarrierContactHaptic = false
   }
 
   private func scheduleCollapse() {

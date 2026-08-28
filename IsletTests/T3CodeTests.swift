@@ -1,0 +1,423 @@
+import XCTest
+
+@testable import Islet
+
+@MainActor
+final class T3CodeTests: XCTestCase {
+  func testParsesHostedPairingLink() throws {
+    let target = try T3PairingTarget.parse(
+      "https://app.t3.codes/pair?host=https%3A%2F%2Fmini.example.com%3A44342%2F#token=once")
+    XCTAssertEqual(target.endpoint.baseURL.absoluteString, "https://mini.example.com:44342/")
+    XCTAssertEqual(target.credential, "once")
+  }
+
+  func testParsesDirectPairingLink() throws {
+    let target = try T3PairingTarget.parse("https://mini.example.com/pair#token=once")
+    XCTAssertEqual(target.endpoint.baseURL.absoluteString, "https://mini.example.com/")
+    XCTAssertEqual(target.credential, "once")
+  }
+
+  func testRejectsInsecureRemotePairingByDefault() {
+    XCTAssertThrowsError(
+      try T3PairingTarget.parse("http://mini.example.com:3773/pair#token=once"))
+  }
+
+  func testAgentDerivationIsProviderNeutralAndPrioritizesQuestions() throws {
+    let json = """
+      {
+        "snapshotSequence": 1,
+        "projects": [{"id":"p1","title":"Islet","workspaceRoot":"/tmp/islet"}],
+        "threads": [{
+          "id":"t1","projectId":"p1","title":"Build the monitor",
+          "modelSelection":{"instanceId":"future-provider","model":"future-1"},
+          "runtimeMode":"auto","interactionMode":"default","branch":"feature/t3",
+          "worktreePath":"/tmp/islet","latestTurn":{"turnId":"turn1","state":"running",
+          "requestedAt":"2026-08-27T00:00:00.000Z","startedAt":"2026-08-27T00:00:00.000Z",
+          "completedAt":null},"createdAt":"2026-08-27T00:00:00.000Z",
+          "updatedAt":"2026-08-27T00:00:01.000Z","archivedAt":null,"settledAt":null,
+          "session":{"status":"running","providerName":"Future Provider",
+          "providerInstanceId":"future-provider","lastError":null},
+          "latestUserMessageAt":"2026-08-27T00:00:00.000Z","hasPendingApprovals":false,
+          "hasPendingUserInput":true,"hasActionableProposedPlan":false,
+          "backgroundLiveness":null,"planProgress":{"step":"Wire the API","completedSteps":1,"totalSteps":3}
+        }],
+        "updatedAt":"2026-08-27T00:00:01.000Z"
+      }
+      """
+    let shell = try JSONDecoder().decode(T3ShellSnapshot.self, from: Data(json.utf8))
+    let agents = T3AgentSnapshot.activeAgents(
+      in: shell, environmentID: "machine", now: Date(timeIntervalSince1970: 1_788_000_000))
+    XCTAssertEqual(agents.count, 1)
+    XCTAssertEqual(agents[0].providerInstance, "Future Provider")
+    XCTAssertEqual(agents[0].model, "future-1")
+    XCTAssertEqual(agents[0].phase, .needsInput)
+    XCTAssertEqual(agents[0].planStep, "Wire the API")
+  }
+
+  func testDuplicateProjectIDsDoNotCrashAgentDerivation() throws {
+    let json = """
+      {
+        "snapshotSequence": 1,
+        "projects": [
+          {"id":"duplicate","title":"First","workspaceRoot":"/tmp/first"},
+          {"id":"duplicate","title":"Second","workspaceRoot":"/tmp/second"}
+        ],
+        "threads": [{
+          "id":"t1","projectId":"duplicate","title":"Work",
+          "modelSelection":{"instanceId":"provider","model":"model"},
+          "runtimeMode":"auto","interactionMode":"default","branch":null,
+          "worktreePath":"/tmp/first","latestTurn":{"turnId":"turn1","state":"running",
+          "requestedAt":null,"startedAt":null,"completedAt":null},
+          "createdAt":null,"updatedAt":"2026-08-28T00:00:00.000Z","archivedAt":null,
+          "settledAt":null,"session":{"status":"running","providerName":null,
+          "providerInstanceId":"provider","lastError":null},"latestUserMessageAt":null,
+          "hasPendingApprovals":false,"hasPendingUserInput":false,
+          "hasActionableProposedPlan":false,"backgroundLiveness":null,"planProgress":null
+        }],
+        "updatedAt":"2026-08-28T00:00:00.000Z"
+      }
+      """
+    let shell = try JSONDecoder().decode(T3ShellSnapshot.self, from: Data(json.utf8))
+
+    let agents = T3AgentSnapshot.activeAgents(
+      in: shell, environmentID: "machine", now: Date(timeIntervalSince1970: 1_788_000_000))
+
+    XCTAssertEqual(agents.first?.project, "First")
+  }
+
+  func testLocalDiscoveryRequiresASuccessfulT3Descriptor() {
+    let descriptor = Data(
+      #"{"environmentId":"machine","label":"This Mac","platform":null,"serverVersion":"1"}"#
+        .utf8)
+    XCTAssertTrue(T3LocalDiscovery.acceptsDiscoveryResponse(data: descriptor, statusCode: 200))
+    XCTAssertFalse(T3LocalDiscovery.acceptsDiscoveryResponse(data: descriptor, statusCode: 404))
+    XCTAssertFalse(
+      T3LocalDiscovery.acceptsDiscoveryResponse(data: Data(#"{"error":"not found"}"#.utf8), statusCode: 200))
+  }
+
+  func testRuntimePortRejectsMalformedAndOutOfRangeValues() {
+    let valid = T3LocalDiscovery.runtime(
+      from: Data(#"{"origin":"http://127.0.0.1:4773","pid":123,"port":4773}"#.utf8))
+    XCTAssertEqual(valid?.endpoint.baseURL.absoluteString, "http://127.0.0.1:4773/")
+    XCTAssertEqual(valid?.processID, 123)
+    XCTAssertNil(
+      T3LocalDiscovery.runtime(
+        from: Data(#"{"origin":"http://127.0.0.1:3773","pid":123,"port":-1}"#.utf8)))
+    XCTAssertNil(
+      T3LocalDiscovery.runtime(
+        from: Data(#"{"origin":"http://127.0.0.1:3773","pid":123,"port":0}"#.utf8)))
+    XCTAssertNil(
+      T3LocalDiscovery.runtime(
+        from: Data(#"{"origin":"http://127.0.0.1:65536","pid":123,"port":65536}"#.utf8)))
+    XCTAssertNil(
+      T3LocalDiscovery.runtime(
+        from: Data(#"{"origin":"http://127.0.0.1:3773","pid":123,"port":"3773"}"#.utf8)))
+    XCTAssertNil(
+      T3LocalDiscovery.runtime(
+        from: Data(#"{"origin":"http://127.0.0.1:4888","pid":123,"port":3773}"#.utf8)))
+    XCTAssertNil(
+      T3LocalDiscovery.runtime(
+        from: Data(#"{"origin":"http://example.com:3773","pid":123,"port":3773}"#.utf8)))
+  }
+
+  func testStandardHomebrewT3ServeProcessShapeIsAccepted() {
+    XCTAssertTrue(
+      T3LocalDiscovery.acceptsT3CLILaunch(
+        executablePath: "/opt/homebrew/Cellar/node/24.6.0/bin/node",
+        arguments: [
+          "/opt/homebrew/bin/node",
+          "/opt/homebrew/lib/node_modules/t3/dist/bin.mjs",
+          "serve",
+        ],
+        entryPointPath: "/opt/homebrew/lib/node_modules/t3/dist/bin.mjs",
+        packageName: "t3",
+        declaredBin: "dist/bin.mjs"))
+    XCTAssertFalse(
+      T3LocalDiscovery.acceptsT3CLILaunch(
+        executablePath: "/opt/homebrew/Cellar/node/24.6.0/bin/node",
+        arguments: ["node", "/tmp/t3/dist/bin.mjs", "serve"],
+        entryPointPath: "/tmp/t3/dist/bin.mjs",
+        packageName: "t3",
+        declaredBin: "dist/bin.mjs"))
+    XCTAssertFalse(
+      T3LocalDiscovery.acceptsT3CLILaunch(
+        executablePath: "/opt/homebrew/Cellar/node/24.6.0/bin/node",
+        arguments: [
+          "/opt/homebrew/bin/node",
+          "/tmp/attacker.js",
+          "/opt/homebrew/lib/node_modules/t3/dist/bin.mjs",
+          "serve",
+        ],
+        entryPointPath: "/opt/homebrew/lib/node_modules/t3/dist/bin.mjs",
+        packageName: "t3",
+        declaredBin: "dist/bin.mjs"))
+  }
+
+  func testT3ResponseGrowthIsBounded() {
+    XCTAssertTrue(
+      T3Client.acceptsResponseGrowth(
+        currentBytes: T3Client.maximumResponseBytes - 1, additionalBytes: 1))
+    XCTAssertFalse(
+      T3Client.acceptsResponseGrowth(
+        currentBytes: T3Client.maximumResponseBytes, additionalBytes: 1))
+    XCTAssertFalse(T3Client.acceptsResponseGrowth(currentBytes: -1, additionalBytes: 1))
+  }
+
+  func testT3RequestHasATotalDeadlineEvenWhileBytesKeepArriving() async throws {
+    let session = Self.testSession()
+    defer { session.invalidateAndCancel() }
+    let endpoint = try T3Endpoint(URL(string: "https://slow.t3-unit.test")!)
+
+    do {
+      _ = try await T3Client(endpoint: endpoint, token: nil, session: session)
+        .fetchDescriptor(timeoutInterval: 0.15)
+      XCTFail("Expected the total request deadline to expire")
+    } catch T3ClientError.requestTimedOut {
+    } catch {
+      XCTFail("Expected requestTimedOut, got \(error)")
+    }
+  }
+
+  func testT3RequestRejectsOversizedDeclaredResponseBeforeBufferingIt() async throws {
+    let session = Self.testSession()
+    defer { session.invalidateAndCancel() }
+    let endpoint = try T3Endpoint(URL(string: "https://oversized.t3-unit.test")!)
+
+    do {
+      _ = try await T3Client(endpoint: endpoint, token: nil, session: session)
+        .fetchDescriptor()
+      XCTFail("Expected the response size limit to reject the request")
+    } catch T3ClientError.responseTooLarge {
+    } catch {
+      XCTFail("Expected responseTooLarge, got \(error)")
+    }
+  }
+
+  func testT3ClientRejectsRedirectsBeforeReplayingPairingCredential() async throws {
+    let session = Self.testSession()
+    defer { session.invalidateAndCancel() }
+    let endpoint = try T3Endpoint(URL(string: "https://redirect.t3-unit.test")!)
+
+    do {
+      _ = try await T3Client(endpoint: endpoint, token: nil, session: session)
+        .exchange(pairingCredential: "one-time-secret")
+      XCTFail("Expected the redirect to be rejected")
+    } catch T3ClientError.http(307) {
+    } catch {
+      XCTFail("Expected the original redirect response, got \(error)")
+    }
+  }
+
+  func testFutureDatedFailedAgentIsRejected() {
+    let now = Date(timeIntervalSince1970: 1_788_000_000)
+    let shell = Self.shell(
+      updatedAt: now.addingTimeInterval(24 * 60 * 60), sessionStatus: "error",
+      turnState: "error")
+    XCTAssertTrue(T3AgentSnapshot.activeAgents(in: shell, environmentID: "machine", now: now).isEmpty)
+  }
+
+  func testFutureDatedFinishedAgentIsRejected() {
+    let now = Date(timeIntervalSince1970: 1_788_000_000)
+    let shell = Self.shell(
+      updatedAt: now.addingTimeInterval(24 * 60 * 60), sessionStatus: "ready",
+      turnState: "completed")
+    XCTAssertTrue(T3AgentSnapshot.activeAgents(in: shell, environmentID: "machine", now: now).isEmpty)
+  }
+
+  func testPollingPolicySlowsInBackgroundAndLowPowerMode() {
+    XCTAssertEqual(
+      T3CodeActivity.pollInterval(busy: true, expanded: true, lowPowerMode: false), 3)
+    XCTAssertEqual(
+      T3CodeActivity.pollInterval(busy: false, expanded: true, lowPowerMode: false), 5)
+    XCTAssertEqual(
+      T3CodeActivity.pollInterval(busy: true, expanded: false, lowPowerMode: false), 5)
+    XCTAssertEqual(
+      T3CodeActivity.pollInterval(busy: false, expanded: false, lowPowerMode: false), 12)
+    XCTAssertEqual(
+      T3CodeActivity.pollInterval(busy: true, expanded: true, lowPowerMode: true), 30)
+    XCTAssertEqual(
+      T3CodeActivity.pollInterval(
+        busy: true, expanded: true, lowPowerMode: true, energyMode: .live), 2)
+    XCTAssertEqual(
+      T3CodeActivity.pollInterval(
+        busy: true, expanded: true, lowPowerMode: false, energyMode: .lowEnergy), 30)
+  }
+
+  func testReconnectBackoffIsExponentialAndCapped() {
+    XCTAssertEqual(T3CodeActivity.reconnectDelay(failureCount: 1, remote: false), 3)
+    XCTAssertEqual(T3CodeActivity.reconnectDelay(failureCount: 4, remote: false), 24)
+    XCTAssertEqual(T3CodeActivity.reconnectDelay(failureCount: 20, remote: false), 60)
+    XCTAssertEqual(T3CodeActivity.reconnectDelay(failureCount: 1, remote: true), 5)
+    XCTAssertEqual(T3CodeActivity.reconnectDelay(failureCount: 20, remote: true), 300)
+  }
+
+  func testRemoteMonitorProfilesAreEnabledUniqueAndOrdered() {
+    let profiles = [
+      T3EnvironmentProfile(id: "one", label: "First", baseURL: "https://one.example"),
+      T3EnvironmentProfile(
+        id: "off", label: "Off", baseURL: "https://off.example", enabled: false),
+      T3EnvironmentProfile(id: "one", label: "Duplicate", baseURL: "https://dup.example"),
+      T3EnvironmentProfile(id: "local", label: "Reserved-looking", baseURL: "https://two.example"),
+    ]
+    let selected = T3CodeActivity.enabledRemoteProfiles(profiles)
+    XCTAssertEqual(selected.map(\.id), ["one", "local"])
+    XCTAssertEqual(selected.first?.label, "First")
+  }
+
+  func testUpsertOfUnchangedSnapshotDoesNotChangePublishedValue() {
+    let snapshot = T3EnvironmentSnapshot(
+      id: "local", label: "This Mac", baseURL: "http://127.0.0.1:3773/",
+      isLocal: true, platform: "macOS · arm64", serverVersion: "1",
+      state: .connected, agents: [])
+    let current = [snapshot]
+    XCTAssertEqual(T3CodeActivity.upserting(snapshot, into: current), current)
+  }
+
+  func testLocalAndRemoteEnvironmentIdentityCannotCollide() {
+    XCTAssertEqual(T3CodeActivity.localSnapshotID("same"), "local|same")
+    XCTAssertEqual(
+      T3CodeActivity.remoteSnapshotID(
+        environmentID: "same", baseURL: "https://mini.example.com/api?ignored=yes"),
+      "remote|same|https://mini.example.com/")
+    XCTAssertNotEqual(
+      T3CodeActivity.localCredentialID(
+        environmentID: "same", baseURL: "http://127.0.0.1:3773"),
+      T3CodeActivity.remoteCredentialID(
+        environmentID: "same", baseURL: "http://127.0.0.1:3773"))
+  }
+
+  func testExplicitLocalPairingReplacesObsoleteCredentialsWithoutMigratingThem() {
+    let current = "local|machine|http://127.0.0.1:4888/"
+    let old = "local|machine|http://127.0.0.1:3773/"
+    let replaced = T3CredentialStore.replacingLocalCredentials(
+      in: [
+        old: "scoped", "machine": "legacy",
+        "local|retired|http://127.0.0.1:3773/": "retired",
+        "remote|other|https://example.com/": "keep",
+      ],
+      token: "fresh", credentialID: current, environmentID: "machine")
+
+    XCTAssertEqual(replaced[current], "fresh")
+    XCTAssertNil(replaced[old])
+    XCTAssertNil(replaced["machine"])
+    XCTAssertNil(replaced["local|retired|http://127.0.0.1:3773/"])
+    XCTAssertEqual(replaced["remote|other|https://example.com/"], "keep")
+  }
+
+  func testPairingTargetsIdentifyLoopbackWithoutTrustingArbitraryHosts() throws {
+    XCTAssertTrue(
+      try T3PairingTarget.parse("http://127.0.0.1:3773/pair#token=once")
+        .endpoint.isLoopback)
+    XCTAssertFalse(
+      try T3PairingTarget.parse("https://mini.example.com/pair#token=once")
+        .endpoint.isLoopback)
+  }
+
+  private static func testSession() -> URLSession {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [T3TestURLProtocol.self]
+    return URLSession(configuration: configuration)
+  }
+
+  private static func shell(
+    updatedAt: Date, sessionStatus: String, turnState: String
+  ) -> T3ShellSnapshot {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let timestamp = formatter.string(from: updatedAt)
+    return T3ShellSnapshot(
+      snapshotSequence: 1,
+      projects: [T3ProjectShell(id: "project", title: "Project", workspaceRoot: nil)],
+      threads: [
+        T3ThreadShell(
+          id: "thread", projectId: "project", title: "Thread",
+          modelSelection: T3ModelSelection(instanceId: "provider", model: "model"),
+          runtimeMode: nil, interactionMode: nil, branch: nil, worktreePath: nil,
+          latestTurn: T3LatestTurn(
+            turnId: "turn", state: turnState, requestedAt: nil, startedAt: nil,
+            completedAt: turnState == "completed" ? timestamp : nil),
+          createdAt: nil, updatedAt: timestamp, archivedAt: nil, settledAt: nil,
+          session: T3Session(
+            status: sessionStatus, providerName: nil, providerInstanceId: "provider",
+            lastError: nil),
+          latestUserMessageAt: nil, hasPendingApprovals: false, hasPendingUserInput: false,
+          hasActionableProposedPlan: false, backgroundLiveness: nil, planProgress: nil)
+      ],
+      updatedAt: timestamp)
+  }
+}
+
+private final class T3TestURLProtocol: URLProtocol, @unchecked Sendable {
+  private let lock = NSLock()
+  private var stopped = false
+  private let queue = DispatchQueue(label: "T3TestURLProtocol")
+
+  override class func canInit(with request: URLRequest) -> Bool {
+    request.url?.host?.hasSuffix("t3-unit.test") == true
+  }
+
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+  override func startLoading() {
+    guard let url = request.url else { return }
+    if url.host == "oversized.t3-unit.test" {
+      let response = HTTPURLResponse(
+        url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+        headerFields: ["Content-Length": String(T3Client.maximumResponseBytes + 1)])!
+      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocolDidFinishLoading(self)
+      return
+    }
+    if url.host == "redirect.t3-unit.test" {
+      let response = HTTPURLResponse(
+        url: url, statusCode: 307, httpVersion: "HTTP/1.1",
+        headerFields: ["Location": "http://plaintext.t3-unit.test/capture"])!
+      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocolDidFinishLoading(self)
+      return
+    }
+    if url.host == "plaintext.t3-unit.test" {
+      let body = Data(
+        #"{"access_token":"stolen","token_type":"Bearer","expires_in":3600,"scope":"orchestration:read"}"#
+          .utf8)
+      let response = HTTPURLResponse(
+        url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+        headerFields: ["Content-Type": "application/json"]
+      )!
+      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocol(self, didLoad: body)
+      client?.urlProtocolDidFinishLoading(self)
+      return
+    }
+
+    let body = Data(
+      #"{"environmentId":"machine","label":"This Mac","platform":null,"serverVersion":"1"}"#
+        .utf8)
+    let response = HTTPURLResponse(
+      url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+      headerFields: ["Content-Type": "application/json"])!
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    let chunks = stride(from: 0, to: body.count, by: 8).map {
+      body[$0..<min($0 + 8, body.count)]
+    }
+    for (index, chunk) in chunks.enumerated() {
+      queue.asyncAfter(deadline: .now() + 0.05 * Double(index + 1)) { [weak self] in
+        guard let self, !self.isStopped else { return }
+        self.client?.urlProtocol(self, didLoad: Data(chunk))
+        if index == chunks.count - 1 { self.client?.urlProtocolDidFinishLoading(self) }
+      }
+    }
+  }
+
+  override func stopLoading() {
+    lock.lock()
+    stopped = true
+    lock.unlock()
+  }
+
+  private var isStopped: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return stopped
+  }
+}

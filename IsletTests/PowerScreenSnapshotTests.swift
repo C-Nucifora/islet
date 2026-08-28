@@ -5,25 +5,27 @@ import XCTest
 @testable import Islet
 
 /// Renders the power screen with real hardware data into /tmp/power_snapshot.png so its layout can
-/// be reviewed without clicking through the island. The 452×206 box is exactly what
-/// `ExpandedContainerView` hands the tall tier: 480 wide minus 14pt side padding, 250 tall minus
-/// the 32pt notch band and 12pt bottom padding.
+/// be reviewed without clicking through the island. The box matches what `ExpandedContainerView`
+/// hands the tall tier after its side, notch-band and bottom padding.
 @MainActor
 final class PowerScreenSnapshotTests: XCTestCase {
   func testSnapshotPowerScreen() throws {
     let monitor = BatteryMonitor()
     monitor.refresh()  // one real read; no timers
+    let contentSize = CGSize(
+      width: Metrics.expandedSize.width - 28,
+      height: Metrics.tallExpandedHeight - 32 - 12)
 
     let host = NSHostingView(
       rootView: BatteryExpandedView(monitor: monitor)
-        .frame(width: 452, height: 206)
+        .frame(width: contentSize.width, height: contentSize.height)
         .background(Color.black)
         .environment(\.colorScheme, .dark))
-    host.frame = CGRect(x: 0, y: 0, width: 452, height: 206)
+    host.frame = CGRect(origin: .zero, size: contentSize)
 
     // Far off screen: rendered by the window server, never visible.
     let window = NSWindow(
-      contentRect: CGRect(x: -4000, y: -4000, width: 452, height: 206),
+      contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: contentSize),
       styleMask: [.borderless], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
     window.contentView = host

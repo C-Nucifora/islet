@@ -84,6 +84,7 @@ final class SystemEventTests: XCTestCase {
 
   func testCatalogueLookupsFallBackToTheRawID() {
     XCTAssertEqual(SourceCatalog.name(for: "usb"), "USB devices")
+    XCTAssertEqual(SourceCatalog.name(for: "power"), "Low Power Mode")
     XCTAssertEqual(SourceCatalog.name(for: "nope"), "nope")
     XCTAssertEqual(SourceCatalog.tier(for: "nope"), .core)
   }
@@ -204,6 +205,7 @@ final class SystemEventTests: XCTestCase {
     defer { Defaults[.disabledEventSources] = [] }
     var delivered: [Sneak] = []
     bus.onSneak = { delivered.append($0) }
+    bus.startEnabled()
 
     bus.emit(SystemEvent(sourceID: "usb", icon: "cable.connector", title: "Keyboard"))
     XCTAssertEqual(delivered.count, 1)
@@ -211,6 +213,22 @@ final class SystemEventTests: XCTestCase {
     bus.setEnabled(false, for: "usb")
     bus.emit(SystemEvent(sourceID: "usb", icon: "cable.connector", title: "Mouse"))
     XCTAssertEqual(delivered.count, 1, "a disabled source's event reached the queue")
+  }
+
+  /// A callback already queued by AppKit/IOKit may arrive after every source has stopped. The bus
+  /// itself is the final lifecycle boundary and must reject it.
+  @MainActor
+  func testStopAllDropsLateCallbacks() {
+    let bus = makeBus()
+    var delivered: [Sneak] = []
+    bus.onSneak = { delivered.append($0) }
+    bus.startEnabled()
+    bus.emit(SystemEvent(sourceID: "usb", icon: "circle", title: "Before stop"))
+    XCTAssertEqual(delivered.count, 1)
+
+    bus.stopAll()
+    bus.emit(SystemEvent(sourceID: "usb", icon: "circle", title: "After stop"))
+    XCTAssertEqual(delivered.count, 1)
   }
 
   /// Registering twice must not double-start or double-deliver.

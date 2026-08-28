@@ -13,11 +13,14 @@ final class PortsActivity: NotchActivity, ObservableObject {
 
   private let monitor = PortMonitor.shared
   private var cancellables: Set<AnyCancellable> = []
+  private var isMonitoring = false
 
   var isActive: Bool { Defaults[.portsEnabled] && !monitor.devices.isEmpty }
 
   func start() {
-    monitor.start()
+    guard !isMonitoring else { return }
+    guard monitor.start(owner: id) else { return }
+    isMonitoring = true
     monitor.objectWillChange
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
@@ -27,6 +30,15 @@ final class PortsActivity: NotchActivity, ObservableObject {
         self.objectWillChange.send()
       }
       .store(in: &cancellables)
+  }
+
+  func stop() {
+    guard isMonitoring else { return }
+    isMonitoring = false
+    cancellables.removeAll()
+    monitor.stop(owner: id)
+    activationDate = nil
+    objectWillChange.send()
   }
 
   var compactLeading: AnyView {
@@ -45,7 +57,7 @@ struct PortsView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Label("Connected — \(monitor.devices.count)", systemImage: "cable.connector")
+      Label("\(monitor.devices.count) connected", systemImage: "cable.connector")
         .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
       if monitor.devices.isEmpty {
         Text("No USB devices").font(.caption).foregroundStyle(.secondary)

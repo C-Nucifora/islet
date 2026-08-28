@@ -7,6 +7,7 @@ enum HUDKey: Hashable {
   static func decode(data1: Int) -> (key: HUDKey, isKeyDown: Bool)? {
     let keyCode = (data1 & 0xFFFF_0000) >> 16
     let state = (data1 & 0xFF00) >> 8  // 0xA = down, 0xB = up
+    guard state == 0xA || state == 0xB else { return nil }
     let key: HUDKey
     switch keyCode {
     case 0: key = .volumeUp
@@ -32,6 +33,29 @@ enum HUDMath {
   }
 }
 
+/// CoreAudio devices sometimes expose both a master scalar and per-channel scalars. Writing all
+/// of them can destroy a user's channel balance; prefer master when present, otherwise channels.
+enum VolumeControlLayout {
+  static func preferredElements(
+    from available: [UInt32], master: UInt32 = 0
+  ) -> [UInt32] {
+    let unique = Array(Set(available))
+    if unique.contains(master) { return [master] }
+    return unique.sorted()
+  }
+
+  /// Shift every channel by the same delta so devices without a master scalar retain their
+  /// left/right balance (subject only to unavoidable clamping at 0 and 1).
+  static func shiftedValues(
+    _ originals: [UInt32: Float], reference: Float, target: Float
+  ) -> [UInt32: Float] {
+    let delta = target - reference
+    return originals.mapValues { max(0, min(1, $0 + delta)) }
+  }
+}
+
+/// Tracks which key-up events may be suppressed. A failed key-down and its key-up must both reach
+/// macOS; a successfully handled key-down and its key-up must both be hidden from macOS.
 struct HUDKeyConsumptionState {
   private var consumedKeyDowns: Set<HUDKey> = []
 

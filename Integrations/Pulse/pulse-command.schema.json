@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://islet.local/schemas/pulse-command.schema.json",
+  "title": "Islet Pulse command",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["token", "operation"],
+  "properties": {
+    "token": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9+/]{43}=$",
+      "description": "The current 32-byte shared bearer token encoded as Base64."
+    },
+    "operation": { "enum": ["show", "update", "end", "event"] },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "Optional source guard for end. Providers should always include it."
+    },
+    "requestID": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Optional correlation identifier echoed unchanged in the response."
+    },
+    "activity": { "$ref": "#/$defs/activity" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "operation": { "const": "end" } }, "required": ["operation"] },
+      "then": { "required": ["id"] },
+      "else": { "required": ["activity"] }
+    }
+  ],
+  "$defs": {
+    "activity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source", "title"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "source": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "subtitle": { "type": "string", "maxLength": 240 },
+        "symbol": { "type": "string", "maxLength": 80 },
+        "accentHex": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "progress": { "type": "number", "minimum": 0, "maximum": 1 },
+        "state": { "enum": ["active", "progress", "needsAction", "succeeded", "failed"] },
+        "priority": { "enum": ["low", "normal", "high", "critical"] },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "actions": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "title", "url"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "title": { "type": "string", "minLength": 1, "maxLength": 60 },
+              "url": {
+                "type": "string",
+                "format": "uri",
+                "maxLength": 2048,
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/@]+(?:/|$)",
+                "description": "HTTP(S) URL with a host and no embedded user credentials."
+              }
+            }
+          }
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "id": { "type": "string" },
+        "error": { "type": "string" },
+        "errorCode": {
+          "enum": [
+            "featureDisabled",
+            "unauthorized",
+            "invalidCommand",
+            "validationFailed",
+            "sourceRevoked",
+            "identifierConflict",
+            "sourceMismatch",
+            "messageTooLarge",
+            "commandLimitExceeded",
+            "rateLimited",
+            "capacityExceeded"
+          ]
+        },
+        "requestID": { "type": "string" }
+      }
+    }
+  }
+}

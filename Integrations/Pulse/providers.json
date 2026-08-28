@@ -1,0 +1,33 @@
+{
+  "formatVersion": 1,
+  "providers": [
+    {
+      "id": "shortcuts",
+      "name": "Shortcuts",
+      "sources": ["shortcuts"],
+      "capabilities": ["events"],
+      "setup": "Add the Publish an Islet Pulse Event action."
+    },
+    {
+      "id": "cli",
+      "name": "Pulse CLI",
+      "sources": ["cli"],
+      "capabilities": ["events", "progress", "webActions"],
+      "setup": "Run Tools/islet-pulse.swift from this project."
+    },
+    {
+      "id": "github-actions",
+      "name": "GitHub workflow watcher",
+      "sources": ["github-actions", "github"],
+      "capabilities": ["events", "progress", "webActions"],
+      "setup": "Use examples/github-actions.sh locally or on a self-hosted Mac runner."
+    },
+    {
+      "id": "developer-tools",
+      "name": "Developer tools",
+      "sources": ["xcode", "build", "tests", "agent"],
+      "capabilities": ["events", "progress", "webActions"],
+      "setup": "Use a stable source name from local automation."
+    }
+  ]
+}

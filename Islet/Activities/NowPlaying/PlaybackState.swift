@@ -29,7 +29,9 @@ struct PlaybackState: Equatable {
 
   /// Best-guess current position extrapolated from the last update.
   var currentElapsed: TimeInterval {
-    guard duration > 0 else { return elapsed }
-    return isPlaying ? min(elapsed + Date().timeIntervalSince(elapsedAt), duration) : elapsed
+    let extrapolated = isPlaying ? elapsed + Date().timeIntervalSince(elapsedAt) : elapsed
+    guard extrapolated.isFinite else { return 0 }
+    guard duration > 0, duration.isFinite else { return max(0, extrapolated) }
+    return min(max(0, extrapolated), duration)
   }
 }

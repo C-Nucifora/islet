@@ -23,7 +23,7 @@ final class ContinuityActivity: NotchActivity, ObservableObject {
   var promoted: LiveActivityCard? { monitor.cards.first }
 
   func start() {
-    monitor.start()
+    guard cancellables.isEmpty else { return }
     monitor.objectWillChange
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
@@ -33,6 +33,16 @@ final class ContinuityActivity: NotchActivity, ObservableObject {
         self.objectWillChange.send()
       }
       .store(in: &cancellables)
+    monitor.start()
+    if isActive { activationDate = Date() }
+  }
+
+  func stop() {
+    guard !cancellables.isEmpty else { return }
+    cancellables.removeAll()
+    monitor.stop()
+    activationDate = nil
+    objectWillChange.send()
   }
 
   var compactLeading: AnyView { AnyView(ContinuityCompactLeading(activity: self)) }
