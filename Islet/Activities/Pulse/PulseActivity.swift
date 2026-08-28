@@ -54,10 +54,35 @@ struct PulseExpandedView: View {
         Label("Now", systemImage: "waveform.path.ecg")
           .font(.headline)
         Spacer()
+        if center.hiddenItemCount > 0 {
+          Text("\(center.hiddenItemCount) filtered")
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("\(center.hiddenItemCount) Pulse items filtered")
+        }
         Text("\(center.items.count)")
           .font(.caption.monospacedDigit())
           .foregroundStyle(.secondary)
           .accessibilityLabel("\(center.items.count) active items")
+        Menu {
+          Picker("Delivery", selection: $center.deliveryProfile) {
+            ForEach(PulseDeliveryProfile.allCases) { profile in
+              Text(profile.title).tag(profile)
+            }
+          }
+          if !center.items.isEmpty {
+            Divider()
+            Button("Dismiss Visible") { center.dismissVisible() }
+          }
+        } label: {
+          Image(systemName: "line.3.horizontal.decrease.circle")
+            .frame(width: 24, height: 24)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("Pulse delivery and stack actions")
+        .help("Pulse delivery: \(center.deliveryProfile.title)")
       }
       ScrollView(.vertical, showsIndicators: false) {
         LazyVStack(spacing: 6) {

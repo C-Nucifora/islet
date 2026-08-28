@@ -22,6 +22,8 @@ final class PulseCenter: ObservableObject {
   private var expiryTask: Task<Void, Never>?
 
   var primary: PulseItem? { items.first }
+  var retainedItemCount: Int { storedItems.count }
+  var hiddenItemCount: Int { max(0, storedItems.count - items.count) }
 
   @discardableResult
   func apply(_ command: PulseCommand, now: Date = Date()) -> PulseResponse {
@@ -31,16 +33,27 @@ final class PulseCenter: ObservableObject {
       case .show, .update, .event:
         guard var payload = command.activity else {
           record(operation: command.operation, item: nil, result: .rejected, date: now)
-          return .failure("activity is required for \(command.operation.rawValue)")
+          return .failure(
+            "activity is required for \(command.operation.rawValue)", code: .invalidCommand,
+            requestID: command.requestID)
         }
         if command.operation == .event, payload.expiresAt == nil {
           payload.expiresAt = now.addingTimeInterval(8)
         }
-        let previous = storedItems.first { $0.id == payload.id }
+        let normalizedIncomingID = try PulseItem.normalizedIdentifier(payload.id)
+        let previous = storedItems.first { $0.id == normalizedIncomingID }
         let item = try PulseItem(payload: payload, now: now, previous: previous)
+        if let previous, sourceKey(previous.source) != sourceKey(item.source) {
+          record(operation: command.operation, item: nil, result: .rejected, date: now)
+          return .failure(
+            "id is already active under a different source", code: .identifierConflict,
+            requestID: command.requestID)
+        }
         guard policy(for: item.source) != .revoked else {
           record(operation: command.operation, item: nil, result: .rejected, date: now)
-          return .failure("source is revoked in Islet Settings")
+          return .failure(
+            "source is revoked in Islet Settings", code: .sourceRevoked,
+            requestID: command.requestID)
         }
         let visible = shouldPresent(item)
         upsertStored(item, operation: command.operation, now: now)
@@ -48,26 +61,37 @@ final class PulseCenter: ObservableObject {
           operation: command.operation, item: item,
           result: visible ? (previous == nil ? .shown : .updated) : .suppressed, date: now)
         refreshVisibleItems()
-        return .success(id: item.id)
+        return .success(id: item.id, requestID: command.requestID)
       case .end:
         guard let rawIdentifier = command.id ?? command.activity?.id else {
           record(operation: .end, item: nil, result: .rejected, date: now)
-          return .failure("id is required for end")
+          return .failure(
+            "id is required for end", code: .invalidCommand, requestID: command.requestID)
         }
         let identifier = try PulseItem.normalizedIdentifier(rawIdentifier)
+        let normalizedEndSource = try command.source.map(PulseItem.normalizedSource)
         if let item = storedItems.first(where: { $0.id == identifier }) {
+          if let normalizedEndSource {
+            guard sourceKey(normalizedEndSource) == sourceKey(item.source) else {
+              record(operation: .end, item: nil, result: .rejected, date: now)
+              return .failure(
+                "id belongs to a different source", code: .sourceMismatch,
+                requestID: command.requestID)
+            }
+          }
           storedItems.removeAll { $0.id == identifier }
           record(operation: .end, item: item, result: .ended, date: now)
         }
         refreshVisibleItems()
         scheduleExpiry()
-        return .success(id: identifier)
+        return .success(id: identifier, requestID: command.requestID)
       }
     } catch {
       // Rejected wire data and error descriptions can contain secrets. Only the operation and
       // outcome are retained for local diagnostics.
       record(operation: command.operation, item: nil, result: .rejected, date: now)
-      return .failure(error.localizedDescription)
+      return .failure(
+        error.localizedDescription, code: .validationFailed, requestID: command.requestID)
     }
   }
 
@@ -87,6 +111,20 @@ final class PulseCenter: ObservableObject {
     items.removeAll()
     expiryTask?.cancel()
     expiryTask = nil
+  }
+
+  /// Dismisses only what the user can currently see. Muted or delivery-filtered provider state is
+  /// intentionally retained so a visible-stack action never silently destroys hidden work.
+  func dismissVisible(now: Date = Date()) {
+    let visibleIDs = Set(items.map(\.id))
+    guard !visibleIDs.isEmpty else { return }
+    let removed = storedItems.filter { visibleIDs.contains($0.id) }
+    storedItems.removeAll { visibleIDs.contains($0.id) }
+    for item in removed {
+      record(operation: .end, item: item, result: .dismissed, date: now)
+    }
+    refreshVisibleItems()
+    scheduleExpiry()
   }
 
   func clearHistory() { history.removeAll() }
@@ -216,8 +254,8 @@ final class PulseCenter: ObservableObject {
   ) {
     history.insert(
       PulseHistoryEntry(
-        id: UUID(), date: date, operation: operation, itemID: item?.id,
-        source: item?.source, state: item?.state, priority: item?.priority, result: result),
+        id: UUID(), date: date, operation: operation, source: item?.source,
+        state: item?.state, priority: item?.priority, result: result),
       at: 0)
     if history.count > Self.maximumHistoryEntries {
       history.removeLast(history.count - Self.maximumHistoryEntries)

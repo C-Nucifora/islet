@@ -12,6 +12,18 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
   case advanced = "Advanced"
 
   var id: Self { self }
+
+  init(destination: SettingsDestination) {
+    switch destination {
+    case .overview: self = .overview
+    case .activities: self = .activities
+    case .events: self = .events
+    case .appearance: self = .appearance
+    case .permissions: self = .permissions
+    case .integrations: self = .integrations
+    case .advanced: self = .advanced
+    }
+  }
   var icon: String {
     switch self {
     case .overview: "house"
@@ -32,6 +44,25 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
     case .permissions: "calendar reminders accessibility privacy grant denied restricted"
     case .integrations: "t3 code agents remote media spotify music pulse api cli providers history rules focus shortcuts"
     case .advanced: "cpu gpu memory disk network thermal metrics clipboard diagnostics defaults reset"
+    }
+  }
+}
+
+private enum PulseHistoryFilter: String, CaseIterable, Identifiable {
+  case all = "All"
+  case accepted = "Accepted"
+  case filtered = "Filtered"
+  case rejected = "Rejected"
+
+  var id: Self { self }
+
+  func includes(_ entry: PulseHistoryEntry) -> Bool {
+    switch self {
+    case .all: true
+    case .accepted:
+      [.shown, .updated, .ended, .dismissed, .expired].contains(entry.result)
+    case .filtered: [.suppressed, .evicted].contains(entry.result)
+    case .rejected: entry.result == .rejected
     }
   }
 }
@@ -71,11 +102,18 @@ struct SettingsView: View {
   @Default(.pulseEnabled) private var pulseEnabled
   @Default(.energyMode) private var energyMode
 
-  @State private var selection: SettingsCategory? = .overview
+  @State private var selection: SettingsCategory?
   @State private var searchText = ""
   @State private var newBundleID = ""
   @State private var confirmingRestore = false
+  @State private var confirmingPulseTokenRotation = false
+  @State private var pulseTokenRotationResult: String?
   @State private var showPulseHistory = false
+  @State private var pulseHistoryFilter: PulseHistoryFilter = .all
+
+  init(destination: SettingsDestination = .overview) {
+    _selection = State(initialValue: SettingsCategory(destination: destination))
+  }
 
   private var filteredCategories: [SettingsCategory] {
     let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -83,6 +121,10 @@ struct SettingsView: View {
     return SettingsCategory.allCases.filter {
       $0.rawValue.lowercased().contains(query) || $0.searchTerms.contains(query)
     }
+  }
+
+  private var filteredPulseHistory: [PulseHistoryEntry] {
+    pulse.history.filter(pulseHistoryFilter.includes)
   }
 
   private func enabled(_ id: String) -> Binding<Bool> {
@@ -140,6 +182,14 @@ struct SettingsView: View {
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) {
       _ in refreshPermissionState()
     }
+    .onReceive(NotificationCenter.default.publisher(for: .isletSettingsDestination)) {
+      notification in
+      guard let rawValue = notification.object as? String,
+        let destination = SettingsDestination(rawValue: rawValue)
+      else { return }
+      selection = SettingsCategory(destination: destination)
+      searchText = ""
+    }
     .confirmationDialog(
       "Restore interface defaults?", isPresented: $confirmingRestore, titleVisibility: .visible
     ) {
@@ -147,6 +197,24 @@ struct SettingsView: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text("This resets layout and presentation. Permissions, paired machines and activity data are kept.")
+    }
+    .confirmationDialog(
+      "Rotate the Pulse provider token?", isPresented: $confirmingPulseTokenRotation,
+      titleVisibility: .visible
+    ) {
+      Button("Rotate Token and Disconnect Providers", role: .destructive) { rotatePulseToken() }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Every connected provider will be disconnected immediately. Existing scripts must read the new token before they can publish again. Per-source Revoke cannot provide this guarantee because source names are self-declared.")
+    }
+    .alert(
+      "Pulse authentication", isPresented: Binding(
+        get: { pulseTokenRotationResult != nil },
+        set: { if !$0 { pulseTokenRotationResult = nil } })
+    ) {
+      Button("OK") { pulseTokenRotationResult = nil }
+    } message: {
+      Text(pulseTokenRotationResult ?? "")
     }
   }
 
@@ -360,8 +428,16 @@ struct SettingsView: View {
           title: "Local activity API", icon: "waveform.path.ecg",
           status: pulseServer.lastError ?? (pulseServer.isRunning ? "Listening on 127.0.0.1:47717" : "Stopped"),
           color: pulseServer.lastError == nil ? (pulseServer.isRunning ? .green : .secondary) : .red)
-        LabeledContent("Active items") {
-          Text("\(pulse.items.count)").monospacedDigit().foregroundStyle(.secondary)
+        LabeledContent("Activity stack") {
+          Text(
+            pulse.hiddenItemCount == 0
+              ? "\(pulse.items.count) visible"
+              : "\(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
+          )
+          .monospacedDigit().foregroundStyle(.secondary)
+        }
+        LabeledContent("Authentication") {
+          Text("Shared bearer token").foregroundStyle(.secondary)
         }
         Picker("Delivery profile", selection: $pulse.deliveryProfile) {
           ForEach(PulseDeliveryProfile.allCases) { profile in
@@ -374,16 +450,20 @@ struct SettingsView: View {
           .font(.caption).foregroundStyle(.secondary)
         HStack {
           Button("Quick Actions…") { QuickActionsOpener.open() }
-          Button("Show support folder") { NSWorkspace.shared.open(PulsePaths.supportDirectory) }
+          Button("Reveal token folder") { NSWorkspace.shared.open(PulsePaths.supportDirectory) }
+            .help("The token is a provider credential. Do not share it.")
           if !pulse.items.isEmpty {
-            Button("Dismiss all") { pulse.removeAll() }
+            Button("Dismiss visible") { pulse.dismissVisible() }
+          }
+          Button("Rotate provider token…", role: .destructive) {
+            confirmingPulseTokenRotation = true
           }
         }
       }
       Section("Provider gallery") {
         Text("Providers run as separate processes. The capabilities below describe the bounded data they may send; providers cannot load code into Islet or read activity data back.")
           .font(.caption).foregroundStyle(.secondary)
-        Text("Allow, Mute, and Revoke apply to the source name declared on the wire for this session. Source names identify routing, not a cryptographically verified process.")
+        Text("Allow, Mute, and Revoke apply to the source name declared on the wire for this session. A provider holding the shared token can choose another source name, so Revoke is a routing rule—not credential revocation. Rotate the provider token above to invalidate every client.")
           .font(.caption).foregroundStyle(.orange)
         ForEach(pulse.providerStatuses) { status in
           PulseProviderRow(status: status, center: pulse)
@@ -406,18 +486,23 @@ struct SettingsView: View {
         }
       }
       Section("Pulse session history") {
-        Toggle("Show privacy-safe history", isOn: $showPulseHistory)
-        Text("Kept only in memory. Titles, details, web links, authentication tokens, and error text are never recorded.")
+        Toggle("Show payload-free history", isOn: $showPulseHistory)
+        Text("Kept only in memory. Payload IDs, titles, details, web links, authentication tokens, and error text are never recorded. Source routing names and state metadata are retained for provider health.")
           .font(.caption).foregroundStyle(.secondary)
         if showPulseHistory {
-          if pulse.history.isEmpty {
-            Text("No provider activity this session.").foregroundStyle(.secondary)
+          Picker("History filter", selection: $pulseHistoryFilter) {
+            ForEach(PulseHistoryFilter.allCases) { filter in Text(filter.rawValue).tag(filter) }
+          }
+          .pickerStyle(.segmented)
+          if filteredPulseHistory.isEmpty {
+            Text(pulse.history.isEmpty ? "No provider activity this session." : "No matching history entries.")
+              .foregroundStyle(.secondary)
           } else {
-            ForEach(pulse.history.prefix(30)) { entry in
+            ForEach(filteredPulseHistory.prefix(30)) { entry in
               PulseHistoryRow(entry: entry)
             }
             HStack {
-              Text("Showing \(min(30, pulse.history.count)) of \(pulse.history.count)")
+              Text("Showing \(min(30, filteredPulseHistory.count)) of \(filteredPulseHistory.count)")
                 .font(.caption).foregroundStyle(.secondary)
               Spacer()
               Button("Clear history") { pulse.clearHistory() }
@@ -539,8 +624,18 @@ struct SettingsView: View {
     let text = permissions.diagnostics.text
       + "\nHUD event tap: \(hud.eventTapStatus.summary)"
       + "\nPulse: \(pulseServer.isRunning ? "Running" : "Stopped")"
+      + "\nPulse stack: \(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(text, forType: .string)
+  }
+
+  private func rotatePulseToken() {
+    do {
+      try pulseServer.rotateToken()
+      pulseTokenRotationResult = "The token was replaced and all provider connections were disconnected. Providers must read the new token before reconnecting."
+    } catch {
+      pulseTokenRotationResult = "The token could not be rotated: \(error.localizedDescription)"
+    }
   }
 
   private func restoreInterfaceDefaults() {

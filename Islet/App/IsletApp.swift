@@ -102,9 +102,10 @@ struct IsletApp: App {
           }
         }
         Divider()
-        Button("Dismiss All") { PulseCenter.shared.removeAll() }
-          .disabled(PulseCenter.shared.items.isEmpty)
-        Button("Open Support Folder") { NSWorkspace.shared.open(PulsePaths.supportDirectory) }
+        Button("Dismiss All Retained Items") { PulseCenter.shared.removeAll() }
+          .disabled(PulseCenter.shared.retainedItemCount == 0)
+        Button("Provider Settings…") { SettingsOpener.open(destination: .integrations) }
+        Button("Reveal Token Folder") { NSWorkspace.shared.open(PulsePaths.supportDirectory) }
       }
       #if DEBUG
         Menu("Debug") {
