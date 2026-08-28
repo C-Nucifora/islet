@@ -108,4 +108,12 @@ final class ActivityCenterTests: XCTestCase {
     XCTAssertEqual(
       ActivityCatalog.mergedOrder(ActivityCatalog.defaultOrder), ActivityCatalog.defaultOrder)
   }
+
+  func testEveryCataloguedActivityHasALifecycleClassification() {
+    XCTAssertEqual(
+      Set(ActivityCatalog.defaultOrder),
+      ActivityCatalog.lifecycleManagedIDs.union(ActivityCatalog.persistentLifecycleIDs))
+    XCTAssertTrue(
+      ActivityCatalog.lifecycleManagedIDs.isDisjoint(with: ActivityCatalog.persistentLifecycleIDs))
+  }
 }

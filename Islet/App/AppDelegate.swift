@@ -56,6 +56,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       ActivityCenter.shared.register(AppState.system)
       ActivityCenter.shared.register(AppState.t3Code)
       ActivityCenter.shared.register(AppState.pulse)
+      #if DEBUG
+        let registeredIDs = Set(ActivityCenter.shared.activities.map(\.id))
+        let missingIDs = Set(ActivityCatalog.defaultOrder).subtracting(registeredIDs)
+        assert(
+          missingIDs.isEmpty,
+          "ActivityCatalog entries are not registered in AppDelegate: \(missingIDs.sorted())")
+      #endif
       configureActivityLifecycles()
       RemindersProvider.shared.start()
       for source in AppState.eventSources { SystemEventBus.shared.register(source) }

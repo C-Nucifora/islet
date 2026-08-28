@@ -222,10 +222,9 @@ final class ScreenManager {
 
   private func applyFullscreenVisibility() {
     guard Defaults[.hideInFullscreen] else { return }
+    let fullscreenDisplays = FullscreenDetector.fullscreenDisplayUUIDs()
     for inst in instances.values {
-      guard let screen = NSScreen.screens.first(where: { $0.displayUUID == inst.screenUUID })
-      else { continue }
-      let hidden = FullscreenDetector.hasFullscreenWindow(on: screen)
+      let hidden = fullscreenDisplays.contains(inst.screenUUID)
       // orderOut (not alpha 0) so the hidden panel's SwiftUI tree stops rendering entirely.
       if hidden, inst.panel.isVisible {
         inst.panel.orderOut(nil)

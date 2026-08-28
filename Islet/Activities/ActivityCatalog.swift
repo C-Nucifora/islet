@@ -17,6 +17,17 @@ enum ActivityCatalog {
 
   static var defaultOrder: [String] { orderable.map(\.id) }
 
+  /// Activities whose observer/server lifecycle follows their visibility toggle. AppDelegate uses
+  /// the same ids when reconciling feature switches; publishing the classification here gives
+  /// tests a way to catch a newly catalogued activity that nobody starts or deliberately exempts.
+  static let lifecycleManagedIDs: Set<String> = [
+    "pulse", "t3Code", "nowPlaying", "clipboard", "ports", "calendar", "battery", "system",
+  ]
+
+  /// These are intentionally resident when hidden. Timer owns no background polling and must keep
+  /// an already-running completion task; Shelf keeps user state and a cheap model subscription.
+  static let persistentLifecycleIDs: Set<String> = ["timer", "shelf"]
+
   /// The user's stored order, with any catalogue entries it predates appended at the end.
   ///
   /// `Defaults[.activityOrder]` is persisted, so an install from before a new activity shipped

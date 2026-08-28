@@ -29,6 +29,10 @@ final class BatteryMonitor: ObservableObject {
   private var fastMetrics = false
   private var isRunning = false
   private var isSampling = false
+  /// A power-source callback may arrive while a live telemetry read is in flight. Remember the
+  /// strongest dropped request so charger topology, peripherals and health do not wait for the
+  /// next five-minute stable timer.
+  private var pendingStableRefresh = false
   private var samplingTask: Task<Void, Never>?
   private var lastStableRead: Date?
   private var generation = 0
@@ -80,6 +84,7 @@ final class BatteryMonitor: ObservableObject {
     samplingTask?.cancel()
     samplingTask = nil
     isSampling = false
+    pendingStableRefresh = false
     metricsTimer = nil
     cancellables.removeAll()
     if let runLoopSource {
@@ -131,7 +136,11 @@ final class BatteryMonitor: ObservableObject {
   /// IOKit and IOPS can bridge sizeable property dictionaries. Keep that work off the main actor;
   /// only the small, equatable value snapshot crosses back for publication.
   private func scheduleRefresh(includeStable: Bool) {
-    guard isRunning, !isSampling else { return }
+    guard isRunning else { return }
+    if isSampling {
+      pendingStableRefresh = pendingStableRefresh || includeStable
+      return
+    }
     isSampling = true
     let expectedGeneration = generation
     samplingTask = Task { [weak self] in
@@ -147,6 +156,9 @@ final class BatteryMonitor: ObservableObject {
       }
       self.apply(snapshot, includeStable: includeStable)
       self.isSampling = false
+      let followUpNeedsStable = self.pendingStableRefresh
+      self.pendingStableRefresh = false
+      if followUpNeedsStable { self.scheduleRefresh(includeStable: true) }
     }
   }
 
@@ -181,11 +193,12 @@ final class BatteryMonitor: ObservableObject {
 
   nonisolated static func readState() -> BatteryState? {
     guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-      let list = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef],
-      let source = list.first,
-      let desc = IOPSGetPowerSourceDescription(info, source)?.takeUnretainedValue()
-        as? [String: Any]
+      let list = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef]
     else { return nil }
+    let descriptions = list.compactMap {
+      IOPSGetPowerSourceDescription(info, $0)?.takeUnretainedValue() as? [String: Any]
+    }
+    guard let desc = IOPSPowerSourceSelector.internalBattery(in: descriptions) else { return nil }
 
     let current = desc[kIOPSCurrentCapacityKey] as? Int ?? 0
     let max = desc[kIOPSMaxCapacityKey] as? Int ?? 100
