@@ -70,12 +70,15 @@ struct EnergyPolicy: Equatable, Sendable {
   }
 
   func batteryInterval(viewIsLive: Bool) -> TimeInterval {
+    // Selecting Battery is an explicit request to watch its continuously changing telemetry.
+    // Keep that screen genuinely live in every energy profile; only background sampling is
+    // constrained by the selected profile.
+    if viewIsLive { return BatteryMonitor.liveInterval }
     switch mode {
-    case .live: return viewIsLive ? 3 : 15
-    case .lowEnergy: return viewIsLive ? 30 : 120
+    case .live: return 15
+    case .lowEnergy: return 120
     case .automatic:
-      if systemLowPowerMode { return viewIsLive ? 30 : 120 }
-      return viewIsLive ? 12 : 60
+      return systemLowPowerMode ? 120 : 60
     }
   }
 

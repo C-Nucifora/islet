@@ -13,9 +13,9 @@ private struct BatteryReadSnapshot: Sendable {
 /// metrics (health, cycles, temperature, power, time remaining) refreshed on a short timer.
 @MainActor
 final class BatteryMonitor: ObservableObject {
-  /// Battery power changes slowly enough that one-second IOKit polling only creates wake-ups and
-  /// allocation churn. Power-source notifications still trigger an immediate refresh.
-  nonisolated static let liveInterval: TimeInterval = 12
+  /// The selected Battery screen updates every second so its power-flow readings visibly track
+  /// load changes. Slower background intervals avoid that wake-up rate when nobody is watching.
+  nonisolated static let liveInterval: TimeInterval = 1
   nonisolated static let backgroundInterval: TimeInterval = 60
   nonisolated static let stableInterval: TimeInterval = 5 * 60
 
