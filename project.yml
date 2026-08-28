@@ -1,6 +1,6 @@
 name: Islet
 options:
-  bundleIdPrefix: dev.nedlane
+  bundleIdPrefix: dev.cnucifora
   deploymentTarget:
     macOS: "26.0"
   createIntermediateGroups: true
@@ -15,9 +15,9 @@ settings:
     # requirement, and an ad-hoc signature's requirement is a bare cdhash that changes on every
     # build — so macOS treated each rebuild as a brand-new app and dropped Accessibility,
     # Calendar and Reminders every time. Signing with one certificate makes the requirement
-    # `identifier dev.nedlane.Islet and certificate root = H"..."`, which does not change.
+    # `identifier dev.cnucifora.Islet and certificate root = H"..."`, which does not change.
     # Create the certificate with Scripts/create-signing-certificate.sh.
-    CODE_SIGN_IDENTITY: "Islet Local Development"
+    CODE_SIGN_IDENTITY: "Islet Dev"
     CODE_SIGN_STYLE: Manual
     ENABLE_HARDENED_RUNTIME: false
     MACOSX_DEPLOYMENT_TARGET: "26.0"

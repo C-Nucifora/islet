@@ -5,7 +5,7 @@ import Foundation
 /// The adapter is expected to die and respawn (macOS may kill it), so every process/pipe is
 /// torn down cleanly on each restart to avoid leaking file handles or stale handlers.
 final class MediaWatcher: @unchecked Sendable {
-  private let queue = DispatchQueue(label: "dev.nedlane.Islet.mediawatcher")
+  private let queue = DispatchQueue(label: "dev.cnucifora.Islet.mediawatcher")
   private let queueKey = DispatchSpecificKey<Void>()
   private var process: Process?
   private var pipe: Pipe?

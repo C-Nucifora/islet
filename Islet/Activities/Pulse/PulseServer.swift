@@ -28,7 +28,7 @@ final class PulseServer: ObservableObject {
   private var connections: [ObjectIdentifier: NWConnection] = [:]
   private var commandPipelines: [ObjectIdentifier: PulseCommandPipeline] = [:]
   private var commandTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
-  private let queue = DispatchQueue(label: "dev.nedlane.Islet.pulse", qos: .utility)
+  private let queue = DispatchQueue(label: "dev.cnucifora.Islet.pulse", qos: .utility)
   @Published private(set) var isRunning = false
   @Published private(set) var lastError: String?
   @Published private(set) var tokenRotatedAt: Date?

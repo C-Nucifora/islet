@@ -20,7 +20,7 @@ enum T3CredentialStoreError: Error, LocalizedError {
 /// remote T3 environments Islet watches.
 @MainActor
 enum T3CredentialStore {
-  private static let service = "dev.nedlane.islet.t3-code"
+  private static let service = "dev.cnucifora.islet.t3-code"
   private static let vaultAccount = "read-only-environment-tokens-v1"
 
   private static var cachedTokens: [String: String]?
@@ -30,7 +30,7 @@ enum T3CredentialStore {
     if let token = tokens[credentialID] { return token }
     guard let legacyEnvironmentID, let token = tokens[legacyEnvironmentID] else { return nil }
 
-    // Same-service schema upgrade only: older nedlane builds keyed credentials by the server's
+    // Same-service schema upgrade only: older cnucifora builds keyed credentials by the server's
     // environment id. Endpoint-scoped keys prevent two machines with a duplicated id from sharing
     // or overwriting one another. This never reads another bundle/service identity.
     tokens[credentialID] = token

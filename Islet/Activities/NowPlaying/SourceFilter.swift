@@ -10,7 +10,7 @@ enum SourceFilter {
     "systemsoundserverd",
     "com.apple.PowerChime",
     "com.apple.controlcenter",
-    "dev.nedlane.Islet",
+    "dev.cnucifora.Islet",
     // Also observed and equally useless as a "player":
     "com.apple.audio.Core-Audio-Driver-Service",
     "com.apple.mediaremoted",
