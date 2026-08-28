@@ -5,8 +5,9 @@ import SwiftUI
 struct ExpandedContainerView: View {
   /// The physical notch's size, so the switcher can flank it in the top band.
   let notchSize: CGSize
-  /// Height tiers are reported up to the view model, which owns the panel frame.
-  let vm: NotchViewModel
+  /// Size tiers are reported to and observed from the view model so the switcher recalculates as
+  /// soon as its expanded width changes.
+  @ObservedObject var vm: NotchViewModel
   @ObservedObject private var center = ActivityCenter.shared
   @ObservedObject private var shelf = ShelfModel.shared
   /// nil selection means the dashboard ("Home"); otherwise an activity id.
