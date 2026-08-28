@@ -76,20 +76,20 @@ private enum SettingsDetailPage: String, CaseIterable, Identifiable {
 
   var title: String {
     switch self {
-    case .startupDisplays: "Startup & Displays"
+    case .startupDisplays: "Startup and displays"
     case .interaction: "Interaction"
     case .energy: "Energy"
-    case .activityOrder: "Activity Lineup"
-    case .calendarReminders: "Calendar & Reminders"
-    case .nowPlaying: "Now Playing"
+    case .activityOrder: "Activity order"
+    case .calendarReminders: "Calendar and reminders"
+    case .nowPlaying: "Now playing"
     case .continuity: "iPhone Live Activities"
-    case .systemMetrics: "System Metrics"
+    case .systemMetrics: "System metrics"
     case .clipboard: "Clipboard"
     case .systemHUD: "System HUD"
-    case .eventSources: "Event Sources"
+    case .eventSources: "Event sources"
     case .t3Code: "T3 Code"
-    case .pulse: "Pulse Providers"
-    case .permissions: "App Permissions"
+    case .pulse: "Pulse providers"
+    case .permissions: "App permissions"
     case .diagnostics: "Diagnostics"
     case .reset: "Reset"
     }
@@ -97,22 +97,22 @@ private enum SettingsDetailPage: String, CaseIterable, Identifiable {
 
   var subtitle: String {
     switch self {
-    case .startupDisplays: "Login, monitors, and fullscreen behavior"
-    case .interaction: "Push-through, collapse timing, and haptics"
-    case .energy: "Choose the balance between freshness and battery life"
-    case .activityOrder: "Choose, order, and disable island activities"
-    case .calendarReminders: "Calendars, countdowns, and Home reminders"
-    case .nowPlaying: "Select the primary player when several are active"
-    case .continuity: "Show iPhone activity presence exposed by macOS"
-    case .systemMetrics: "Visibility and metric presentation"
-    case .clipboard: "Retention behavior and privacy boundaries"
-    case .systemHUD: "Volume and brightness overlay replacement"
-    case .eventSources: "Choose which system changes appear briefly"
-    case .t3Code: "Pair and manage provider-neutral T3 machines"
-    case .pulse: "Local providers, policies, credentials, and history"
-    case .permissions: "Review macOS access and recording privacy"
-    case .diagnostics: "Identity, integration health, and support details"
-    case .reset: "Restore appearance and interaction defaults"
+    case .startupDisplays: "Login item and display placement"
+    case .interaction: "How the notch opens and closes"
+    case .energy: "Refresh rates and Low Power Mode"
+    case .activityOrder: "Show, hide and reorder activities"
+    case .calendarReminders: "Agenda, countdown and reminder options"
+    case .nowPlaying: "Choose which active player opens first"
+    case .continuity: "App names from iPhone Live Activities"
+    case .systemMetrics: "Choose metrics and chart styles"
+    case .clipboard: "History, storage and filtering"
+    case .systemHUD: "Volume and brightness controls"
+    case .eventSources: "Brief alerts for system changes"
+    case .t3Code: "Pair T3 Code machines"
+    case .pulse: "Local API, providers and access token"
+    case .permissions: "macOS access used by each feature"
+    case .diagnostics: "App identity and integration status"
+    case .reset: "Restore interface defaults"
     }
   }
 
@@ -502,21 +502,21 @@ struct SettingsView: View {
       "Restore appearance and interaction defaults?", isPresented: $confirmingRestore,
       titleVisibility: .visible
     ) {
-      Button("Restore Appearance & Interaction", role: .destructive) {
+      Button("Restore appearance and interaction", role: .destructive) {
         restoreInterfaceDefaults()
       }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("Resets push-through, collapse timing, haptics, HUD style, player priority, activity order, and metric presentation. Enabled activities, permissions, paired machines, and activity data are kept.")
+      Text("Resets notch interaction, haptics, HUD style, player order, activity order and metric styles. It keeps enabled activities, permissions, paired machines and activity data.")
     }
     .confirmationDialog(
       "Rotate the Pulse provider token?", isPresented: $confirmingPulseTokenRotation,
       titleVisibility: .visible
     ) {
-      Button("Rotate Token and Disconnect Providers", role: .destructive) { rotatePulseToken() }
+      Button("Rotate token and disconnect providers", role: .destructive) { rotatePulseToken() }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("Every connected provider will be disconnected immediately. Existing scripts must read the new token before they can publish again. Per-source Revoke cannot provide this guarantee because source names are self-declared.")
+      Text("Disconnects every provider. Scripts must read the new token before publishing again. Revoking one source is not enough because providers choose their own source name.")
     }
     .alert(
       "Pulse authentication", isPresented: Binding(
@@ -532,32 +532,20 @@ struct SettingsView: View {
   @ViewBuilder private var categoryView: some View {
     switch selection ?? .general {
     case .general:
-      settingsLanding(
-        "Control how Islet starts, appears, responds, and balances freshness with battery life.",
-        pages: [.startupDisplays, .interaction, .energy])
+      settingsLanding(pages: [.startupDisplays, .interaction, .energy])
     case .activities:
-      settingsLanding(
-        "Choose what belongs in the island, then configure only the activities that need extra options.",
-        pages: [
+      settingsLanding(pages: [
           .activityOrder, .calendarReminders, .nowPlaying, .continuity, .systemMetrics,
           .clipboard, .systemHUD,
         ])
     case .notifications:
-      settingsLanding(
-        "Choose which system changes deserve a brief island notification. Disabled sources stop observing.",
-        pages: [.eventSources])
+      settingsLanding(pages: [.eventSources])
     case .integrations:
-      settingsLanding(
-        "Connect external tools without mixing their credentials and operational controls into everyday settings.",
-        pages: [.t3Code, .pulse])
+      settingsLanding(pages: [.t3Code, .pulse])
     case .privacy:
-      settingsLanding(
-        "Review every macOS permission Islet can request and recover access without enabling background monitoring.",
-        pages: [.permissions])
+      settingsLanding(pages: [.permissions])
     case .advanced:
-      settingsLanding(
-        "Support information and narrowly scoped reset actions live here.",
-        pages: [.diagnostics, .reset])
+      settingsLanding(pages: [.diagnostics, .reset])
     }
   }
 
@@ -595,33 +583,9 @@ struct SettingsView: View {
     }
   }
 
-  private func settingsLanding(
-    _ introduction: String, pages: [SettingsDetailPage]
-  ) -> some View {
+  private func settingsLanding(pages: [SettingsDetailPage]) -> some View {
     ScrollView {
-      VStack(spacing: 20) {
-        VStack(spacing: 10) {
-          Image(systemName: (selection ?? .general).icon)
-            .font(.system(size: 32, weight: .medium))
-            .foregroundStyle(.white)
-            .frame(width: 62, height: 62)
-            .background(
-              RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.accentColor.gradient)
-                .shadow(color: .black.opacity(0.18), radius: 4, y: 2))
-          Text((selection ?? .general).rawValue)
-            .font(.title.bold())
-          Text(introduction)
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: 570)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 24)
-        .padding(.horizontal, 28)
-        .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 16))
-
+      VStack(spacing: 0) {
         VStack(spacing: 0) {
           ForEach(Array(pages.enumerated()), id: \.element.id) { index, page in
             SettingsNavigationLink(page: page) { navigate(to: page) }
@@ -630,8 +594,8 @@ struct SettingsView: View {
             }
           }
         }
-        .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 16))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
       }
       .padding(24)
       .frame(maxWidth: 760)
@@ -651,11 +615,12 @@ struct SettingsView: View {
           Label(error, systemImage: "exclamationmark.triangle.fill")
             .font(.caption).foregroundStyle(.orange)
         }
+        Button("Run setup again…") { OnboardingOpener.open() }
       }
       Section("Displays") {
         Toggle("Show Islet on every display", isOn: $showOnAllDisplays)
         Toggle("Hide Islet while an app is fullscreen", isOn: $hideInFullscreen)
-        Text("With multiple displays off, Islet follows the display that owns the active notch panel.")
+        Text("When this is off, Islet uses one display at a time.")
           .font(.caption).foregroundStyle(.secondary)
       }
     }
@@ -664,8 +629,8 @@ struct SettingsView: View {
 
   private var activityOrderForm: some View {
     Form {
-      Section("Activity lineup") {
-        Text("Drag to set priority. Shared Home services keep running when hidden. Turning Clipboard or Pulse off also stops its data service.")
+      Section("Activities") {
+        Text("Drag to reorder. Hiding Clipboard or Pulse also stops its data service.")
           .font(.caption).foregroundStyle(.secondary)
         List {
           ForEach(ActivityCatalog.mergedOrder(activityOrder), id: \.self) { id in
@@ -681,9 +646,9 @@ struct SettingsView: View {
         }
         .frame(minHeight: 210, idealHeight: 260)
       }
-      Section("Home services") {
+      Section("Home") {
         Toggle("Reminders", isOn: $remindersEnabled)
-        Text("Reminders appear on Home rather than as a separate tab, so their switch lives here instead of the lineup.")
+        Text("Reminders appear on Home, not in a separate tab.")
           .font(.caption).foregroundStyle(.secondary)
       }
     }
@@ -693,7 +658,7 @@ struct SettingsView: View {
   private var eventsForm: some View {
     Form {
       Section {
-        Text("Event sources show a brief animation when something changes. Hardware and system observers stop when disabled.")
+        Text("Enabled sources show a brief alert when something changes. Disabled sources stop observing.")
           .foregroundStyle(.secondary)
       }
       Section("Activity notifications") {
@@ -702,7 +667,7 @@ struct SettingsView: View {
             Label(SourceCatalog.name(for: id), systemImage: SourceCatalog.icon(for: id))
           }
         }
-        Text("These switches suppress notifications emitted by an already-running activity; they do not stop that activity.")
+        Text("These switches hide alerts but do not stop the activity.")
           .font(.caption).foregroundStyle(.secondary)
       }
       ForEach(SystemEventTier.allCases, id: \.rawValue) { tier in
@@ -712,7 +677,7 @@ struct SettingsView: View {
         if !ids.isEmpty {
           Section(tier.label) {
             if tier == .heuristic {
-              Text("These inferred notifications start off because they can be late or ambiguous. An AirDrop arrival is detected after transfer, and a tunnel may be iCloud Private Relay.")
+              Text("These start off. AirDrop is detected after transfer, and a network tunnel may be iCloud Private Relay.")
                 .font(.caption).foregroundStyle(.orange)
             }
             ForEach(ids, id: \.self) { id in
@@ -745,7 +710,7 @@ struct SettingsView: View {
               Text("1,000 pt").font(.caption).foregroundStyle(.secondary)
             }
           }
-          Text("Current push distance: \(Int(barrierPushDistance)) points. The slider gives finer control at short distances, where small changes matter most.")
+          Text("Current distance: \(Int(barrierPushDistance)) points")
             .font(.caption).foregroundStyle(.secondary)
           LabeledContent("Collapse after: \(collapseTimeout, format: .number.precision(.fractionLength(1)))s") {
             Slider(value: $collapseTimeout, in: 0.2...3.0, step: 0.1).frame(minWidth: 180)
@@ -771,7 +736,7 @@ struct SettingsView: View {
         }
         Text("Current strength: \(hapticStrengthBinding.wrappedValue.title)")
           .font(.caption).foregroundStyle(.secondary)
-        Text("Push-through plays one contact pulse and one final snap—no middle pulse. The final snap is always one strongest single pulse, never a double pulse.")
+        Text("Push-through uses one pulse at the top edge and one when Islet opens.")
           .font(.caption).foregroundStyle(.secondary)
       }
     }
@@ -785,7 +750,7 @@ struct SettingsView: View {
           Text("Whatever is playing").tag(MediaSourceMode.auto)
           Text("My order").tag(MediaSourceMode.prioritized)
         }
-        Text("Every player remains available. This only chooses the large player when several are active.")
+        Text("This only changes which player opens first when several are active.")
           .font(.caption).foregroundStyle(.secondary)
         if sourceMode == .prioritized {
           List {
@@ -835,7 +800,7 @@ struct SettingsView: View {
         LabeledContent("Activity") {
           Text(calendarEnabled ? "On" : "Off").foregroundStyle(.secondary)
         }
-        Text("Activity Lineup controls the Calendar tab. EventKit monitoring stays on because Calendar also supplies the Home agenda.")
+        Text("Calendar also supplies the Home agenda when its tab is hidden.")
           .font(.caption).foregroundStyle(.secondary)
         if calendarEnabled {
           Picker("Upcoming-event countdown", selection: $calendarLeadMinutes) {
@@ -860,7 +825,7 @@ struct SettingsView: View {
       }
       Section("Reminders") {
         Toggle("Show incomplete reminders on Home", isOn: $remindersEnabled)
-        Text("Reminder monitoring stops when this is off. Permission can still be reviewed separately.")
+        Text("Turning this off stops reading reminders.")
           .font(.caption).foregroundStyle(.secondary)
         Button("Manage Reminders permission…") {
           navigate(to: .permissions)
@@ -876,7 +841,7 @@ struct SettingsView: View {
         LabeledContent("System activity") {
           Text(systemEnabled ? "On" : "Off").foregroundStyle(.secondary)
         }
-        Text("Enable or disable System from Activity Lineup. When enabled, it can appear only under sustained load or stay available at all times.")
+        Text("By default, System appears only during sustained load.")
           .font(.caption).foregroundStyle(.secondary)
         if systemEnabled {
           Toggle("Always show System in the activity switcher", isOn: $systemAlwaysVisible)
@@ -903,7 +868,7 @@ struct SettingsView: View {
               }
             }
           }
-          Text("Balanced combines a current value with useful recent context. Thermal offers only presentations that match its state-based data.")
+          Text("Balanced shows the current value with a recent graph. Thermal uses state labels instead of a sparkline.")
             .font(.caption).foregroundStyle(.secondary)
         }
       }
@@ -915,7 +880,7 @@ struct SettingsView: View {
     Form {
       Section("iPhone Live Activities") {
         Toggle("Show iPhone Live Activities", isOn: $continuityEnabled)
-        Text("Islet reads the Live Activity app identities that macOS already exposes through Control Centre. Activity contents remain on your iPhone.")
+        Text("Islet reads app names from Control Centre. macOS does not share the activity text.")
           .font(.caption).foregroundStyle(.secondary)
         if continuityEnabled {
           PermissionStatusRow(
@@ -936,10 +901,6 @@ struct SettingsView: View {
           }
         }
       }
-      Section("Limits") {
-        Text("macOS shares which apps have Live Activities, but not the full phone-side content. Available detail therefore varies by app.")
-          .font(.caption).foregroundStyle(.secondary)
-      }
     }
     .formStyle(.grouped)
   }
@@ -950,14 +911,14 @@ struct SettingsView: View {
         LabeledContent("Activity") {
           Text(clipboardEnabled ? "On" : "Off").foregroundStyle(.secondary)
         }
-        Text("Enable or disable Clipboard from Activity Lineup. Turning it off stops polling and immediately clears retained history.")
+        Text("Turning Clipboard off stops polling and clears its history.")
           .font(.caption).foregroundStyle(.secondary)
-        Text("Pause and Clear are available beside the history itself and in Quick Actions, where their effect is visible immediately.")
+        Text("Pause and Clear are beside the history and in Quick Actions.")
           .font(.caption).foregroundStyle(.secondary)
       }
       Section("Privacy") {
         Label(
-          "History remains in memory and is cleared at quit. Concealed and transient items plus common credential formats are filtered on a best-effort basis.",
+          "History stays in memory and clears when Islet quits. Islet filters concealed items and common credential formats, but it may miss sensitive text.",
           systemImage: "lock.shield")
           .font(.caption).foregroundStyle(.orange)
       }
@@ -1001,7 +962,7 @@ struct SettingsView: View {
         }
       }
       Section {
-        Text("If Islet cannot safely change the active device or display, it passes the media key back to macOS and leaves the system HUD intact.")
+        Text("If Islet cannot change the active device or display, macOS handles the key and shows its own HUD.")
           .font(.caption).foregroundStyle(.secondary)
       }
     }
@@ -1010,7 +971,7 @@ struct SettingsView: View {
 
   private var energyForm: some View {
     Form {
-      Section("Energy policy") {
+      Section("Energy use") {
         Picker("Mode", selection: $energyMode) {
           Text("Automatic").tag(EnergyMode.automatic)
           Text("Low Energy").tag(EnergyMode.lowEnergy)
@@ -1028,12 +989,12 @@ struct SettingsView: View {
     Form {
       Section("Screen recording") {
         Toggle("Hide Islet from screen recordings", isOn: $hideFromRecording)
-        Text("This hides Islet's panels from capture; it does not change what enabled activities collect.")
+        Text("This hides Islet's panels from capture. It does not stop enabled activities.")
           .font(.caption).foregroundStyle(.secondary)
       }
       Section("Calendar") {
         PermissionStatusRow(title: "Calendar access", icon: "calendar", status: eventStatusText, color: eventStatusColor)
-        Text("Used to show today's agenda, countdowns and meeting links.").font(.caption).foregroundStyle(.secondary)
+        Text("Shows today's agenda, event countdowns and meeting links.").font(.caption).foregroundStyle(.secondary)
         permissionButtons(
           status: permissions.diagnostics.calendar, pane: .calendars,
           requestEnabled: calendarEnabled
@@ -1046,7 +1007,7 @@ struct SettingsView: View {
       }
       Section("Reminders") {
         PermissionStatusRow(title: "Reminders access", icon: "checklist", status: reminderStatusText, color: reminderStatusColor)
-        Text("Used to show and complete your incomplete reminders.").font(.caption).foregroundStyle(.secondary)
+        Text("Shows incomplete reminders and lets you complete them.").font(.caption).foregroundStyle(.secondary)
         permissionButtons(
           status: permissions.diagnostics.reminders, pane: .reminders,
           requestEnabled: remindersEnabled
@@ -1062,7 +1023,7 @@ struct SettingsView: View {
           title: "Accessibility access", icon: "accessibility",
           status: permissions.diagnostics.accessibilityGranted ? "Allowed" : "Not allowed",
           color: permissions.diagnostics.accessibilityGranted ? .green : .red)
-        Text("Used only when the media-key HUD or iPhone Live Activities feature is enabled.")
+        Text("Reads media keys for Islet's HUD and app names for iPhone Live Activities.")
           .font(.caption).foregroundStyle(.secondary)
         HStack {
           if !permissions.diagnostics.accessibilityGranted {
@@ -1078,7 +1039,14 @@ struct SettingsView: View {
           color: platformPermissionColor(permissions.diagnostics.location))
         Text("Without location access, Wi-Fi notifications still work but omit the network name.")
           .font(.caption).foregroundStyle(.secondary)
-        Button("Open Location Settings") { permissions.open(.location) }
+        HStack {
+          if permissions.diagnostics.location == .notDetermined {
+            Button("Request access") { permissions.requestLocationAccess() }
+          }
+          if permissions.diagnostics.location != .granted {
+            Button("Open Location Settings") { permissions.open(.location) }
+          }
+        }
         PermissionStatusRow(
           title: "Bluetooth devices", icon: "dot.radiowaves.right",
           status: permissions.diagnostics.bluetooth.summary,
@@ -1087,7 +1055,7 @@ struct SettingsView: View {
         PermissionStatusRow(
           title: "Local network", icon: "network", status: "Managed by macOS",
           color: .secondary)
-        Text("Requested only when pairing a T3 Code machine on your local network. macOS does not expose a reliable read-only status for this permission.")
+        Text("macOS asks when Islet first connects to T3 Code on another local Mac. macOS does not report this permission's status.")
           .font(.caption).foregroundStyle(.secondary)
         Button("Open Local Network Settings") { permissions.open(.localNetwork) }
       }
@@ -1105,10 +1073,6 @@ struct SettingsView: View {
             .foregroundStyle(.orange)
         }
       }
-      Section {
-        Text("Enable or disable the T3 Code activity from Activity Lineup. Pairing and machine controls remain here so credentials are never mixed with presentation settings.")
-          .font(.caption).foregroundStyle(.secondary)
-      }
     }
     .formStyle(.grouped)
   }
@@ -1120,7 +1084,7 @@ struct SettingsView: View {
           title: "Local activity API", icon: "waveform.path.ecg",
           status: pulseServer.lastError ?? (pulseServer.isRunning ? "Listening on 127.0.0.1:47717" : "Stopped"),
           color: pulseServer.lastError == nil ? (pulseServer.isRunning ? .green : .secondary) : .red)
-        LabeledContent("Activity stack") {
+        LabeledContent("Pulse items") {
           Text(
             pulse.hiddenItemCount == 0
               ? "\(pulse.items.count) visible"
@@ -1131,11 +1095,9 @@ struct SettingsView: View {
         LabeledContent("Authentication") {
           Text("Shared bearer token").foregroundStyle(.secondary)
         }
-        Text("Pulse lets local scripts and tools publish bounded progress, alerts and actions. Connections are loopback-only and authenticated with a private token.")
+        Text("Local scripts publish status and web actions over 127.0.0.1:47717. A private token authenticates each connection.")
           .font(.caption).foregroundStyle(.secondary)
-        Text("Choose the temporary delivery profile from the Pulse menu or Quick Actions, close to where it takes effect.")
-          .font(.caption).foregroundStyle(.secondary)
-        Text("Enable or disable Pulse from Activity Lineup. Turning it off closes the listener and disconnects providers.")
+        Text("Turning Pulse off under Activity order closes the listener and disconnects providers.")
           .font(.caption).foregroundStyle(.secondary)
         HStack {
           Button("Quick Actions…") { QuickActionsOpener.open() }
@@ -1149,10 +1111,10 @@ struct SettingsView: View {
           }
         }
       }
-      Section("Provider gallery") {
-        Text("Providers run as separate processes. The capabilities below describe the bounded data they may send; providers cannot load code into Islet or read activity data back.")
+      Section("Provider examples") {
+        Text("Providers run outside Islet. They can publish only the listed data and cannot read other activities.")
           .font(.caption).foregroundStyle(.secondary)
-        Text("Allow, Mute, and Revoke apply to the source name declared on the wire for this session. A provider holding the shared token can choose another source name, so Revoke is a routing rule—not credential revocation. Rotate the provider token above to invalidate every client.")
+        Text("Allow, Mute and Revoke match a provider's self-reported source name. Rotate the token to revoke access for every client.")
           .font(.caption).foregroundStyle(.orange)
         ForEach(pulse.providerStatuses) { status in
           PulseProviderRow(status: status, center: pulse)
@@ -1174,9 +1136,9 @@ struct SettingsView: View {
           }
         }
       }
-      Section("Pulse session history") {
-        Toggle("Show payload-free history", isOn: $showPulseHistory)
-        Text("Kept only in memory. Payload IDs, titles, details, web links, authentication tokens, and error text are never recorded. Source routing names and state metadata are retained for provider health.")
+      Section("Pulse history") {
+        Toggle("Show session history", isOn: $showPulseHistory)
+        Text("Stored in memory until Islet quits. History includes source, result, priority and time. It excludes payload text, links, tokens and errors.")
           .font(.caption).foregroundStyle(.secondary)
         if showPulseHistory {
           Picker("History filter", selection: $pulseHistoryFilter) {
@@ -1210,13 +1172,14 @@ struct SettingsView: View {
           Text(Bundle.main.bundleIdentifier ?? "Unknown").textSelection(.enabled)
         }
         LabeledContent("Version") { Text(versionText).foregroundStyle(.secondary) }
-        LabeledContent("Energy policy") { Text(energyModeTitle).foregroundStyle(.secondary) }
+        LabeledContent("Energy mode") { Text(energyModeTitle).foregroundStyle(.secondary) }
         HStack {
-          Button("Copy Diagnostics") { copyDiagnostics() }
-          Button("Open Logs Folder") {
+          Button("Copy diagnostics") { copyDiagnostics() }
+          Button("Open logs folder") {
             NSWorkspace.shared.open(
               URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Logs"))
           }
+          Button("Quit Islet") { NSApplication.shared.terminate(nil) }
         }
       }
       Section("Integration health") {
@@ -1245,10 +1208,10 @@ struct SettingsView: View {
   private var resetForm: some View {
     Form {
       Section("Appearance and interaction") {
-        Button("Restore Appearance & Interaction…", role: .destructive) {
+        Button("Restore appearance and interaction…", role: .destructive) {
           confirmingRestore = true
         }
-        Text("Resets push-through, collapse timing, haptics, HUD style, player priority, activity order, and metric presentation. Enabled activities, permissions, paired machines, and activity data are kept.")
+        Text("Resets notch interaction, haptics, HUD style, player order, activity order and metric styles. It keeps enabled activities, permissions, paired machines and activity data.")
           .font(.caption).foregroundStyle(.secondary)
       }
     }
@@ -1362,7 +1325,7 @@ struct SettingsView: View {
     let text = permissions.diagnostics.text
       + "\nHUD event tap: \(hud.eventTapStatus.summary)"
       + "\nPulse: \(pulseServer.isRunning ? "Running" : "Stopped")"
-      + "\nPulse stack: \(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
+      + "\nPulse items: \(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(text, forType: .string)
   }

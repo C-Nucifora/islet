@@ -81,7 +81,7 @@ struct RestartIsletTimerIntent: AppIntent {
 
 struct ShowIsletIntent: AppIntent {
   static let title: LocalizedStringResource = "Show Islet"
-  static let description = IntentDescription("Opens Islet's current activity surface.")
+  static let description = IntentDescription("Opens the Islet notch panel.")
   static let openAppWhenRun = false
 
   @MainActor

@@ -5,7 +5,7 @@ import Defaults
 enum Haptics {
   private static var delayedTestTask: Task<Void, Never>?
 
-  /// Deliberate feedback for a discrete action (tap, expand, completion). Not throttled.
+  /// Deliberate feedback for non-click events such as completion and explicit previews.
   static func perform(_ pattern: NSHapticFeedbackManager.FeedbackPattern = .generic) {
     let strength = Defaults[.hapticStrength]
     guard Defaults[.hapticsEnabled], strength != .off else { return }

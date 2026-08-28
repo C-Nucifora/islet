@@ -7,6 +7,7 @@ enum ActivityLifecyclePolicy {
   /// feature switch is disabled, so hiding Calendar cannot empty the Home agenda (and hiding any
   /// other activity cannot silently shut down a shared monitor).
   static func shouldRun(featureEnabled: Bool = true) -> Bool { featureEnabled }
+
   /// Clipboard polling and the Pulse listener retain or accept user/provider data solely for their
   /// corresponding activities. Their lineup toggles are therefore also their privacy switches.
   /// Shared providers such as Calendar stay independent because Home still consumes their data.
@@ -71,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       configureActivityLifecycles()
       RemindersProvider.shared.start()
       for source in AppState.eventSources { SystemEventBus.shared.register(source) }
-      SystemEventBus.shared.startEnabled()
+      if OnboardingState.isComplete { SystemEventBus.shared.startEnabled() }
       SneakQueue.shared.isSuspended = {
         ScreenManager.shared.viewModel?.state.isExpanded ?? false
       }
@@ -80,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       launchAtLoginObserver = Defaults.observe(.launchAtLogin) { change in
         Task { @MainActor in LaunchAtLogin.apply(change.newValue) }
       }
+      OnboardingOpener.openIfNeeded()
     }
     Log.app.info("Islet launched")
   }

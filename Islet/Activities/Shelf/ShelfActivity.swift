@@ -64,7 +64,6 @@ struct ShelfView: View {
         Spacer()
         if !model.items.isEmpty {
           Button {
-            Haptics.perform()
             airdropAll()
           } label: {
             Image(systemName: "square.and.arrow.up")
@@ -73,7 +72,6 @@ struct ShelfView: View {
           .help("Share all Shelf items with AirDrop")
           .accessibilityLabel("AirDrop all Shelf items")
           Button {
-            Haptics.perform(.levelChange)
             Task { await model.clear() }
           } label: {
             Image(systemName: "trash")
@@ -162,7 +160,6 @@ struct ShelfItemView: View {
       .frame(width: 56, height: 56)
       .overlay(alignment: .topTrailing) {
         Button {
-          Haptics.perform()
           Task { await model.remove(item) }
         } label: {
           Image(systemName: "xmark.circle.fill")

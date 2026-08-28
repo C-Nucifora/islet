@@ -111,7 +111,18 @@ struct BatteryExpandedView: View {
 
   private var outputItems: [FlowItem] {
     var items: [FlowItem] = []
-    if let watts = flow.macUseWatts, watts > 0.05 {
+    if let watts = flow.cpuUseWatts, watts > 0.05 {
+      items.append(
+        FlowItem(
+          id: "cpu", label: "CPU", note: "estimated processor power",
+          symbol: "cpu", watts: watts))
+    }
+    if let watts = flow.restOfMacWatts, watts > 0.05 {
+      items.append(
+        FlowItem(
+          id: "rest-of-mac", label: "Rest of Mac", note: "display, memory and other hardware",
+          symbol: "laptopcomputer", watts: watts))
+    } else if flow.cpuUseWatts == nil, let watts = flow.macUseWatts, watts > 0.05 {
       items.append(
         FlowItem(
           id: "mac", label: "Running the Mac", note: "internal system load",
@@ -163,7 +174,7 @@ struct BatteryExpandedView: View {
       VStack(spacing: 6) {
         Image(systemName: "bolt.horizontal.circle")
           .font(.system(size: 24, weight: .light)).foregroundStyle(.secondary)
-        Text("Waiting for live power telemetry").font(.caption.weight(.semibold))
+        Text("Waiting for power data").font(.caption.weight(.semibold))
         Text(
           onAC
             ? "Power is connected; the next hardware sample will populate the flow."
