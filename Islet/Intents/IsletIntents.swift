@@ -122,7 +122,7 @@ struct PublishPulseEventIntent: AppIntent {
       priority: eventPriority.pulseValue, expiresAt: Date().addingTimeInterval(TimeInterval(seconds)),
       actions: nil)
     let center = PulseCenter.shared
-    let response = center.apply(
+    let response = center.applyIfEnabled(
       PulseCommand(token: "", operation: .event, activity: payload, id: nil))
     guard response.ok else { throw PulseIntentError.rejected(response.error ?? "Unknown error") }
     if center.items.contains(where: { $0.id == id }) {
@@ -160,7 +160,7 @@ struct UpdatePulseProgressIntent: AppIntent {
       id: identifier, source: "shortcuts", title: activityTitle, subtitle: details,
       symbol: "chart.bar.fill", accentHex: "#64D2FF", progress: progress, state: .progress,
       priority: activityPriority.pulseValue, expiresAt: nil, actions: nil)
-    let response = PulseCenter.shared.apply(
+    let response = PulseCenter.shared.applyIfEnabled(
       PulseCommand(token: "", operation: .update, activity: payload, id: nil))
     guard response.ok else { throw PulseIntentError.rejected(response.error ?? "Unknown error") }
     return .result(dialog: "Updated Pulse progress.")
@@ -178,7 +178,7 @@ struct EndPulseItemIntent: AppIntent {
 
   @MainActor
   func perform() async throws -> some IntentResult & ProvidesDialog {
-    let response = PulseCenter.shared.apply(
+    let response = PulseCenter.shared.applyIfEnabled(
       PulseCommand(
         token: "", operation: .end, activity: nil, id: identifier, source: "shortcuts"))
     guard response.ok else { throw PulseIntentError.rejected(response.error ?? "Unknown error") }

@@ -89,37 +89,60 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   func addRemote(pairingLink: String, allowInsecureHTTP: Bool = false) async throws {
     let target = try T3PairingTarget.parse(
       pairingLink, allowInsecureRemoteHTTP: allowInsecureHTTP)
+    if target.endpoint.isLoopback, !T3LocalDiscovery.isTrusted(target.endpoint) {
+      throw T3ClientError.untrustedLocalEndpoint
+    }
     let unauthenticated = T3Client(endpoint: target.endpoint, token: nil)
     let descriptor = try await unauthenticated.fetchDescriptor()
-    if let local = environments.first(where: \.isLocal),
+    let isLocal = target.endpoint.isLoopback
+    if !isLocal, let local = environments.first(where: \.isLocal),
       local.id == Self.localSnapshotID(descriptor.environmentId)
     {
       throw T3ClientError.environmentIdentityConflict
     }
-    let incomingCredentialID = Self.remoteCredentialID(
-      environmentID: descriptor.environmentId,
-      baseURL: target.endpoint.baseURL.absoluteString)
+    let incomingCredentialID = isLocal
+      ? Self.localCredentialID(
+        environmentID: descriptor.environmentId,
+        baseURL: target.endpoint.baseURL.absoluteString)
+      : Self.remoteCredentialID(
+        environmentID: descriptor.environmentId,
+        baseURL: target.endpoint.baseURL.absoluteString)
     if let existing = Defaults[.t3RemoteEnvironments].first(where: {
       $0.id == descriptor.environmentId
-        && Self.remoteCredentialID(environmentID: $0.id, baseURL: $0.baseURL)
-          != incomingCredentialID
+        && (isLocal
+          || Self.remoteCredentialID(environmentID: $0.id, baseURL: $0.baseURL)
+            != incomingCredentialID)
     }) {
       Log.app.error(
         "Rejected duplicate T3 environment id from \(target.endpoint.baseURL.absoluteString, privacy: .public); already paired with \(existing.baseURL, privacy: .public)")
       throw T3ClientError.environmentIdentityConflict
     }
+    if isLocal, !T3LocalDiscovery.isTrusted(target.endpoint) {
+      throw T3ClientError.untrustedLocalEndpoint
+    }
     let exchange = try await unauthenticated.exchange(pairingCredential: target.credential)
     let authenticated = T3Client(endpoint: target.endpoint, token: exchange.accessToken)
     _ = try await authenticated.fetchShell()
-    let credentialKey = Self.remoteMonitorKey(descriptor.environmentId)
+    let credentialKey = isLocal ? "local" : Self.remoteMonitorKey(descriptor.environmentId)
     do {
-      try T3CredentialStore.save(
-        exchange.accessToken,
-        credentialID: incomingCredentialID)
+      if isLocal {
+        try T3CredentialStore.saveLocal(
+          exchange.accessToken, credentialID: incomingCredentialID,
+          environmentID: descriptor.environmentId)
+      } else {
+        try T3CredentialStore.save(
+          exchange.accessToken,
+          credentialID: incomingCredentialID)
+      }
       updateCredentialError(nil, for: credentialKey)
     } catch {
       updateCredentialError(error, for: credentialKey)
       throw error
+    }
+
+    if isLocal {
+      restartMonitors()
+      return
     }
 
     var profiles = Defaults[.t3RemoteEnvironments]
@@ -223,19 +246,35 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   private func monitorLocal() async {
     var failures = 0
     while !Task.isCancelled {
-      let endpoint = await T3LocalDiscovery.endpoint()
+      guard let endpoint = await T3LocalDiscovery.endpoint() else {
+        failures += 1
+        let error = T3ClientError.untrustedLocalEndpoint
+        updateCredentialError(error, for: "local")
+        upsert(
+          T3EnvironmentSnapshot(
+            id: "local", label: "This Mac", baseURL: "http://127.0.0.1/",
+            isLocal: true, platform: nil, serverVersion: nil,
+            state: .offline(error.localizedDescription), agents: []))
+        let delay = Self.reconnectDelay(failureCount: failures, remote: false)
+        try? await Task.sleep(for: .seconds(Self.jitter(delay)))
+        continue
+      }
       do {
         let descriptor = try await T3Client(endpoint: endpoint, token: nil).fetchDescriptor()
         let credentialID = Self.localCredentialID(
           environmentID: descriptor.environmentId, baseURL: endpoint.baseURL.absoluteString)
-        var token = try T3CredentialStore.loadLocal(
-          credentialID: credentialID, environmentID: descriptor.environmentId)
-        if token == nil {
-          let pairingCredential = try await T3LocalPairingMinting.mint()
-          token = try await T3Client(endpoint: endpoint, token: nil)
-            .exchange(pairingCredential: pairingCredential).accessToken
-          guard let token else { throw T3ClientError.invalidResponse }
-          try T3CredentialStore.save(token, credentialID: credentialID)
+        guard let token = try T3CredentialStore.load(credentialID: credentialID) else {
+          try Task.checkCancellation()
+          updateCredentialError(nil, for: "local")
+          upsert(
+            T3EnvironmentSnapshot(
+              id: Self.localSnapshotID(descriptor.environmentId),
+              label: descriptor.label.isEmpty ? "This Mac" : descriptor.label,
+              baseURL: endpoint.baseURL.absoluteString, isLocal: true,
+              platform: nil, serverVersion: descriptor.serverVersion,
+              state: .needsPairing, agents: []))
+          try? await Task.sleep(for: .seconds(10))
+          continue
         }
         updateCredentialError(nil, for: "local")
         try await poll(
@@ -331,6 +370,9 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   ) async throws {
     let client = T3Client(endpoint: endpoint, token: token)
     while !Task.isCancelled {
+      if isLocal, !T3LocalDiscovery.isTrusted(endpoint) {
+        throw T3ClientError.untrustedLocalEndpoint
+      }
       let shell = try await client.fetchShell()
       try Task.checkCancellation()
       // A successful response ends the outage. Without this callback, a later unrelated failure

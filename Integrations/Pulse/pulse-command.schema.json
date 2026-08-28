@@ -82,6 +82,7 @@
         "error": { "type": "string" },
         "errorCode": {
           "enum": [
+            "featureDisabled",
             "unauthorized",
             "invalidCommand",
             "validationFailed",

@@ -24,6 +24,8 @@ shared token is capped at 512 accepted commands per rolling minute across reconn
 rate-limited provider receives a structured `rateLimited` error and should retry with backoff. If
 capacity ordering would immediately evict the submitted item, the provider receives
 `capacityExceeded` instead of a false success.
+When Pulse is disabled, Islet clears retained items and rejects every transport or Shortcuts update
+with `featureDisabled`.
 
 ## Operations
 

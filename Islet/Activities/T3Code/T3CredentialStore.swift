@@ -29,38 +29,27 @@ enum T3CredentialStore {
     try loadVault()[credentialID]
   }
 
-  /// Local T3 is constrained to loopback, so an endpoint-port change can safely carry the token
-  /// for the same environment forward. Collapse old port-scoped and ID-only entries at the same
-  /// time so runtime restarts cannot leave live bearer tokens accumulating in the vault.
-  static func loadLocal(credentialID: String, environmentID: String) throws -> String? {
-    let tokens = try loadVault()
-    let migration = migratingLocalCredential(
-      in: tokens, credentialID: credentialID, environmentID: environmentID)
-    guard let token = migration.token else { return nil }
-    guard migration.tokens != tokens else { return token }
-
-    try persist(migration.tokens)
-    cachedTokens = migration.tokens
-    return token
+  /// Saves a credential obtained through an explicit local pairing link. Old entries are removed
+  /// only after a fresh one-time credential has authenticated the new endpoint. Discovery never
+  /// moves or releases a bearer token based on a public environment descriptor.
+  static func saveLocal(_ token: String, credentialID: String, environmentID: String) throws {
+    let tokens = replacingLocalCredentials(
+      in: try loadVault(), token: token, credentialID: credentialID,
+      environmentID: environmentID)
+    try persist(tokens)
+    cachedTokens = tokens
   }
 
-  nonisolated static func migratingLocalCredential(
-    in tokens: [String: String], credentialID: String, environmentID: String
-  ) -> (tokens: [String: String], token: String?) {
-    var migrated = tokens
-    let prefix = "local|\(environmentID)|"
-    let obsoleteIDs = migrated.keys.filter {
-      $0 == environmentID || ($0.hasPrefix(prefix) && $0 != credentialID)
+  nonisolated static func replacingLocalCredentials(
+    in tokens: [String: String], token: String, credentialID: String, environmentID: String
+  ) -> [String: String] {
+    var replaced = tokens
+    let obsoleteIDs = replaced.keys.filter {
+      $0 == environmentID || $0.hasPrefix("local|")
     }
-    let oldScopedIDs = obsoleteIDs.filter { $0.hasPrefix(prefix) }.sorted()
-    let token = migrated[credentialID]
-      ?? oldScopedIDs.compactMap { migrated[$0] }.first
-      ?? migrated[environmentID]
-    guard let token else { return (migrated, nil) }
-
-    migrated[credentialID] = token
-    for id in obsoleteIDs { migrated.removeValue(forKey: id) }
-    return (migrated, token)
+    for id in obsoleteIDs { replaced.removeValue(forKey: id) }
+    replaced[credentialID] = token
+    return replaced
   }
 
   static func save(_ token: String, credentialID: String) throws {

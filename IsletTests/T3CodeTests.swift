@@ -95,6 +95,71 @@ final class T3CodeTests: XCTestCase {
       T3LocalDiscovery.acceptsDiscoveryResponse(data: Data(#"{"error":"not found"}"#.utf8), statusCode: 200))
   }
 
+  func testRuntimePortRejectsMalformedAndOutOfRangeValues() {
+    let valid = T3LocalDiscovery.runtime(
+      from: Data(#"{"origin":"http://127.0.0.1:4773","pid":123,"port":4773}"#.utf8))
+    XCTAssertEqual(valid?.endpoint.baseURL.absoluteString, "http://127.0.0.1:4773/")
+    XCTAssertEqual(valid?.processID, 123)
+    XCTAssertNil(
+      T3LocalDiscovery.runtime(
+        from: Data(#"{"origin":"http://127.0.0.1:3773","pid":123,"port":-1}"#.utf8)))
+    XCTAssertNil(
+      T3LocalDiscovery.runtime(
+        from: Data(#"{"origin":"http://127.0.0.1:3773","pid":123,"port":0}"#.utf8)))
+    XCTAssertNil(
+      T3LocalDiscovery.runtime(
+        from: Data(#"{"origin":"http://127.0.0.1:65536","pid":123,"port":65536}"#.utf8)))
+    XCTAssertNil(
+      T3LocalDiscovery.runtime(
+        from: Data(#"{"origin":"http://127.0.0.1:3773","pid":123,"port":"3773"}"#.utf8)))
+    XCTAssertNil(
+      T3LocalDiscovery.runtime(
+        from: Data(#"{"origin":"http://127.0.0.1:4888","pid":123,"port":3773}"#.utf8)))
+    XCTAssertNil(
+      T3LocalDiscovery.runtime(
+        from: Data(#"{"origin":"http://example.com:3773","pid":123,"port":3773}"#.utf8)))
+  }
+
+  func testT3ResponseGrowthIsBounded() {
+    XCTAssertTrue(
+      T3Client.acceptsResponseGrowth(
+        currentBytes: T3Client.maximumResponseBytes - 1, additionalBytes: 1))
+    XCTAssertFalse(
+      T3Client.acceptsResponseGrowth(
+        currentBytes: T3Client.maximumResponseBytes, additionalBytes: 1))
+    XCTAssertFalse(T3Client.acceptsResponseGrowth(currentBytes: -1, additionalBytes: 1))
+  }
+
+  func testT3RequestHasATotalDeadlineEvenWhileBytesKeepArriving() async throws {
+    let session = Self.testSession()
+    defer { session.invalidateAndCancel() }
+    let endpoint = try T3Endpoint(URL(string: "https://slow.t3-unit.test")!)
+
+    do {
+      _ = try await T3Client(endpoint: endpoint, token: nil, session: session)
+        .fetchDescriptor(timeoutInterval: 0.15)
+      XCTFail("Expected the total request deadline to expire")
+    } catch T3ClientError.requestTimedOut {
+    } catch {
+      XCTFail("Expected requestTimedOut, got \(error)")
+    }
+  }
+
+  func testT3RequestRejectsOversizedDeclaredResponseBeforeBufferingIt() async throws {
+    let session = Self.testSession()
+    defer { session.invalidateAndCancel() }
+    let endpoint = try T3Endpoint(URL(string: "https://oversized.t3-unit.test")!)
+
+    do {
+      _ = try await T3Client(endpoint: endpoint, token: nil, session: session)
+        .fetchDescriptor()
+      XCTFail("Expected the response size limit to reject the request")
+    } catch T3ClientError.responseTooLarge {
+    } catch {
+      XCTFail("Expected responseTooLarge, got \(error)")
+    }
+  }
+
   func testPollingPolicySlowsInBackgroundAndLowPowerMode() {
     XCTAssertEqual(
       T3CodeActivity.pollInterval(busy: true, expanded: true, lowPowerMode: false), 3)
@@ -157,26 +222,90 @@ final class T3CodeTests: XCTestCase {
         environmentID: "same", baseURL: "http://127.0.0.1:3773"))
   }
 
-  func testLocalCredentialMigrationPrefersScopedTokenAndRemovesObsoleteEntries() {
+  func testExplicitLocalPairingReplacesObsoleteCredentialsWithoutMigratingThem() {
     let current = "local|machine|http://127.0.0.1:4888/"
     let old = "local|machine|http://127.0.0.1:3773/"
-    let migration = T3CredentialStore.migratingLocalCredential(
-      in: [old: "scoped", "machine": "legacy", "remote|other|https://example.com/": "keep"],
-      credentialID: current, environmentID: "machine")
+    let replaced = T3CredentialStore.replacingLocalCredentials(
+      in: [
+        old: "scoped", "machine": "legacy",
+        "local|retired|http://127.0.0.1:3773/": "retired",
+        "remote|other|https://example.com/": "keep",
+      ],
+      token: "fresh", credentialID: current, environmentID: "machine")
 
-    XCTAssertEqual(migration.token, "scoped")
-    XCTAssertEqual(migration.tokens[current], "scoped")
-    XCTAssertNil(migration.tokens[old])
-    XCTAssertNil(migration.tokens["machine"])
-    XCTAssertEqual(migration.tokens["remote|other|https://example.com/"], "keep")
+    XCTAssertEqual(replaced[current], "fresh")
+    XCTAssertNil(replaced[old])
+    XCTAssertNil(replaced["machine"])
+    XCTAssertNil(replaced["local|retired|http://127.0.0.1:3773/"])
+    XCTAssertEqual(replaced["remote|other|https://example.com/"], "keep")
   }
 
-  func testLocalPairingCommandUsesAnInstalledT3ExecutableWithoutNpx() {
-    let paths = T3LocalPairingMinting.candidateExecutablePaths(
-      environment: ["PATH": "/custom/bin:/second/bin"])
-    XCTAssertEqual(Array(paths.prefix(2)), ["/custom/bin/t3", "/second/bin/t3"])
-    XCTAssertTrue(paths.contains("/custom/bin/t3"))
-    XCTAssertTrue(paths.contains("/second/bin/t3"))
-    XCTAssertFalse(paths.contains { $0.contains("npx") || $0.contains("latest") })
+  func testPairingTargetsIdentifyLoopbackWithoutTrustingArbitraryHosts() throws {
+    XCTAssertTrue(
+      try T3PairingTarget.parse("http://127.0.0.1:3773/pair#token=once")
+        .endpoint.isLoopback)
+    XCTAssertFalse(
+      try T3PairingTarget.parse("https://mini.example.com/pair#token=once")
+        .endpoint.isLoopback)
+  }
+
+  private static func testSession() -> URLSession {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [T3TestURLProtocol.self]
+    return URLSession(configuration: configuration)
+  }
+}
+
+private final class T3TestURLProtocol: URLProtocol, @unchecked Sendable {
+  private let lock = NSLock()
+  private var stopped = false
+  private let queue = DispatchQueue(label: "T3TestURLProtocol")
+
+  override class func canInit(with request: URLRequest) -> Bool {
+    request.url?.host?.hasSuffix("t3-unit.test") == true
+  }
+
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+  override func startLoading() {
+    guard let url = request.url else { return }
+    if url.host == "oversized.t3-unit.test" {
+      let response = HTTPURLResponse(
+        url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+        headerFields: ["Content-Length": String(T3Client.maximumResponseBytes + 1)])!
+      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocolDidFinishLoading(self)
+      return
+    }
+
+    let body = Data(
+      #"{"environmentId":"machine","label":"This Mac","platform":null,"serverVersion":"1"}"#
+        .utf8)
+    let response = HTTPURLResponse(
+      url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+      headerFields: ["Content-Type": "application/json"])!
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    let chunks = stride(from: 0, to: body.count, by: 8).map {
+      body[$0..<min($0 + 8, body.count)]
+    }
+    for (index, chunk) in chunks.enumerated() {
+      queue.asyncAfter(deadline: .now() + 0.05 * Double(index + 1)) { [weak self] in
+        guard let self, !self.isStopped else { return }
+        self.client?.urlProtocol(self, didLoad: Data(chunk))
+        if index == chunks.count - 1 { self.client?.urlProtocolDidFinishLoading(self) }
+      }
+    }
+  }
+
+  override func stopLoading() {
+    lock.lock()
+    stopped = true
+    lock.unlock()
+  }
+
+  private var isStopped: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return stopped
   }
 }

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Security
 
 enum T3ClientError: Error, LocalizedError, Sendable {
   case invalidURL
@@ -9,10 +10,11 @@ enum T3ClientError: Error, LocalizedError, Sendable {
   case environmentIdentityConflict
   case missingPairingToken
   case invalidResponse
+  case responseTooLarge
+  case requestTimedOut
+  case untrustedLocalEndpoint
   case unauthorized
   case http(Int)
-  case tokenMintFailed(String)
-  case tokenMintTimedOut
 
   var errorDescription: String? {
     switch self {
@@ -24,16 +26,23 @@ enum T3ClientError: Error, LocalizedError, Sendable {
       "That T3 Code machine reports an identity already used by a different endpoint."
     case .missingPairingToken: "The pairing link has no one-time token."
     case .invalidResponse: "T3 Code returned an unreadable response."
+    case .responseTooLarge: "T3 Code returned more data than Islet accepts."
+    case .requestTimedOut: "T3 Code did not finish the request before the deadline."
+    case .untrustedLocalEndpoint:
+      "The local endpoint is not owned by the signed T3 Code process. Pairing was not attempted."
     case .unauthorized: "This T3 Code credential is no longer authorized."
     case .http(let status): "T3 Code returned HTTP \(status)."
-    case .tokenMintFailed(let message): message
-    case .tokenMintTimedOut: "T3 Code did not issue a local pairing token within 15 seconds."
     }
   }
 }
 
 struct T3Endpoint: Equatable, Sendable {
   let baseURL: URL
+
+  var isLoopback: Bool {
+    guard let host = baseURL.host?.lowercased() else { return false }
+    return ["127.0.0.1", "::1", "localhost"].contains(host)
+  }
 
   init(_ url: URL, allowInsecureRemoteHTTP: Bool = false) throws {
     guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -129,11 +138,22 @@ struct T3TokenExchange: Decodable, Sendable {
 }
 
 struct T3Client: Sendable {
+  nonisolated static let maximumResponseBytes = 2 * 1024 * 1024
+
   let endpoint: T3Endpoint
   let token: String?
+  let session: URLSession
 
-  func fetchDescriptor() async throws -> T3EnvironmentDescriptor {
-    try await get(".well-known/t3/environment", as: T3EnvironmentDescriptor.self, authorized: false)
+  init(endpoint: T3Endpoint, token: String?, session: URLSession = .shared) {
+    self.endpoint = endpoint
+    self.token = token
+    self.session = session
+  }
+
+  func fetchDescriptor(timeoutInterval: TimeInterval = 5) async throws -> T3EnvironmentDescriptor {
+    try await get(
+      ".well-known/t3/environment", as: T3EnvironmentDescriptor.self, authorized: false,
+      timeoutInterval: timeoutInterval)
   }
 
   func fetchShell() async throws -> T3ShellSnapshot {
@@ -161,10 +181,10 @@ struct T3Client: Sendable {
   }
 
   private func get<T: Decodable>(
-    _ path: String, as type: T.Type, authorized: Bool
+    _ path: String, as type: T.Type, authorized: Bool, timeoutInterval: TimeInterval = 5
   ) async throws -> T {
     var request = URLRequest(url: endpoint.url(path))
-    request.timeoutInterval = 5
+    request.timeoutInterval = timeoutInterval
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     if authorized, let token {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -173,14 +193,64 @@ struct T3Client: Sendable {
   }
 
   private func perform<T: Decodable>(_ request: URLRequest, as type: T.Type) async throws -> T {
-    let (data, response) = try await URLSession.shared.data(for: request)
-    guard let http = response as? HTTPURLResponse else { throw T3ClientError.invalidResponse }
-    if http.statusCode == 401 || http.statusCode == 403 { throw T3ClientError.unauthorized }
-    guard (200..<300).contains(http.statusCode) else { throw T3ClientError.http(http.statusCode) }
+    let response = try await Self.boundedResponse(for: request, session: session)
+    if response.statusCode == 401 || response.statusCode == 403 {
+      throw T3ClientError.unauthorized
+    }
+    guard (200..<300).contains(response.statusCode) else {
+      throw T3ClientError.http(response.statusCode)
+    }
     do {
-      return try JSONDecoder().decode(type, from: data)
+      return try JSONDecoder().decode(type, from: response.data)
     } catch {
       throw T3ClientError.invalidResponse
+    }
+  }
+
+  nonisolated static func acceptsResponseGrowth(currentBytes: Int, additionalBytes: Int) -> Bool {
+    currentBytes >= 0 && additionalBytes >= 0
+      && currentBytes <= maximumResponseBytes - additionalBytes
+  }
+
+  private struct BoundedResponse: Sendable {
+    let data: Data
+    let statusCode: Int
+  }
+
+  private static func boundedResponse(
+    for request: URLRequest, session: URLSession
+  ) async throws -> BoundedResponse {
+    let totalDeadline = max(0.1, request.timeoutInterval)
+    return try await withThrowingTaskGroup(of: BoundedResponse.self) { group in
+      group.addTask {
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else {
+          throw T3ClientError.invalidResponse
+        }
+        if response.expectedContentLength > Int64(maximumResponseBytes) {
+          throw T3ClientError.responseTooLarge
+        }
+        var data = Data()
+        data.reserveCapacity(
+          min(max(0, Int(response.expectedContentLength)), maximumResponseBytes))
+        for try await byte in bytes {
+          try Task.checkCancellation()
+          guard acceptsResponseGrowth(currentBytes: data.count, additionalBytes: 1) else {
+            throw T3ClientError.responseTooLarge
+          }
+          data.append(byte)
+        }
+        return BoundedResponse(data: data, statusCode: http.statusCode)
+      }
+      group.addTask {
+        try await Task.sleep(for: .seconds(totalDeadline))
+        throw T3ClientError.requestTimedOut
+      }
+      defer { group.cancelAll() }
+      guard let response = try await group.next() else {
+        throw T3ClientError.invalidResponse
+      }
+      return response
     }
   }
 
@@ -196,25 +266,30 @@ struct T3Client: Sendable {
   }
 }
 
+struct T3LocalRuntime: Equatable, Sendable {
+  let endpoint: T3Endpoint
+  let processID: Int32
+}
+
 enum T3LocalDiscovery {
-  static func endpoint() async -> T3Endpoint {
-    let primary = T3Endpoint()
-    if await reachable(primary) { return primary }
-    if let port = runtimePort() {
-      let fallback = T3Endpoint(port: port)
-      if await reachable(fallback) { return fallback }
-    }
-    return primary
+  private static let runtimeURL = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent(".t3/userdata/server-runtime.json")
+
+  static func endpoint() async -> T3Endpoint? {
+    guard let runtime = trustedRuntime(), await reachable(runtime.endpoint) else { return nil }
+    return runtime.endpoint
+  }
+
+  static func isTrusted(_ endpoint: T3Endpoint) -> Bool {
+    guard endpoint.isLoopback, let port = endpoint.baseURL.port,
+      let trusted = trustedRuntime()
+    else { return false }
+    return trusted.endpoint.baseURL.port == port
   }
 
   private static func reachable(_ endpoint: T3Endpoint) async -> Bool {
-    var request = URLRequest(url: endpoint.url(".well-known/t3/environment"))
-    request.timeoutInterval = 1.5
-    do {
-      let (data, response) = try await URLSession.shared.data(for: request)
-      guard let http = response as? HTTPURLResponse else { return false }
-      return acceptsDiscoveryResponse(data: data, statusCode: http.statusCode)
-    } catch { return false }
+    (try? await T3Client(endpoint: endpoint, token: nil).fetchDescriptor(timeoutInterval: 1.5))
+      != nil
   }
 
   /// A listening port is T3 Code only when its public descriptor succeeds and decodes. Treating a
@@ -224,118 +299,86 @@ enum T3LocalDiscovery {
       && (try? JSONDecoder().decode(T3EnvironmentDescriptor.self, from: data)) != nil
   }
 
-  private static func runtimePort() -> Int? {
-    let url = FileManager.default.homeDirectoryForCurrentUser
-      .appendingPathComponent(".t3/userdata/server-runtime.json")
-    guard let data = try? Data(contentsOf: url),
-      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+  nonisolated static func runtime(from data: Data) -> T3LocalRuntime? {
+    struct WireRuntime: Decodable {
+      let origin: String
+      let pid: Int
+      let port: Int
+    }
+    guard let wire = try? JSONDecoder().decode(WireRuntime.self, from: data),
+      (1...65_535).contains(wire.port),
+      (1...Int(Int32.max)).contains(wire.pid),
+      let origin = URL(string: wire.origin),
+      let endpoint = try? T3Endpoint(origin),
+      endpoint.isLoopback,
+      endpoint.baseURL.port == wire.port
     else { return nil }
-    return object["port"] as? Int
-  }
-}
-
-enum T3LocalPairingMinting {
-  private struct Output: Decodable {
-    let credential: String
+    return T3LocalRuntime(endpoint: endpoint, processID: Int32(wire.pid))
   }
 
-  static func mint() async throws -> String {
-    let worker = Task.detached(priority: .utility) {
-      let process = Process()
-      guard let executable = executableURL() else {
-        throw T3ClientError.tokenMintFailed(
-          "The T3 Code command-line tool is not installed. Install it or pair this Mac from T3 Code, then reconnect.")
-      }
-      process.executableURL = executable
-      process.arguments = [
-        "auth", "pairing", "create", "--json", "--ttl", "2m", "--label", "Islet",
-      ]
-      process.standardInput = FileHandle.nullDevice
-      let stdout = Pipe()
-      let stderr = Pipe()
-      process.standardOutput = stdout
-      process.standardError = stderr
-      do { try process.run() } catch {
-        throw T3ClientError.tokenMintFailed("Could not run the T3 Code pairing command.")
-      }
-      defer { if process.isRunning { terminate(process) } }
+  private static func trustedRuntime() -> T3LocalRuntime? {
+    var fileInfo = stat()
+    guard lstat(runtimeURL.path, &fileInfo) == 0,
+      (fileInfo.st_mode & S_IFMT) == S_IFREG,
+      fileInfo.st_uid == getuid(),
+      (fileInfo.st_mode & (S_IWGRP | S_IWOTH)) == 0,
+      let data = try? Data(contentsOf: runtimeURL),
+      let runtime = runtime(from: data), let port = runtime.endpoint.baseURL.port,
+      isSignedT3Code(processID: runtime.processID),
+      process(runtime.processID, ownsListeningTCPPort: port)
+    else { return nil }
+    return runtime
+  }
 
-      // Drain both pipes while the child runs. Waiting first can deadlock once either pipe fills.
-      let stdoutHandle = SendableFileHandle(stdout.fileHandleForReading)
-      let stderrHandle = SendableFileHandle(stderr.fileHandleForReading)
-      let stdoutTask = Task.detached(priority: .utility) {
-        stdoutHandle.value.readDataToEndOfFile()
-      }
-      let stderrTask = Task.detached(priority: .utility) {
-        stderrHandle.value.readDataToEndOfFile()
-      }
-      let deadline = ProcessInfo.processInfo.systemUptime + 15
-      while process.isRunning {
-        if Task.isCancelled {
-          terminate(process)
-          _ = await stdoutTask.value
-          _ = await stderrTask.value
-          throw CancellationError()
-        }
-        if ProcessInfo.processInfo.systemUptime >= deadline {
-          terminate(process)
-          _ = await stdoutTask.value
-          _ = await stderrTask.value
-          throw T3ClientError.tokenMintTimedOut
-        }
-        try await Task.sleep(for: .milliseconds(50))
-      }
-      let outputData = await stdoutTask.value
-      let errorData = await stderrTask.value
-      let output = String(data: outputData, encoding: .utf8) ?? ""
-      let error = String(data: errorData, encoding: .utf8) ?? ""
-      guard process.terminationStatus == 0 else {
-        let detail = error.trimmingCharacters(in: .whitespacesAndNewlines)
-        throw T3ClientError.tokenMintFailed(
-          detail.isEmpty ? "T3 Code could not issue a local pairing token." : detail)
-      }
-      guard let data = output.data(using: .utf8),
-        let credential = try? JSONDecoder().decode(Output.self, from: data).credential,
-        !credential.isEmpty
-      else { throw T3ClientError.tokenMintFailed("T3 Code returned no local pairing token.") }
-      return credential
+  nonisolated private static func isSignedT3Code(processID: Int32) -> Bool {
+    let attributes = [
+      kSecGuestAttributePid as String: NSNumber(value: processID)
+    ] as CFDictionary
+    let flags = SecCSFlags(rawValue: 0)
+    var code: SecCode?
+    guard SecCodeCopyGuestWithAttributes(nil, attributes, flags, &code) == errSecSuccess,
+      let code
+    else { return false }
+
+    var requirement: SecRequirement?
+    let requirementText =
+      "anchor apple generic and identifier \"com.t3tools.t3code\" and certificate leaf[subject.OU] = \"ARK85ZXQ4Z\""
+        as CFString
+    guard SecRequirementCreateWithString(requirementText, flags, &requirement) == errSecSuccess,
+      let requirement
+    else { return false }
+    return SecCodeCheckValidity(code, flags, requirement) == errSecSuccess
+  }
+
+  nonisolated private static func process(
+    _ processID: Int32, ownsListeningTCPPort port: Int
+  ) -> Bool {
+    let estimatedBytes = proc_pidinfo(processID, PROC_PIDLISTFDS, 0, nil, 0)
+    guard estimatedBytes > 0 else { return false }
+    let stride = MemoryLayout<proc_fdinfo>.stride
+    var descriptors = [proc_fdinfo](
+      repeating: proc_fdinfo(), count: max(1, Int(estimatedBytes) / stride))
+    let returnedBytes = descriptors.withUnsafeMutableBytes {
+      proc_pidinfo(processID, PROC_PIDLISTFDS, 0, $0.baseAddress, Int32($0.count))
     }
-    return try await withTaskCancellationHandler {
-      try await worker.value
-    } onCancel: {
-      worker.cancel()
+    guard returnedBytes > 0 else { return false }
+
+    let expectedPort = UInt16(port)
+    for descriptor in descriptors.prefix(Int(returnedBytes) / stride)
+    where descriptor.proc_fdtype == PROX_FDTYPE_SOCKET {
+      var socket = socket_fdinfo()
+      let result = withUnsafeMutablePointer(to: &socket) {
+        proc_pidfdinfo(
+          processID, descriptor.proc_fd, PROC_PIDFDSOCKETINFO, $0,
+          Int32(MemoryLayout<socket_fdinfo>.stride))
+      }
+      guard result == MemoryLayout<socket_fdinfo>.stride,
+        socket.psi.soi_kind == SOCKINFO_TCP
+      else { continue }
+      let tcp = socket.psi.soi_proto.pri_tcp
+      let localPort = UInt16(bigEndian: UInt16(truncatingIfNeeded: tcp.tcpsi_ini.insi_lport))
+      if tcp.tcpsi_state == TSI_S_LISTEN, localPort == expectedPort { return true }
     }
+    return false
   }
-
-  nonisolated static func candidateExecutablePaths(
-    environment: [String: String] = ProcessInfo.processInfo.environment
-  ) -> [String] {
-    let fromPath = (environment["PATH"] ?? "")
-      .split(separator: ":")
-      .map { String($0) + "/t3" }
-    var seen: Set<String> = []
-    return (fromPath + ["/opt/homebrew/bin/t3", "/usr/local/bin/t3"])
-      .filter { seen.insert($0).inserted }
-  }
-
-  private static func executableURL() -> URL? {
-    candidateExecutablePaths().first {
-      FileManager.default.isExecutableFile(atPath: $0)
-    }.map(URL.init(fileURLWithPath:))
-  }
-
-  private static func terminate(_ process: Process) {
-    guard process.isRunning else { return }
-    process.terminate()
-    let deadline = ProcessInfo.processInfo.systemUptime + 0.25
-    while process.isRunning, ProcessInfo.processInfo.systemUptime < deadline {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
-  }
-}
-
-private final class SendableFileHandle: @unchecked Sendable {
-  let value: FileHandle
-  init(_ value: FileHandle) { self.value = value }
 }
