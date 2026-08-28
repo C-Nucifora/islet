@@ -76,5 +76,5 @@ security find-identity -v -p codesigning | grep "\"$NAME\"" || {
   exit 1
 }
 echo
-echo "Done. Build normally — project.yml already sets CODE_SIGN_IDENTITY to \"$NAME\"."
+echo "Done. Set ISLET_CODE_SIGN_IDENTITY = $NAME in Config/Islet.local.xcconfig."
 echo "Grant Islet its permissions once more; from then on they survive rebuilds."

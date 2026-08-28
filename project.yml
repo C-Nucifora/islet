@@ -1,9 +1,11 @@
 name: Islet
 options:
-  bundleIdPrefix: dev.cnucifora
   deploymentTarget:
     macOS: "26.0"
   createIntermediateGroups: true
+configFiles:
+  Debug: Config/Islet.xcconfig
+  Release: Config/Islet.xcconfig
 packages:
   Defaults:
     url: https://github.com/sindresorhus/Defaults
@@ -14,10 +16,10 @@ settings:
     # A stable signing identity, not ad-hoc. TCC keys every grant on the app's designated
     # requirement, and an ad-hoc signature's requirement is a bare cdhash that changes on every
     # build — so macOS treated each rebuild as a brand-new app and dropped Accessibility,
-    # Calendar and Reminders every time. Signing with one certificate makes the requirement
-    # `identifier dev.cnucifora.Islet and certificate root = H"..."`, which does not change.
+    # Calendar and Reminders every time. Signing with one certificate makes the requirement use
+    # the configured bundle identifier and certificate root, which do not change between builds.
     # Create the certificate with Scripts/create-signing-certificate.sh.
-    CODE_SIGN_IDENTITY: "Islet Dev"
+    CODE_SIGN_IDENTITY: "$(ISLET_CODE_SIGN_IDENTITY)"
     CODE_SIGN_STYLE: Manual
     ENABLE_HARDENED_RUNTIME: false
     MACOSX_DEPLOYMENT_TARGET: "26.0"
@@ -36,6 +38,9 @@ targets:
         embed: true
         codeSign: true
         link: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(ISLET_PRODUCT_BUNDLE_IDENTIFIER)"
     info:
       path: Islet/Info.plist
       properties:
