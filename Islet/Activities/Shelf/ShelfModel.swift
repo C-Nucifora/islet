@@ -196,36 +196,24 @@ final class ShelfModel: ObservableObject {
     NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:])
   }
 
-  /// Resolves and copies every file provider while keeping the Shelf visible through async work.
+  /// AppKit window destinations already resolve Finder's pasteboard to file URLs, so imports can
+  /// begin without waiting for an item-provider callback.
   @discardableResult
-  func importDroppedItems(from providers: [NSItemProvider]) -> Bool {
-    let fileProviders = providers.filter { $0.canLoadObject(ofClass: URL.self) }
-    guard !fileProviders.isEmpty else { return false }
+  func importDroppedURLs(_ urls: [URL]) -> Bool {
+    let fileURLs = urls.filter(\.isFileURL)
+    guard !fileURLs.isEmpty else { return false }
 
-    dropState.beginImports(fileProviders.count)
-    Self.loadURLs(from: fileProviders) { [weak self] url in
+    dropState.beginImports(fileURLs.count)
+    for url in fileURLs {
       Task { @MainActor [weak self] in
         guard let self else { return }
         defer { self.dropState.finishImport() }
-        guard let url else {
-          self.lastError = "Couldn’t read one of the dropped items."
-          return
-        }
         await self.add(url)
       }
     }
     return true
   }
 
-  nonisolated private static func loadURLs(
-    from providers: [NSItemProvider], completion: @escaping @Sendable (URL?) -> Void
-  ) {
-    for provider in providers {
-      _ = provider.loadObject(ofClass: URL.self) { url, _ in
-        completion(url)
-      }
-    }
-  }
 }
 
 struct ShelfDropState: Equatable {

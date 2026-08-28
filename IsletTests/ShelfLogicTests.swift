@@ -65,20 +65,18 @@ final class ShelfLogicTests: XCTestCase {
   }
 
   @MainActor
-  func testDroppedProviderStaysPendingUntilItsFileIsCopied() async throws {
+  func testDroppedFileURLsCopyThroughAppKitImportPath() async throws {
     let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
       UUID().uuidString, isDirectory: true)
     let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
-    let source = temporaryRoot.appendingPathComponent("drop-test.txt")
+    let source = temporaryRoot.appendingPathComponent("appkit-drop.txt")
     try FileManager.default.createDirectory(
       at: temporaryRoot, withIntermediateDirectories: true)
-    try Data("notch drop".utf8).write(to: source)
+    try Data("appkit drop".utf8).write(to: source)
     defer { try? FileManager.default.removeItem(at: temporaryRoot) }
 
     let model = ShelfModel(directory: shelfDirectory)
-    let provider = try XCTUnwrap(NSItemProvider(contentsOf: source))
-
-    XCTAssertTrue(model.importDroppedItems(from: [provider]))
+    XCTAssertTrue(model.importDroppedURLs([source]))
     XCTAssertEqual(model.pendingImportCount, 1)
     XCTAssertTrue(model.isDropPresentationActive)
 
@@ -88,7 +86,7 @@ final class ShelfLogicTests: XCTestCase {
 
     XCTAssertEqual(model.pendingImportCount, 0)
     XCTAssertFalse(model.isDropPresentationActive)
-    XCTAssertEqual(model.items.map(\.name), ["drop-test.txt"])
-    XCTAssertEqual(try String(contentsOf: model.items[0].url, encoding: .utf8), "notch drop")
+    XCTAssertEqual(model.items.map(\.name), ["appkit-drop.txt"])
+    XCTAssertEqual(try String(contentsOf: model.items[0].url, encoding: .utf8), "appkit drop")
   }
 }

@@ -172,6 +172,14 @@ final class ScreenManager {
       let geometry = screen.notchGeometry(reading: reading)
       let vm = NotchViewModel(geometry: geometry)
       let panel = NotchPanel(frame: vm.panelFrame)
+      let dropZoneID = UUID()
+      panel.fileDragTargetChanged = { targeted in
+        ShelfModel.shared.setDropTarget(dropZoneID, active: targeted)
+        if targeted { vm.apply(.fileDragEntered) }
+      }
+      panel.fileURLsDropped = { urls in
+        ShelfModel.shared.importDroppedURLs(urls)
+      }
       panel.contentView = NSHostingView(rootView: NotchRootView(vm: vm))
       panel.alphaValue = 0
       panel.orderFrontRegardless()

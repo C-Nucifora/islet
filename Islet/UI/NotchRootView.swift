@@ -8,8 +8,6 @@ struct NotchRootView: View {
   @ObservedObject private var reminders = RemindersProvider.shared
   @State private var compactLeadingWidth: CGFloat = 0
   @State private var compactTrailingWidth: CGFloat = 0
-  @State private var dropTargeting = false
-  @State private var dropZoneID = UUID()
 
   /// Compact content precedence: HUD > in-flight sneak > primary activity > idle dashboard hint.
   private var compactContent: (leading: AnyView, trailing: AnyView)? {
@@ -116,12 +114,6 @@ struct NotchRootView: View {
 
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    // This destination survives the collapsed-to-expanded content replacement. Its frame follows
-    // the panel, so the whole expanded island accepts the same drag after leaving and re-entering.
-    .contentShape(Rectangle())
-    .onDrop(of: [.fileURL], isTargeted: $dropTargeting) { providers in
-      ShelfModel.shared.importDroppedItems(from: providers)
-    }
     .animation(
       Motion.gated(vm.state.isExpanded ? Motion.opening : Motion.closing), value: vm.state
     )
@@ -130,11 +122,6 @@ struct NotchRootView: View {
     .onChange(of: compactLeadingWidth, initial: true) { _, _ in syncPanelWidths() }
     .onChange(of: compactTrailingWidth) { _, _ in syncPanelWidths() }
     .onChange(of: compactVisible) { _, _ in syncPanelWidths() }
-    .onChange(of: dropTargeting) { _, targeted in
-      ShelfModel.shared.setDropTarget(dropZoneID, active: targeted)
-      if targeted { vm.apply(.fileDragEntered) }
-    }
-    .onDisappear { ShelfModel.shared.setDropTarget(dropZoneID, active: false) }
     .preferredColorScheme(.dark)
   }
 
