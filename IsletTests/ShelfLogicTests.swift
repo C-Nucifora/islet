@@ -238,13 +238,6 @@ final class ShelfLogicTests: XCTestCase {
     XCTAssertTrue(copyStarted)
 
     await model.clear()
-    for _ in 0..<200 {
-      let remaining =
-        (try? FileManager.default.contentsOfDirectory(
-          at: shelfDirectory, includingPropertiesForKeys: nil)) ?? []
-      if remaining.isEmpty { break }
-      try await Task.sleep(for: .milliseconds(10))
-    }
 
     XCTAssertTrue(model.items.isEmpty)
     let remaining =

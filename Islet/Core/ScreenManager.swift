@@ -218,6 +218,10 @@ final class ScreenManager {
       )
       .sink { [weak inst] _ in inst?.updateMousePassthrough() }
       .store(in: &inst.cancellables)
+      vm.$compactTargetRevision
+        .dropFirst()
+        .sink { [weak inst] _ in inst?.updateMousePassthrough() }
+        .store(in: &inst.cancellables)
       EventMonitors.shared.pointerMovement
         .sink { [weak inst] location in inst?.updateMousePassthrough(at: location) }
         .store(in: &inst.cancellables)

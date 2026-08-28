@@ -23,6 +23,9 @@
 #
 #     tccutil reset Accessibility dev.cnucifora.Islet
 #
+# `dev.cnucifora.Islet` is the upstream default. If Islet.local.xcconfig overrides
+# ISLET_PRODUCT_BUNDLE_IDENTIFIER, substitute that effective identifier in the reset command.
+#
 # then add /Applications/Islet.app in System Settings. Repeat per service as needed
 # (Calendar, Reminders, Bluetooth, Location).
 #

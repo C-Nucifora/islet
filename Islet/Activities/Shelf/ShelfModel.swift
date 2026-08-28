@@ -170,7 +170,7 @@ final class ShelfModel: ObservableObject {
   }
 
   func clear() async {
-    cancelPendingImports()
+    await cancelPendingImports()
     let current = items
     let removedIDs: Set<UUID> = await Task.detached(priority: .utility) {
       var removed: Set<UUID> = []
@@ -281,12 +281,15 @@ final class ShelfModel: ObservableObject {
     startImportWorkerIfNeeded()
   }
 
-  private func cancelPendingImports() {
+  private func cancelPendingImports() async {
     importGeneration &+= 1
     importQueue.removeAll()
-    importWorker?.cancel()
+    let activeWorker = importWorker
+    activeWorker?.cancel()
+    await activeWorker?.value
     importWorker = nil
     dropState.cancelImports()
+    startImportWorkerIfNeeded()
   }
 }
 

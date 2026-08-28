@@ -1,3 +1,4 @@
+import Combine
 import Defaults
 import XCTest
 
@@ -215,6 +216,21 @@ final class NotchViewModelTests: XCTestCase {
     vm.updateCompactWidths(leading: 18, trailing: 76)
     XCTAssertEqual(
       vm.panelFrame, vm.geometry.collapsedPanelFrame(compactLeading: 18, compactTrailing: 76))
+  }
+
+  func testCompactTargetChangePublishesBeforeDelayedShrink() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.updateCompactWidths(leading: 80, trailing: 80)
+    vm.setActualPanelFrame(vm.panelFrame)
+    var revisions: [UInt] = []
+    let cancellable = vm.$compactTargetRevision.dropFirst()
+      .sink { revisions.append($0) }
+
+    vm.updateCompactWidths(leading: 10, trailing: 10)
+
+    XCTAssertEqual(revisions, [2])
+    XCTAssertTrue(vm.needsPointerPassthroughMonitoring)
+    withExtendedLifetime(cancellable) {}
   }
 
   // MARK: - Per-tab height tiers

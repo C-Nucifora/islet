@@ -21,6 +21,7 @@ final class NotchViewModel: ObservableObject {
   /// Drawn island width for the live tab count. The expanded panel reserves the maximum supported
   /// width up front, so changing this value animates only SwiftUI content and never resizes AppKit.
   @Published private(set) var expandedWidth: CGFloat = Metrics.expandedSize.width
+  @Published private(set) var compactTargetRevision: UInt = 0
   /// Live 0...1 pressure against the hover barrier. The view turns this into elastic stretch.
   @Published private(set) var barrierProgress: CGFloat = 0
   var preventAutoClose = false
@@ -177,6 +178,7 @@ final class NotchViewModel: ObservableObject {
     guard leading != compactLeadingWidth || trailing != compactTrailingWidth else { return }
     compactLeadingWidth = leading
     compactTrailingWidth = trailing
+    compactTargetRevision &+= 1
     updatePanelFrame(for: state)
   }
 
