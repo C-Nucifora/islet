@@ -40,9 +40,8 @@ final class PulseServer: ObservableObject {
       let parameters = NWParameters.tcp
       parameters.allowLocalEndpointReuse = true
       parameters.requiredLocalEndpoint = .hostPort(
-        host: NWEndpoint.Host("127.0.0.1"), port: PulsePaths.port)
+        host: NWEndpoint.Host("127.0.0.1"), port: .any)
       let listener = try NWListener(using: parameters, on: PulsePaths.port)
-      listener.newConnectionLimit = Self.maximumConnections
       listener.newConnectionHandler = { [weak self] connection in
         Task { @MainActor in self?.accept(connection) }
       }
@@ -108,6 +107,10 @@ final class PulseServer: ObservableObject {
       connection.cancel()
       return
     }
+    guard Self.canAcceptConnection(activeCount: connections.count) else {
+      connection.cancel()
+      return
+    }
     let id = ObjectIdentifier(connection)
     connections[id] = connection
     connection.stateUpdateHandler = { [weak self, weak connection] state in
@@ -125,6 +128,13 @@ final class PulseServer: ObservableObject {
   nonisolated private static func isLoopback(_ endpoint: NWEndpoint) -> Bool {
     guard case .hostPort(let host, _) = endpoint else { return false }
     return host == NWEndpoint.Host("127.0.0.1") || host == NWEndpoint.Host("::1")
+  }
+
+  /// `NWListener.newConnectionLimit` is a decreasing lifetime admission allowance, not a
+  /// concurrent-client ceiling. Keep the listener accepting indefinitely and enforce the bound
+  /// against the connections Islet currently owns instead.
+  nonisolated static func canAcceptConnection(activeCount: Int) -> Bool {
+    activeCount >= 0 && activeCount < maximumConnections
   }
 
   nonisolated private func receive(

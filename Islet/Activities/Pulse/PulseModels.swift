@@ -391,6 +391,7 @@ enum PulseErrorCode: String, Codable, Sendable {
   case messageTooLarge
   case commandLimitExceeded
   case rateLimited
+  case capacityExceeded
 }
 
 struct PulseResponse: Codable, Equatable, Sendable {

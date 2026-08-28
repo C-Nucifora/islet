@@ -19,8 +19,8 @@ final class PortsActivity: NotchActivity, ObservableObject {
 
   func start() {
     guard !isMonitoring else { return }
+    guard monitor.start(owner: id) else { return }
     isMonitoring = true
-    monitor.start(owner: id)
     monitor.objectWillChange
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
