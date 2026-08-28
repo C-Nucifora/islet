@@ -125,11 +125,11 @@ final class ShelfModel: ObservableObject {
     reservedDestinations.remove(dest)
 
     if let expectedImportGeneration, expectedImportGeneration != importGeneration {
-      if case .success = result {
-        await Task.detached(priority: .utility) {
-          try? FileManager.default.removeItem(at: dest)
-        }.value
-      }
+      // A failed copy may still have created a partial file or directory before Clear invalidated
+      // the import. Remove the reserved destination regardless of the reported result.
+      await Task.detached(priority: .utility) {
+        try? FileManager.default.removeItem(at: dest)
+      }.value
       return (nil, nil)
     }
 

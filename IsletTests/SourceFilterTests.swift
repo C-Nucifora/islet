@@ -6,13 +6,21 @@ final class SourceFilterTests: XCTestCase {
   func testDenylistedBundlesAreHidden() {
     for bundleID in [
       "systemsoundserverd", "com.apple.PowerChime", "com.apple.controlcenter",
-      "dev.islet",
     ] {
       XCTAssertNil(
         SourceFilter.rank(bundleID: bundleID, mode: .auto, priorityList: []),
         "\(bundleID) should be hidden")
       XCTAssertTrue(SourceFilter.isDenied(bundleID))
     }
+  }
+
+  func testConfiguredAppIdentityIsHidden() throws {
+    let bundleIdentifier = try XCTUnwrap(Bundle.main.bundleIdentifier)
+    XCTAssertTrue(SourceFilter.isDenied(bundleIdentifier))
+    XCTAssertTrue(
+      SourceFilter.isDenied("dev.review.override", ownBundleIdentifier: "dev.review.override"))
+    XCTAssertFalse(
+      SourceFilter.isDenied("dev.review.player", ownBundleIdentifier: "dev.review.override"))
   }
 
   func testEmptyBundleIdentifierIsHidden() {

@@ -204,4 +204,52 @@ final class ShelfLogicTests: XCTestCase {
         at: shelfDirectory, includingPropertiesForKeys: nil)) ?? []
     XCTAssertTrue(remaining.isEmpty)
   }
+
+  @MainActor
+  func testClearRemovesPartialDestinationLeftByFailedCopy() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("partial.txt")
+    try FileManager.default.createDirectory(
+      at: temporaryRoot, withIntermediateDirectories: true)
+    try Data("source".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+    let probe = CopyProbe()
+
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      copyItem: { _, destination in
+        await Task.detached(priority: .utility) {
+          try? Data("partial".utf8).write(to: destination)
+        }.value
+        await probe.markStarted()
+        return await Task.detached(priority: .utility) { () -> Result<Void, Error> in
+          usleep(150_000)
+          return .failure(CopyFailure.expected)
+        }.value
+      })
+    XCTAssertTrue(model.importDroppedURLs([source]))
+    for _ in 0..<100 {
+      if await probe.hasStarted() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let copyStarted = await probe.hasStarted()
+    XCTAssertTrue(copyStarted)
+
+    await model.clear()
+    for _ in 0..<200 {
+      let remaining =
+        (try? FileManager.default.contentsOfDirectory(
+          at: shelfDirectory, includingPropertiesForKeys: nil)) ?? []
+      if remaining.isEmpty { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+
+    XCTAssertTrue(model.items.isEmpty)
+    let remaining =
+      (try? FileManager.default.contentsOfDirectory(
+        at: shelfDirectory, includingPropertiesForKeys: nil)) ?? []
+    XCTAssertTrue(remaining.isEmpty)
+  }
 }

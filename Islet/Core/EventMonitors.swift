@@ -58,6 +58,7 @@ final class EventMonitors {
   private var wasPointerInTopInteractionBand = false
   private var wasFileDragInTopInteractionBand = false
   private var forwardsHoverMovement = false
+  private var pointerPassthroughDemand: Set<UUID> = []
 
   func start() {
     guard downMonitor == nil else { return }
@@ -75,18 +76,6 @@ final class EventMonitors {
     }
     fileDragMonitor = fileDrag
     fileDrag.start()
-    let move = PairedMonitor(mask: [.mouseMoved, .leftMouseDragged]) { [weak self] event in
-      guard let self else { return }
-      let location = NSEvent.mouseLocation
-      self.forwardPointerMovementIfRelevant(location)
-      // A Finder drag hovering over the notch opens the Shelf immediately. Do not also feed the
-      // same event into the ordinary hover barrier.
-      if event.type == .leftMouseDragged, Self.dragPasteboardContainsFileURLs() { return }
-      guard self.forwardsHoverMovement else { return }
-      self.forwardMovementIfRelevant(event, location: location)
-    }
-    movementMonitor = move
-    move.start()
     interactionModeCancellable = Defaults.publisher(.interactionMode)
       .sink { [weak self] change in
         Task { @MainActor in self?.setMovementMonitoring(change.newValue == .hover) }
@@ -102,6 +91,7 @@ final class EventMonitors {
     downMonitor?.stop()
     downMonitor = nil
     interactionModeCancellable = nil
+    pointerPassthroughDemand.removeAll()
     wasInTopInteractionBand = false
     wasPointerInTopInteractionBand = false
     wasFileDragInTopInteractionBand = false
@@ -116,6 +106,50 @@ final class EventMonitors {
       wasInTopInteractionBand = false
     }
     forwardsHoverMovement = enabled
+    updateMovementMonitor()
+  }
+
+  func setPointerPassthroughNeeded(_ needed: Bool, sourceID: UUID) {
+    if needed {
+      pointerPassthroughDemand.insert(sourceID)
+    } else {
+      pointerPassthroughDemand.remove(sourceID)
+    }
+    updateMovementMonitor()
+  }
+
+  private func updateMovementMonitor() {
+    let shouldRun = Self.shouldRunMovementMonitor(
+      hoverEnabled: forwardsHoverMovement,
+      pointerPassthroughDemandCount: pointerPassthroughDemand.count)
+    guard shouldRun != (movementMonitor != nil) else { return }
+    guard shouldRun else {
+      movementMonitor?.stop()
+      movementMonitor = nil
+      wasPointerInTopInteractionBand = false
+      return
+    }
+
+    let move = PairedMonitor(mask: [.mouseMoved, .leftMouseDragged]) { [weak self] event in
+      guard let self else { return }
+      let location = NSEvent.mouseLocation
+      if !self.pointerPassthroughDemand.isEmpty {
+        self.forwardPointerMovementIfRelevant(location)
+      }
+      // A Finder drag hovering over the notch opens the Shelf immediately. Do not also feed the
+      // same event into the ordinary hover barrier.
+      if event.type == .leftMouseDragged, Self.dragPasteboardContainsFileURLs() { return }
+      guard self.forwardsHoverMovement else { return }
+      self.forwardMovementIfRelevant(event, location: location)
+    }
+    movementMonitor = move
+    move.start()
+  }
+
+  nonisolated static func shouldRunMovementMonitor(
+    hoverEnabled: Bool, pointerPassthroughDemandCount: Int
+  ) -> Bool {
+    hoverEnabled || pointerPassthroughDemandCount > 0
   }
 
   nonisolated static func pasteboardContainsFileURLs(_ pasteboard: NSPasteboard) -> Bool {

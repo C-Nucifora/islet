@@ -32,8 +32,15 @@ final class SystemMetricsTests: XCTestCase {
     let automatic = EnergyPolicy(mode: .automatic, systemLowPowerMode: false)
     let lowEnergy = EnergyPolicy(mode: .lowEnergy, systemLowPowerMode: false)
 
-    XCTAssertEqual(automatic.batteryInterval(viewIsLive: true), BatteryMonitor.liveInterval)
-    XCTAssertEqual(lowEnergy.batteryInterval(viewIsLive: true), BatteryMonitor.liveInterval)
+    XCTAssertEqual(automatic.batteryInterval(viewIsLive: true), 12)
+    XCTAssertEqual(
+      EnergyPolicy(mode: .live, systemLowPowerMode: false).batteryInterval(viewIsLive: true),
+      BatteryMonitor.liveInterval)
+    XCTAssertEqual(lowEnergy.batteryInterval(viewIsLive: true), 30)
+    XCTAssertEqual(
+      EnergyPolicy(mode: .automatic, systemLowPowerMode: true)
+        .batteryInterval(viewIsLive: true),
+      30)
     XCTAssertGreaterThan(
       lowEnergy.batteryInterval(viewIsLive: false),
       automatic.batteryInterval(viewIsLive: false))

@@ -20,10 +20,23 @@ enum T3CredentialStoreError: Error, LocalizedError {
 /// remote T3 environments Islet watches.
 @MainActor
 enum T3CredentialStore {
-  static let service = "dev.islet"
+  static var service: String { credentialService(for: Bundle.main.bundleIdentifier) }
   private static let vaultAccount = "read-only-environment-tokens-v1"
 
   private static var cachedTokens: [String: String]?
+
+  /// The upstream identity keeps using its established Keychain service. Local bundle-ID
+  /// overrides get an isolated service without changing or migrating an installed app's vault.
+  nonisolated static func credentialService(for bundleIdentifier: String?) -> String {
+    switch bundleIdentifier {
+    case "dev.cnucifora.Islet":
+      "dev.cnucifora.islet.t3-code"
+    case let bundleIdentifier? where !bundleIdentifier.isEmpty:
+      bundleIdentifier
+    default:
+      "dev.cnucifora.islet.t3-code"
+    }
+  }
 
   static func load(credentialID: String) throws -> String? {
     try loadVault()[credentialID]

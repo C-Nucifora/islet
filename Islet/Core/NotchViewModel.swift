@@ -89,6 +89,12 @@ final class NotchViewModel: ObservableObject {
     geometry.expandedRect(width: expandedWidth, height: expandedHeight)
   }
 
+  /// The expanded window has transparent margins that must pass pointer events through. Keep the
+  /// global movement monitor only while expanded or while AppKit still owns the closing frame.
+  var needsPointerPassthroughMonitoring: Bool {
+    state.isExpanded || actualPanelFrame != targetPanelFrame(for: state)
+  }
+
   /// The region that counts as "hovering" for the current state.
   private var hoverRegion: CGRect {
     state.isExpanded ? expandedRect.union(geometry.hitRect) : geometry.hitRect

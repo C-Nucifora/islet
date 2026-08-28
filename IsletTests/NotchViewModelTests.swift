@@ -438,6 +438,33 @@ final class NotchViewModelTests: XCTestCase {
         desktop, screenFrames: [frame], wasInTopInteractionBand: true))
   }
 
+  func testMovementMonitorRunsOnlyForHoverOrExpandedPassthrough() {
+    XCTAssertFalse(
+      EventMonitors.shouldRunMovementMonitor(
+        hoverEnabled: false, pointerPassthroughDemandCount: 0))
+    XCTAssertTrue(
+      EventMonitors.shouldRunMovementMonitor(
+        hoverEnabled: true, pointerPassthroughDemandCount: 0))
+    XCTAssertTrue(
+      EventMonitors.shouldRunMovementMonitor(
+        hoverEnabled: false, pointerPassthroughDemandCount: 1))
+  }
+
+  func testPointerPassthroughMonitoringCoversExpandedAndClosingFrames() {
+    let vm = makeVM(mode: .clickToPin)
+    XCTAssertFalse(vm.needsPointerPassthroughMonitoring)
+
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    vm.setActualPanelFrame(expandedPanel(vm))
+    XCTAssertTrue(vm.needsPointerPassthroughMonitoring)
+
+    vm.handleMouseDown(CGPoint(x: 100, y: 500))
+    XCTAssertTrue(vm.needsPointerPassthroughMonitoring)
+
+    vm.setActualPanelFrame(vm.geometry.collapsedPanelFrame())
+    XCTAssertFalse(vm.needsPointerPassthroughMonitoring)
+  }
+
   func testDisabledShelfDoesNotForwardMonitorDrivenFileDrags() {
     let frame = CGRect(x: 0, y: 0, width: 1728, height: 1117)
     let notch = CGPoint(x: 864, y: 1110)

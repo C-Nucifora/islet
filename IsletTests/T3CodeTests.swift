@@ -5,7 +5,15 @@ import XCTest
 @MainActor
 final class T3CodeTests: XCTestCase {
   func testCredentialVaultUsesTheAppIdentity() {
-    XCTAssertEqual(T3CredentialStore.service, "dev.islet")
+    XCTAssertEqual(
+      T3CredentialStore.credentialService(for: "dev.cnucifora.Islet"),
+      "dev.cnucifora.islet.t3-code")
+    XCTAssertEqual(
+      T3CredentialStore.credentialService(for: "dev.review.override"),
+      "dev.review.override")
+    XCTAssertEqual(
+      T3CredentialStore.credentialService(for: nil),
+      "dev.cnucifora.islet.t3-code")
   }
 
   func testParsesHostedPairingLink() throws {

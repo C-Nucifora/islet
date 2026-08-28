@@ -3,20 +3,22 @@ import Foundation
 enum MediaSourceMode: String, CaseIterable, Codable { case auto, prioritized }
 
 enum SourceFilter {
-  /// Bundle identifiers that are never shown as a media source. All four were observed in the
-  /// CoreAudio process list on this machine, along with Islet itself; none of them is a player a
-  /// user would want to switch to.
+  /// Bundle identifiers that are never shown as a media source. These were observed in the
+  /// CoreAudio process list on this machine; none is a player a user would want to switch to.
   static let denylist: Set<String> = [
     "systemsoundserverd",
     "com.apple.PowerChime",
     "com.apple.controlcenter",
-    "dev.islet",
     // Also observed and equally useless as a "player":
     "com.apple.audio.Core-Audio-Driver-Service",
     "com.apple.mediaremoted",
   ]
 
-  static func isDenied(_ bundleID: String) -> Bool { denylist.contains(bundleID) }
+  static func isDenied(
+    _ bundleID: String, ownBundleIdentifier: String? = Bundle.main.bundleIdentifier
+  ) -> Bool {
+    denylist.contains(bundleID) || bundleID == ownBundleIdentifier
+  }
 
   /// Display rank for a source: lower sorts first, nil means "never show".
   ///

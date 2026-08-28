@@ -1,4 +1,4 @@
-ISLET_PRODUCT_BUNDLE_IDENTIFIER = dev.islet
+ISLET_PRODUCT_BUNDLE_IDENTIFIER = dev.cnucifora.Islet
 ISLET_CODE_SIGN_IDENTITY = Islet Dev
 
 #include? "Islet.local.xcconfig"

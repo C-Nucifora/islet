@@ -15,6 +15,7 @@ private final class PanelInstance {
   let viewModel: NotchViewModel
   var cancellables: Set<AnyCancellable> = []
   private var isApplying = false
+  private let pointerMonitoringID = UUID()
 
   init(screenUUID: String, panel: NotchPanel, viewModel: NotchViewModel) {
     self.screenUUID = screenUUID
@@ -69,8 +70,16 @@ private final class PanelInstance {
   }
 
   func updateMousePassthrough(at location: CGPoint = NSEvent.mouseLocation) {
+    EventMonitors.shared.setPointerPassthroughNeeded(
+      viewModel.needsPointerPassthroughMonitoring, sourceID: pointerMonitoringID)
     let shouldIgnore = viewModel.shouldIgnorePanelMouseEvents(at: location)
     if panel.ignoresMouseEvents != shouldIgnore { panel.ignoresMouseEvents = shouldIgnore }
+  }
+
+  func stop() {
+    EventMonitors.shared.setPointerPassthroughNeeded(false, sourceID: pointerMonitoringID)
+    cancellables.removeAll()
+    panel.close()
   }
 }
 
@@ -148,10 +157,7 @@ final class ScreenManager {
   func stop() {
     fullscreenTimer = nil
     cancellables.removeAll()
-    for instance in instances.values {
-      instance.cancellables.removeAll()
-      instance.panel.close()
-    }
+    for instance in instances.values { instance.stop() }
     instances.removeAll()
   }
 
@@ -162,7 +168,7 @@ final class ScreenManager {
   }
 
   func rebuild() {
-    for instance in instances.values { instance.panel.close() }
+    for instance in instances.values { instance.stop() }
     instances.removeAll()
 
     for screen in targetScreens() {
@@ -207,9 +213,11 @@ final class ScreenManager {
         .removeDuplicates()
         .sink { [weak inst] frame in inst?.apply(frame) }
         .store(in: &inst.cancellables)
-      Publishers.CombineLatest3(vm.$state, vm.$expandedWidth, vm.$expandedHeight)
-        .sink { [weak inst] _ in inst?.updateMousePassthrough() }
-        .store(in: &inst.cancellables)
+      Publishers.CombineLatest4(
+        vm.$state, vm.$expandedWidth, vm.$expandedHeight, vm.$actualPanelFrame
+      )
+      .sink { [weak inst] _ in inst?.updateMousePassthrough() }
+      .store(in: &inst.cancellables)
       EventMonitors.shared.pointerMovement
         .sink { [weak inst] location in inst?.updateMousePassthrough(at: location) }
         .store(in: &inst.cancellables)
