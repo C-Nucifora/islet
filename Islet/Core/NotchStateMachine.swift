@@ -9,7 +9,7 @@ enum NotchState: Equatable {
 }
 
 enum NotchEvent: Equatable {
-  case hoverEntered, hoverExited, hoverDwellElapsed
+  case hoverEntered, hoverExited, pushThresholdCrossed
   case collapseTimeoutElapsed
   case clickedNotch, clickedInsideExpanded, clickedOutside
 }
@@ -26,7 +26,7 @@ enum NotchStateMachine {
     switch (state, event) {
     case (.closed, .hoverEntered): return .peek
     case (.peek, .hoverExited): return .closed
-    case (.peek, .hoverDwellElapsed):
+    case (.peek, .pushThresholdCrossed):
       return mode == .hover ? .expanded(pinned: false) : .peek
     case (.closed, .clickedNotch), (.peek, .clickedNotch):
       return .expanded(pinned: true)

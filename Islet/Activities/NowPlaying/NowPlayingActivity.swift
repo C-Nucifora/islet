@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Defaults
 import SwiftUI
@@ -22,11 +23,21 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   private(set) var activationDate: Date?
 
   private var table = MediaSourceTable()
+  private var artworkPayloads: [SourceID: Data] = [:]
+  private var artworkImages: [SourceID: NSImage] = [:]
+  private var appNames: [String: String] = [:]
+  private var appIcons: [String: NSImage] = [:]
+  private var resolvedBundleIdentifiers: Set<String> = []
   private let watcher = MediaWatcher()
   private let audio = AudioProcessMonitor()
   private var streamTask: Task<Void, Never>?
   private var expiryTask: Task<Void, Never>?
   private var audioCancellable: AnyCancellable?
+  private var preferenceCancellables: Set<AnyCancellable> = []
+  /// Last primary reflected to observers. Defaults changes can alter this without changing the
+  /// underlying source dictionary, so it participates in diffing separately.
+  private var publishedPrimaryKey: SourceID?
+  private var isMonitoring = false
 
   /// The source that owns the hero player.
   var primaryKey: SourceID? {
@@ -38,9 +49,12 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
 
   /// CoreAudio-only sources never activate the tab on their own — there would be no hero to put
   /// them beside. They are context for an adapter source, not a source in themselves.
-  var isActive: Bool { !sources.isEmpty }
+  /// A source hidden by the user's media filter must not leave behind an empty, selectable tab.
+  var isActive: Bool { publishedPrimaryKey != nil }
 
   func start() {
+    guard !isMonitoring else { return }
+    isMonitoring = true
     watcher.onStatus = { status in
       Task { @MainActor [weak self] in self?.adapterStatus = status }
     }
@@ -49,6 +63,14 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     audioCancellable = audio.$sources
       .receive(on: DispatchQueue.main)
       .sink { [weak self] latest in self?.publish(audioSources: latest) }
+    Defaults.publisher(.mediaSourceMode)
+      .dropFirst()
+      .sink { [weak self] _ in self?.publish() }
+      .store(in: &preferenceCancellables)
+    Defaults.publisher(.mediaPriorityList)
+      .dropFirst()
+      .sink { [weak self] _ in self?.publish() }
+      .store(in: &preferenceCancellables)
     streamTask = Task { [weak self] in
       guard let self else { return }
       for await update in self.watcher.updates {
@@ -72,7 +94,8 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
           self.table.upsert(key, state, now: Date())
           if !wasVisible { self.activationDate = Date() }
           if let previous, previous.title != state.title, !state.title.isEmpty {
-            SystemEventBus.shared.emit(Self.trackChangeEvent(for: state))
+            let appName = self.resolvedApplicationName(for: key.displayBundleIdentifier)
+            SystemEventBus.shared.emit(Self.trackChangeEvent(for: state, appName: appName))
           }
           self.publish()
           self.rescheduleExpiry()
@@ -81,10 +104,64 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     }
   }
 
+  func stop() {
+    guard isMonitoring else { return }
+    isMonitoring = false
+    streamTask?.cancel()
+    streamTask = nil
+    expiryTask?.cancel()
+    expiryTask = nil
+    audioCancellable = nil
+    preferenceCancellables.removeAll()
+    audio.stop()
+    watcher.stop()
+    table.removeAll()
+    publishedPrimaryKey = nil
+    sources = [:]
+    strip = []
+    artworkPayloads = [:]
+    artworkImages = [:]
+    appNames = [:]
+    appIcons = [:]
+    resolvedBundleIdentifiers = []
+    activationDate = nil
+    adapterStatus = "Stopped"
+  }
+
   /// Tapping a chip. See `MediaRemoteCommands.promote` for what "promote" can actually mean today.
   func promote(_ source: SourceID) {
-    Haptics.perform(.alignment)
     MediaRemoteCommands.shared.promote(source)
+  }
+
+  func artwork(for source: SourceID?) -> NSImage? {
+    source.flatMap { artworkImages[$0] }
+  }
+
+  func sourceIcon(for source: SourceID) -> NSImage? {
+    appIcons[source.displayBundleIdentifier]
+  }
+
+  func sourceName(for source: SourceID) -> String {
+    appNames[source.displayBundleIdentifier] ?? source.displayBundleIdentifier
+  }
+
+  var knownBundleIdentifiers: [String] {
+    Array(Set(sources.keys.map(\.displayBundleIdentifier) + strip.map(\.displayBundleIdentifier)))
+      .filter { !$0.isEmpty }
+      .sorted {
+        applicationName(for: $0).localizedStandardCompare(applicationName(for: $1))
+          == .orderedAscending
+      }
+  }
+
+  func applicationName(for bundleIdentifier: String) -> String {
+    resolveApplication(for: bundleIdentifier)
+    return appNames[bundleIdentifier] ?? bundleIdentifier
+  }
+
+  func applicationIcon(for bundleIdentifier: String) -> NSImage? {
+    resolveApplication(for: bundleIdentifier)
+    return appIcons[bundleIdentifier]
   }
 
   /// Mirrors the table (and the audio monitor) into the published properties the views read.
@@ -95,8 +172,65 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     let merged = SourceStrip.merge(
       adapter: adapterKeys, audio: audioSources ?? audio.sources)
     let nextStrip = SourceStrip.secondary(all: merged, primary: adapterKeys.first)
-    if sources != table.states { sources = table.states }
-    if strip != nextStrip { strip = nextStrip }
+    let nextPrimaryKey = adapterKeys.first
+    let presentationChanged = publishedPrimaryKey != nextPrimaryKey
+    publishedPrimaryKey = nextPrimaryKey
+    for source in merged { resolveApplication(for: source.displayBundleIdentifier) }
+    var publishedPropertyChanged = false
+    if sources != table.states {
+      reconcileArtwork(with: table.states)
+      sources = table.states
+      publishedPropertyChanged = true
+    }
+    if strip != nextStrip {
+      strip = nextStrip
+      publishedPropertyChanged = true
+    }
+    // Preference changes can hide every adapter source without changing `table.states`. Keep
+    // activation and ActivityCenter invalidation in sync with what the user can actually select.
+    if adapterKeys.isEmpty {
+      activationDate = nil
+    } else if activationDate == nil {
+      activationDate = Date()
+    }
+    if presentationChanged, !publishedPropertyChanged { objectWillChange.send() }
+  }
+
+  /// Decode artwork and resolve application metadata when the model changes, not from SwiftUI's
+  /// `body`. Body can be recomputed many times per second while scrubbing or animating bars; doing
+  /// AppKit workspace and image-decoding work there caused avoidable UI and energy spikes.
+  private func reconcileArtwork(with states: [SourceID: PlaybackState]) {
+    let activeKeys = Set(states.keys)
+    artworkPayloads = artworkPayloads.filter { activeKeys.contains($0.key) }
+    artworkImages = artworkImages.filter { activeKeys.contains($0.key) }
+    for (key, state) in states {
+      guard artworkPayloads[key] != state.artwork else { continue }
+      if let data = state.artwork, let image = NSImage(data: data) {
+        artworkPayloads[key] = data
+        artworkImages[key] = image
+      } else {
+        artworkPayloads[key] = nil
+        artworkImages[key] = nil
+      }
+    }
+  }
+
+  private func resolveApplication(for bundleIdentifier: String) {
+    guard !bundleIdentifier.isEmpty,
+      resolvedBundleIdentifiers.insert(bundleIdentifier).inserted
+    else { return }
+    guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
+    else {
+      appNames[bundleIdentifier] = bundleIdentifier
+      return
+    }
+    appNames[bundleIdentifier] = FileManager.default.displayName(atPath: url.path)
+    appIcons[bundleIdentifier] = NSWorkspace.shared.icon(forFile: url.path)
+  }
+
+  private func resolvedApplicationName(for bundleIdentifier: String) -> String {
+    resolveApplication(for: bundleIdentifier)
+    return appNames[bundleIdentifier] ?? bundleIdentifier
   }
 
   /// One timer for the whole table, always aimed at the earliest deadline.
@@ -126,9 +260,8 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   /// Symbol, and a 16pt bitmap there measures differently — which would change the island's width
   /// for track changes alone. The app name goes in the subtitle instead, which is the attribution
   /// the artwork was carrying.
-  static func trackChangeEvent(for state: PlaybackState) -> SystemEvent {
-    let appName = state.sourceBundleIdentifier.isEmpty
-      ? "" : ExpandedPlayerView.appName(for: state.sourceBundleIdentifier)
+  static func trackChangeEvent(for state: PlaybackState, appName: String? = nil) -> SystemEvent {
+    let appName = appName ?? state.sourceBundleIdentifier
     let subtitle = [state.artist, appName].filter { !$0.isEmpty }.joined(separator: " · ")
     var announcement =
       state.artist.isEmpty

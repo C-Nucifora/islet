@@ -22,7 +22,17 @@ final class IORegistryReaderTests: XCTestCase {
 
   func testUnknownServiceHasNoProperties() {
     XCTAssertNil(IORegistryReader.properties(matching: "IsletNoSuchServiceExists"))
+    XCTAssertNil(
+      IORegistryReader.properties(
+        matching: "IsletNoSuchServiceExists", keys: ["AnyProperty"]))
     XCTAssertTrue(IORegistryReader.allProperties(matching: "IsletNoSuchServiceExists").isEmpty)
+  }
+
+  func testNarrowReadReturnsOnlyRequestedProperties() {
+    let props = IORegistryReader.properties(
+      matching: "IOPlatformExpertDevice", keys: ["IOPlatformUUID"])
+    XCTAssertEqual(Set(props?.keys.map { $0 } ?? []), Set(["IOPlatformUUID"]))
+    XCTAssertNotNil(props?["IOPlatformUUID"] as? String)
   }
 
   func testPlatformExpertPropertiesComeBackInOneRead() {

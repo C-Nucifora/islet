@@ -22,11 +22,12 @@ enum PowerStatus {
     batteryWatts: Double?, notChargingReason: UInt64?
   ) -> String {
     if !onAC { return "On battery" }
+    // IOPS's `IsCharging` describes the requested charger state and can remain true while the
+    // pack is momentarily supplying the shortfall. Prefer the same signed live measurement used
+    // by the flow graph so the headline can never claim that a left-side battery ribbon is charge.
+    if let batteryWatts, batteryWatts < -0.05 { return "Adapter can't keep up" }
     if isCharging { return "Charging" }
     if fullyCharged { return "Charged" }
-    // AC attached, not charging, and the pack is still discharging: the adapter is smaller than the
-    // current system load. Derived from PowerTelemetryData.BatteryPower, not from a guessed bit.
-    if let batteryWatts, batteryWatts < -0.5 { return "Adapter can't keep up" }
     // The reason bitfield is undocumented diagnostics, not prose — the view offers it in a
     // tooltip. Putting the hex in this line truncated it into "Not charging · 0x80000…".
     return "Not charging"
@@ -54,6 +55,9 @@ enum PowerFormat {
   /// Signed: the sign is the information — into the pack or out of it.
   static func watts(_ w: Double) -> String { String(format: "%+.1f W", w) }
   static func wattsUnsigned(_ w: Double) -> String { String(format: "%.1f W", w) }
+  static func percentage(_ fraction: Double) -> String {
+    "\(Int((min(1, max(0, fraction)) * 100).rounded()))%"
+  }
   static func amps(_ a: Double) -> String { String(format: "%+.2f A", a) }
   static func volts(_ v: Double) -> String { String(format: "%.2f V", v) }
   static func temperature(_ c: Double) -> String { String(format: "%.1f°C", c) }
@@ -62,9 +66,9 @@ enum PowerFormat {
     // Written with explicit returns: a switch *expression* whose branches mix String and nil does
     // not type-check against a String? contextual type.
     switch (watts, description) {
-    case let (w?, d?): return "\(w) W · \(d)"
-    case let (w?, nil): return "\(w) W"
-    case let (nil, d?): return d
+    case (let w?, let d?): return "\(w) W · \(d)"
+    case (let w?, nil): return "\(w) W"
+    case (nil, let d?): return d
     case (nil, nil): return nil
     }
   }
@@ -72,7 +76,8 @@ enum PowerFormat {
   /// The whole negotiated PD ladder on one line, for the charger tile's tooltip.
   static func ladderSummary(_ ladder: [PDProfile]) -> String? {
     guard !ladder.isEmpty else { return nil }
-    return ladder
+    return
+      ladder
       .map { String(format: "%.0fV/%.2fA", $0.volts, $0.amps) }
       .joined(separator: " · ")
   }
@@ -116,8 +121,16 @@ enum PowerSmoothing {
     out.systemVoltageIn = blend(previous: old.systemVoltageIn, sample: new.systemVoltageIn)
     out.systemCurrentIn = blend(previous: old.systemCurrentIn, sample: new.systemCurrentIn)
     out.systemLoadWatts = blend(previous: old.systemLoadWatts, sample: new.systemLoadWatts)
+    out.cpuPowerWatts = blend(previous: old.cpuPowerWatts, sample: new.cpuPowerWatts)
     out.batteryPowerWatts = blend(previous: old.batteryPowerWatts, sample: new.batteryPowerWatts)
     out.adapterLossWatts = blend(previous: old.adapterLossWatts, sample: new.adapterLossWatts)
+    out.usbPowerOutputs = new.usbPowerOutputs.map { sample in
+      guard let previous = old.usbPowerOutputs.first(where: { $0.portIndex == sample.portIndex })
+      else { return sample }
+      var smoothed = sample
+      smoothed.watts = blend(previous: previous.watts, sample: sample.watts) ?? sample.watts
+      return smoothed
+    }
     return out
   }
 }

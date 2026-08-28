@@ -5,7 +5,7 @@ struct CompactArtworkView: View {
 
   var body: some View {
     Group {
-      if let data = activity.playback?.artwork, let img = NSImage(data: data) {
+      if let img = activity.artwork(for: activity.primaryKey) {
         Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
       } else {
         Image(systemName: "music.note").font(.caption).foregroundStyle(.secondary)
@@ -13,6 +13,7 @@ struct CompactArtworkView: View {
     }
     .frame(width: 18, height: 18)
     .clipShape(RoundedRectangle(cornerRadius: 4))
+    .accessibilityHidden(true)
   }
 }
 
@@ -49,7 +50,7 @@ struct ExpandedPlayerView: View {
   var body: some View {
     VStack(spacing: 6) {
       if let pb = activity.playback {
-        hero(pb)
+        hero(pb, source: activity.primaryKey)
       } else {
         Text("Nothing playing")
           .foregroundStyle(.secondary)
@@ -60,12 +61,12 @@ struct ExpandedPlayerView: View {
     .foregroundStyle(.white)
   }
 
-  private func hero(_ pb: PlaybackState) -> some View {
+  private func hero(_ pb: PlaybackState, source: SourceID?) -> some View {
     HStack(spacing: 16) {
-      artwork(pb)
+      artwork(source)
       VStack(alignment: .leading, spacing: 6) {
         HStack(spacing: 6) {
-          if let icon = Self.appIcon(for: pb.sourceBundleIdentifier) {
+          if let source, let icon = activity.sourceIcon(for: source) {
             Image(nsImage: icon).resizable().frame(width: 14, height: 14)
           }
           Text(pb.title).font(.headline).lineLimit(1)
@@ -98,7 +99,7 @@ struct ExpandedPlayerView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(
-          "Switch to \(Self.appName(for: source.displayBundleIdentifier))")
+          "Switch to \(activity.sourceName(for: source))")
       }
       if layout.overflow > 0 {
         Text("+\(layout.overflow)")
@@ -119,7 +120,7 @@ struct ExpandedPlayerView: View {
     // producing output, so absent means playing.
     let isPlaying = activity.sources[source]?.isPlaying ?? true
     return HStack(spacing: 4) {
-      if let icon = Self.appIcon(for: source.displayBundleIdentifier) {
+      if let icon = activity.sourceIcon(for: source) {
         Image(nsImage: icon).resizable().frame(width: 14, height: 14)
       } else {
         Image(systemName: "speaker.wave.2.fill").font(.caption2)
@@ -134,9 +135,9 @@ struct ExpandedPlayerView: View {
     .opacity(0.7)
   }
 
-  private func artwork(_ pb: PlaybackState) -> some View {
+  private func artwork(_ source: SourceID?) -> some View {
     Group {
-      if let data = pb.artwork, let img = NSImage(data: data) {
+      if let img = activity.artwork(for: source) {
         Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
       } else {
         RoundedRectangle(cornerRadius: 13).fill(.quaternary)
@@ -145,6 +146,7 @@ struct ExpandedPlayerView: View {
     }
     .frame(width: 110, height: 110)
     .clipShape(RoundedRectangle(cornerRadius: 13))
+    .accessibilityHidden(true)
   }
 
   private func scrubber(_ pb: PlaybackState) -> some View {
@@ -160,6 +162,9 @@ struct ExpandedPlayerView: View {
           scrubbing = editing
           if !editing { MediaRemoteCommands.shared.seek(to: scrubValue) }
         }
+        .accessibilityLabel("Playback position")
+        .accessibilityValue(
+          "\(format(scrubbing ? scrubValue : pb.currentElapsed)) of \(format(pb.duration))")
         HStack {
           Text(format(pb.currentElapsed)).monospacedDigit()
           Spacer()
@@ -177,6 +182,8 @@ struct ExpandedPlayerView: View {
       } label: {
         Image(systemName: "shuffle").foregroundStyle(pb.isShuffleOn ? .green : .secondary)
       }
+      .help("Shuffle")
+      .accessibilityLabel(pb.isShuffleOn ? "Turn shuffle off" : "Turn shuffle on")
       // Podcasts/audiobooks get ±15 s skip; music gets prev/next.
       Button {
         pb.supportsSkip15
@@ -184,24 +191,31 @@ struct ExpandedPlayerView: View {
       } label: {
         Image(systemName: pb.supportsSkip15 ? "gobackward.15" : "backward.fill")
       }
+      .help(pb.supportsSkip15 ? "Back 15 seconds" : "Previous track")
+      .accessibilityLabel(pb.supportsSkip15 ? "Back 15 seconds" : "Previous track")
       Button {
-        Haptics.perform()
         MediaRemoteCommands.shared.togglePlayPause()
       } label: {
         Image(systemName: pb.isPlaying ? "pause.fill" : "play.fill").font(.title2)
       }
+      .help(pb.isPlaying ? "Pause" : "Play")
+      .accessibilityLabel(pb.isPlaying ? "Pause" : "Play")
       Button {
         pb.supportsSkip15
           ? MediaRemoteCommands.shared.skipForward15() : MediaRemoteCommands.shared.next()
       } label: {
         Image(systemName: pb.supportsSkip15 ? "goforward.15" : "forward.fill")
       }
+      .help(pb.supportsSkip15 ? "Forward 15 seconds" : "Next track")
+      .accessibilityLabel(pb.supportsSkip15 ? "Forward 15 seconds" : "Next track")
       Button {
         MediaRemoteCommands.shared.cycleRepeat()
       } label: {
         Image(systemName: pb.repeatMode == 1 ? "repeat.1" : "repeat")
           .foregroundStyle(pb.repeatMode != 0 ? .green : .secondary)
       }
+      .help("Repeat")
+      .accessibilityLabel(pb.repeatMode == 0 ? "Turn repeat on" : "Change repeat mode")
     }
     .buttonStyle(.plain)
     .frame(maxWidth: .infinity)
@@ -209,23 +223,10 @@ struct ExpandedPlayerView: View {
     .opacity(pb.isAdvertisement ? 0.4 : 1)
   }
 
-  /// Resolves the source app's icon for attribution (parent app for browser-hosted media).
-  static func appIcon(for bundleID: String) -> NSImage? {
-    guard !bundleID.isEmpty,
-      let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
-    else { return nil }
-    return NSWorkspace.shared.icon(forFile: url.path)
-  }
-
   private func format(_ t: TimeInterval) -> String {
-    let s = Int(t.rounded())
+    guard t.isFinite else { return "0:00" }
+    let s = max(0, Int(t.rounded()))
     return String(format: "%d:%02d", s / 60, s % 60)
   }
 
-  /// Human-readable app name for the chip's accessibility label.
-  static func appName(for bundleID: String) -> String {
-    guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
-    else { return bundleID }
-    return FileManager.default.displayName(atPath: url.path)
-  }
 }

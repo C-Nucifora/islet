@@ -29,6 +29,15 @@ final class ContinuityMonitor: ObservableObject {
       .sink { [weak self] _ in self?.refresh() }
   }
 
+  func stop() {
+    guard didStart else { return }
+    didStart = false
+    pollTimer = nil
+    reader.stopObserving()
+    cards = []
+    availability = .waiting
+  }
+
   private func refresh() {
     let items = reader.read()
     let fresh = LiveActivityCatalog.cards(

@@ -2,13 +2,24 @@ import Foundation
 
 /// One rung of the USB-C Power Delivery ladder the attached charger advertises
 /// (`AdapterDetails.UsbHvcMenu`), in volts and amps.
-struct PDProfile: Identifiable, Equatable {
+struct PDProfile: Identifiable, Equatable, Sendable {
   let index: Int
   let volts: Double
   let amps: Double
 
   var id: Int { index }
   var watts: Double { volts * amps }
+}
+
+/// Live power the Mac is sourcing to a peripheral through one USB-C port. AppleSmartBattery
+/// publishes these entries only while power is flowing out; the values are milli-units.
+struct USBPowerOutput: Identifiable, Equatable, Sendable {
+  let portIndex: Int
+  var watts: Double
+  let volts: Double?
+  let amps: Double?
+
+  var id: Int { portIndex }
 }
 
 /// Deep battery, charger and power-flow telemetry, read from AppleSmartBattery, IOPS and
@@ -18,7 +29,7 @@ struct PDProfile: Identifiable, Equatable {
 /// are absent on machines other than the one this was developed against, so the panel omits a tile
 /// rather than rendering a zero for something it never read. `hasAny` is the "did we read anything
 /// worth showing at all" test that decides whether the metrics block appears.
-struct BatteryMetrics: Equatable {
+struct BatteryMetrics: Equatable, Sendable {
   // Health. Two numbers, deliberately, because there is no single right one.
   //
   // `healthPercent` is NominalChargeCapacity/DesignCapacity — the closest thing to what System
@@ -58,14 +69,18 @@ struct BatteryMetrics: Equatable {
   var adapterPowerTier: Int?
   var pdLadder: [PDProfile] = []
   var pdSelectedIndex: Int?
+  /// `ParentPortTypeDescription` from the active IOPortFeaturePowerSource node.
+  var inputPortType: String?
 
-  // Power flow, from the undocumented PowerTelemetryData dictionary. All watts.
+  // Power flow, from undocumented AppleSmartBattery and IOReport telemetry. All watts.
   var systemPowerInWatts: Double?  // SystemPowerIn — what the wall is delivering
   var systemVoltageIn: Double?
   var systemCurrentIn: Double?
   var systemLoadWatts: Double?  // SystemLoad — what the machine is drawing
+  var cpuPowerWatts: Double?  // IOReport Energy Model — estimated aggregate CPU power
   var batteryPowerWatts: Double?  // BatteryPower — + into the pack, - out of it
   var adapterLossWatts: Double?  // AdapterEfficiencyLoss
+  var usbPowerOutputs: [USBPowerOutput] = []  // PowerOutDetails, one entry per sourcing port
 
   // Charge state.
   var isCharging: Bool?
@@ -82,6 +97,7 @@ struct BatteryMetrics: Equatable {
       || temperatureC != nil || voltage != nil || amperage != nil || powerWatts != nil
       || timeToFullMinutes != nil || timeToEmptyMinutes != nil
       || adapterWatts != nil || adapterDescription != nil
-      || systemPowerInWatts != nil || batteryPowerWatts != nil
+      || systemPowerInWatts != nil || cpuPowerWatts != nil || batteryPowerWatts != nil
+      || !usbPowerOutputs.isEmpty
   }
 }

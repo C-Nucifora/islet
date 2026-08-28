@@ -99,6 +99,24 @@ enum BatteryMetricsParser {
     if let mW = int(t, "AdapterEfficiencyLoss") { m.adapterLossWatts = Double(mW) / 1000.0 }
   }
 
+  /// `PowerOutDetails` is macOS's per-port measurement for power the Mac provides to USB devices.
+  /// It is absent (or an empty array) when no port is sourcing power. Despite the historical key
+  /// name `Watts`, captures and the accumulator alongside it establish that this value is mW.
+  static func applyPowerOutputs(_ m: inout BatteryMetrics, from p: [String: Any]) {
+    guard let entries = p["PowerOutDetails"] as? [[String: Any]] else { return }
+    m.usbPowerOutputs = entries.compactMap { entry in
+      guard let port = int(entry, "PortIndex"), let milliwatts = int(entry, "Watts"),
+        milliwatts > 0
+      else { return nil }
+      return USBPowerOutput(
+        portIndex: port,
+        watts: Double(milliwatts) / 1000.0,
+        volts: int(entry, "AdapterVoltage").map { Double($0) / 1000.0 },
+        amps: int(entry, "Current").map { Double($0) / 1000.0 })
+    }
+    .sorted { $0.portIndex < $1.portIndex }
+  }
+
   // MARK: - Charge state
 
   static func applyChargeState(_ m: inout BatteryMetrics, from p: [String: Any]) {
@@ -135,6 +153,7 @@ enum BatteryMetricsParser {
     applyInstant(&m, from: smartBattery)
     applyCharger(&m, from: adapter)
     applyTelemetry(&m, from: smartBattery)
+    applyPowerOutputs(&m, from: smartBattery)
     applyChargeState(&m, from: smartBattery)
     if let powerSource {
       m.condition = condition(

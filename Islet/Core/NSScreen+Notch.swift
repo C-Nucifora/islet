@@ -1,6 +1,9 @@
 import AppKit
 
 extension NSScreen {
+  /// Quartz display id behind this screen. Keep the conversion in one place: AppKit screen frames
+  /// use a bottom-left coordinate system, while CGWindow bounds and CGDisplayBounds use Quartz's
+  /// top-left display coordinates.
   var displayID: CGDirectDisplayID? {
     (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
   }

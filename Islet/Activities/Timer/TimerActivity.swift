@@ -18,6 +18,8 @@ final class TimerActivity: NotchActivity, ObservableObject {
   @Published private(set) var label: String?  // e.g. "Focus" / "Break"
   private var pausedRemaining: TimeInterval?
   private var completionTask: Task<Void, Never>?
+  private(set) var lastDuration: TimeInterval?
+  private(set) var lastLabel: String?
 
   var isActive: Bool { endDate != nil || isPaused || finished }
   var isRunning: Bool { endDate != nil && !isPaused && !finished }
@@ -37,15 +39,18 @@ final class TimerActivity: NotchActivity, ObservableObject {
   // MARK: - Control
 
   func start(_ duration: TimeInterval, label: String? = nil) {
+    guard let duration = TimerLogic.validatedDuration(duration) else { return }
     total = duration
-    self.label = label
+    let cleanLabel = label?.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.label = cleanLabel?.isEmpty == true ? nil : cleanLabel
+    lastDuration = duration
+    lastLabel = self.label
     pausedRemaining = nil
     isPaused = false
     finished = false
     activationDate = Date()
     endDate = Date().addingTimeInterval(duration)
     scheduleCompletion()
-    Haptics.perform()
   }
 
   func togglePause() {
@@ -57,7 +62,14 @@ final class TimerActivity: NotchActivity, ObservableObject {
       pausedRemaining = nil
       scheduleCompletion()
     } else {
-      pausedRemaining = remainingNow
+      let remaining = remainingNow
+      // The deadline can pass just before the scheduled completion task gets its main-actor turn.
+      // Pausing in that sliver must complete the timer, not create a permanently paused 0:00.
+      guard remaining > 0 else {
+        fire()
+        return
+      }
+      pausedRemaining = remaining
       endDate = nil
       isPaused = true
       completionTask?.cancel()
@@ -65,14 +77,28 @@ final class TimerActivity: NotchActivity, ObservableObject {
   }
 
   func addMinute() {
+    adjust(by: 60)
+  }
+
+  /// Adjusts an active timer without allowing the remaining time to become zero or exceed a week.
+  func adjust(by delta: TimeInterval) {
     guard !finished else { return }
-    total += 60
+    let remaining = remainingNow
+    guard remaining > 0 else { return }
+    let adjusted = TimerLogic.adjustedRemaining(remaining, by: delta)
+    let appliedDelta = adjusted - remaining
+    total = min(TimerLogic.maximumDuration, max(adjusted, total + appliedDelta))
     if isPaused {
-      pausedRemaining = (pausedRemaining ?? 0) + 60
-    } else if let endDate {
-      self.endDate = endDate.addingTimeInterval(60)
+      pausedRemaining = adjusted
+    } else if endDate != nil {
+      endDate = Date().addingTimeInterval(adjusted)
       scheduleCompletion()
     }
+  }
+
+  func restartLastTimer() {
+    guard let lastDuration else { return }
+    start(lastDuration, label: lastLabel)
   }
 
   func cancel() {
@@ -150,10 +176,17 @@ struct TimerCountdownText: View {
   @ObservedObject var activity: TimerActivity
 
   var body: some View {
-    TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+    // A paused timer may remain in the island for hours. An animation schedule can be paused,
+    // unlike a periodic schedule, so it creates no needless twice-per-second view invalidations.
+    TimelineView(.animation(minimumInterval: 0.5, paused: !activity.isRunning)) { _ in
       Text(TimerFormat.mmss(activity.remainingNow))
         .font(.caption.weight(.semibold)).monospacedDigit()
         .foregroundStyle(activity.finished ? .green : .orange)
+        .accessibilityLabel(activity.label.map { "\($0) timer" } ?? "Timer")
+        .accessibilityValue(
+          activity.finished
+            ? "Done"
+            : "\(TimerFormat.accessible(activity.remainingNow)) remaining\(activity.isPaused ? ", paused" : "")")
     }
   }
 }
@@ -187,12 +220,20 @@ struct TimerExpandedView: View {
       VStack(spacing: 10) {
         if activity.finished {
           Text("Done").font(.headline).foregroundStyle(.green)
-          Button("Dismiss") { activity.cancel() }.buttonStyle(.borderedProminent).tint(.orange)
+          HStack {
+            Button("Repeat") { activity.restartLastTimer() }
+              .buttonStyle(.borderedProminent).tint(.orange)
+            Button("Dismiss") { activity.cancel() }.buttonStyle(.bordered)
+          }
         } else {
           HStack(spacing: 14) {
-            control(activity.isPaused ? "play.fill" : "pause.fill") { activity.togglePause() }
-            control("plus") { activity.addMinute() }
-            control("xmark") { activity.cancel() }
+            control(
+              activity.isPaused ? "play.fill" : "pause.fill",
+              label: activity.isPaused ? "Resume timer" : "Pause timer"
+            ) { activity.togglePause() }
+            control("minus", label: "Remove one minute") { activity.adjust(by: -60) }
+            control("plus", label: "Add one minute") { activity.addMinute() }
+            control("xmark", label: "Cancel timer") { activity.cancel() }
           }
           Text(activity.isPaused ? "Paused" : "Running")
             .font(.caption2).foregroundStyle(.secondary)
@@ -202,9 +243,10 @@ struct TimerExpandedView: View {
     .foregroundStyle(.white)
   }
 
-  private func control(_ symbol: String, _ action: @escaping () -> Void) -> some View {
+  private func control(
+    _ symbol: String, label: String, _ action: @escaping () -> Void
+  ) -> some View {
     Button {
-      Haptics.perform()
       action()
     } label: {
       Image(systemName: symbol)
@@ -213,13 +255,46 @@ struct TimerExpandedView: View {
         .background(Circle().fill(.white.opacity(0.12)))
     }
     .buttonStyle(.plain)
+    .accessibilityLabel(label)
+  }
+}
+
+enum TimerLogic {
+  static let minimumDuration: TimeInterval = 1
+  static let maximumDuration: TimeInterval = 7 * 24 * 60 * 60
+
+  static func validatedDuration(_ duration: TimeInterval) -> TimeInterval? {
+    guard duration.isFinite, duration >= minimumDuration else { return nil }
+    return min(duration, maximumDuration)
+  }
+
+  static func adjustedRemaining(_ remaining: TimeInterval, by delta: TimeInterval) -> TimeInterval {
+    guard remaining.isFinite, delta.isFinite else {
+      return min(maximumDuration, max(minimumDuration, remaining.isFinite ? remaining : 0))
+    }
+    return min(maximumDuration, max(minimumDuration, remaining + delta))
   }
 }
 
 enum TimerFormat {
   static func mmss(_ t: TimeInterval) -> String {
-    let s = Int(t.rounded(.up))
+    guard t.isFinite else { return "0:00" }
+    let s = max(0, Int(t.rounded(.up)))
     if s >= 3600 { return String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60) }
     return String(format: "%d:%02d", s / 60, s % 60)
+  }
+
+
+  static func accessible(_ t: TimeInterval) -> String {
+    guard t.isFinite else { return "0 seconds" }
+    let seconds = max(0, Int(t.rounded(.up)))
+    let hours = seconds / 3600
+    let minutes = (seconds % 3600) / 60
+    let remainder = seconds % 60
+    return [
+      hours > 0 ? "\(hours) hour\(hours == 1 ? "" : "s")" : nil,
+      minutes > 0 ? "\(minutes) minute\(minutes == 1 ? "" : "s")" : nil,
+      remainder > 0 || seconds == 0 ? "\(remainder) second\(remainder == 1 ? "" : "s")" : nil,
+    ].compactMap { $0 }.joined(separator: ", ")
   }
 }

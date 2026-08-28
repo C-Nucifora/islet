@@ -27,7 +27,7 @@ enum SourceCatalog {
     ("usb", "USB devices", .core, "cable.connector"),
     ("volume", "Disks and volumes", .core, "externaldrive.fill"),
     ("display", "External displays", .core, "display"),
-    ("power", "Charging and Low Power Mode", .core, "bolt.fill"),
+    ("power", "Low Power Mode", .core, "bolt.fill"),
     ("sleep", "Sleep and wake", .core, "moon.fill"),
     ("peripheral", "Peripheral batteries", .core, "magicmouse.fill"),
     ("audiodevice", "Audio output device", .core, "airpodspro"),

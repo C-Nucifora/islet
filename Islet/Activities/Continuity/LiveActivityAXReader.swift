@@ -58,6 +58,7 @@ final class LiveActivityAXReader {
 
   /// Starts watching for changes. `onChange` fires on the main actor, already coalesced.
   func startObserving(_ onChange: @escaping () -> Void) {
+    stopObserving()
     self.onChange = onChange
     attach()
     // ControlCenter is restartable — it is a launch agent, and restarting it is even the known fix
@@ -76,6 +77,16 @@ final class LiveActivityAXReader {
       }
       workspaceObservers.append(token)
     }
+  }
+
+  func stopObserving() {
+    coalesce?.cancel()
+    coalesce = nil
+    detach()
+    let center = NSWorkspace.shared.notificationCenter
+    workspaceObservers.forEach { center.removeObserver($0) }
+    workspaceObservers.removeAll()
+    onChange = nil
   }
 
   private func attach() {

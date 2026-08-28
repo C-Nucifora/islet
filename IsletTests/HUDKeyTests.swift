@@ -28,6 +28,19 @@ final class HUDKeyTests: XCTestCase {
 
   func testUnhandledKeyReturnsNil() {
     XCTAssertNil(HUDKey.decode(data1: data1(keyCode: 10, state: 0xA)))
+    XCTAssertNil(HUDKey.decode(data1: data1(keyCode: 0, state: 0xC)))
+  }
+
+  func testMasterVolumeIsPreferredWhenAvailable() {
+    XCTAssertEqual(VolumeControlLayout.preferredElements(from: [2, 0, 1]), [0])
+    XCTAssertEqual(VolumeControlLayout.preferredElements(from: [2, 1, 2]), [1, 2])
+  }
+
+  func testVolumeShiftPreservesPerChannelBalance() {
+    let shifted = VolumeControlLayout.shiftedValues(
+      [1: 0.4, 2: 0.6], reference: 0.4, target: 0.5)
+    XCTAssertEqual(shifted[1] ?? -1, 0.5, accuracy: 1e-6)
+    XCTAssertEqual(shifted[2] ?? -1, 0.7, accuracy: 1e-6)
   }
 
   func testBrightnessClassification() {
@@ -88,18 +101,20 @@ final class HUDKeyTests: XCTestCase {
     XCTAssertNil(level)
   }
 
-  func testFailedBrightnessKeyDownLeavesItsKeyUpUnconsumed() {
+  func testOnlySuccessfulKeyDownConsumesMatchingKeyUp() {
     var state = HUDKeyConsumptionState()
+    XCTAssertFalse(state.recordKeyDown(.volumeUp, applied: false))
+    XCTAssertFalse(state.shouldConsumeKeyUp(.volumeUp))
 
-    XCTAssertFalse(state.recordKeyDown(.brightnessDown, applied: false))
-    XCTAssertFalse(state.shouldConsumeKeyUp(.brightnessDown))
+    XCTAssertTrue(state.recordKeyDown(.volumeUp, applied: true))
+    XCTAssertTrue(state.shouldConsumeKeyUp(.volumeUp))
+    XCTAssertFalse(state.shouldConsumeKeyUp(.volumeUp))
   }
 
-  func testSuccessfulBrightnessKeyDownConsumesItsKeyUpOnce() {
+  func testFailedRepeatReturnsKeyOwnershipToMacOS() {
     var state = HUDKeyConsumptionState()
-
-    XCTAssertTrue(state.recordKeyDown(.brightnessUp, applied: true))
-    XCTAssertTrue(state.shouldConsumeKeyUp(.brightnessUp))
-    XCTAssertFalse(state.shouldConsumeKeyUp(.brightnessUp))
+    XCTAssertTrue(state.recordKeyDown(.brightnessDown, applied: true))
+    XCTAssertFalse(state.recordKeyDown(.brightnessDown, applied: false))
+    XCTAssertFalse(state.shouldConsumeKeyUp(.brightnessDown))
   }
 }
