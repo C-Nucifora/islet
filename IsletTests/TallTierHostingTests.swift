@@ -21,8 +21,11 @@ final class TallTierHostingTests: XCTestCase {
 
   /// The power screen's content alone, at tall-tier size, with a real one-shot hardware read.
   func testBatteryExpandedViewSurvivesRealHosting() {
+    let contentSize = CGSize(
+      width: Metrics.expandedSize.width - 28,
+      height: Metrics.tallExpandedHeight - 32 - 12)
     let panel = NSPanel(
-      contentRect: CGRect(x: 200, y: 200, width: 452, height: 206),
+      contentRect: CGRect(origin: CGPoint(x: 200, y: 200), size: contentSize),
       styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     panel.isReleasedWhenClosed = false
     let monitor = BatteryMonitor()

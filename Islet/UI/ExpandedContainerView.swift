@@ -87,8 +87,8 @@ struct ExpandedContainerView: View {
   private static let rowSpacing: CGFloat = 4
   private static let rowPadding: CGFloat = 12
 
-  /// Width the bounded switcher gets in the left ear. Five compact controls (Home, three tabs and
-  /// overflow) require 116pt, fitting the 126pt reference ear without crossing the physical notch.
+  /// Width the bounded switcher gets in the left ear. The 520pt island leaves room for four
+  /// controls beside a 296pt hardware notch, so Home and three activities remain directly visible.
   private var tabStripWidth: CGFloat {
     ActivityTabLayout.leftStripWidth(
       containerWidth: Metrics.expandedSize.width, horizontalPadding: Self.rowPadding,
