@@ -132,27 +132,28 @@ struct T3SettingsSection: View {
 
   var body: some View {
     Section("T3 Code agents") {
-      Toggle("Show active agents", isOn: $enabled)
+      LabeledContent("Activity") {
+        Text(enabled ? "On" : "Off").foregroundStyle(.secondary)
+      }
       Text("Provider-neutral monitoring for every connected T3 Code machine. Pairing is read-only and credentials stay in Keychain.")
         .font(.caption2).foregroundStyle(.secondary)
-
-      if enabled {
-        machineRows
-        HStack {
-          SecureField("Paste a T3 Code pairing link", text: $pairingLink)
-          Button(isPairing ? "Pairing…" : "Add") { pair() }
-            .disabled(pairingLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPairing)
-        }
-        Toggle("Allow plain HTTP for this pairing", isOn: $allowInsecureHTTP)
-          .font(.caption)
-        Text("Leave this off outside localhost. HTTPS or a private Tailscale endpoint is recommended.")
-          .font(.caption2).foregroundStyle(.secondary)
-        if let statusMessage {
-          Text(statusMessage).font(.caption2)
-            .foregroundStyle(statusMessage.hasPrefix("Added") ? .green : .orange)
-        }
-        Button("Reconnect now") { activity.reconnect() }
+      machineRows
+      HStack {
+        SecureField("Paste a T3 Code pairing link", text: $pairingLink)
+        Button(isPairing ? "Pairing…" : "Add") { pair() }
+          .disabled(pairingLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPairing)
       }
+      Toggle("Allow plain HTTP for this pairing", isOn: $allowInsecureHTTP)
+        .font(.caption)
+      Text("Leave this off outside localhost. HTTPS or a private Tailscale endpoint is recommended.")
+        .font(.caption2).foregroundStyle(.secondary)
+      if let statusMessage {
+        Text(statusMessage).font(.caption2)
+          .foregroundStyle(
+            statusMessage.hasPrefix("Added") || statusMessage.hasPrefix("Removed")
+              ? .green : .orange)
+      }
+      Button("Reconnect now") { activity.reconnect() }.disabled(!enabled)
     }
   }
 
@@ -160,10 +161,15 @@ struct T3SettingsSection: View {
     if let local = activity.environments.first(where: \.isLocal) {
       machineRow(local)
     } else {
-      LabeledContent("This Mac") { Text("Discovering…").foregroundStyle(.secondary) }
+      LabeledContent("This Mac") {
+        Text(enabled ? "Discovering…" : "Off").foregroundStyle(.secondary)
+      }
     }
     ForEach(profiles) { profile in
-      let snapshot = activity.environments.first { $0.id == profile.id }
+      let snapshot = activity.environments.first {
+        $0.id == T3CodeActivity.remoteSnapshotID(
+          environmentID: profile.id, baseURL: profile.baseURL)
+      }
       HStack {
         Toggle(
           profile.label,
@@ -173,7 +179,7 @@ struct T3SettingsSection: View {
         Spacer()
         Text(snapshot?.state.label ?? (profile.enabled ? "Connecting" : "Off"))
           .font(.caption).foregroundStyle(connectionColor(snapshot?.state))
-        Button(role: .destructive) { activity.removeRemote(environmentID: profile.id) } label: {
+        Button(role: .destructive) { remove(profile) } label: {
           Image(systemName: "trash")
         }
         .buttonStyle(.borderless).accessibilityLabel("Remove \(profile.label)")
@@ -214,6 +220,15 @@ struct T3SettingsSection: View {
       } catch {
         statusMessage = error.localizedDescription
       }
+    }
+  }
+
+  private func remove(_ profile: T3EnvironmentProfile) {
+    do {
+      try activity.removeRemote(environmentID: profile.id)
+      statusMessage = "Removed T3 Code machine."
+    } catch {
+      statusMessage = "Machine was not removed: \(error.localizedDescription)"
     }
   }
 }

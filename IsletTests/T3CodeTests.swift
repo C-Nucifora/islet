@@ -102,4 +102,26 @@ final class T3CodeTests: XCTestCase {
     let current = [snapshot]
     XCTAssertEqual(T3CodeActivity.upserting(snapshot, into: current), current)
   }
+
+  func testLocalAndRemoteEnvironmentIdentityCannotCollide() {
+    XCTAssertEqual(T3CodeActivity.localSnapshotID("same"), "local|same")
+    XCTAssertEqual(
+      T3CodeActivity.remoteSnapshotID(
+        environmentID: "same", baseURL: "https://mini.example.com/api?ignored=yes"),
+      "remote|same|https://mini.example.com/")
+    XCTAssertNotEqual(
+      T3CodeActivity.localCredentialID(
+        environmentID: "same", baseURL: "http://127.0.0.1:3773"),
+      T3CodeActivity.remoteCredentialID(
+        environmentID: "same", baseURL: "http://127.0.0.1:3773"))
+  }
+
+  func testLocalPairingCommandUsesAnInstalledT3ExecutableWithoutNpx() {
+    let paths = T3LocalPairingMinting.candidateExecutablePaths(
+      environment: ["PATH": "/custom/bin:/second/bin"])
+    XCTAssertEqual(Array(paths.prefix(2)), ["/custom/bin/t3", "/second/bin/t3"])
+    XCTAssertTrue(paths.contains("/custom/bin/t3"))
+    XCTAssertTrue(paths.contains("/second/bin/t3"))
+    XCTAssertFalse(paths.contains { $0.contains("npx") || $0.contains("latest") })
+  }
 }

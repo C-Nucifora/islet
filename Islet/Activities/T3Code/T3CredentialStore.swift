@@ -3,11 +3,14 @@ import Security
 
 enum T3CredentialStoreError: Error, LocalizedError {
   case keychain(OSStatus)
+  case invalidVault
 
   var errorDescription: String? {
     switch self {
     case .keychain(let status):
       SecCopyErrorMessageString(status, nil) as String? ?? "Keychain error \(status)"
+    case .invalidVault:
+      "The saved T3 Code credential vault is unreadable. It was left unchanged."
     }
   }
 }
@@ -22,33 +25,43 @@ enum T3CredentialStore {
 
   private static var cachedTokens: [String: String]?
 
-  static func load(environmentID: String) -> String? {
-    loadVault()[environmentID]
+  static func load(credentialID: String, legacyEnvironmentID: String? = nil) throws -> String? {
+    var tokens = try loadVault()
+    if let token = tokens[credentialID] { return token }
+    guard let legacyEnvironmentID, let token = tokens[legacyEnvironmentID] else { return nil }
+
+    // Same-service schema upgrade only: older nedlane builds keyed credentials by the server's
+    // environment id. Endpoint-scoped keys prevent two machines with a duplicated id from sharing
+    // or overwriting one another. This never reads another bundle/service identity.
+    tokens[credentialID] = token
+    tokens.removeValue(forKey: legacyEnvironmentID)
+    try persist(tokens)
+    cachedTokens = tokens
+    return token
   }
 
-  static func save(_ token: String, environmentID: String) throws {
-    var tokens = loadVault()
-    tokens[environmentID] = token
+  static func save(_ token: String, credentialID: String) throws {
+    var tokens = try loadVault()
+    tokens[credentialID] = token
     try persist(tokens)
     cachedTokens = tokens
   }
 
-  static func delete(environmentID: String) {
-    var tokens = loadVault()
-    tokens.removeValue(forKey: environmentID)
-    try? persist(tokens)
+  static func delete(credentialID: String) throws {
+    var tokens = try loadVault()
+    guard tokens.removeValue(forKey: credentialID) != nil else { return }
+    try persist(tokens)
     cachedTokens = tokens
   }
 
-  private static func loadVault() -> [String: String] {
+  private static func loadVault() throws -> [String: String] {
     if let cachedTokens { return cachedTokens }
-    let tokens: [String: String]
-    if let data = readData(service: service, account: vaultAccount),
-      let decoded = try? JSONDecoder().decode([String: String].self, from: data)
-    {
-      tokens = decoded
-    } else {
-      tokens = [:]
+    guard let data = try readData(service: service, account: vaultAccount) else {
+      cachedTokens = [:]
+      return [:]
+    }
+    guard let tokens = try? JSONDecoder().decode([String: String].self, from: data) else {
+      throw T3CredentialStoreError.invalidVault
     }
     cachedTokens = tokens
     return tokens
@@ -77,7 +90,7 @@ enum T3CredentialStore {
     }
   }
 
-  private static func readData(service: String, account: String) -> Data? {
+  private static func readData(service: String, account: String) throws -> Data? {
     let query: [CFString: Any] = [
       kSecClass: kSecClassGenericPassword,
       kSecAttrService: service,
@@ -86,7 +99,10 @@ enum T3CredentialStore {
       kSecMatchLimit: kSecMatchLimitOne,
     ]
     var item: CFTypeRef?
-    guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
-    return item as? Data
+    let status = SecItemCopyMatching(query as CFDictionary, &item)
+    if status == errSecItemNotFound { return nil }
+    guard status == errSecSuccess else { throw T3CredentialStoreError.keychain(status) }
+    guard let data = item as? Data else { throw T3CredentialStoreError.invalidVault }
+    return data
   }
 }

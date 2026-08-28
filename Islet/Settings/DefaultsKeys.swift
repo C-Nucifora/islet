@@ -3,6 +3,22 @@ import Foundation
 
 enum HUDStyle: String, CaseIterable, Codable { case bar, gauge }
 
+enum HapticStrength: String, CaseIterable, Codable, Sendable {
+  case off
+  case light
+  case medium
+  case strong
+
+  var title: String {
+    switch self {
+    case .off: "Off"
+    case .light: "Light"
+    case .medium: "Medium"
+    case .strong: "Strong"
+    }
+  }
+}
+
 /// Controls how aggressively Islet refreshes sources that can wake the CPU or radios.
 ///
 /// Automatic follows macOS Low Power Mode. Low Energy is an explicit always-constrained profile;
@@ -77,6 +93,7 @@ extension InteractionMode: Defaults.Serializable {}
 extension MediaSourceMode: Defaults.Serializable {}
 extension HUDStyle: Defaults.Serializable {}
 extension EnergyMode: Defaults.Serializable {}
+extension HapticStrength: Defaults.Serializable {}
 
 extension Defaults.Keys {
   static let mediaSourceMode = Key<MediaSourceMode>("mediaSourceMode", default: .auto)
@@ -86,6 +103,8 @@ extension Defaults.Keys {
   static let interactionMode = Key<InteractionMode>("interactionMode", default: .hover)
   static let hoverCollapseTimeout = Key<Double>("hoverCollapseTimeout", default: 0.5)
   static let hapticsEnabled = Key<Bool>("hapticsEnabled", default: true)
+  static let hapticStrength = Key<HapticStrength>("hapticStrength", default: .medium)
+  static let barrierPushDistance = Key<Double>("barrierPushDistance", default: 288)
   static let energyMode = Key<EnergyMode>("energyMode", default: .automatic)
   static let hideFromScreenRecording = Key<Bool>("hideFromScreenRecording", default: false)
   static let batteryEnabled = Key<Bool>("batteryEnabled", default: true)
