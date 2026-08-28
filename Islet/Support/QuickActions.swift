@@ -20,6 +20,14 @@ struct IsletQuickAction: Identifiable {
         ScreenManager.shared.viewModel?.apply(.clickedNotch)
       },
       .init(
+        id: "shelf-open", title: "Open File Shelf", detail: "View files held in Islet",
+        symbol: "tray.full.fill", keywords: "files drop drag tray open", isAvailable: { true }
+      ) {
+        ShelfModel.shared.requestPresentation()
+        let viewModel = ScreenManager.shared.viewModel
+        if viewModel?.state.isExpanded != true { viewModel?.apply(.clickedNotch) }
+      },
+      .init(
         id: "timer-5", title: "Start 5-minute timer", detail: "Set a five-minute countdown",
         symbol: "timer", keywords: "countdown short break", isAvailable: { true }
       ) {

@@ -18,21 +18,40 @@ final class ShelfModel: ObservableObject {
 
   @Published private(set) var items: [ShelfItem] = []
   @Published private(set) var lastError: String?
-  /// True while a file drag is hovering the notch, so the UI can reveal the shelf.
-  @Published var isDragActive = false
+  @Published private var dropState = ShelfDropState()
+  @Published private(set) var presentationRequest: UUID?
 
   private let dir: URL
   private var reservedDestinations: Set<URL> = []
 
-  init() {
-    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent("Islet/Shelf", isDirectory: true)
+  init(directory: URL? = nil) {
+    let base =
+      directory
+      ?? FileManager.default.urls(
+        for: .applicationSupportDirectory, in: .userDomainMask
+      )[0].appendingPathComponent("Islet/Shelf", isDirectory: true)
     try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
     dir = base
     load()
   }
 
   var urls: [URL] { items.map(\.url) }
+  /// True while at least one notch window is under the current file drag.
+  var isDragActive: Bool { dropState.isTargeted }
+  /// Keeps the Shelf selected until every provider resolves and every copy finishes.
+  var isDropPresentationActive: Bool { dropState.isActive }
+  var pendingImportCount: Int { dropState.pendingImportCount }
+
+  func setDropTarget(_ id: UUID, active: Bool) {
+    dropState.setTarget(id, active: active)
+  }
+
+  func requestPresentation() { presentationRequest = UUID() }
+
+  func consumePresentationRequest(_ id: UUID) {
+    guard presentationRequest == id else { return }
+    presentationRequest = nil
+  }
 
   private func load() {
     let found =
@@ -128,6 +147,14 @@ final class ShelfModel: ObservableObject {
     lastError = items.isEmpty ? nil : "Some Shelf items couldn’t be removed."
   }
 
+  func open(_ item: ShelfItem) {
+    guard NSWorkspace.shared.open(item.url) else {
+      lastError = "Couldn’t open \(item.name)."
+      return
+    }
+    lastError = nil
+  }
+
   func dismissError() { lastError = nil }
 
   private func reserveDestination(named name: String) -> URL {
@@ -169,15 +196,61 @@ final class ShelfModel: ObservableObject {
     NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:])
   }
 
-  /// Extracts file URLs from dropped item providers; `add` is called per URL (off-main).
-  nonisolated static func loadURLs(
-    from providers: [NSItemProvider], add: @escaping @Sendable (URL) -> Void
+  /// Resolves and copies every file provider while keeping the Shelf visible through async work.
+  @discardableResult
+  func importDroppedItems(from providers: [NSItemProvider]) -> Bool {
+    let fileProviders = providers.filter { $0.canLoadObject(ofClass: URL.self) }
+    guard !fileProviders.isEmpty else { return false }
+
+    dropState.beginImports(fileProviders.count)
+    Self.loadURLs(from: fileProviders) { [weak self] url in
+      Task { @MainActor [weak self] in
+        guard let self else { return }
+        defer { self.dropState.finishImport() }
+        guard let url else {
+          self.lastError = "Couldn’t read one of the dropped items."
+          return
+        }
+        await self.add(url)
+      }
+    }
+    return true
+  }
+
+  nonisolated private static func loadURLs(
+    from providers: [NSItemProvider], completion: @escaping @Sendable (URL?) -> Void
   ) {
     for provider in providers {
       _ = provider.loadObject(ofClass: URL.self) { url, _ in
-        if let url { add(url) }
+        completion(url)
       }
     }
+  }
+}
+
+struct ShelfDropState: Equatable {
+  private(set) var targetedDropZones: Set<UUID> = []
+  private(set) var pendingImportCount = 0
+
+  var isTargeted: Bool { !targetedDropZones.isEmpty }
+  var isActive: Bool { isTargeted || pendingImportCount > 0 }
+
+  mutating func setTarget(_ id: UUID, active: Bool) {
+    if active {
+      targetedDropZones.insert(id)
+    } else {
+      targetedDropZones.remove(id)
+    }
+  }
+
+  mutating func beginImports(_ count: Int) {
+    guard count > 0 else { return }
+    pendingImportCount += count
+  }
+
+  mutating func finishImport() {
+    guard pendingImportCount > 0 else { return }
+    pendingImportCount -= 1
   }
 }
 

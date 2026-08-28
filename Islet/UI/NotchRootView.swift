@@ -9,6 +9,7 @@ struct NotchRootView: View {
   @State private var compactLeadingWidth: CGFloat = 0
   @State private var compactTrailingWidth: CGFloat = 0
   @State private var dropTargeting = false
+  @State private var dropZoneID = UUID()
 
   /// Compact content precedence: HUD > in-flight sneak > primary activity > idle dashboard hint.
   private var compactContent: (leading: AnyView, trailing: AnyView)? {
@@ -113,27 +114,14 @@ struct NotchRootView: View {
         // to windows beneath (hover/click detection is monitor-driven).
         .allowsHitTesting(vm.state.isExpanded)
 
-      // Drag-to-open: a near-invisible drop zone over the collapsed island. Dropping files adds
-      // them to the shelf; hovering a drag opens the island so the shelf is visible. It covers the
-      // island exactly — anything wider would only be clipped by the panel, which no longer
-      // reserves slack around the notch for it.
-      if !vm.state.isExpanded {
-        Color.black.opacity(0.001)
-          .frame(
-            width: bodySize.width + (Metrics.closedRadii.top + Metrics.islandMargin) * 2,
-            height: vm.geometry.notchSize.height + Metrics.collapsedDepth
-          )
-          .contentShape(Rectangle())
-          .offset(x: islandOffset)
-          .onDrop(of: [.fileURL], isTargeted: $dropTargeting) { providers in
-            ShelfModel.loadURLs(from: providers) { url in
-              Task { @MainActor in await ShelfModel.shared.add(url) }
-            }
-            return true
-          }
-      }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    // This destination survives the collapsed-to-expanded content replacement. Its frame follows
+    // the panel, so the whole expanded island accepts the same drag after leaving and re-entering.
+    .contentShape(Rectangle())
+    .onDrop(of: [.fileURL], isTargeted: $dropTargeting) { providers in
+      ShelfModel.shared.importDroppedItems(from: providers)
+    }
     .animation(
       Motion.gated(vm.state.isExpanded ? Motion.opening : Motion.closing), value: vm.state
     )
@@ -143,9 +131,10 @@ struct NotchRootView: View {
     .onChange(of: compactTrailingWidth) { _, _ in syncPanelWidths() }
     .onChange(of: compactVisible) { _, _ in syncPanelWidths() }
     .onChange(of: dropTargeting) { _, targeted in
-      ShelfModel.shared.isDragActive = targeted
+      ShelfModel.shared.setDropTarget(dropZoneID, active: targeted)
       if targeted, !vm.state.isExpanded { vm.apply(.clickedNotch) }
     }
+    .onDisappear { ShelfModel.shared.setDropTarget(dropZoneID, active: false) }
     .preferredColorScheme(.dark)
   }
 

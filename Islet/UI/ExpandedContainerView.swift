@@ -13,10 +13,10 @@ struct ExpandedContainerView: View {
   @State private var selection: String? = nil
   private static let homeTab = "\u{0000}home"  // sentinel id for the dashboard chip
 
-  /// Tabs shown, left to right: Home, then each active activity.
+  /// Tabs shown, left to right: Home, then active activities and persistent utility surfaces.
   private var tabs: [(id: String, icon: String)] {
     [(Self.homeTab, "square.grid.2x2.fill")]
-      + center.activeActivities.map { ($0.id, $0.tabIcon) }
+      + center.expandedActivities.map { ($0.id, $0.tabIcon) }
   }
 
   /// The left ear has a hard physical width. Keep Home plus three activities at most, replacing
@@ -41,7 +41,11 @@ struct ExpandedContainerView: View {
   private var effectiveSelection: String {
     let ids = tabs.map(\.id)
     // A file drag jumps straight to the shelf so you can drop onto it.
-    if shelf.isDragActive, ids.contains("shelf") { return "shelf" }
+    if shelf.isDropPresentationActive || shelf.presentationRequest != nil,
+      ids.contains("shelf")
+    {
+      return "shelf"
+    }
     if let selection, ids.contains(selection) { return selection }
     // Default to a prominent active activity (running timer or media player); else the dashboard.
     if let primary = center.primaryActivity, primary.id == "timer" || primary.id == "nowPlaying" {
@@ -53,7 +57,7 @@ struct ExpandedContainerView: View {
   /// The height tier the selected tab wants. The dashboard always takes the base tier.
   private var selectedHeight: CGFloat {
     guard effectiveSelection != Self.homeTab,
-      let activity = center.activeActivities.first(where: { $0.id == effectiveSelection })
+      let activity = center.expandedActivities.first(where: { $0.id == effectiveSelection })
     else { return Metrics.expandedSize.height }
     return activity.preferredExpandedHeight
   }
@@ -79,6 +83,14 @@ struct ExpandedContainerView: View {
       // Only the drawn island resizes; the panel already holds the tallest tier while expanded.
       // Making the panel follow this crashed the app — see NotchViewModel.targetPanelFrame.
       vm.setExpandedHeight(selectedHeight)
+    }
+    .onChange(of: shelf.isDropPresentationActive, initial: true) { _, active in
+      if active { selection = "shelf" }
+    }
+    .onChange(of: shelf.presentationRequest, initial: true) { _, request in
+      guard let request else { return }
+      selection = "shelf"
+      Task { @MainActor in shelf.consumePresentationRequest(request) }
     }
   }
 
@@ -172,7 +184,7 @@ struct ExpandedContainerView: View {
   @ViewBuilder private var content: some View {
     if effectiveSelection == Self.homeTab {
       IdleDashboardView()
-    } else if let activity = center.activeActivities.first(where: {
+    } else if let activity = center.expandedActivities.first(where: {
       $0.id == effectiveSelection
     }) {
       activity.expandedView
