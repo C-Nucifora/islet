@@ -12,7 +12,7 @@ enum Metrics {
   static let peekGrowth: CGFloat = 4
   /// Default upward cursor travel needed to push through the hover barrier. The user-facing value
   /// is persisted in Defaults and clamped by NotchViewModel.
-  static let barrierPushDistance: CGFloat = 288
+  static let barrierPushDistance: CGFloat = 400
   /// Extra downward stretch at maximum pressure, before the island snaps open.
   static let barrierStretch: CGFloat = 24
   /// Point in the push where the trackpad acknowledges contact with the barrier.

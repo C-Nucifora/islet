@@ -1344,7 +1344,7 @@ struct SettingsView: View {
     collapseTimeout = 0.5
     haptics = true
     hapticStrength = .medium
-    barrierPushDistance = 288
+    barrierPushDistance = Double(Metrics.barrierPushDistance)
     sourceMode = .auto
     priorityList = ["com.spotify.client", "com.apple.Music"]
     activityOrder = ActivityCatalog.defaultOrder

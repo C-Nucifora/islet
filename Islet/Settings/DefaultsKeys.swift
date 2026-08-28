@@ -129,7 +129,8 @@ extension Defaults.Keys {
   static let hoverCollapseTimeout = Key<Double>("hoverCollapseTimeout", default: 0.5)
   static let hapticsEnabled = Key<Bool>("hapticsEnabled", default: true)
   static let hapticStrength = Key<HapticStrength>("hapticStrength", default: .medium)
-  static let barrierPushDistance = Key<Double>("barrierPushDistance", default: 288)
+  static let barrierPushDistance = Key<Double>(
+    "barrierPushDistance", default: Double(Metrics.barrierPushDistance))
   static let energyMode = Key<EnergyMode>("energyMode", default: .automatic)
   static let hideFromScreenRecording = Key<Bool>("hideFromScreenRecording", default: false)
   static let batteryEnabled = Key<Bool>("batteryEnabled", default: true)

@@ -43,7 +43,7 @@ final class NotchViewModelTests: XCTestCase {
     let vm = makeVM()
     vm.handleMouseMoved(CGPoint(x: 864, y: 1082))
     vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -34)
-    vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -254)
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -366)
     XCTAssertEqual(vm.state, .expanded(pinned: false))
     XCTAssertEqual(vm.barrierProgress, 0)
   }
@@ -53,7 +53,7 @@ final class NotchViewModelTests: XCTestCase {
     vm.handleMouseMoved(CGPoint(x: 864, y: 1090))
     vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -27)
     XCTAssertEqual(vm.state, .peek)
-    vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -261)
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -373)
     XCTAssertEqual(vm.state, .expanded(pinned: false))
   }
 
@@ -61,7 +61,7 @@ final class NotchViewModelTests: XCTestCase {
     let vm = makeVM()
     vm.handleMouseMoved(CGPoint(x: 864, y: 1117))
     XCTAssertEqual(vm.state, .peek)
-    vm.handleMouseMoved(CGPoint(x: 864, y: 1117), deviceDeltaY: -288)
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1117), deviceDeltaY: -400)
     XCTAssertEqual(vm.state, .expanded(pinned: false))
   }
 
