@@ -139,6 +139,18 @@ final class T3CodeTests: XCTestCase {
         entryPointPath: "/tmp/t3/dist/bin.mjs",
         packageName: "t3",
         declaredBin: "dist/bin.mjs"))
+    XCTAssertFalse(
+      T3LocalDiscovery.acceptsT3CLILaunch(
+        executablePath: "/opt/homebrew/Cellar/node/24.6.0/bin/node",
+        arguments: [
+          "/opt/homebrew/bin/node",
+          "/tmp/attacker.js",
+          "/opt/homebrew/lib/node_modules/t3/dist/bin.mjs",
+          "serve",
+        ],
+        entryPointPath: "/opt/homebrew/lib/node_modules/t3/dist/bin.mjs",
+        packageName: "t3",
+        declaredBin: "dist/bin.mjs"))
   }
 
   func testT3ResponseGrowthIsBounded() {
