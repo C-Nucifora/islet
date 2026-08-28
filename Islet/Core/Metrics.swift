@@ -2,7 +2,7 @@ import SwiftUI
 
 enum Metrics {
   /// The base height tier. Width is fixed for every tier; only the height varies per tab.
-  static let expandedSize = CGSize(width: 480, height: 190)
+  static let expandedSize = CGSize(width: 520, height: 190)
   /// The tall tier, for information-dense tabs (power, system stats).
   static let tallExpandedHeight: CGFloat = 250
   static let shadowPadding: CGFloat = 20

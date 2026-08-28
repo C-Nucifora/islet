@@ -46,4 +46,18 @@ final class ActivityTabLayoutTests: XCTestCase {
     XCTAssertEqual(
       ActivityTabLayout.controlCapacity(width: width, controlWidth: 20, spacing: 4), 5)
   }
+
+  func testExpandedIslandFitsFourTabsBesideHardwareNotch() {
+    let width = ActivityTabLayout.leftStripWidth(
+      containerWidth: Metrics.expandedSize.width, horizontalPadding: 12, notchWidth: 296,
+      spacing: 4, minimum: 20)
+    let capacity = ActivityTabLayout.controlCapacity(width: width, controlWidth: 20, spacing: 4)
+    let result = ActivityTabLayout.split(
+      tabIDs: ids(4), selectedID: "home", controlCapacity: capacity)
+
+    XCTAssertEqual(width, 96)
+    XCTAssertEqual(capacity, 4)
+    XCTAssertEqual(result.visibleIDs, ids(4))
+    XCTAssertTrue(result.overflowIDs.isEmpty)
+  }
 }
