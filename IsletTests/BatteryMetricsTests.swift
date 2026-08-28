@@ -350,6 +350,7 @@ final class BatteryMetricsTests: XCTestCase {
     m.systemPowerInWatts = 60
     m.systemLoadWatts = 35
     m.batteryPowerWatts = 25
+    m.cpuPowerWatts = 12
     m.usbPowerOutputs = [
       USBPowerOutput(portIndex: 2, watts: 5, volts: 5, amps: 1)
     ]
@@ -357,10 +358,41 @@ final class BatteryMetricsTests: XCTestCase {
     let flow = PowerFlowSnapshot(metrics: m)
     XCTAssertEqual(try XCTUnwrap(flow.adapterInputWatts), 60, accuracy: 0.0001)
     XCTAssertEqual(try XCTUnwrap(flow.macUseWatts), 30, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(flow.cpuUseWatts), 12, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(flow.restOfMacWatts), 18, accuracy: 0.0001)
     XCTAssertEqual(flow.usbOutputWatts, 5, accuracy: 0.0001)
     XCTAssertEqual(try XCTUnwrap(flow.batteryChargeWatts), 25, accuracy: 0.0001)
     XCTAssertEqual(flow.scaleWatts, 60, accuracy: 0.0001)
     XCTAssertEqual(flow.proportion(of: 30), 0.5, accuracy: 0.0001)
+  }
+
+  func testPowerFlowFallsBackToWholeMacWithoutCPUTelemetry() throws {
+    var m = BatteryMetrics()
+    m.systemLoadWatts = 20
+
+    let flow = PowerFlowSnapshot(metrics: m)
+    XCTAssertEqual(try XCTUnwrap(flow.macUseWatts), 20, accuracy: 0.0001)
+    XCTAssertNil(flow.cpuUseWatts)
+    XCTAssertNil(flow.restOfMacWatts)
+  }
+
+  func testPowerFlowClampsMismatchedCPUTelemetryToMacUse() throws {
+    var m = BatteryMetrics()
+    m.systemLoadWatts = 8
+    m.cpuPowerWatts = 12
+
+    let flow = PowerFlowSnapshot(metrics: m)
+    XCTAssertEqual(try XCTUnwrap(flow.cpuUseWatts), 8, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(flow.restOfMacWatts), 0, accuracy: 0.0001)
+    XCTAssertEqual(flow.scaleWatts, 8, accuracy: 0.0001)
+  }
+
+  func testCPUPowerConvertsMillijoulesOverTheMeasuredInterval() throws {
+    XCTAssertEqual(
+      try XCTUnwrap(CPUPowerMath.watts(millijoules: 376, elapsedSeconds: 1)), 0.376,
+      accuracy: 0.0001)
+    XCTAssertNil(CPUPowerMath.watts(millijoules: -1, elapsedSeconds: 1))
+    XCTAssertNil(CPUPowerMath.watts(millijoules: 100, elapsedSeconds: 0))
   }
 
   func testPowerFlowShowsBatterySupplementingAnUndersizedAdapter() throws {
@@ -657,16 +689,19 @@ final class BatteryMetricsTests: XCTestCase {
   func testSmoothLeavesStableFieldsUntouched() throws {
     var old = BatteryMetrics()
     old.temperatureC = 30.0
+    old.cpuPowerWatts = 2
     old.cycleCount = 224
     old.healthPercent = 89
 
     var new = BatteryMetrics()
     new.temperatureC = 31.0
+    new.cpuPowerWatts = 4
     new.cycleCount = 225
     new.healthPercent = 88
 
     let out = PowerSmoothing.smooth(old, into: new)
     XCTAssertEqual(try XCTUnwrap(out.temperatureC), 30.35, accuracy: 1e-9)
+    XCTAssertEqual(try XCTUnwrap(out.cpuPowerWatts), 2.7, accuracy: 1e-9)
     XCTAssertEqual(out.cycleCount, 225)
     XCTAssertEqual(out.healthPercent, 88)
   }

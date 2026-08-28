@@ -72,11 +72,12 @@ struct BatteryMetrics: Equatable, Sendable {
   /// `ParentPortTypeDescription` from the active IOPortFeaturePowerSource node.
   var inputPortType: String?
 
-  // Power flow, from the undocumented PowerTelemetryData dictionary. All watts.
+  // Power flow, from undocumented AppleSmartBattery and IOReport telemetry. All watts.
   var systemPowerInWatts: Double?  // SystemPowerIn — what the wall is delivering
   var systemVoltageIn: Double?
   var systemCurrentIn: Double?
   var systemLoadWatts: Double?  // SystemLoad — what the machine is drawing
+  var cpuPowerWatts: Double?  // IOReport Energy Model — estimated aggregate CPU power
   var batteryPowerWatts: Double?  // BatteryPower — + into the pack, - out of it
   var adapterLossWatts: Double?  // AdapterEfficiencyLoss
   var usbPowerOutputs: [USBPowerOutput] = []  // PowerOutDetails, one entry per sourcing port
@@ -96,6 +97,7 @@ struct BatteryMetrics: Equatable, Sendable {
       || temperatureC != nil || voltage != nil || amperage != nil || powerWatts != nil
       || timeToFullMinutes != nil || timeToEmptyMinutes != nil
       || adapterWatts != nil || adapterDescription != nil
-      || systemPowerInWatts != nil || batteryPowerWatts != nil || !usbPowerOutputs.isEmpty
+      || systemPowerInWatts != nil || cpuPowerWatts != nil || batteryPowerWatts != nil
+      || !usbPowerOutputs.isEmpty
   }
 }
