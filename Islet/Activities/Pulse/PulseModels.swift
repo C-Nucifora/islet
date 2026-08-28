@@ -391,7 +391,6 @@ enum PulseErrorCode: String, Codable, Sendable {
   case messageTooLarge
   case commandLimitExceeded
   case rateLimited
-  case capacityExceeded
 }
 
 struct PulseResponse: Codable, Equatable, Sendable {
@@ -417,21 +416,18 @@ struct PulseResponse: Codable, Equatable, Sendable {
 struct PulseRateLimiter: Sendable {
   let limit: Int
   let window: TimeInterval
-  private(set) var acceptedTimes: [TimeInterval] = []
+  private(set) var acceptedDates: [Date] = []
 
   init(limit: Int = 512, window: TimeInterval = 60) {
     self.limit = limit
     self.window = window
   }
 
-  mutating func accepts(_ now: TimeInterval) -> Bool {
-    if let last = acceptedTimes.last, now < last {
-      acceptedTimes.removeAll(keepingCapacity: true)
-    }
-    let cutoff = now - window
-    acceptedTimes.removeAll { $0 <= cutoff }
-    guard acceptedTimes.count < limit else { return false }
-    acceptedTimes.append(now)
+  mutating func accepts(_ now: Date) -> Bool {
+    let cutoff = now.addingTimeInterval(-window)
+    acceptedDates.removeAll { $0 <= cutoff }
+    guard acceptedDates.count < limit else { return false }
+    acceptedDates.append(now)
     return true
   }
 }

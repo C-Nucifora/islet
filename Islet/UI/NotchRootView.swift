@@ -127,7 +127,7 @@ struct NotchRootView: View {
           .offset(x: islandOffset)
           .onDrop(of: [.fileURL], isTargeted: $dropTargeting) { providers in
             ShelfModel.loadURLs(from: providers) { url in
-              Task { @MainActor in await ShelfModel.shared.add(url) }
+              Task { @MainActor in ShelfModel.shared.add(url) }
             }
             return true
           }

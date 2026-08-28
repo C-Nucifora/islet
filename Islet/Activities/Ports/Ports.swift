@@ -78,17 +78,16 @@ final class PortMonitor: ObservableObject {
   private var iterators: [io_iterator_t] = []
   private var owners: Set<String> = []
 
-  @discardableResult
-  func start(owner: String) -> Bool {
+  func start(owner: String) {
     let inserted = owners.insert(owner).inserted
-    guard inserted, notifyPort == nil else { return notifyPort != nil }
+    guard inserted, notifyPort == nil else { return }
     refresh()
     notifyPort = IONotificationPortCreate(kIOMainPortDefault)
     guard let notifyPort else {
       // Do not strand the owner in a logically-running state after setup fails. A later lifecycle
       // reconciliation must be able to retry rather than hitting the duplicate-owner guard.
       owners.remove(owner)
-      return false
+      return
     }
     IONotificationPortSetDispatchQueue(notifyPort, DispatchQueue.main)
 
@@ -124,9 +123,7 @@ final class PortMonitor: ObservableObject {
       tearDownNotifications()
       owners.remove(owner)
       Log.app.error("Could not register both USB matching notifications")
-      return false
     }
-    return true
   }
 
   func stop(owner: String) {

@@ -56,12 +56,7 @@ final class PulseCenter: ObservableObject {
             requestID: command.requestID)
         }
         let visible = shouldPresent(item)
-        guard upsertStored(item, operation: command.operation, now: now) else {
-          refreshVisibleItems()
-          return .failure(
-            "activity was evicted because Pulse is at capacity", code: .capacityExceeded,
-            requestID: command.requestID)
-        }
+        upsertStored(item, operation: command.operation, now: now)
         record(
           operation: command.operation, item: item,
           result: visible ? (previous == nil ? .shown : .updated) : .suppressed, date: now)
@@ -190,10 +185,7 @@ final class PulseCenter: ObservableObject {
       .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
   }
 
-  @discardableResult
-  private func upsertStored(
-    _ item: PulseItem, operation: PulseOperation, now: Date
-  ) -> Bool {
+  private func upsertStored(_ item: PulseItem, operation: PulseOperation, now: Date) {
     if let index = storedItems.firstIndex(where: { $0.id == item.id }) {
       storedItems[index] = item
     } else {
@@ -208,7 +200,6 @@ final class PulseCenter: ObservableObject {
       }
     }
     scheduleExpiry()
-    return storedItems.contains { $0.id == item.id }
   }
 
   private func refreshVisibleItems() {

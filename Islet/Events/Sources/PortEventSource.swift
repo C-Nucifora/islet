@@ -16,7 +16,7 @@ final class PortEventSource: SystemEventSource {
 
   func start() {
     guard cancellable == nil else { return }
-    guard PortMonitor.shared.start(owner: id) else { return }
+    PortMonitor.shared.start(owner: id)
     cancellable = PortMonitor.shared.$devices
       // The first value is the list as it stands at launch. Announcing it would fire one event per
       // already-connected device every time Islet starts.

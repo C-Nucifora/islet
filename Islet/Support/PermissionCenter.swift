@@ -1,8 +1,6 @@
 import AppKit
 import ApplicationServices
 import Combine
-import CoreBluetooth
-import CoreLocation
 import EventKit
 import Security
 
@@ -66,24 +64,6 @@ enum EventKitPermissionState: Equatable, Sendable {
   }
 }
 
-enum PlatformPermissionState: Equatable, Sendable {
-  case notDetermined
-  case granted
-  case denied
-  case restricted
-  case unavailable
-
-  var summary: String {
-    switch self {
-    case .notDetermined: "Not requested"
-    case .granted: "Allowed"
-    case .denied: "Denied"
-    case .restricted: "Restricted"
-    case .unavailable: "Unavailable"
-    }
-  }
-}
-
 struct PermissionDiagnosticsSnapshot: Equatable, Sendable {
   var capturedAt: Date
   var appPath: String
@@ -98,8 +78,6 @@ struct PermissionDiagnosticsSnapshot: Equatable, Sendable {
   var accessibilityGranted: Bool
   var calendar: EventKitPermissionState
   var reminders: EventKitPermissionState
-  var location: PlatformPermissionState
-  var bluetooth: PlatformPermissionState
 
   var text: String {
     [
@@ -115,8 +93,6 @@ struct PermissionDiagnosticsSnapshot: Equatable, Sendable {
       "Accessibility: \(accessibilityGranted ? "Granted" : "Not granted")",
       "Calendars: \(calendar.summary)",
       "Reminders: \(reminders.summary)",
-      "Location: \(location.summary)",
-      "Bluetooth: \(bluetooth.summary)",
     ].joined(separator: "\n")
   }
 }
@@ -165,49 +141,19 @@ final class PermissionCenter: ObservableObject {
       codeDirectoryHash: signing.cdHash,
       accessibilityGranted: AXIsProcessTrusted(),
       calendar: EventKitPermissionState(EKEventStore.authorizationStatus(for: .event)),
-      reminders: EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder)),
-      location: locationPermissionState(),
-      bluetooth: bluetoothPermissionState())
-  }
-
-  private static func locationPermissionState() -> PlatformPermissionState {
-    switch CLLocationManager().authorizationStatus {
-    case .notDetermined: .notDetermined
-    case .restricted: .restricted
-    case .denied: .denied
-    case .authorizedAlways, .authorizedWhenInUse: .granted
-    @unknown default: .unavailable
-    }
-  }
-
-  private static func bluetoothPermissionState() -> PlatformPermissionState {
-    switch CBManager.authorization {
-    case .notDetermined: .notDetermined
-    case .restricted: .restricted
-    case .denied: .denied
-    case .allowedAlways: .granted
-    @unknown default: .unavailable
-    }
+      reminders: EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder)))
   }
 
   private static func signingInformation() -> (
     identifier: String, team: String, identity: String, cdHash: String
   ) {
-    guard let executableURL = Bundle.main.executableURL else {
-      return ("Unavailable", "Unavailable", "Unavailable", "Unavailable")
-    }
-    let defaultFlags = SecCSFlags(rawValue: 0)
-    var code: SecStaticCode?
-    guard
-      SecStaticCodeCreateWithPath(executableURL as CFURL, defaultFlags, &code) == errSecSuccess,
-      let code
-    else {
+    var code: SecCode?
+    guard SecCodeCopySelf(kSecCSDefaultFlags, &code) == errSecSuccess, let code else {
       return ("Unavailable", "Unavailable", "Unavailable", "Unavailable")
     }
     var rawInformation: CFDictionary?
-    let informationFlags = SecCSFlags(rawValue: kSecCSSigningInformation)
     guard
-      SecCodeCopySigningInformation(code, informationFlags, &rawInformation)
+      SecCodeCopySigningInformation(code, kSecCSSigningInformation, &rawInformation)
         == errSecSuccess,
       let information = rawInformation as? [String: Any]
     else {

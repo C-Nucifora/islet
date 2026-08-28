@@ -19,11 +19,9 @@ The reference tool reads a user-only token from
 `~/Library/Application Support/Islet/pulse-token` and sends one newline-delimited JSON command to
 TCP port `47717` on `127.0.0.1`. The server rejects messages over 64 KiB, invalid tokens, unsafe
 action URL schemes, more than three actions, and more than 100 simultaneous items.
-The listener accepts at most 16 concurrent clients, each socket is capped at 128 commands, and the
-shared token is capped at 512 accepted commands per rolling minute across reconnects. A
-rate-limited provider receives a structured `rateLimited` error and should retry with backoff. If
-capacity ordering would immediately evict the submitted item, the provider receives
-`capacityExceeded` instead of a false success.
+Each socket is capped at 128 commands, and the shared token is capped at 512 accepted commands per
+rolling minute across reconnects. A rate-limited provider receives a structured `rateLimited`
+error and should retry with backoff.
 
 ## Operations
 

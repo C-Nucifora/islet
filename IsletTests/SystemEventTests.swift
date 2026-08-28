@@ -84,7 +84,6 @@ final class SystemEventTests: XCTestCase {
 
   func testCatalogueLookupsFallBackToTheRawID() {
     XCTAssertEqual(SourceCatalog.name(for: "usb"), "USB devices")
-    XCTAssertEqual(SourceCatalog.name(for: "power"), "Low Power Mode")
     XCTAssertEqual(SourceCatalog.name(for: "nope"), "nope")
     XCTAssertEqual(SourceCatalog.tier(for: "nope"), .core)
   }

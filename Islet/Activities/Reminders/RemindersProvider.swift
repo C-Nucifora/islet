@@ -76,27 +76,28 @@ final class RemindersProvider: ObservableObject {
   }
 
   func requestAccess() async {
+    guard isRunning, Defaults[.remindersEnabled] else { return }
     hasRequestedAccess = true
     authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
     if authorization.canRead {
-      if isRunning, Defaults[.remindersEnabled] {
-        observeStoreChanges()
-        await reload()
-      }
+      observeStoreChanges()
+      await reload()
       return
     }
     reminders = []
     guard authorization == .notDetermined else { return }
     do {
       let granted = try await store.requestFullAccessToReminders()
+      guard isRunning, Defaults[.remindersEnabled] else { return }
       authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
-      if granted, authorization.canRead, isRunning, Defaults[.remindersEnabled] {
+      if granted, authorization.canRead {
         observeStoreChanges()
         await reload()
       } else {
         loadState = .idle
       }
     } catch {
+      guard isRunning, Defaults[.remindersEnabled] else { return }
       authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
       loadState = .failed(error.localizedDescription)
       Log.app.error("Reminders access error: \(error.localizedDescription)")
@@ -113,11 +114,12 @@ final class RemindersProvider: ObservableObject {
   }
 
   func refreshAuthorization() async {
+    guard isRunning, Defaults[.remindersEnabled] else { return }
     authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
-    if authorization.canRead, isRunning, Defaults[.remindersEnabled] {
+    if authorization.canRead {
       observeStoreChanges()
       await reload()
-    } else if isRunning {
+    } else {
       reloadGeneration += 1
       reminders = []
       loadState = .idle
@@ -148,7 +150,7 @@ final class RemindersProvider: ObservableObject {
           let hasDueTime =
             dueComponents?.hour != nil || dueComponents?.minute != nil
             || dueComponents?.second != nil
-          return ReminderItem(
+          ReminderItem(
             id: r.calendarItemIdentifier,
             title: r.title ?? "Untitled",
             dueDate: RemindersLogic.dueDate(from: dueComponents),

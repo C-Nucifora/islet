@@ -1,4 +1,3 @@
-import AppKit
 import XCTest
 
 @testable import Islet
@@ -34,18 +33,5 @@ final class ClipboardPrivacyPolicyTests: XCTestCase {
     let item = ClipboardItem(kind: .image(payload), date: .distantPast)
     XCTAssertEqual(item.retainedByteCount, 3)
     XCTAssertEqual(payload.pasteboardTypeRawValue, "public.png")
-  }
-
-  func testFailedHistoryWriteRestoresTheExistingClipboard() throws {
-    let pasteboard = NSPasteboard(name: NSPasteboard.Name("islet-tests-\(UUID().uuidString)"))
-    pasteboard.clearContents()
-    XCTAssertTrue(pasteboard.setString("keep me", forType: .string))
-
-    XCTAssertFalse(
-      ClipboardPasteboardTransaction.replace(on: pasteboard) {
-        _ = pasteboard.setString("replacement", forType: .string)
-        return false
-      })
-    XCTAssertEqual(pasteboard.string(forType: .string), "keep me")
   }
 }

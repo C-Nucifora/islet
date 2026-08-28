@@ -146,25 +146,6 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     appNames[source.displayBundleIdentifier] ?? source.displayBundleIdentifier
   }
 
-  var knownBundleIdentifiers: [String] {
-    Array(Set(sources.keys.map(\.displayBundleIdentifier) + strip.map(\.displayBundleIdentifier)))
-      .filter { !$0.isEmpty }
-      .sorted {
-        applicationName(for: $0).localizedStandardCompare(applicationName(for: $1))
-          == .orderedAscending
-      }
-  }
-
-  func applicationName(for bundleIdentifier: String) -> String {
-    resolveApplication(for: bundleIdentifier)
-    return appNames[bundleIdentifier] ?? bundleIdentifier
-  }
-
-  func applicationIcon(for bundleIdentifier: String) -> NSImage? {
-    resolveApplication(for: bundleIdentifier)
-    return appIcons[bundleIdentifier]
-  }
-
   /// Mirrors the table (and the audio monitor) into the published properties the views read.
   private func publish(audioSources: [SourceID]? = nil) {
     let mode = Defaults[.mediaSourceMode]

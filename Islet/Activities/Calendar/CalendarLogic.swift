@@ -1,7 +1,7 @@
 import Foundation
 
 /// A calendar event reduced to what the island needs (keeps EventKit out of unit tests).
-struct AgendaEvent: Identifiable, Equatable, Sendable {
+struct AgendaEvent: Identifiable, Equatable {
   let id: String
   var title: String
   var start: Date
@@ -61,7 +61,6 @@ enum CalendarLogic {
 
   /// Whether a countdown should show yet: event starts within `leadMinutes` (and hasn't started).
   static func shouldCountdown(event: AgendaEvent, now: Date, leadMinutes: Int) -> Bool {
-    guard leadMinutes > 0 else { return false }
     let secondsUntil = event.start.timeIntervalSince(now)
     return secondsUntil > 0 && secondsUntil <= Double(leadMinutes) * 60
   }

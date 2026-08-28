@@ -64,7 +64,7 @@
                 "type": "string",
                 "format": "uri",
                 "maxLength": 2048,
-                "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/@]+(?:/|$)",
+                "pattern": "^https?://[^/@]+(?:/|$)",
                 "description": "HTTP(S) URL with a host and no embedded user credentials."
               }
             }
@@ -90,8 +90,7 @@
             "sourceMismatch",
             "messageTooLarge",
             "commandLimitExceeded",
-            "rateLimited",
-            "capacityExceeded"
+            "rateLimited"
           ]
         },
         "requestID": { "type": "string" }

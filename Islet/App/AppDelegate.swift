@@ -3,10 +3,11 @@ import Combine
 import Defaults
 
 enum ActivityLifecyclePolicy {
-  /// Activity lineup visibility is presentation state. Providers stop only when their actual
-  /// feature switch is disabled, so hiding Calendar cannot empty the Home agenda (and hiding any
-  /// other activity cannot silently shut down a shared monitor).
-  static func shouldRun(featureEnabled: Bool = true) -> Bool { featureEnabled }
+  static func shouldRun(
+    activityID: String, featureEnabled: Bool = true, disabledActivities: Set<String>
+  ) -> Bool {
+    featureEnabled && !disabledActivities.contains(activityID)
+  }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -105,6 +106,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   @MainActor
   private func configureActivityLifecycles() {
+    Defaults.publisher(.disabledActivities)
+      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
+      .store(in: &activityLifecycleCancellables)
     Defaults.publisher(.batteryEnabled)
       .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
       .store(in: &activityLifecycleCancellables)
@@ -129,6 +133,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     Defaults.publisher(.continuityEnabled)
       .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
       .store(in: &activityLifecycleCancellables)
+    Defaults.publisher(.airpodsEnabled)
+      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
+      .store(in: &activityLifecycleCancellables)
     Defaults.publisher(.disabledEventSources)
       .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
       .store(in: &activityLifecycleCancellables)
@@ -137,53 +144,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   @MainActor
   private func reconcileActivityLifecycles() {
-    if ActivityLifecyclePolicy.shouldRun() {
+    let disabled = Set(Defaults[.disabledActivities])
+
+    if ActivityLifecyclePolicy.shouldRun(
+      activityID: AppState.nowPlaying.id, disabledActivities: disabled)
+    {
       AppState.nowPlaying.start()
     } else {
       AppState.nowPlaying.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.batteryEnabled]) {
+    if ActivityLifecyclePolicy.shouldRun(
+      activityID: AppState.battery.id, featureEnabled: Defaults[.batteryEnabled],
+      disabledActivities: disabled)
+    {
       AppState.battery.start()
     } else {
       AppState.battery.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.calendarEnabled]) {
+    if ActivityLifecyclePolicy.shouldRun(
+      activityID: AppState.calendar.id, featureEnabled: Defaults[.calendarEnabled],
+      disabledActivities: disabled)
+    {
       AppState.calendar.start()
     } else {
       AppState.calendar.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.portsEnabled]) {
+    if ActivityLifecyclePolicy.shouldRun(
+      activityID: AppState.ports.id, featureEnabled: Defaults[.portsEnabled],
+      disabledActivities: disabled)
+    {
       AppState.ports.start()
     } else {
       AppState.ports.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.clipboardEnabled]) {
+    if ActivityLifecyclePolicy.shouldRun(
+      activityID: AppState.clipboard.id, featureEnabled: Defaults[.clipboardEnabled],
+      disabledActivities: disabled)
+    {
       AppState.clipboard.start()
     } else {
       AppState.clipboard.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.systemEnabled]) {
+    if ActivityLifecyclePolicy.shouldRun(
+      activityID: AppState.system.id, featureEnabled: Defaults[.systemEnabled],
+      disabledActivities: disabled)
+    {
       AppState.system.start()
     } else {
       AppState.system.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.t3CodeEnabled]) {
+    if ActivityLifecyclePolicy.shouldRun(
+      activityID: AppState.t3Code.id, featureEnabled: Defaults[.t3CodeEnabled],
+      disabledActivities: disabled)
+    {
       AppState.t3Code.start()
     } else {
       AppState.t3Code.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.pulseEnabled]) {
+    if ActivityLifecyclePolicy.shouldRun(
+      activityID: AppState.pulse.id, featureEnabled: Defaults[.pulseEnabled],
+      disabledActivities: disabled)
+    {
       AppState.pulse.start()
     } else {
       AppState.pulse.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.continuityEnabled]) {
+    if ActivityLifecyclePolicy.shouldRun(
+      activityID: AppState.continuity.id, featureEnabled: Defaults[.continuityEnabled],
+      disabledActivities: disabled)
+    {
       AppState.continuity.start()
     } else {
       AppState.continuity.stop()
     }
     let audioDeviceEventsEnabled = !Defaults[.disabledEventSources].contains("audiodevice")
-    if audioDeviceEventsEnabled {
+    if Defaults[.airpodsEnabled], audioDeviceEventsEnabled {
       AudioDeviceMonitor.shared.start()
     } else {
       AudioDeviceMonitor.shared.stop()

@@ -4,16 +4,12 @@ import XCTest
 
 @MainActor
 final class NotchViewModelTests: XCTestCase {
-  func makeVM(
-    mode: InteractionMode = .hover,
-    barrierPushDistance: CGFloat? = Metrics.barrierPushDistance
-  ) -> NotchViewModel {
+  func makeVM(mode: InteractionMode = .hover) -> NotchViewModel {
     let g = NotchGeometry(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
       safeAreaTop: 32, auxLeftWidth: 716, auxRightWidth: 716,
       menuBarHeight: 37)
-    return NotchViewModel(
-      geometry: g, modeOverride: mode, barrierPushDistanceOverride: barrierPushDistance)
+    return NotchViewModel(geometry: g, modeOverride: mode)
   }
 
   func testMouseIntoHitRectPeeks() {
@@ -31,7 +27,7 @@ final class NotchViewModelTests: XCTestCase {
   }
 
   func testUpwardPushStretchesPeekBeforeOpening() {
-    let vm = makeVM(barrierPushDistance: 288)
+    let vm = makeVM()
     vm.handleMouseMoved(CGPoint(x: 864, y: 1082))
     vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -34)
     vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -110)
@@ -62,16 +58,6 @@ final class NotchViewModelTests: XCTestCase {
     vm.handleMouseMoved(CGPoint(x: 864, y: 1117))
     XCTAssertEqual(vm.state, .peek)
     vm.handleMouseMoved(CGPoint(x: 864, y: 1117), deviceDeltaY: -288)
-    XCTAssertEqual(vm.state, .expanded(pinned: false))
-  }
-
-  func testConfiguredPushDistanceChangesTheSnapThreshold() {
-    let vm = makeVM(barrierPushDistance: 160)
-    vm.handleMouseMoved(CGPoint(x: 864, y: 1117))
-    vm.handleMouseMoved(CGPoint(x: 864, y: 1117), deviceDeltaY: -159)
-    XCTAssertEqual(vm.state, .peek)
-    XCTAssertEqual(vm.barrierProgress, 159.0 / 160.0, accuracy: 0.001)
-    vm.handleMouseMoved(CGPoint(x: 864, y: 1117), deviceDeltaY: -1)
     XCTAssertEqual(vm.state, .expanded(pinned: false))
   }
 

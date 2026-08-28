@@ -24,15 +24,7 @@ final class NotchViewModel: ObservableObject {
 
   let geometry: NotchGeometry
   private let modeOverride: InteractionMode?
-  private let barrierPushDistanceOverride: CGFloat?
   private var mode: InteractionMode { modeOverride ?? Defaults[.interactionMode] }
-  private var barrierPushDistance: CGFloat {
-    barrierPushDistanceOverride
-      ?? CGFloat(
-        min(
-          max(Defaults[.barrierPushDistance], PushDistanceScale.minimum),
-          PushDistanceScale.maximum))
-  }
 
   private var wasInside = false
   private var lastMouseLocation: CGPoint = .zero
@@ -40,18 +32,14 @@ final class NotchViewModel: ObservableObject {
   private var compactTrailingWidth: CGFloat = 0
   private var barrierTravel: CGFloat = 0
   private var upwardDeviceDeltaSign: CGFloat?
-  private var didPlayBarrierContactHaptic = false
+  private var barrierHapticStage = 0
   private var collapseTask: Task<Void, Never>?
   private var shrinkTask: Task<Void, Never>?
   private var cancellables: Set<AnyCancellable> = []
 
-  init(
-    geometry: NotchGeometry, modeOverride: InteractionMode? = nil,
-    barrierPushDistanceOverride: CGFloat? = nil
-  ) {
+  init(geometry: NotchGeometry, modeOverride: InteractionMode? = nil) {
     self.geometry = geometry
     self.modeOverride = modeOverride
-    self.barrierPushDistanceOverride = barrierPushDistanceOverride
     let initialFrame = geometry.collapsedPanelFrame()
     self.panelFrame = initialFrame
     self.actualPanelFrame = initialFrame
@@ -259,7 +247,7 @@ final class NotchViewModel: ObservableObject {
     barrierTravel = 0
     upwardDeviceDeltaSign = nil
     barrierProgress = 0
-    didPlayBarrierContactHaptic = false
+    barrierHapticStage = 0
   }
 
   private func updateBarrier(
@@ -284,19 +272,22 @@ final class NotchViewModel: ObservableObject {
         upwardTravel = deviceDeltaY * sign
       }
     }
-    barrierTravel = min(max(barrierTravel + upwardTravel, 0), barrierPushDistance)
-    let progress = barrierTravel / barrierPushDistance
+    barrierTravel = min(max(barrierTravel + upwardTravel, 0), Metrics.barrierPushDistance)
+    let progress = barrierTravel / Metrics.barrierPushDistance
     if progress != barrierProgress { barrierProgress = progress }
 
-    // A fast flick may reach the threshold in one event. In that case the snap alone is clearer
-    // than two simultaneous pulses; normal deliberate pressure gets exactly contact, then release.
+    // A fast flick may cross both marks in one event. In that case the snap alone is clearer than
+    // two simultaneous pulses; normal deliberate pressure still gets contact, then release.
     if progress >= 1 {
       apply(.pushThresholdCrossed)
       return
     }
-    if !didPlayBarrierContactHaptic, progress >= Metrics.barrierContactProgress {
-      didPlayBarrierContactHaptic = true
-      Haptics.barrierContact()
+    if barrierHapticStage < 2, progress >= Metrics.barrierStrainProgress {
+      barrierHapticStage = 2
+      Haptics.barrierResistance(strong: true)
+    } else if barrierHapticStage < 1, progress >= Metrics.barrierContactProgress {
+      barrierHapticStage = 1
+      Haptics.barrierResistance(strong: false)
     }
   }
 
@@ -304,7 +295,7 @@ final class NotchViewModel: ObservableObject {
     barrierTravel = 0
     upwardDeviceDeltaSign = nil
     barrierProgress = 0
-    didPlayBarrierContactHaptic = false
+    barrierHapticStage = 0
   }
 
   private func scheduleCollapse() {

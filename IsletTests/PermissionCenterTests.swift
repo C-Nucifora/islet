@@ -41,15 +41,11 @@ final class PermissionCenterTests: XCTestCase {
       codeDirectoryHash: "abcdef",
       accessibilityGranted: true,
       calendar: .denied,
-      reminders: .fullAccess,
-      location: .granted,
-      bluetooth: .notDetermined)
+      reminders: .fullAccess)
 
     XCTAssertTrue(snapshot.text.contains("App path: /Applications/Islet.app"))
     XCTAssertTrue(snapshot.text.contains("Team identifier: TEAM123"))
     XCTAssertTrue(snapshot.text.contains("Calendars: Denied"))
     XCTAssertTrue(snapshot.text.contains("Reminders: Full access"))
-    XCTAssertTrue(snapshot.text.contains("Location: Allowed"))
-    XCTAssertTrue(snapshot.text.contains("Bluetooth: Not requested"))
   }
 }

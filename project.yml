@@ -50,10 +50,6 @@ targets:
         NSLocationWhenInUseUsageDescription: "Islet shows the name of the Wi-Fi network you join. macOS requires location access to read network names; deny this and Islet will simply say 'Wi-Fi connected'."
         NSLocalNetworkUsageDescription: "Islet connects to T3 Code on your Macs to show active agents in the notch."
         NSAppTransportSecurity:
-          # T3 endpoints are user-supplied, so qualified HTTP hosts cannot be enumerated under
-          # NSExceptionDomains. T3Endpoint still rejects remote HTTP unless the user explicitly
-          # enables the insecure-transport option for that pairing.
-          NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
   IsletTests:
     type: bundle.unit-test
