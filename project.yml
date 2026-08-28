@@ -11,7 +11,13 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    CODE_SIGN_IDENTITY: "-"
+    # A stable signing identity, not ad-hoc. TCC keys every grant on the app's designated
+    # requirement, and an ad-hoc signature's requirement is a bare cdhash that changes on every
+    # build — so macOS treated each rebuild as a brand-new app and dropped Accessibility,
+    # Calendar and Reminders every time. Signing with one certificate makes the requirement
+    # `identifier dev.nedlane.Islet and certificate root = H"..."`, which does not change.
+    # Create the certificate with Scripts/create-signing-certificate.sh.
+    CODE_SIGN_IDENTITY: "Islet Local Development"
     CODE_SIGN_STYLE: Manual
     ENABLE_HARDENED_RUNTIME: false
     MACOSX_DEPLOYMENT_TARGET: "26.0"

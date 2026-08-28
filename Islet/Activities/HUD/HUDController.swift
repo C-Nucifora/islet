@@ -79,7 +79,7 @@ final class HUDController: ObservableObject {
 
   /// Refreshes the read-only TCC state. This never prompts and is safe to call on every activation.
   func refreshPermissionStatus() {
-    accessibilityTrusted = AXIsProcessTrusted()
+    accessibilityTrusted = AccessibilityPermission.isTrusted
     if !accessibilityTrusted {
       tearDownTap()
       eventTapStatus = Defaults[.hudEnabled] ? .accessibilityRequired : .disabled
@@ -87,14 +87,12 @@ final class HUDController: ObservableObject {
   }
 
   func promptForAccessibility() {
-    // Literal avoids referencing the non-Sendable global kAXTrustedCheckOptionPrompt.
-    let options = ["AXTrustedCheckOptionPrompt": true]
-    _ = AXIsProcessTrustedWithOptions(options as CFDictionary)
+    AccessibilityPermission.prompt()
     refreshPermissionStatus()
   }
 
   func openAccessibilitySettings() {
-    SystemSettingsPrivacyPane.accessibility.open()
+    AccessibilityPermission.openSettings()
   }
 
   func start() {

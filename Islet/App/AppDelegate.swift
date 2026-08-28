@@ -55,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       ActivityCenter.shared.register(AppState.system)
       ActivityCenter.shared.register(AppState.t3Code)
       ActivityCenter.shared.register(AppState.pulse)
+      ActivityCenter.shared.register(AppState.continuity)
       #if DEBUG
         let registeredIDs = Set(ActivityCenter.shared.activities.map(\.id))
         let missingIDs = Set(ActivityCatalog.defaultOrder).subtracting(registeredIDs)
@@ -91,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       AppState.system.stop()
       AppState.t3Code.stop()
       AppState.pulse.stop()
+      AppState.continuity.stop()
       RemindersProvider.shared.stop()
       AudioDeviceMonitor.shared.stop()
       HUDController.shared.stop()
@@ -126,6 +128,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
       .store(in: &activityLifecycleCancellables)
     Defaults.publisher(.pulseEnabled)
+      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
+      .store(in: &activityLifecycleCancellables)
+    Defaults.publisher(.continuityEnabled)
       .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
       .store(in: &activityLifecycleCancellables)
     Defaults.publisher(.disabledEventSources)
@@ -200,6 +205,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       AppState.pulse.start()
     } else {
       AppState.pulse.stop()
+    }
+    if ActivityLifecyclePolicy.shouldRun(
+      activityID: AppState.continuity.id, featureEnabled: Defaults[.continuityEnabled],
+      disabledActivities: disabled)
+    {
+      AppState.continuity.start()
+    } else {
+      AppState.continuity.stop()
     }
     let audioDeviceEventsEnabled = !Defaults[.disabledEventSources].contains("audiodevice")
     if audioDeviceEventsEnabled {
