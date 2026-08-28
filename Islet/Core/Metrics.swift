@@ -10,7 +10,8 @@ enum Metrics {
   static let closedOversize: CGFloat = 2  // draw wider/taller than hardware
   static let hitSlop: CGFloat = 4  // hit target extends this far beyond notch
   static let peekGrowth: CGFloat = 4
-  /// Upward cursor travel needed to push through the hover barrier.
+  /// Default upward cursor travel needed to push through the hover barrier. The user-facing value
+  /// is persisted in Defaults and clamped by NotchViewModel.
   static let barrierPushDistance: CGFloat = 288
   /// Extra downward stretch at maximum pressure, before the island snaps open.
   static let barrierStretch: CGFloat = 24

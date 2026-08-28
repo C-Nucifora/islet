@@ -24,7 +24,12 @@ final class NotchViewModel: ObservableObject {
 
   let geometry: NotchGeometry
   private let modeOverride: InteractionMode?
+  private let barrierPushDistanceOverride: CGFloat?
   private var mode: InteractionMode { modeOverride ?? Defaults[.interactionMode] }
+  private var barrierPushDistance: CGFloat {
+    barrierPushDistanceOverride
+      ?? CGFloat(min(max(Defaults[.barrierPushDistance], 80), 480))
+  }
 
   private var wasInside = false
   private var lastMouseLocation: CGPoint = .zero
@@ -37,9 +42,13 @@ final class NotchViewModel: ObservableObject {
   private var shrinkTask: Task<Void, Never>?
   private var cancellables: Set<AnyCancellable> = []
 
-  init(geometry: NotchGeometry, modeOverride: InteractionMode? = nil) {
+  init(
+    geometry: NotchGeometry, modeOverride: InteractionMode? = nil,
+    barrierPushDistanceOverride: CGFloat? = nil
+  ) {
     self.geometry = geometry
     self.modeOverride = modeOverride
+    self.barrierPushDistanceOverride = barrierPushDistanceOverride
     let initialFrame = geometry.collapsedPanelFrame()
     self.panelFrame = initialFrame
     self.actualPanelFrame = initialFrame
@@ -272,8 +281,8 @@ final class NotchViewModel: ObservableObject {
         upwardTravel = deviceDeltaY * sign
       }
     }
-    barrierTravel = min(max(barrierTravel + upwardTravel, 0), Metrics.barrierPushDistance)
-    let progress = barrierTravel / Metrics.barrierPushDistance
+    barrierTravel = min(max(barrierTravel + upwardTravel, 0), barrierPushDistance)
+    let progress = barrierTravel / barrierPushDistance
     if progress != barrierProgress { barrierProgress = progress }
 
     // A fast flick may cross both marks in one event. In that case the snap alone is clearer than

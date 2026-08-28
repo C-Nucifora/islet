@@ -1,7 +1,7 @@
 import Foundation
 
 /// A calendar event reduced to what the island needs (keeps EventKit out of unit tests).
-struct AgendaEvent: Identifiable, Equatable {
+struct AgendaEvent: Identifiable, Equatable, Sendable {
   let id: String
   var title: String
   var start: Date
