@@ -14,30 +14,16 @@ enum T3CredentialStoreError: Error, LocalizedError {
 
 /// All T3 bearer tokens live in one Keychain item and are cached for the process lifetime. That
 /// means macOS can ask for Keychain access at most once per launch, regardless of how many local or
-/// remote T3 environments Islet watches. The old per-environment items are imported lazily.
+/// remote T3 environments Islet watches.
 @MainActor
 enum T3CredentialStore {
   private static let service = "dev.cnucifora.islet.t3-code"
-  private static let legacyService = "dev.nedlane.islet.t3-code"
   private static let vaultAccount = "read-only-environment-tokens-v1"
 
   private static var cachedTokens: [String: String]?
-  private static var attemptedLegacyIDs: Set<String> = []
 
-  static func load(environmentID: String, migrateLegacy: Bool = true) -> String? {
-    var tokens = loadVault()
-    if let token = tokens[environmentID] { return token }
-
-    // One release-cycle migration path for credentials created by the feature-fork identity.
-    // Local T3 can mint a fresh token without interaction, so only remote credentials need this
-    // lookup. Each remote environment is queried no more than once, even if monitors restart.
-    guard migrateLegacy, attemptedLegacyIDs.insert(environmentID).inserted,
-      let token = read(service: legacyService, account: environmentID)
-    else { return nil }
-    tokens[environmentID] = token
-    cachedTokens = tokens
-    try? persist(tokens)
-    return token
+  static func load(environmentID: String) -> String? {
+    loadVault()[environmentID]
   }
 
   static func save(_ token: String, environmentID: String) throws {
@@ -61,13 +47,6 @@ enum T3CredentialStore {
       let decoded = try? JSONDecoder().decode([String: String].self, from: data)
     {
       tokens = decoded
-    } else if let data = readData(service: legacyService, account: vaultAccount),
-      let decoded = try? JSONDecoder().decode([String: String].self, from: data)
-    {
-      // The feature fork already used the consolidated vault format. Copy it under the upstream
-      // service name once so switching bundle identity does not make paired remotes disappear.
-      tokens = decoded
-      try? persist(decoded)
     } else {
       tokens = [:]
     }
@@ -96,11 +75,6 @@ enum T3CredentialStore {
     } else if status != errSecSuccess {
       throw T3CredentialStoreError.keychain(status)
     }
-  }
-
-  private static func read(service: String, account: String) -> String? {
-    guard let data = readData(service: service, account: account) else { return nil }
-    return String(data: data, encoding: .utf8)
   }
 
   private static func readData(service: String, account: String) -> Data? {
