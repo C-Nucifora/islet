@@ -25,4 +25,11 @@ final class TimerLogicTests: XCTestCase {
       TimerLogic.adjustedRemaining(TimerLogic.maximumDuration, by: 60),
       TimerLogic.maximumDuration)
   }
+
+  func testTimerFormattingFailsClosedForInvalidValues() {
+    XCTAssertEqual(TimerFormat.mmss(-5), "0:00")
+    XCTAssertEqual(TimerFormat.mmss(.nan), "0:00")
+    XCTAssertEqual(TimerFormat.accessible(3661), "1 hour, 1 minute, 1 second")
+    XCTAssertEqual(TimerFormat.accessible(0), "0 seconds")
+  }
 }

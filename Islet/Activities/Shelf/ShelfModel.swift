@@ -64,6 +64,10 @@ final class ShelfModel: ObservableObject {
       lastError = "Only files and folders can be added."
       return false
     }
+    guard FileManager.default.fileExists(atPath: source.path) else {
+      lastError = "That item is no longer available."
+      return false
+    }
 
     let dest = reserveDestination(named: source.lastPathComponent)
     let result: Result<Void, Error> = await Task.detached(priority: .utility) {
@@ -79,6 +83,8 @@ final class ShelfModel: ObservableObject {
       generateThumbnail(id: item.id, url: item.url)
       return true
     case .failure(let error):
+      // A file can disappear between Finder producing its drag payload and the async copy. Give a
+      // useful, non-technical error while retaining the detailed failure in the log.
       lastError = "Couldn’t add \(source.lastPathComponent)."
       Log.app.error("Shelf copy failed: \(error.localizedDescription)")
       return false
@@ -91,6 +97,11 @@ final class ShelfModel: ObservableObject {
     }.value
     switch result {
     case .success:
+      items.removeAll { $0.id == item.id }
+      lastError = nil
+    case .failure(let error as CocoaError) where error.code == .fileNoSuchFile:
+      // Finder or another process may already have removed the persistent copy. The requested
+      // final state is still achieved, so do not strand a ghost tile on the Shelf.
       items.removeAll { $0.id == item.id }
       lastError = nil
     case .failure(let error):

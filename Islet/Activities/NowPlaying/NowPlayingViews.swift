@@ -225,7 +225,8 @@ struct ExpandedPlayerView: View {
   }
 
   private func format(_ t: TimeInterval) -> String {
-    let s = Int(t.rounded())
+    guard t.isFinite else { return "0:00" }
+    let s = max(0, Int(t.rounded()))
     return String(format: "%d:%02d", s / 60, s % 60)
   }
 

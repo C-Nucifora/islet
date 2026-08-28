@@ -24,6 +24,18 @@ struct ReminderItem: Identifiable, Equatable, Sendable {
 }
 
 enum RemindersLogic {
+  enum SnoozePreset: String, CaseIterable, Sendable {
+    case oneHour
+    case tomorrowMorning
+
+    var title: String {
+      switch self {
+      case .oneHour: "In 1 Hour"
+      case .tomorrowMorning: "Tomorrow Morning"
+      }
+    }
+  }
+
   /// Resolves EventKit date components in their declared calendar/time zone, falling back to the
   /// user's current local calendar. `DateComponents.date` can be nil or use surprising defaults
   /// when a provider omits one of those fields.
@@ -44,6 +56,20 @@ enum RemindersLogic {
     components.calendar = calendar
     components.timeZone = calendar.timeZone
     return components
+  }
+
+  /// Concrete dates for the dashboard's quick-snooze actions. Calendar arithmetic keeps the
+  /// actions correct through daylight-saving changes instead of assuming every day is 86,400 s.
+  static func snoozeDate(
+    _ preset: SnoozePreset, from now: Date, calendar: Calendar = .current
+  ) -> Date? {
+    switch preset {
+    case .oneHour:
+      return calendar.date(byAdding: .hour, value: 1, to: now)
+    case .tomorrowMorning:
+      guard let tomorrow = calendar.date(byAdding: .day, value: 1, to: now) else { return nil }
+      return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)
+    }
   }
 
   /// Ordering for the dashboard: dated reminders first (soonest due first),

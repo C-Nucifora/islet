@@ -28,6 +28,19 @@ final class HUDKeyTests: XCTestCase {
 
   func testUnhandledKeyReturnsNil() {
     XCTAssertNil(HUDKey.decode(data1: data1(keyCode: 10, state: 0xA)))
+    XCTAssertNil(HUDKey.decode(data1: data1(keyCode: 0, state: 0xC)))
+  }
+
+  func testMasterVolumeIsPreferredWhenAvailable() {
+    XCTAssertEqual(VolumeControlLayout.preferredElements(from: [2, 0, 1]), [0])
+    XCTAssertEqual(VolumeControlLayout.preferredElements(from: [2, 1, 2]), [1, 2])
+  }
+
+  func testVolumeShiftPreservesPerChannelBalance() {
+    let shifted = VolumeControlLayout.shiftedValues(
+      [1: 0.4, 2: 0.6], reference: 0.4, target: 0.5)
+    XCTAssertEqual(shifted[1], 0.5)
+    XCTAssertEqual(shifted[2], 0.7)
   }
 
   func testBrightnessClassification() {
