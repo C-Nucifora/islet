@@ -24,6 +24,7 @@ final class HUDController: ObservableObject {
   private var runLoopSource: CFRunLoopSource?
   private var hideTask: Task<Void, Never>?
   private var cancellables: Set<AnyCancellable> = []
+  private var brightnessKeyConsumption = HUDKeyConsumptionState()
 
   func startObserving() {
     Defaults.publisher(.hudEnabled)
@@ -72,6 +73,7 @@ final class HUDController: ObservableObject {
     if let runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes) }
     eventTap = nil
     runLoopSource = nil
+    brightnessKeyConsumption.reset()
     hud = nil
   }
 
@@ -87,18 +89,22 @@ final class HUDController: ObservableObject {
       let decoded = HUDKey.decode(data1: nsEvent.data1)
     else { return false }
 
-    // Only swallow the key (and suppress the system OSD) if we can actually act on it.
-    // Otherwise pass it through so the system handles it and shows its own OSD.
-    guard canHandle(decoded.key) else { return false }
-    if decoded.isKeyDown { apply(decoded.key, modifiers: nsEvent.modifierFlags) }
+    if decoded.key.isBrightness {
+      if !decoded.isKeyDown {
+        return brightnessKeyConsumption.shouldConsumeKeyUp(decoded.key)
+      }
+      return brightnessKeyConsumption.recordKeyDown(
+        decoded.key,
+        applied: apply(decoded.key, modifiers: nsEvent.modifierFlags))
+    }
+
+    // Volume handling keeps its existing all-or-nothing ownership behavior.
+    guard VolumeController.hasOutputDevice else { return false }
+    if decoded.isKeyDown { _ = apply(decoded.key, modifiers: nsEvent.modifierFlags) }
     return true  // consume both down and up so the system never sees the key
   }
 
-  private func canHandle(_ key: HUDKey) -> Bool {
-    key.isBrightness ? BrightnessController.isAvailable : VolumeController.hasOutputDevice
-  }
-
-  private func apply(_ key: HUDKey, modifiers: NSEvent.ModifierFlags) {
+  private func apply(_ key: HUDKey, modifiers: NSEvent.ModifierFlags) -> Bool {
     let divisor: Float = modifiers.contains(.shift) && modifiers.contains(.option) ? 4 : 1
     switch key {
     case .volumeUp, .volumeDown:
@@ -106,6 +112,7 @@ final class HUDController: ObservableObject {
         VolumeController.currentVolume(), up: key == .volumeUp, divisor: divisor)
       VolumeController.setVolume(target)
       present(.init(kind: .volume, level: target, isMuted: target == 0))
+      return true
     case .mute:
       VolumeController.toggleMute()
       let muted = VolumeController.isMuted()
@@ -113,12 +120,20 @@ final class HUDController: ObservableObject {
         .init(
           kind: .volume, level: muted ? 0 : VolumeController.currentVolume(),
           isMuted: muted))
+      return true
     case .brightnessUp, .brightnessDown:
-      let target = HUDMath.stepped(
-        BrightnessController.currentBrightness(), up: key == .brightnessUp,
-        divisor: divisor)
-      BrightnessController.setBrightness(target)
+      let displays = NSScreen.screens.compactMap { screen -> BrightnessDisplayTarget? in
+        guard let displayID = screen.displayID else { return nil }
+        return BrightnessDisplayTarget(displayID: displayID, frame: screen.frame)
+      }
+      guard
+        let displayID = BrightnessTargetResolver.displayID(
+          at: NSEvent.mouseLocation, displays: displays),
+        let target = BrightnessController.adjustBrightness(
+          displayID: displayID, up: key == .brightnessUp, divisor: divisor)
+      else { return false }
       present(.init(kind: .brightness, level: target, isMuted: false))
+      return true
     }
   }
 

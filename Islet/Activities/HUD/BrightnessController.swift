@@ -1,6 +1,19 @@
 import CoreGraphics
 import Foundation
 
+struct BrightnessDisplayTarget: Equatable {
+  let displayID: CGDirectDisplayID
+  let frame: CGRect
+}
+
+enum BrightnessTargetResolver {
+  static func displayID(
+    at point: CGPoint, displays: [BrightnessDisplayTarget]
+  ) -> CGDirectDisplayID? {
+    displays.first { $0.frame.contains(point) }?.displayID
+  }
+}
+
 /// Display brightness via the private DisplayServices framework (dlopen, no linkage).
 /// Degrades to no-op if the symbols are unavailable on this macOS.
 enum BrightnessController {
@@ -28,16 +41,30 @@ enum BrightnessController {
     .flatMap { dlsym($0, "DisplayServicesSetBrightness") }
     .map { unsafeBitCast($0, to: SetFn.self) }
 
-  static var isAvailable: Bool { getFn != nil && setFn != nil }
-
-  static func currentBrightness() -> Float {
-    guard let getFn else { return 0 }
-    var value: Float = 0
-    return getFn(CGMainDisplayID(), &value) == 0 ? max(0, min(1, value)) : 0
+  static func adjustBrightness(
+    displayID: CGDirectDisplayID, up: Bool, divisor: Float
+  ) -> Float? {
+    guard let getFn, let setFn else { return nil }
+    return adjustBrightness(
+      displayID: displayID, up: up, divisor: divisor,
+      read: { displayID in
+        var value: Float = 0
+        guard getFn(displayID, &value) == 0 else { return nil }
+        return max(0, min(1, value))
+      },
+      write: { displayID, value in
+        setFn(displayID, max(0, min(1, value))) == 0
+      })
   }
 
-  static func setBrightness(_ value: Float) {
-    guard let setFn else { return }
-    _ = setFn(CGMainDisplayID(), max(0, min(1, value)))
+  static func adjustBrightness(
+    displayID: CGDirectDisplayID, up: Bool, divisor: Float,
+    read: (CGDirectDisplayID) -> Float?,
+    write: (CGDirectDisplayID, Float) -> Bool
+  ) -> Float? {
+    guard let current = read(displayID) else { return nil }
+    let target = HUDMath.stepped(current, up: up, divisor: divisor)
+    guard write(displayID, target) else { return nil }
+    return target
   }
 }
