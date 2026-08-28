@@ -3,11 +3,10 @@ import Combine
 import Defaults
 
 enum ActivityLifecyclePolicy {
-  static func shouldRun(
-    activityID: String, featureEnabled: Bool = true, disabledActivities: Set<String>
-  ) -> Bool {
-    featureEnabled && !disabledActivities.contains(activityID)
-  }
+  /// Activity lineup visibility is presentation state. Providers stop only when their actual
+  /// feature switch is disabled, so hiding Calendar cannot empty the Home agenda (and hiding any
+  /// other activity cannot silently shut down a shared monitor).
+  static func shouldRun(featureEnabled: Bool = true) -> Bool { featureEnabled }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -106,9 +105,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   @MainActor
   private func configureActivityLifecycles() {
-    Defaults.publisher(.disabledActivities)
-      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
-      .store(in: &activityLifecycleCancellables)
     Defaults.publisher(.batteryEnabled)
       .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
       .store(in: &activityLifecycleCancellables)
@@ -141,75 +137,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   @MainActor
   private func reconcileActivityLifecycles() {
-    let disabled = Set(Defaults[.disabledActivities])
-
-    if ActivityLifecyclePolicy.shouldRun(
-      activityID: AppState.nowPlaying.id, disabledActivities: disabled)
-    {
+    if ActivityLifecyclePolicy.shouldRun() {
       AppState.nowPlaying.start()
     } else {
       AppState.nowPlaying.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(
-      activityID: AppState.battery.id, featureEnabled: Defaults[.batteryEnabled],
-      disabledActivities: disabled)
-    {
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.batteryEnabled]) {
       AppState.battery.start()
     } else {
       AppState.battery.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(
-      activityID: AppState.calendar.id, featureEnabled: Defaults[.calendarEnabled],
-      disabledActivities: disabled)
-    {
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.calendarEnabled]) {
       AppState.calendar.start()
     } else {
       AppState.calendar.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(
-      activityID: AppState.ports.id, featureEnabled: Defaults[.portsEnabled],
-      disabledActivities: disabled)
-    {
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.portsEnabled]) {
       AppState.ports.start()
     } else {
       AppState.ports.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(
-      activityID: AppState.clipboard.id, featureEnabled: Defaults[.clipboardEnabled],
-      disabledActivities: disabled)
-    {
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.clipboardEnabled]) {
       AppState.clipboard.start()
     } else {
       AppState.clipboard.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(
-      activityID: AppState.system.id, featureEnabled: Defaults[.systemEnabled],
-      disabledActivities: disabled)
-    {
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.systemEnabled]) {
       AppState.system.start()
     } else {
       AppState.system.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(
-      activityID: AppState.t3Code.id, featureEnabled: Defaults[.t3CodeEnabled],
-      disabledActivities: disabled)
-    {
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.t3CodeEnabled]) {
       AppState.t3Code.start()
     } else {
       AppState.t3Code.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(
-      activityID: AppState.pulse.id, featureEnabled: Defaults[.pulseEnabled],
-      disabledActivities: disabled)
-    {
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.pulseEnabled]) {
       AppState.pulse.start()
     } else {
       AppState.pulse.stop()
     }
-    if ActivityLifecyclePolicy.shouldRun(
-      activityID: AppState.continuity.id, featureEnabled: Defaults[.continuityEnabled],
-      disabledActivities: disabled)
-    {
+    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.continuityEnabled]) {
       AppState.continuity.start()
     } else {
       AppState.continuity.stop()

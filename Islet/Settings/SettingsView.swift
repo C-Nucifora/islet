@@ -280,9 +280,13 @@ struct SettingsView: View {
     Binding(
       get: { !disabledActivities.contains(id) && featureEnabled(id) },
       set: { on in
-        if on { disabledActivities.removeAll { $0 == id } }
-        else if !disabledActivities.contains(id) { disabledActivities.append(id) }
-        setFeatureEnabled(on, id: id)
+        if on {
+          disabledActivities.removeAll { $0 == id }
+          // Recover preferences written by the previous combined visibility/lifecycle switch.
+          setFeatureEnabled(true, id: id)
+        } else if !disabledActivities.contains(id) {
+          disabledActivities.append(id)
+        }
       })
   }
 
@@ -657,7 +661,7 @@ struct SettingsView: View {
   private var activityOrderForm: some View {
     Form {
       Section("Activity lineup") {
-        Text("Drag to set priority. Turning an activity off removes it from the island and stops its monitor or local server when it owns one.")
+        Text("Drag to set priority. Turning an activity off hides it from the island; shared Home data, monitors, and local integrations keep running.")
           .font(.caption).foregroundStyle(.secondary)
         List {
           ForEach(ActivityCatalog.mergedOrder(activityOrder), id: \.self) { id in
@@ -827,7 +831,7 @@ struct SettingsView: View {
         LabeledContent("Activity") {
           Text(calendarEnabled ? "On" : "Off").foregroundStyle(.secondary)
         }
-        Text("Enable or disable Calendar from Activity Lineup so visibility and EventKit monitoring stay in sync.")
+        Text("Activity Lineup controls the Calendar tab. EventKit monitoring stays on because Calendar also supplies the Home agenda.")
           .font(.caption).foregroundStyle(.secondary)
         if calendarEnabled {
           Picker("Upcoming-event countdown", selection: $calendarLeadMinutes) {

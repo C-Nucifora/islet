@@ -211,9 +211,17 @@ enum T3LocalDiscovery {
     var request = URLRequest(url: endpoint.url(".well-known/t3/environment"))
     request.timeoutInterval = 1.5
     do {
-      let (_, response) = try await URLSession.shared.data(for: request)
-      return (response as? HTTPURLResponse).map { (200..<500).contains($0.statusCode) } ?? false
+      let (data, response) = try await URLSession.shared.data(for: request)
+      guard let http = response as? HTTPURLResponse else { return false }
+      return acceptsDiscoveryResponse(data: data, statusCode: http.statusCode)
     } catch { return false }
+  }
+
+  /// A listening port is T3 Code only when its public descriptor succeeds and decodes. Treating a
+  /// 404 from an unrelated service as reachable would suppress the runtime-file fallback.
+  nonisolated static func acceptsDiscoveryResponse(data: Data, statusCode: Int) -> Bool {
+    (200..<300).contains(statusCode)
+      && (try? JSONDecoder().decode(T3EnvironmentDescriptor.self, from: data)) != nil
   }
 
   private static func runtimePort() -> Int? {
