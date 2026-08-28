@@ -26,6 +26,8 @@ final class PulseServer: ObservableObject {
 
   private var listener: NWListener?
   private var connections: [ObjectIdentifier: NWConnection] = [:]
+  private var commandPipelines: [ObjectIdentifier: PulseCommandPipeline] = [:]
+  private var commandTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
   private let queue = DispatchQueue(label: "dev.cnucifora.Islet.pulse", qos: .utility)
   @Published private(set) var isRunning = false
   @Published private(set) var lastError: String?
@@ -83,7 +85,11 @@ final class PulseServer: ObservableObject {
     listener = nil
     isRunning = false
     for connection in connections.values { connection.cancel() }
+    for pipeline in commandPipelines.values { pipeline.finish() }
+    for task in commandTasks.values { task.cancel() }
     connections.removeAll()
+    commandPipelines.removeAll()
+    commandTasks.removeAll()
   }
 
   /// Invalidates the one shared provider credential, disconnects every current client, and
@@ -112,17 +118,40 @@ final class PulseServer: ObservableObject {
       return
     }
     let id = ObjectIdentifier(connection)
+    let pipeline = PulseCommandPipeline()
     connections[id] = connection
+    commandPipelines[id] = pipeline
+    commandTasks[id] = Task { @MainActor [weak self, weak connection] in
+      guard let self, let connection else { return }
+      for await data in pipeline.stream {
+        guard !Task.isCancelled, self.process(data, on: connection) else { break }
+      }
+      pipeline.finish()
+      self.detachConnection(id)
+    }
     connection.stateUpdateHandler = { [weak self, weak connection] state in
       guard case .failed = state else {
-        if case .cancelled = state { Task { @MainActor in self?.connections[id] = nil } }
+        if case .cancelled = state { Task { @MainActor in self?.removeConnection(id) } }
         return
       }
       connection?.cancel()
-      Task { @MainActor in self?.connections[id] = nil }
+      Task { @MainActor in self?.removeConnection(id) }
     }
     connection.start(queue: queue)
-    receive(on: connection, id: id, buffer: Data(), commandCount: 0)
+    receive(on: connection, id: id, pipeline: pipeline, buffer: Data(), commandCount: 0)
+  }
+
+  private func removeConnection(_ id: ObjectIdentifier) {
+    // A state callback can arrive while already-received commands are still queued. Finish the
+    // stream and release our handles, but let its consumer drain in wire order. `stop()` is the
+    // only path that deliberately cancels pending commands.
+    detachConnection(id)
+  }
+
+  private func detachConnection(_ id: ObjectIdentifier) {
+    connections[id] = nil
+    commandPipelines.removeValue(forKey: id)?.finish()
+    commandTasks[id] = nil
   }
 
   nonisolated private static func isLoopback(_ endpoint: NWEndpoint) -> Bool {
@@ -138,7 +167,8 @@ final class PulseServer: ObservableObject {
   }
 
   nonisolated private func receive(
-    on connection: NWConnection, id: ObjectIdentifier, buffer: Data, commandCount: Int
+    on connection: NWConnection, id: ObjectIdentifier, pipeline: PulseCommandPipeline,
+    buffer: Data, commandCount: Int
   ) {
     connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) {
       [weak self] data, _, complete, error in
@@ -156,6 +186,7 @@ final class PulseServer: ObservableObject {
               "message exceeds \(Self.maximumMessageBytes) bytes", code: .messageTooLarge),
             on: connection,
             closeAfterSend: true)
+          pipeline.finish()
           return
         }
         nextCommandCount += 1
@@ -164,54 +195,59 @@ final class PulseServer: ObservableObject {
             .failure("connection command limit exceeded", code: .commandLimitExceeded),
             on: connection,
             closeAfterSend: true)
+          pipeline.finish()
           return
         }
-        self.decode(Data(line), on: connection)
+        pipeline.yield(Data(line))
       }
       guard next.count <= Self.maximumMessageBytes else {
         self.send(
           .failure("message exceeds \(Self.maximumMessageBytes) bytes", code: .messageTooLarge),
           on: connection,
           closeAfterSend: true)
+        pipeline.finish()
         return
       }
       if error != nil || complete {
         connection.cancel()
-        Task { @MainActor in self.connections[id] = nil }
+        pipeline.finish()
+        Task { @MainActor in self.removeConnection(id) }
       } else {
         self.receive(
-          on: connection, id: id, buffer: next, commandCount: nextCommandCount)
+          on: connection, id: id, pipeline: pipeline, buffer: next,
+          commandCount: nextCommandCount)
       }
     }
   }
 
-  nonisolated private func decode(_ data: Data, on connection: NWConnection) {
+  /// Runs only from the connection's one long-lived pipeline task. `show`, `update`, and `end`
+  /// therefore reach the model—and write their responses—in exactly the order received on the wire.
+  private func process(_ data: Data, on connection: NWConnection) -> Bool {
     do {
       try PulseWireValidator.validate(data)
       let command = try PulseWireCodec.decoder().decode(PulseCommand.self, from: data)
-      Task { @MainActor in
-        guard Self.securelyMatches(command.token, self.token) else {
-          self.send(
-            .failure(
-              "unauthorized", code: .unauthorized, requestID: command.requestID),
-            on: connection, closeAfterSend: true)
-          return
-        }
-        guard self.rateLimiter.accepts(Date()) else {
-          self.send(
-            .failure(
-              "provider command rate exceeded; retry later", code: .rateLimited,
-              requestID: command.requestID),
-            on: connection, closeAfterSend: true)
-          return
-        }
-        self.send(PulseCenter.shared.apply(command), on: connection)
+      guard Self.securelyMatches(command.token, token) else {
+        send(
+          .failure("unauthorized", code: .unauthorized, requestID: command.requestID),
+          on: connection, closeAfterSend: true)
+        return false
       }
+      guard rateLimiter.accepts(ProcessInfo.processInfo.systemUptime) else {
+        send(
+          .failure(
+            "provider command rate exceeded; retry later", code: .rateLimited,
+            requestID: command.requestID),
+          on: connection, closeAfterSend: true)
+        return false
+      }
+      send(PulseCenter.shared.apply(command), on: connection)
+      return true
     } catch {
       send(
         .failure("invalid command: \(error.localizedDescription)", code: .invalidCommand),
         on: connection,
         closeAfterSend: true)
+      return false
     }
   }
 
@@ -292,4 +328,18 @@ final class PulseServer: ObservableObject {
     for index in left.indices { difference |= left[index] ^ right[index] }
     return difference == 0
   }
+}
+
+/// Thread-safe bridge from Network.framework's serial receive queue into one ordered MainActor
+/// consumer. AsyncStream preserves yield order without creating one unstructured task per command.
+private final class PulseCommandPipeline: @unchecked Sendable {
+  let stream: AsyncStream<Data>
+  private let continuation: AsyncStream<Data>.Continuation
+
+  init() {
+    (stream, continuation) = AsyncStream.makeStream(of: Data.self)
+  }
+
+  func yield(_ data: Data) { continuation.yield(data) }
+  func finish() { continuation.finish() }
 }

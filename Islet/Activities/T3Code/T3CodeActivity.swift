@@ -11,8 +11,10 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   let preferredExpandedHeight = Metrics.tallExpandedHeight
 
   @Published private(set) var environments: [T3EnvironmentSnapshot] = []
+  @Published private(set) var lastCredentialError: String?
   private(set) var activationDate: Date?
 
+  private var credentialErrors: [String: String] = [:]
   private var monitorTasks: [String: Task<Void, Never>] = [:]
   private var cancellables: Set<AnyCancellable> = []
   private var workspaceCancellables: Set<AnyCancellable> = []
@@ -89,10 +91,36 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       pairingLink, allowInsecureRemoteHTTP: allowInsecureHTTP)
     let unauthenticated = T3Client(endpoint: target.endpoint, token: nil)
     let descriptor = try await unauthenticated.fetchDescriptor()
+    if let local = environments.first(where: \.isLocal),
+      local.id == Self.localSnapshotID(descriptor.environmentId)
+    {
+      throw T3ClientError.environmentIdentityConflict
+    }
+    let incomingCredentialID = Self.remoteCredentialID(
+      environmentID: descriptor.environmentId,
+      baseURL: target.endpoint.baseURL.absoluteString)
+    if let existing = Defaults[.t3RemoteEnvironments].first(where: {
+      $0.id == descriptor.environmentId
+        && Self.remoteCredentialID(environmentID: $0.id, baseURL: $0.baseURL)
+          != incomingCredentialID
+    }) {
+      Log.app.error(
+        "Rejected duplicate T3 environment id from \(target.endpoint.baseURL.absoluteString, privacy: .public); already paired with \(existing.baseURL, privacy: .public)")
+      throw T3ClientError.environmentIdentityConflict
+    }
     let exchange = try await unauthenticated.exchange(pairingCredential: target.credential)
     let authenticated = T3Client(endpoint: target.endpoint, token: exchange.accessToken)
     _ = try await authenticated.fetchShell()
-    try T3CredentialStore.save(exchange.accessToken, environmentID: descriptor.environmentId)
+    let credentialKey = Self.remoteMonitorKey(descriptor.environmentId)
+    do {
+      try T3CredentialStore.save(
+        exchange.accessToken,
+        credentialID: incomingCredentialID)
+      updateCredentialError(nil, for: credentialKey)
+    } catch {
+      updateCredentialError(error, for: credentialKey)
+      throw error
+    }
 
     var profiles = Defaults[.t3RemoteEnvironments]
     let profile = T3EnvironmentProfile(
@@ -114,11 +142,21 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     Defaults[.t3RemoteEnvironments] = profiles
   }
 
-  func removeRemote(environmentID: String) {
+  func removeRemote(environmentID: String) throws {
     var profiles = Defaults[.t3RemoteEnvironments]
+    guard let profile = profiles.first(where: { $0.id == environmentID }) else { return }
+    let credentialKey = Self.remoteMonitorKey(profile.id)
+    do {
+      try T3CredentialStore.delete(
+        credentialID: Self.remoteCredentialID(
+          environmentID: profile.id, baseURL: profile.baseURL))
+      updateCredentialError(nil, for: credentialKey)
+    } catch {
+      updateCredentialError(error, for: credentialKey)
+      throw error
+    }
     profiles.removeAll { $0.id == environmentID }
     Defaults[.t3RemoteEnvironments] = profiles
-    T3CredentialStore.delete(environmentID: environmentID)
   }
 
   var compactLeading: AnyView {
@@ -163,7 +201,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       for profile in Self.enabledRemoteProfiles(Defaults[.t3RemoteEnvironments]) {
         // Namespace the key: an imported/corrupt remote id of "local" must not overwrite the only
         // handle capable of cancelling the local monitor.
-        monitorTasks["remote:\(profile.id)"] = Task { [weak self] in
+        monitorTasks[Self.remoteMonitorKey(profile.id)] = Task { [weak self] in
           await self?.monitorRemote(profile)
         }
       }
@@ -187,13 +225,18 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       let endpoint = await T3LocalDiscovery.endpoint()
       do {
         let descriptor = try await T3Client(endpoint: endpoint, token: nil).fetchDescriptor()
-        var token = T3CredentialStore.load(environmentID: descriptor.environmentId)
+        let credentialID = Self.localCredentialID(
+          environmentID: descriptor.environmentId, baseURL: endpoint.baseURL.absoluteString)
+        var token = try T3CredentialStore.load(
+          credentialID: credentialID, legacyEnvironmentID: descriptor.environmentId)
         if token == nil {
           let pairingCredential = try await T3LocalPairingMinting.mint()
           token = try await T3Client(endpoint: endpoint, token: nil)
             .exchange(pairingCredential: pairingCredential).accessToken
-          try T3CredentialStore.save(token!, environmentID: descriptor.environmentId)
+          guard let token else { throw T3ClientError.invalidResponse }
+          try T3CredentialStore.save(token, credentialID: credentialID)
         }
+        updateCredentialError(nil, for: "local")
         try await poll(
           descriptor: descriptor, endpoint: endpoint, token: token, isLocal: true,
           onConnected: { failures = 0 })
@@ -202,10 +245,20 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       } catch T3ClientError.unauthorized {
         failures += 1
         if let descriptor = try? await T3Client(endpoint: endpoint, token: nil).fetchDescriptor() {
-          T3CredentialStore.delete(environmentID: descriptor.environmentId)
+          do {
+            try T3CredentialStore.delete(
+              credentialID: Self.localCredentialID(
+                environmentID: descriptor.environmentId,
+                baseURL: endpoint.baseURL.absoluteString))
+            updateCredentialError(nil, for: "local")
+          } catch {
+            updateCredentialError(error, for: "local")
+            Log.app.error("Could not remove rejected local T3 credential: \(error.localizedDescription)")
+          }
         }
       } catch {
         guard !Task.isCancelled else { return }
+        updateCredentialError(error, for: "local")
         failures += 1
         upsert(
           T3EnvironmentSnapshot(
@@ -224,10 +277,19 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       let endpoint = try? T3Endpoint(url, allowInsecureRemoteHTTP: true)
     else { return }
     var failures = 0
+    let monitorKey = Self.remoteMonitorKey(profile.id)
     while !Task.isCancelled {
       do {
         let descriptor = try await T3Client(endpoint: endpoint, token: nil).fetchDescriptor()
-        guard let token = T3CredentialStore.load(environmentID: profile.id) else {
+        guard descriptor.environmentId == profile.id else {
+          throw T3ClientError.environmentIdentityConflict
+        }
+        let credentialID = Self.remoteCredentialID(
+          environmentID: profile.id, baseURL: profile.baseURL)
+        let token = try T3CredentialStore.load(
+          credentialID: credentialID, legacyEnvironmentID: profile.id)
+        updateCredentialError(nil, for: monitorKey)
+        guard let token else {
           upsert(snapshot(profile, descriptor: descriptor, state: .needsPairing, agents: []))
           try? await Task.sleep(for: .seconds(10))
           continue
@@ -242,6 +304,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         upsert(snapshot(profile, descriptor: nil, state: .needsPairing, agents: []))
       } catch {
         guard !Task.isCancelled else { return }
+        updateCredentialError(error, for: monitorKey)
         failures += 1
         upsert(
           snapshot(
@@ -266,13 +329,17 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       // A successful response ends the outage. Without this callback, a later unrelated failure
       // resumed at the old exponential-backoff ceiling even after days of healthy polling.
       onConnected()
-      let active = T3AgentSnapshot.activeAgents(
-        in: shell, environmentID: descriptor.environmentId)
+      let snapshotID = isLocal
+        ? Self.localSnapshotID(descriptor.environmentId)
+        : Self.remoteSnapshotID(
+          environmentID: descriptor.environmentId,
+          baseURL: endpoint.baseURL.absoluteString)
+      let active = T3AgentSnapshot.activeAgents(in: shell, environmentID: snapshotID)
       let platform = [descriptor.platform?.os, descriptor.platform?.arch]
         .compactMap { $0 }.joined(separator: " · ")
       upsert(
         T3EnvironmentSnapshot(
-          id: descriptor.environmentId,
+          id: snapshotID,
           label: descriptor.label.isEmpty ? (fallbackLabel ?? "T3 Code") : descriptor.label,
           baseURL: endpoint.baseURL.absoluteString,
           isLocal: isLocal,
@@ -300,7 +367,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     let platform = [descriptor?.platform?.os, descriptor?.platform?.arch]
       .compactMap { $0 }.joined(separator: " · ")
     return T3EnvironmentSnapshot(
-      id: profile.id,
+      id: Self.remoteSnapshotID(environmentID: profile.id, baseURL: profile.baseURL),
       label: descriptor?.label ?? profile.label,
       baseURL: profile.baseURL,
       isLocal: false,
@@ -350,6 +417,44 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   ) -> [T3EnvironmentProfile] {
     var seen: Set<String> = []
     return profiles.filter { $0.enabled && seen.insert($0.id).inserted }
+  }
+
+  nonisolated static func localCredentialID(environmentID: String, baseURL: String) -> String {
+    "local|\(environmentID)|\(canonicalEndpointIdentity(baseURL))"
+  }
+
+  nonisolated static func remoteCredentialID(environmentID: String, baseURL: String) -> String {
+    "remote|\(environmentID)|\(canonicalEndpointIdentity(baseURL))"
+  }
+
+  nonisolated static func localSnapshotID(_ environmentID: String) -> String {
+    "local|\(environmentID)"
+  }
+
+  nonisolated static func remoteSnapshotID(environmentID: String, baseURL: String) -> String {
+    "remote|\(environmentID)|\(canonicalEndpointIdentity(baseURL))"
+  }
+
+  nonisolated private static func remoteMonitorKey(_ environmentID: String) -> String {
+    "remote:\(environmentID)"
+  }
+
+  private func updateCredentialError(_ error: Error?, for monitorKey: String) {
+    if let error = error as? T3CredentialStoreError {
+      credentialErrors[monitorKey] = error.localizedDescription
+    } else if error == nil {
+      credentialErrors[monitorKey] = nil
+    }
+    lastCredentialError = credentialErrors.keys.sorted()
+      .compactMap { credentialErrors[$0] }
+      .joined(separator: "\n")
+    if lastCredentialError?.isEmpty == true { lastCredentialError = nil }
+  }
+
+  nonisolated private static func canonicalEndpointIdentity(_ value: String) -> String {
+    guard let url = URL(string: value), let endpoint = try? T3Endpoint(url, allowInsecureRemoteHTTP: true)
+    else { return value }
+    return endpoint.baseURL.absoluteString
   }
 
   nonisolated static func reconnectDelay(failureCount: Int, remote: Bool) -> TimeInterval {
