@@ -5,7 +5,8 @@ import XCTest
 @MainActor
 final class NotchViewModelTests: XCTestCase {
   func makeVM(
-    mode: InteractionMode = .hover, barrierPushDistance: CGFloat? = nil
+    mode: InteractionMode = .hover,
+    barrierPushDistance: CGFloat? = Metrics.barrierPushDistance
   ) -> NotchViewModel {
     let g = NotchGeometry(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
