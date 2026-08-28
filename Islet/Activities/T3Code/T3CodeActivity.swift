@@ -160,8 +160,12 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     // Remote polling is optional work and can keep radios awake. Leave the last snapshot visible
     // in Low Power Mode and reconnect when normal power policy resumes.
     if energyPolicy.allowsRemotePolling {
-      for profile in Defaults[.t3RemoteEnvironments] where profile.enabled {
-        monitorTasks[profile.id] = Task { [weak self] in await self?.monitorRemote(profile) }
+      for profile in Self.enabledRemoteProfiles(Defaults[.t3RemoteEnvironments]) {
+        // Namespace the key: an imported/corrupt remote id of "local" must not overwrite the only
+        // handle capable of cancelling the local monitor.
+        monitorTasks["remote:\(profile.id)"] = Task { [weak self] in
+          await self?.monitorRemote(profile)
+        }
       }
     }
   }
@@ -192,10 +196,12 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
           try T3CredentialStore.save(token!, environmentID: descriptor.environmentId)
         }
         try await poll(
-          descriptor: descriptor, endpoint: endpoint, token: token, isLocal: true)
+          descriptor: descriptor, endpoint: endpoint, token: token, isLocal: true,
+          onConnected: { failures = 0 })
       } catch is CancellationError {
         return
       } catch T3ClientError.unauthorized {
+        failures += 1
         if let descriptor = try? await T3Client(endpoint: endpoint, token: nil).fetchDescriptor() {
           T3CredentialStore.delete(environmentID: descriptor.environmentId)
         }
@@ -229,7 +235,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         }
         try await poll(
           descriptor: descriptor, endpoint: endpoint, token: token, isLocal: false,
-          fallbackLabel: profile.label)
+          fallbackLabel: profile.label, onConnected: { failures = 0 })
       } catch is CancellationError {
         return
       } catch T3ClientError.unauthorized {
@@ -252,11 +258,15 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     endpoint: T3Endpoint,
     token: String?,
     isLocal: Bool,
-    fallbackLabel: String? = nil
+    fallbackLabel: String? = nil,
+    onConnected: () -> Void = {}
   ) async throws {
     let client = T3Client(endpoint: endpoint, token: token)
     while !Task.isCancelled {
       let shell = try await client.fetchShell()
+      // A successful response ends the outage. Without this callback, a later unrelated failure
+      // resumed at the old exponential-backoff ceiling even after days of healthy polling.
+      onConnected()
       let active = T3AgentSnapshot.activeAgents(
         in: shell, environmentID: descriptor.environmentId)
       let platform = [descriptor.platform?.os, descriptor.platform?.arch]
@@ -331,6 +341,16 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   ) -> TimeInterval {
     EnergyPolicy(mode: energyMode, systemLowPowerMode: lowPowerMode)
       .t3PollInterval(busy: busy, expanded: expanded)
+  }
+
+  /// Defaults can be hand-edited or carried across versions. Preserve first occurrence order but
+  /// never launch two infinite polling tasks for the same environment id: storing the second under
+  /// the same dictionary key loses the first cancellation handle while the first task keeps alive.
+  nonisolated static func enabledRemoteProfiles(
+    _ profiles: [T3EnvironmentProfile]
+  ) -> [T3EnvironmentProfile] {
+    var seen: Set<String> = []
+    return profiles.filter { $0.enabled && seen.insert($0.id).inserted }
   }
 
   nonisolated static func reconnectDelay(failureCount: Int, remote: Bool) -> TimeInterval {

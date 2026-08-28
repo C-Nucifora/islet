@@ -29,6 +29,19 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertFalse(o.hasAny)
   }
 
+  func testInternalBatterySelectionDoesNotMistakeAUPSForTheMacBattery() {
+    let descriptions: [[String: Any]] = [
+      ["Type": "UPS", "Name": "Desk UPS"],
+      ["Type": "InternalBattery", "Name": "MacBook Battery"],
+    ]
+    let selected = IOPSPowerSourceSelector.internalBattery(in: descriptions)
+    XCTAssertEqual(selected?["Name"] as? String, "MacBook Battery")
+  }
+
+  func testInternalBatterySelectionReturnsNilOnADesktopWithOnlyAUPS() {
+    XCTAssertNil(IOPSPowerSourceSelector.internalBattery(in: [["Type": "UPS"]]))
+  }
+
   func testPDProfileComputesWatts() {
     let rung = PDProfile(index: 4, volts: 20.0, amps: 1.49)
     XCTAssertEqual(rung.id, 4)

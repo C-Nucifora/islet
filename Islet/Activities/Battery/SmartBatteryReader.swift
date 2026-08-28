@@ -1,6 +1,17 @@
 import Foundation
 import IOKit.ps
 
+/// Chooses the Mac's internal pack from IOPS descriptions. UPS batteries can appear first in the
+/// API's list; treating `list.first` as the Mac battery reports the UPS charge and health in the
+/// notch whenever one is attached.
+enum IOPSPowerSourceSelector {
+  static func internalBattery(in descriptions: [[String: Any]]) -> [String: Any]? {
+    descriptions.first {
+      ($0[kIOPSTypeKey] as? String) == (kIOPSInternalBatteryType as String)
+    }
+  }
+}
+
 /// The only place in the battery stack that touches IOKit, IOPS or ProcessInfo. It gathers the
 /// three dictionaries and hands them straight to `BatteryMetricsParser`, which is pure and tested.
 ///
@@ -78,9 +89,11 @@ enum SmartBatteryReader {
   /// The IOPS description of the internal battery, for `BatteryHealth` / `BatteryHealthCondition`.
   private static func primaryPowerSource() -> [String: Any]? {
     guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-      let list = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef],
-      let source = list.first
+      let list = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef]
     else { return nil }
-    return IOPSGetPowerSourceDescription(info, source)?.takeUnretainedValue() as? [String: Any]
+    let descriptions = list.compactMap {
+      IOPSGetPowerSourceDescription(info, $0)?.takeUnretainedValue() as? [String: Any]
+    }
+    return IOPSPowerSourceSelector.internalBattery(in: descriptions)
   }
 }

@@ -81,6 +81,19 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(T3CodeActivity.reconnectDelay(failureCount: 20, remote: true), 300)
   }
 
+  func testRemoteMonitorProfilesAreEnabledUniqueAndOrdered() {
+    let profiles = [
+      T3EnvironmentProfile(id: "one", label: "First", baseURL: "https://one.example"),
+      T3EnvironmentProfile(
+        id: "off", label: "Off", baseURL: "https://off.example", enabled: false),
+      T3EnvironmentProfile(id: "one", label: "Duplicate", baseURL: "https://dup.example"),
+      T3EnvironmentProfile(id: "local", label: "Reserved-looking", baseURL: "https://two.example"),
+    ]
+    let selected = T3CodeActivity.enabledRemoteProfiles(profiles)
+    XCTAssertEqual(selected.map(\.id), ["one", "local"])
+    XCTAssertEqual(selected.first?.label, "First")
+  }
+
   func testUpsertOfUnchangedSnapshotDoesNotChangePublishedValue() {
     let snapshot = T3EnvironmentSnapshot(
       id: "local", label: "This Mac", baseURL: "http://127.0.0.1:3773/",
