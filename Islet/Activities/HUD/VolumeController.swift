@@ -52,7 +52,9 @@ enum VolumeController {
   /// not confused with a genuine zero volume.
   static func currentVolume() -> Float { readVolume() ?? 0 }
 
-  /// Applies volume and verifies it by reading every control that accepted the write.
+  /// Applies volume and verifies it by reading every control that accepted the write. On devices
+  /// with per-channel controls but no master scalar, every channel moves by the same delta so a
+  /// pre-existing balance is preserved.
   /// Returning false is a hard instruction to the event tap to pass the media key through.
   @discardableResult
   static func setVolume(_ value: Float) -> Bool {
@@ -60,7 +62,7 @@ enum VolumeController {
     guard device != kAudioObjectUnknown else { return false }
     let elements = writableVolumeElements(on: device)
     guard !elements.isEmpty else { return false }
-    var clamped = max(0, min(1, value))
+    let clamped = max(0, min(1, value))
     let originalMute = readMuted()
     if clamped > 0, originalMute == true, !setMuted(false) { return false }
 
@@ -72,12 +74,19 @@ enum VolumeController {
       if originalMute == true { _ = setMuted(true) }
       return false
     }
+    guard let referenceElement = elements.first, let reference = originals[referenceElement] else {
+      if originalMute == true { _ = setMuted(true) }
+      return false
+    }
+    let targets = VolumeControlLayout.shiftedValues(
+      originals, reference: reference, target: clamped)
 
     var written: [UInt32] = []
     for element in elements {
       var addr = volumeAddress(element: element)
+      guard var target = targets[element] else { continue }
       if AudioObjectSetPropertyData(
-        device, &addr, 0, nil, UInt32(MemoryLayout<Float>.size), &clamped) == noErr
+        device, &addr, 0, nil, UInt32(MemoryLayout<Float>.size), &target) == noErr
       {
         written.append(element)
       }
@@ -91,8 +100,10 @@ enum VolumeController {
     // CoreAudio scalar controls are synchronous, though some devices quantise to coarse steps.
     // Two percent tolerates that quantisation without treating a silently ignored write as success.
     let verified = written.allSatisfy { element in
-      guard let readback = readVolume(on: device, element: element) else { return false }
-      return abs(readback - clamped) <= 0.02
+      guard let readback = readVolume(on: device, element: element),
+        let target = targets[element]
+      else { return false }
+      return abs(readback - target) <= 0.02
     }
     if !verified {
       restoreVolumes(originals, on: device)
@@ -145,11 +156,13 @@ enum VolumeController {
   }
 
   private static func writableVolumeElements(on device: AudioObjectID) -> [UInt32] {
-    [kAudioObjectPropertyElementMain, UInt32(1), 2, 3, 4].filter { element in
+    let available = [kAudioObjectPropertyElementMain, UInt32(1), 2, 3, 4].filter { element in
       var address = volumeAddress(element: element)
       return isReadableAndSettable(device, address: &address)
         && readVolume(on: device, element: element) != nil
     }
+    return VolumeControlLayout.preferredElements(
+      from: available, master: kAudioObjectPropertyElementMain)
   }
 
   private static func restoreVolumes(_ originals: [UInt32: Float], on device: AudioObjectID) {

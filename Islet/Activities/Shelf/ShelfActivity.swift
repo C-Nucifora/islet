@@ -13,10 +13,13 @@ final class ShelfActivity: NotchActivity, ObservableObject {
 
   private let model = ShelfModel.shared
   private var cancellables: Set<AnyCancellable> = []
+  private var isMonitoring = false
 
   var isActive: Bool { !model.items.isEmpty || model.isDragActive }
 
   func start() {
+    guard !isMonitoring else { return }
+    isMonitoring = true
     model.objectWillChange
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
@@ -26,6 +29,14 @@ final class ShelfActivity: NotchActivity, ObservableObject {
         self.objectWillChange.send()
       }
       .store(in: &cancellables)
+  }
+
+  func stop() {
+    guard isMonitoring else { return }
+    isMonitoring = false
+    cancellables.removeAll()
+    activationDate = nil
+    objectWillChange.send()
   }
 
   var compactLeading: AnyView {
@@ -59,6 +70,8 @@ struct ShelfView: View {
             Image(systemName: "square.and.arrow.up")
           }
           .buttonStyle(.plain)
+          .help("Share all Shelf items with AirDrop")
+          .accessibilityLabel("AirDrop all Shelf items")
           Button {
             Haptics.perform(.levelChange)
             Task { await model.clear() }
@@ -66,6 +79,8 @@ struct ShelfView: View {
             Image(systemName: "trash")
           }
           .buttonStyle(.plain)
+          .help("Remove all Shelf items")
+          .accessibilityLabel("Clear Shelf")
         }
       }
 

@@ -41,9 +41,10 @@ final class TimerActivity: NotchActivity, ObservableObject {
   func start(_ duration: TimeInterval, label: String? = nil) {
     guard let duration = TimerLogic.validatedDuration(duration) else { return }
     total = duration
-    self.label = label
+    let cleanLabel = label?.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.label = cleanLabel?.isEmpty == true ? nil : cleanLabel
     lastDuration = duration
-    lastLabel = label
+    lastLabel = self.label
     pausedRemaining = nil
     isPaused = false
     finished = false
@@ -62,7 +63,14 @@ final class TimerActivity: NotchActivity, ObservableObject {
       pausedRemaining = nil
       scheduleCompletion()
     } else {
-      pausedRemaining = remainingNow
+      let remaining = remainingNow
+      // The deadline can pass just before the scheduled completion task gets its main-actor turn.
+      // Pausing in that sliver must complete the timer, not create a permanently paused 0:00.
+      guard remaining > 0 else {
+        fire()
+        return
+      }
+      pausedRemaining = remaining
       endDate = nil
       isPaused = true
       completionTask?.cancel()
@@ -175,6 +183,11 @@ struct TimerCountdownText: View {
       Text(TimerFormat.mmss(activity.remainingNow))
         .font(.caption.weight(.semibold)).monospacedDigit()
         .foregroundStyle(activity.finished ? .green : .orange)
+        .accessibilityLabel(activity.label.map { "\($0) timer" } ?? "Timer")
+        .accessibilityValue(
+          activity.finished
+            ? "Done"
+            : "\(TimerFormat.accessible(activity.remainingNow)) remaining\(activity.isPaused ? ", paused" : "")")
     }
   }
 }
@@ -267,8 +280,23 @@ enum TimerLogic {
 
 enum TimerFormat {
   static func mmss(_ t: TimeInterval) -> String {
-    let s = Int(t.rounded(.up))
+    guard t.isFinite else { return "0:00" }
+    let s = max(0, Int(t.rounded(.up)))
     if s >= 3600 { return String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60) }
     return String(format: "%d:%02d", s / 60, s % 60)
+  }
+
+
+  static func accessible(_ t: TimeInterval) -> String {
+    guard t.isFinite else { return "0 seconds" }
+    let seconds = max(0, Int(t.rounded(.up)))
+    let hours = seconds / 3600
+    let minutes = (seconds % 3600) / 60
+    let remainder = seconds % 60
+    return [
+      hours > 0 ? "\(hours) hour\(hours == 1 ? "" : "s")" : nil,
+      minutes > 0 ? "\(minutes) minute\(minutes == 1 ? "" : "s")" : nil,
+      remainder > 0 || seconds == 0 ? "\(remainder) second\(remainder == 1 ? "" : "s")" : nil,
+    ].compactMap { $0 }.joined(separator: ", ")
   }
 }

@@ -1,13 +1,27 @@
 import Foundation
 
 /// A calendar event reduced to what the island needs (keeps EventKit out of unit tests).
-struct AgendaEvent: Equatable {
+struct AgendaEvent: Identifiable, Equatable {
+  let id: String
   var title: String
   var start: Date
   var end: Date
   var isAllDay: Bool
   var calendarColorHex: String?
   var joinURL: URL?
+
+  init(
+    id: String = UUID().uuidString, title: String, start: Date, end: Date, isAllDay: Bool,
+    calendarColorHex: String?, joinURL: URL?
+  ) {
+    self.id = id
+    self.title = title
+    self.start = start
+    self.end = end
+    self.isAllDay = isAllDay
+    self.calendarColorHex = calendarColorHex
+    self.joinURL = joinURL
+  }
 }
 
 enum CalendarLogic {

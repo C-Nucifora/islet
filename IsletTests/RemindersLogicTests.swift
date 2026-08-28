@@ -71,4 +71,26 @@ final class RemindersLogicTests: XCTestCase {
     XCTAssertNil(components.hour)
     XCTAssertNil(components.minute)
   }
+
+  func testOneHourSnoozeUsesCalendarArithmetic() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Australia/Brisbane"))
+    let result = try XCTUnwrap(
+      RemindersLogic.snoozeDate(.oneHour, from: now, calendar: calendar))
+    XCTAssertEqual(calendar.dateComponents([.minute], from: now, to: result).minute, 60)
+  }
+
+  func testTomorrowMorningSnoozeIsNineAMOnNextCalendarDay() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Australia/Brisbane"))
+    let result = try XCTUnwrap(
+      RemindersLogic.snoozeDate(.tomorrowMorning, from: now, calendar: calendar))
+    XCTAssertEqual(
+      calendar.startOfDay(for: result),
+      calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)))
+    let components = calendar.dateComponents([.hour, .minute, .second], from: result)
+    XCTAssertEqual(components.hour, 9)
+    XCTAssertEqual(components.minute, 0)
+    XCTAssertEqual(components.second, 0)
+  }
 }

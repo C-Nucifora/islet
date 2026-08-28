@@ -5,7 +5,6 @@ import SwiftUI
 struct IdleDashboardView: View {
   @ObservedObject var calendar = AppState.calendar
   @ObservedObject var reminders = RemindersProvider.shared
-  @ObservedObject private var permissions = PermissionCenter.shared
   @Default(.calendarEnabled) private var calendarEnabled
   @Default(.remindersEnabled) private var remindersEnabled
 
@@ -63,7 +62,7 @@ struct IdleDashboardView: View {
     } else {
       ScrollView(.vertical, showsIndicators: false) {
         VStack(alignment: .leading, spacing: 6) {
-          ForEach(Array(calendar.events.prefix(6).enumerated()), id: \.offset) { _, event in
+          ForEach(calendar.events.prefix(6)) { event in
             HStack(spacing: 6) {
               // Vertical bar tinted with the event's calendar colour (like Calendar.app).
               Capsule()
@@ -106,15 +105,30 @@ struct IdleDashboardView: View {
   @ViewBuilder private var remindersList: some View {
     if reminders.accessDenied {
       permissionRow(
-        "Reminders: \(permissions.diagnostics.reminders.summary)", permission: "Reminders"
+        "Reminders: \(reminders.authorization.summary)", permission: "Reminders"
       ) {
         Task { await reminders.recoverAccess() }
+      }
+    } else if reminders.loadState == .loading {
+      ProgressView().controlSize(.small).accessibilityLabel("Loading reminders")
+    } else if case .failed(let message) = reminders.loadState {
+      HStack(spacing: 5) {
+        Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(2)
+        Button("Retry") { Task { await reminders.reload() } }
+          .buttonStyle(.link).font(.caption2)
       }
     } else if reminders.reminders.isEmpty {
       emptyRow("All clear")
     } else {
       ScrollView(.vertical, showsIndicators: false) {
         VStack(alignment: .leading, spacing: 6) {
+          if let error = reminders.lastActionError {
+            HStack(spacing: 5) {
+              Text(error).font(.caption2).foregroundStyle(.orange).lineLimit(1)
+              Button("Dismiss") { reminders.dismissActionError() }
+                .buttonStyle(.link).font(.caption2)
+            }
+          }
           ForEach(reminders.reminders) { item in
             HStack(spacing: 6) {
               Button {
@@ -139,6 +153,21 @@ struct IdleDashboardView: View {
                 }
               }
               Spacer(minLength: 0)
+              Menu {
+                ForEach(RemindersLogic.SnoozePreset.allCases, id: \.self) { preset in
+                  Button(preset.title) {
+                    Haptics.perform(.alignment)
+                    _ = reminders.snooze(item, preset: preset)
+                  }
+                }
+              } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                  .font(.caption2).foregroundStyle(.secondary)
+              }
+              .menuStyle(.borderlessButton)
+              .menuIndicator(.hidden)
+              .fixedSize()
+              .accessibilityLabel("Snooze \(item.title)")
             }
           }
         }

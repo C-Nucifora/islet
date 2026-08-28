@@ -34,7 +34,8 @@ final class MediaWatcher: @unchecked Sendable {
   }
 
   static func backoffDelay(failureCount: Int) -> TimeInterval {
-    min(pow(2, Double(failureCount - 1)), 60)
+    guard failureCount > 1 else { return 1 }
+    return min(pow(2, Double(failureCount - 1)), 60)
   }
 
   func start() {
@@ -130,9 +131,22 @@ final class MediaWatcher: @unchecked Sendable {
 
   private func consume(_ data: Data) {
     buffer.append(data)
+    // A malformed or incompatible helper must not grow the process indefinitely while never
+    // producing a newline. Valid adapter records are tiny compared with this defensive ceiling.
+    if buffer.count > 1_048_576, !buffer.contains(UInt8(ascii: "\n")) {
+      buffer.removeAll(keepingCapacity: false)
+      onStatus?("Discarded oversized adapter output")
+      Log.media.error("Discarded oversized MediaRemote adapter record")
+      return
+    }
     while let nl = buffer.firstIndex(of: UInt8(ascii: "\n")) {
       let lineData = buffer[..<nl]
       buffer.removeSubrange(...nl)
+      guard lineData.count <= 1_048_576 else {
+        onStatus?("Discarded oversized adapter output")
+        Log.media.error("Discarded oversized newline-terminated MediaRemote adapter record")
+        continue
+      }
       guard let line = String(data: lineData, encoding: .utf8) else { continue }
       handle(line: line)
     }

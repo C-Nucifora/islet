@@ -52,6 +52,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
           Task { await self?.requestAccess() }
         } else {
           self?.events = []
+          self?.loadState = .idle
           self?.activationDate = nil
           self?.objectWillChange.send()
         }
@@ -63,6 +64,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
       .sink { [weak self] _ in Task { await self?.refreshAuthorization() } }
       .store(in: &cancellables)
     NotificationCenter.default.publisher(for: .EKEventStoreChanged)
+      .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
       .sink { [weak self] _ in Task { await self?.refreshAuthorization() } }
       .store(in: &cancellables)
     // Re-evaluate the countdown every 30 s, but only query EventKit every five minutes. Store
@@ -89,6 +91,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   }
 
   func requestAccess() async {
+    guard isRunning, Defaults[.calendarEnabled] else { return }
     authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
     if authorization.canRead {
       await reload()
@@ -100,9 +103,11 @@ final class CalendarActivity: NotchActivity, ObservableObject {
     guard authorization == .notDetermined else { return }
     do {
       let granted = try await store.requestFullAccessToEvents()
+      guard isRunning, Defaults[.calendarEnabled] else { return }
       authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
       if granted, authorization.canRead { await reload() }
     } catch {
+      guard isRunning, Defaults[.calendarEnabled] else { return }
       authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
       loadState = .failed(error.localizedDescription)
       Log.app.error("Calendar access error: \(error.localizedDescription)")
@@ -125,6 +130,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   }
 
   func refreshAuthorization() async {
+    guard isRunning, Defaults[.calendarEnabled] else { return }
     authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
     if authorization.canRead {
       await reload()
@@ -135,7 +141,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   }
 
   private func reload() async {
-    guard Defaults[.calendarEnabled] else { return }
+    guard isRunning, Defaults[.calendarEnabled] else { return }
     // Re-check authorization every reload so a mid-session revoke flips to "access off" (and a
     // re-grant recovers), instead of silently showing an empty agenda.
     authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
@@ -152,6 +158,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
     let ekEvents = store.events(matching: predicate)
     let mapped = ekEvents.map { ek in
       AgendaEvent(
+        id: "\(ek.calendarItemIdentifier)|\(ek.startDate.timeIntervalSinceReferenceDate)",
         title: ek.title ?? "Untitled",
         start: ek.startDate, end: ek.endDate, isAllDay: ek.isAllDay,
         calendarColorHex: ColorHex.string(from: ek.calendar?.cgColor),
@@ -260,7 +267,7 @@ struct CalendarAgendaView: View {
       if activity.events.isEmpty {
         Text("No more events today").font(.callout).foregroundStyle(.secondary)
       } else {
-        ForEach(Array(activity.events.prefix(4).enumerated()), id: \.offset) { _, event in
+        ForEach(activity.events.prefix(4)) { event in
           HStack(spacing: 8) {
             if event.isAllDay {
               Text("All day")

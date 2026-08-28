@@ -34,13 +34,21 @@ struct HUDBarView: View {
   let snapshot: HUDSnapshot
   @Default(.hudStyle) private var style
 
+  private var normalizedLevel: CGFloat { CGFloat(max(0, min(1, snapshot.level))) }
+  private var accessibilityLabel: String {
+    switch snapshot.kind {
+    case .brightness: "Brightness"
+    case .volume: snapshot.isMuted ? "Volume muted" : "Volume"
+    }
+  }
+
   var body: some View {
     Group {
       if style == .gauge {
         ZStack {
           Circle().stroke(.white.opacity(0.25), lineWidth: 3)
           Circle()
-            .trim(from: 0, to: CGFloat(snapshot.level))
+            .trim(from: 0, to: normalizedLevel)
             .stroke(.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
             .rotationEffect(.degrees(-90))
         }
@@ -52,10 +60,13 @@ struct HUDBarView: View {
           .overlay(alignment: .leading) {
             Capsule()
               .fill(.white)
-              .frame(width: max(2, 70 * CGFloat(snapshot.level)), height: 4)
+              .frame(width: 70 * normalizedLevel, height: 4)
           }
       }
     }
     .animation(Motion.gated(.linear(duration: 0.12)), value: snapshot.level)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(accessibilityLabel)
+    .accessibilityValue("\(Int((normalizedLevel * 100).rounded())) percent")
   }
 }
