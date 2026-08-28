@@ -22,12 +22,14 @@ final class PulseServer: ObservableObject {
   static let shared = PulseServer()
   nonisolated static let maximumMessageBytes = 64 * 1024
   nonisolated static let maximumCommandsPerConnection = 128
+  nonisolated static let authenticationTimeout: Duration = .seconds(10)
   private nonisolated static let maximumConnections = 16
 
   private var listener: NWListener?
   private var connections: [ObjectIdentifier: NWConnection] = [:]
   private var commandPipelines: [ObjectIdentifier: PulseCommandPipeline] = [:]
   private var commandTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+  private var authenticationTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
   private let queue = DispatchQueue(label: "dev.nedlane.Islet.pulse", qos: .utility)
   @Published private(set) var isRunning = false
   @Published private(set) var lastError: String?
@@ -87,9 +89,11 @@ final class PulseServer: ObservableObject {
     for connection in connections.values { connection.cancel() }
     for pipeline in commandPipelines.values { pipeline.finish() }
     for task in commandTasks.values { task.cancel() }
+    for task in authenticationTasks.values { task.cancel() }
     connections.removeAll()
     commandPipelines.removeAll()
     commandTasks.removeAll()
+    authenticationTasks.removeAll()
   }
 
   /// Invalidates the one shared provider credential, disconnects every current client, and
@@ -123,11 +127,26 @@ final class PulseServer: ObservableObject {
     commandPipelines[id] = pipeline
     commandTasks[id] = Task { @MainActor [weak self, weak connection] in
       guard let self, let connection else { return }
-      for await data in pipeline.stream {
-        guard !Task.isCancelled, self.process(data, on: connection) else { break }
+      commandLoop: for await event in pipeline.stream {
+        guard !Task.isCancelled else { break }
+        switch event {
+        case .command(let data):
+          guard self.process(data, on: connection, id: id) else { break commandLoop }
+        case .terminal(let response):
+          self.send(response, on: connection, closeAfterSend: true)
+          break commandLoop
+        }
       }
       pipeline.finish()
       self.detachConnection(id)
+    }
+    authenticationTasks[id] = Task { @MainActor [weak self, weak connection] in
+      try? await Task.sleep(for: Self.authenticationTimeout)
+      guard !Task.isCancelled, let self, let connection,
+        let active = self.connections[id], active === connection
+      else { return }
+      connection.cancel()
+      self.removeConnection(id)
     }
     connection.stateUpdateHandler = { [weak self, weak connection] state in
       guard case .failed = state else {
@@ -152,6 +171,11 @@ final class PulseServer: ObservableObject {
     connections[id] = nil
     commandPipelines.removeValue(forKey: id)?.finish()
     commandTasks[id] = nil
+    authenticationTasks.removeValue(forKey: id)?.cancel()
+  }
+
+  private func markAuthenticated(_ id: ObjectIdentifier) {
+    authenticationTasks.removeValue(forKey: id)?.cancel()
   }
 
   nonisolated private static func isLoopback(_ endpoint: NWEndpoint) -> Bool {
@@ -181,31 +205,22 @@ final class PulseServer: ObservableObject {
         next.removeSubrange(...newline)
         guard !line.isEmpty else { continue }
         guard line.count <= Self.maximumMessageBytes else {
-          self.send(
+          pipeline.terminate(
             .failure(
-              "message exceeds \(Self.maximumMessageBytes) bytes", code: .messageTooLarge),
-            on: connection,
-            closeAfterSend: true)
-          pipeline.finish()
+              "message exceeds \(Self.maximumMessageBytes) bytes", code: .messageTooLarge))
           return
         }
         nextCommandCount += 1
         guard nextCommandCount <= Self.maximumCommandsPerConnection else {
-          self.send(
-            .failure("connection command limit exceeded", code: .commandLimitExceeded),
-            on: connection,
-            closeAfterSend: true)
-          pipeline.finish()
+          pipeline.terminate(
+            .failure("connection command limit exceeded", code: .commandLimitExceeded))
           return
         }
         pipeline.yield(Data(line))
       }
       guard next.count <= Self.maximumMessageBytes else {
-        self.send(
-          .failure("message exceeds \(Self.maximumMessageBytes) bytes", code: .messageTooLarge),
-          on: connection,
-          closeAfterSend: true)
-        pipeline.finish()
+        pipeline.terminate(
+          .failure("message exceeds \(Self.maximumMessageBytes) bytes", code: .messageTooLarge))
         return
       }
       if error != nil || complete {
@@ -222,7 +237,9 @@ final class PulseServer: ObservableObject {
 
   /// Runs only from the connection's one long-lived pipeline task. `show`, `update`, and `end`
   /// therefore reach the model—and write their responses—in exactly the order received on the wire.
-  private func process(_ data: Data, on connection: NWConnection) -> Bool {
+  private func process(
+    _ data: Data, on connection: NWConnection, id: ObjectIdentifier
+  ) -> Bool {
     do {
       try PulseWireValidator.validate(data)
       let command = try PulseWireCodec.decoder().decode(PulseCommand.self, from: data)
@@ -232,6 +249,7 @@ final class PulseServer: ObservableObject {
           on: connection, closeAfterSend: true)
         return false
       }
+      markAuthenticated(id)
       guard rateLimiter.accepts(ProcessInfo.processInfo.systemUptime) else {
         send(
           .failure(
@@ -332,14 +350,23 @@ final class PulseServer: ObservableObject {
 
 /// Thread-safe bridge from Network.framework's serial receive queue into one ordered MainActor
 /// consumer. AsyncStream preserves yield order without creating one unstructured task per command.
-private final class PulseCommandPipeline: @unchecked Sendable {
-  let stream: AsyncStream<Data>
-  private let continuation: AsyncStream<Data>.Continuation
+enum PulseCommandPipelineEvent: Equatable, Sendable {
+  case command(Data)
+  case terminal(PulseResponse)
+}
+
+final class PulseCommandPipeline: @unchecked Sendable {
+  let stream: AsyncStream<PulseCommandPipelineEvent>
+  private let continuation: AsyncStream<PulseCommandPipelineEvent>.Continuation
 
   init() {
-    (stream, continuation) = AsyncStream.makeStream(of: Data.self)
+    (stream, continuation) = AsyncStream.makeStream(of: PulseCommandPipelineEvent.self)
   }
 
-  func yield(_ data: Data) { continuation.yield(data) }
+  func yield(_ data: Data) { continuation.yield(.command(data)) }
+  func terminate(_ response: PulseResponse) {
+    continuation.yield(.terminal(response))
+    continuation.finish()
+  }
   func finish() { continuation.finish() }
 }

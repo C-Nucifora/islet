@@ -105,7 +105,7 @@ struct IsletQuickAction: Identifiable {
         symbol: "point.3.connected.trianglepath.dotted",
         keywords: "integration settings history sources token", isAvailable: { true }
       ) {
-        SettingsOpener.open(destination: .integrations)
+        SettingsOpener.open(destination: .pulse)
       },
       .init(
         id: "clipboard-pause", title: "Pause clipboard history",

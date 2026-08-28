@@ -157,6 +157,20 @@ final class T3CodeTests: XCTestCase {
         environmentID: "same", baseURL: "http://127.0.0.1:3773"))
   }
 
+  func testLocalCredentialMigrationPrefersScopedTokenAndRemovesObsoleteEntries() {
+    let current = "local|machine|http://127.0.0.1:4888/"
+    let old = "local|machine|http://127.0.0.1:3773/"
+    let migration = T3CredentialStore.migratingLocalCredential(
+      in: [old: "scoped", "machine": "legacy", "remote|other|https://example.com/": "keep"],
+      credentialID: current, environmentID: "machine")
+
+    XCTAssertEqual(migration.token, "scoped")
+    XCTAssertEqual(migration.tokens[current], "scoped")
+    XCTAssertNil(migration.tokens[old])
+    XCTAssertNil(migration.tokens["machine"])
+    XCTAssertEqual(migration.tokens["remote|other|https://example.com/"], "keep")
+  }
+
   func testLocalPairingCommandUsesAnInstalledT3ExecutableWithoutNpx() {
     let paths = T3LocalPairingMinting.candidateExecutablePaths(
       environment: ["PATH": "/custom/bin:/second/bin"])

@@ -8,6 +8,7 @@ enum SettingsDestination: String, Sendable {
   case appearance
   case permissions
   case integrations
+  case pulse
   case advanced
 }
 

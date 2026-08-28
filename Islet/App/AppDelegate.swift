@@ -7,6 +7,13 @@ enum ActivityLifecyclePolicy {
   /// feature switch is disabled, so hiding Calendar cannot empty the Home agenda (and hiding any
   /// other activity cannot silently shut down a shared monitor).
   static func shouldRun(featureEnabled: Bool = true) -> Bool { featureEnabled }
+
+  /// Clipboard polling and the Pulse listener retain or accept user/provider data solely for their
+  /// corresponding activities. Their lineup toggles are therefore also their privacy switches.
+  /// Shared providers such as Calendar stay independent because Home still consumes their data.
+  static func stopsFeatureWhenHidden(_ activityID: String) -> Bool {
+    activityID == "clipboard" || activityID == "pulse"
+  }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -105,6 +112,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   @MainActor
   private func configureActivityLifecycles() {
+    // Builds that shipped the combined lineup toggle could persist "hidden" while leaving these
+    // privacy-sensitive providers enabled. Honour that existing user choice before starting them.
+    let hiddenActivities = Set(Defaults[.disabledActivities])
+    if hiddenActivities.contains("clipboard") { Defaults[.clipboardEnabled] = false }
+    if hiddenActivities.contains("pulse") { Defaults[.pulseEnabled] = false }
+
     Defaults.publisher(.batteryEnabled)
       .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
       .store(in: &activityLifecycleCancellables)

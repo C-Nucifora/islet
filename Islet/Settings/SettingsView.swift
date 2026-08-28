@@ -18,7 +18,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
     case .activities: self = .activities
     case .events: self = .notifications
     case .permissions: self = .privacy
-    case .integrations: self = .integrations
+    case .integrations, .pulse: self = .integrations
     case .advanced: self = .advanced
     }
   }
@@ -286,6 +286,9 @@ struct SettingsView: View {
           setFeatureEnabled(true, id: id)
         } else if !disabledActivities.contains(id) {
           disabledActivities.append(id)
+          if ActivityLifecyclePolicy.stopsFeatureWhenHidden(id) {
+            setFeatureEnabled(false, id: id)
+          }
         }
       })
   }
@@ -587,6 +590,7 @@ struct SettingsView: View {
     case .appearance: .interaction
     case .permissions: .permissions
     case .integrations: nil
+    case .pulse: .pulse
     case .advanced: .diagnostics
     }
   }
@@ -661,7 +665,7 @@ struct SettingsView: View {
   private var activityOrderForm: some View {
     Form {
       Section("Activity lineup") {
-        Text("Drag to set priority. Turning an activity off hides it from the island; shared Home data, monitors, and local integrations keep running.")
+        Text("Drag to set priority. Shared Home services keep running when hidden. Turning Clipboard or Pulse off also stops its data service.")
           .font(.caption).foregroundStyle(.secondary)
         List {
           ForEach(ActivityCatalog.mergedOrder(activityOrder), id: \.self) { id in
