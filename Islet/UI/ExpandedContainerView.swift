@@ -105,7 +105,6 @@ struct ExpandedContainerView: View {
           Menu {
             ForEach(overflowTabs, id: \.id) { tab in
               Button {
-                Haptics.perform(.alignment)
                 selection = tab.id
               } label: {
                 Label(ActivityCatalog.name(for: tab.id), systemImage: tab.icon)
@@ -129,7 +128,6 @@ struct ExpandedContainerView: View {
       // Gap for the physical notch, keeping tabs in the left ear and controls in the right ear.
       Spacer(minLength: notchSize.width)
       Button {
-        Haptics.perform()
         QuickActionsOpener.open()
       } label: {
         Image(systemName: "bolt.fill")
@@ -140,7 +138,6 @@ struct ExpandedContainerView: View {
       .buttonStyle(.plain)
       .accessibilityLabel("Quick Actions")
       Button {
-        Haptics.perform()
         SettingsOpener.open()
       } label: {
         Image(systemName: "gearshape.fill")
@@ -156,7 +153,6 @@ struct ExpandedContainerView: View {
   private func tabButton(_ tab: (id: String, icon: String)) -> some View {
     let selected = tab.id == effectiveSelection
     return Button {
-      Haptics.perform(.alignment)
       selection = tab.id
     } label: {
       Image(systemName: tab.icon)

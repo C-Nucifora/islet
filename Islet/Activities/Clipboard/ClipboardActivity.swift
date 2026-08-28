@@ -326,7 +326,6 @@ struct ClipboardView: View {
           .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
         Spacer()
         Button {
-          Haptics.perform(.levelChange)
           model.setPaused(!model.isPaused)
         } label: {
           Image(systemName: model.isPaused ? "play.fill" : "pause.fill")
@@ -337,7 +336,6 @@ struct ClipboardView: View {
           model.isPaused ? "Resume clipboard history" : "Pause and clear clipboard history")
         if !model.items.isEmpty {
           Button {
-            Haptics.perform(.levelChange)
             model.clear()
           } label: {
             Image(systemName: "trash")
@@ -362,8 +360,7 @@ struct ClipboardView: View {
           VStack(spacing: 4) {
             ForEach(model.items) { item in
               Button {
-                Haptics.perform()
-                if !model.copyBack(item) { Haptics.perform(.levelChange) }
+                _ = model.copyBack(item)
               } label: {
                 HStack(spacing: 8) {
                   Image(systemName: item.icon).font(.caption2).foregroundStyle(.purple)

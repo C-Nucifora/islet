@@ -130,7 +130,6 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
 
   /// Tapping a chip. See `MediaRemoteCommands.promote` for what "promote" can actually mean today.
   func promote(_ source: SourceID) {
-    Haptics.perform(.alignment)
     MediaRemoteCommands.shared.promote(source)
   }
 

@@ -51,7 +51,6 @@ final class TimerActivity: NotchActivity, ObservableObject {
     activationDate = Date()
     endDate = Date().addingTimeInterval(duration)
     scheduleCompletion()
-    Haptics.perform()
   }
 
   func togglePause() {
@@ -248,7 +247,6 @@ struct TimerExpandedView: View {
     _ symbol: String, label: String, _ action: @escaping () -> Void
   ) -> some View {
     Button {
-      Haptics.perform()
       action()
     } label: {
       Image(systemName: symbol)
