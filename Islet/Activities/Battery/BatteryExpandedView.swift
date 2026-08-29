@@ -89,6 +89,7 @@ struct BatteryExpandedView: View {
     let note: String
     let symbol: String
     let watts: Double
+    let tint: Color
   }
 
   private var inputItems: [FlowItem] {
@@ -98,13 +99,13 @@ struct BatteryExpandedView: View {
       items.append(
         FlowItem(
           id: "adapter", label: kind.label, note: adapterNote,
-          symbol: kind.symbol, watts: watts))
+          symbol: kind.symbol, watts: watts, tint: .green))
     }
     if let watts = flow.batteryInputWatts {
       items.append(
         FlowItem(
           id: "battery-source", label: "Battery", note: "system battery supplement",
-          symbol: "battery.100percent", watts: watts))
+          symbol: "battery.100percent", watts: watts, tint: .orange))
     }
     return items
   }
@@ -115,30 +116,31 @@ struct BatteryExpandedView: View {
       items.append(
         FlowItem(
           id: "cpu", label: "CPU", note: "estimated processor power",
-          symbol: "cpu", watts: watts))
+          symbol: "cpu", watts: watts, tint: .cyan))
     }
     if let watts = flow.restOfMacWatts, watts > 0.05 {
       items.append(
         FlowItem(
           id: "rest-of-mac", label: "Rest of Mac", note: "display, memory and other hardware",
-          symbol: "laptopcomputer", watts: watts))
+          symbol: "laptopcomputer", watts: watts, tint: .cyan))
     } else if flow.cpuUseWatts == nil, let watts = flow.macUseWatts, watts > 0.05 {
       items.append(
         FlowItem(
           id: "mac", label: "Running the Mac", note: "internal system load",
-          symbol: "laptopcomputer", watts: watts))
+          symbol: "laptopcomputer", watts: watts, tint: .cyan))
     }
     for output in flow.usbOutputs where output.watts > 0.05 {
       items.append(
         FlowItem(
           id: "usb-output-\(output.portIndex)", label: "USB port \(output.portIndex)",
-          note: usbOutputNote(output), symbol: "cable.connector", watts: output.watts))
+          note: usbOutputNote(output), symbol: "cable.connector", watts: output.watts,
+          tint: .purple))
     }
     if let watts = flow.batteryChargeWatts {
       items.append(
         FlowItem(
           id: "battery-charge", label: "Charging battery", note: "stored in the system battery",
-          symbol: "battery.100percent.bolt", watts: watts))
+          symbol: "battery.100percent.bolt", watts: watts, tint: .green))
     }
     return items
   }
@@ -221,8 +223,9 @@ struct BatteryExpandedView: View {
                 from: CGPoint(x: sourceX, y: segment.edgeY),
                 to: CGPoint(x: busX - 3, y: segment.busY),
                 thickness: segment.thickness)
-              context.fill(path, with: .color(.white.opacity(0.19)))
-              context.stroke(path, with: .color(.white.opacity(0.48)), lineWidth: 0.65)
+              context.fill(path, with: .color(segment.item.tint.opacity(0.19)))
+              context.stroke(
+                path, with: .color(segment.item.tint.opacity(0.48)), lineWidth: 0.65)
             }
 
             for segment in destinationSegments {
@@ -230,19 +233,20 @@ struct BatteryExpandedView: View {
                 from: CGPoint(x: busX + 3, y: segment.busY),
                 to: CGPoint(x: destinationX, y: segment.edgeY),
                 thickness: segment.thickness)
-              context.fill(path, with: .color(.white.opacity(0.25)))
-              context.stroke(path, with: .color(.white.opacity(0.56)), lineWidth: 0.65)
+              context.fill(path, with: .color(segment.item.tint.opacity(0.25)))
+              context.stroke(
+                path, with: .color(segment.item.tint.opacity(0.56)), lineWidth: 0.65)
             }
 
             for segment in sourceSegments {
               context.fill(
                 Path(roundedRect: nodeRect(x: sourceX, segment: segment), cornerRadius: 2),
-                with: .color(.white.opacity(0.82)))
+                with: .color(segment.item.tint.opacity(0.82)))
             }
             for segment in destinationSegments {
               context.fill(
                 Path(roundedRect: nodeRect(x: destinationX, segment: segment), cornerRadius: 2),
-                with: .color(.white.opacity(0.92)))
+                with: .color(segment.item.tint.opacity(0.92)))
             }
 
             let busTop = min(
@@ -363,11 +367,11 @@ struct BatteryExpandedView: View {
       return HStack(spacing: 5) {
         if pointsRight { metric }
         ZStack {
-          Circle().fill(.white.opacity(0.08))
-          Circle().stroke(.white.opacity(0.28), lineWidth: 0.6)
+          Circle().fill(item.tint.opacity(0.12))
+          Circle().stroke(item.tint.opacity(0.42), lineWidth: 0.6)
           Image(systemName: item.symbol)
             .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(item.tint)
         }
         .frame(width: 24, height: 24)
         if !pointsRight { metric }

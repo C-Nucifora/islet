@@ -23,6 +23,16 @@ final class BatteryMonitor: ObservableObject {
   @Published private(set) var metrics: BatteryMetrics?
   @Published private(set) var peripherals: [PeripheralBattery] = []
 
+  /// Seeded snapshots keep off-screen previews deterministic without starting the IOKit readers.
+  init(
+    state: BatteryState? = nil, metrics: BatteryMetrics? = nil,
+    peripherals: [PeripheralBattery] = []
+  ) {
+    self.state = state
+    self.metrics = metrics
+    self.peripherals = peripherals
+  }
+
   private var runLoopSource: CFRunLoopSource?
   private var metricsTimer: AnyCancellable?
   private var cancellables: Set<AnyCancellable> = []
