@@ -245,4 +245,72 @@ final class ShelfLogicTests: XCTestCase {
         at: shelfDirectory, includingPropertiesForKeys: nil)) ?? []
     XCTAssertTrue(remaining.isEmpty)
   }
+
+  @MainActor
+  func testDropIsRejectedWhileClearAwaitsInvalidatedCopy() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let pending = temporaryRoot.appendingPathComponent("pending.txt")
+    let fresh = temporaryRoot.appendingPathComponent("fresh.txt")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data("pending".utf8).write(to: pending)
+    try Data("fresh".utf8).write(to: fresh)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+    let probe = CopyProbe()
+
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      copyItem: { source, destination in
+        await probe.markStarted()
+        return await Task.detached(priority: .utility) {
+          usleep(150_000)
+          return Result { try FileManager.default.copyItem(at: source, to: destination) }
+        }.value
+      })
+    XCTAssertTrue(model.importDroppedURLs([pending]))
+    for _ in 0..<100 {
+      if await probe.hasStarted() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+
+    let clearTask = Task { await model.clear() }
+    for _ in 0..<100 where !model.isClearing {
+      await Task.yield()
+    }
+    XCTAssertTrue(model.isClearing)
+    XCTAssertFalse(model.importDroppedURLs([fresh]))
+    XCTAssertEqual(model.pendingImportCount, 0)
+
+    await clearTask.value
+    XCTAssertFalse(model.isClearing)
+    XCTAssertTrue(model.items.isEmpty)
+  }
+
+  @MainActor
+  func testOrdinaryCopyFailureRemovesPartialDestination() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("partial.txt")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data("source".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      copyItem: { _, destination in
+        await Task.detached(priority: .utility) {
+          try? Data("partial".utf8).write(to: destination)
+        }.value
+        return .failure(CopyFailure.expected)
+      })
+
+    let added = await model.add(source)
+    XCTAssertFalse(added)
+    let remaining =
+      (try? FileManager.default.contentsOfDirectory(
+        at: shelfDirectory, includingPropertiesForKeys: nil)) ?? []
+    XCTAssertTrue(remaining.isEmpty)
+  }
 }

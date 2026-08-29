@@ -34,6 +34,7 @@ final class ShelfModel: ObservableObject {
   private var importQueue: [ImportBatch] = []
   private var importWorker: Task<Void, Never>?
   private var importGeneration: UInt = 0
+  private(set) var isClearing = false
 
   init(directory: URL? = nil, copyItem: CopyItem? = nil) {
     let base =
@@ -141,6 +142,11 @@ final class ShelfModel: ObservableObject {
       generateThumbnail(id: item.id, url: item.url)
       return (item, nil)
     case .failure(let error):
+      // FileManager can create part of a file or directory before reporting failure. Never leave
+      // an untracked destination for the next launch to load as a valid Shelf item.
+      await Task.detached(priority: .utility) {
+        try? FileManager.default.removeItem(at: dest)
+      }.value
       // A file can disappear between Finder producing its drag payload and the async copy. Give a
       // useful, non-technical error while retaining the detailed failure in the log.
       let message = "Couldn’t add \(source.lastPathComponent)."
@@ -170,8 +176,12 @@ final class ShelfModel: ObservableObject {
   }
 
   func clear() async {
+    guard !isClearing else { return }
+    isClearing = true
+    defer { isClearing = false }
     await cancelPendingImports()
     let current = items
+    let originalIDs = Set(current.map(\.id))
     let removedIDs: Set<UUID> = await Task.detached(priority: .utility) {
       var removed: Set<UUID> = []
       for item in current {
@@ -185,7 +195,9 @@ final class ShelfModel: ObservableObject {
       return removed
     }.value
     items.removeAll { removedIDs.contains($0.id) }
-    lastError = items.isEmpty ? nil : "Some Shelf items couldn’t be removed."
+    lastError =
+      originalIDs.subtracting(removedIDs).isEmpty
+      ? nil : "Some Shelf items couldn’t be removed."
   }
 
   func open(_ item: ShelfItem) {
@@ -241,6 +253,7 @@ final class ShelfModel: ObservableObject {
   /// begin without waiting for an item-provider callback.
   @discardableResult
   func importDroppedURLs(_ urls: [URL]) -> Bool {
+    guard !isClearing else { return false }
     let fileURLs = urls.filter(\.isFileURL)
     guard !fileURLs.isEmpty else { return false }
 
@@ -286,9 +299,11 @@ final class ShelfModel: ObservableObject {
     importQueue.removeAll()
     let activeWorker = importWorker
     activeWorker?.cancel()
+    // Clear only the generation being invalidated. New drops are rejected while Clear awaits the
+    // old worker, so no fresh progress state can be erased by this reset.
+    dropState.cancelImports()
     await activeWorker?.value
     importWorker = nil
-    dropState.cancelImports()
     startImportWorkerIfNeeded()
   }
 }
