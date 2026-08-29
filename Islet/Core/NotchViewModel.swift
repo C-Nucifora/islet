@@ -6,17 +6,16 @@ import SwiftUI
 @MainActor
 final class NotchViewModel: ObservableObject {
   @Published private(set) var state: NotchState = .closed
-  /// Screen-coordinate frame the panel should occupy right now. Tracked so the collapsed island
-  /// doesn't reserve — and swallow the clicks of — the whole expanded footprint. This is a
-  /// REQUEST: AppKit is handed it, and what the window ends up with is `actualPanelFrame`.
+  /// Screen-coordinate footprint the visible island should occupy right now. The AppKit panel is
+  /// permanently reserved at `reservedPanelFrame`; keeping this logical footprint separate lets
+  /// pointer passthrough and alignment follow only the pixels the island actually draws.
   @Published private(set) var panelFrame: CGRect
-  /// The frame the window really occupies, read back from AppKit after every `setFrame` by
-  /// `ScreenManager`. Anything that positions drawn content on screen must use this: the island is
-  /// drawn centred in the real window, so any divergence from `panelFrame` maps 1:1 onto a
-  /// horizontal shift of the island.
+  /// The frame the reserved window really occupies, read back from AppKit after placement or
+  /// reassertion. Anything positioning drawn content on screen uses this because the compact
+  /// island is aligned within that larger transparent host.
   @Published private(set) var actualPanelFrame: CGRect
   /// Height tier the currently selected tab asked for. Reported by `ExpandedContainerView`; drives
-  /// the drawn island, the hover region, the click-inside test and the panel frame.
+  /// the drawn island, hover region and click-inside test.
   @Published private(set) var expandedHeight: CGFloat = Metrics.expandedSize.height
   /// Drawn island width for the live tab count. The expanded panel reserves the maximum supported
   /// width up front, so changing this value animates only SwiftUI content and never resizes AppKit.
@@ -85,13 +84,19 @@ final class NotchViewModel: ObservableObject {
       minimumWidth: Metrics.expandedSize.width, maximumWidth: screenLimit)
   }
 
+  /// The one AppKit frame used for this panel's whole lifetime. SwiftUI animates the island inside
+  /// it; AppKit never resizes an NSHostingView while that view is updating constraints.
+  var reservedPanelFrame: CGRect {
+    geometry.panelFrame(width: maximumExpandedWidth, height: Metrics.tallExpandedHeight)
+  }
+
   /// The expanded island's rect at the current width and height tiers.
   var expandedRect: CGRect {
     geometry.expandedRect(width: expandedWidth, height: expandedHeight)
   }
 
-  /// The expanded window has transparent margins that must pass pointer events through. Keep the
-  /// global movement monitor only while expanded or while AppKit still owns the closing frame.
+  /// The reserved window has transparent margins that must pass pointer events through. Keep the
+  /// global movement monitor while expanded or whenever its frame exceeds the visible footprint.
   var needsPointerPassthroughMonitoring: Bool {
     state.isExpanded || actualPanelFrame != targetPanelFrame(for: state)
   }
@@ -101,9 +106,8 @@ final class NotchViewModel: ObservableObject {
     state.isExpanded ? expandedRect.union(geometry.hitRect) : geometry.hitRect
   }
 
-  /// The expanded AppKit window is deliberately fixed at its maximum size to avoid resizing a
-  /// hosting view during animation. Only the rendered island inside that window should take mouse
-  /// events; transparent margins must behave like the menu bar or app beneath them.
+  /// The AppKit window is deliberately fixed at its maximum size. Only the rendered island inside
+  /// it should take mouse events; transparent margins behave like the menu bar or app beneath them.
   func shouldIgnorePanelMouseEvents(at location: CGPoint) -> Bool {
     let interactiveRect = state.isExpanded ? expandedRect : targetPanelFrame(for: state)
     return !region(interactiveRect, contains: location)
@@ -182,23 +186,16 @@ final class NotchViewModel: ObservableObject {
     updatePanelFrame(for: state)
   }
 
-  /// Records where AppKit actually put the window. Only drawing offsets read it — `panelFrame`
-  /// remains the single source of truth for what Islet asks for, so a rejected request is visible
-  /// as a divergence rather than being quietly adopted as the new intent.
+  /// Records where AppKit actually put the reserved host window. Drawing offsets use it to keep
+  /// the visible island aligned with the hardware notch.
   func setActualPanelFrame(_ frame: CGRect) {
     guard frame != actualPanelFrame else { return }
     actualPanelFrame = frame
   }
 
   private func targetPanelFrame(for state: NotchState) -> CGRect {
-    // The expanded panel is sized for the TALLEST and WIDEST supported island, always. It follows
-    // neither `expandedHeight` nor `expandedWidth`. Resizing the window while the hosting view
-    // animates throws an uncaught NSException out of AppKit's constraint pass and aborts the app.
-    // TallTierHostingTests reproduces it deterministically; the same transition against a fixed
-    // window survives. The drawn island is what changes height — the shape mask clips it and
-    // `testTallPanelFrameContainsTheBaseOneAndItsIsland` pins the containment. Cost: while a
-    // base-tier tab is open, the panel swallows a ~60pt strip below the island, which the
-    // expanded island's full-frame black backdrop was already doing.
+    // This is the visible footprint, not the reserved AppKit window. The expanded footprint uses
+    // the tallest and widest supported island; compact footprints follow their measured slots.
     switch state {
     case .expanded:
       geometry.panelFrame(width: maximumExpandedWidth, height: Metrics.tallExpandedHeight)
@@ -246,8 +243,8 @@ final class NotchViewModel: ObservableObject {
     }
   }
 
-  /// Grows the panel immediately so nothing is ever clipped mid-animation, but defers shrinking
-  /// until the closing animation has played out.
+  /// Grows the logical visible footprint immediately, then lets it settle after the closing
+  /// animation. The AppKit host itself remains at `reservedPanelFrame` throughout.
   private func updatePanelFrame(for state: NotchState) {
     let target = targetPanelFrame(for: state)
     let grown = panelFrame.union(target)
@@ -280,7 +277,7 @@ final class NotchViewModel: ObservableObject {
       if event == .pushThresholdCrossed { Haptics.barrierSnap() }
       resetBarrier()
     }
-    updatePanelFrame(for: next)  // widen the window before the content animates into it
+    updatePanelFrame(for: next)  // publish the grown footprint before content animates into it
     withAnimation(Motion.gated(opening ? Motion.opening : Motion.closing)) {
       state = next
     }

@@ -50,20 +50,13 @@ final class TallTierHostingTests: XCTestCase {
     panel.close()
   }
 
-  /// The whole island: expand, then switch to the tall tier while a ScreenManager-style sink
-  /// applies every published frame to the real window — the exact sequence a chip click runs.
+  /// The whole island: expand, then switch to the tall tier inside the production reserved panel.
   func testTallTierSelectionSurvivesRealHosting() {
     let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
-    let panel = NotchPanel(frame: vm.panelFrame)
+    let panel = NotchPanel(frame: vm.reservedPanelFrame)
     panel.contentView = NotchHosting.view(for: vm)
     panel.orderFrontRegardless()
-    let sink = vm.$panelFrame
-      .removeDuplicates()
-      .sink { [weak panel] frame in
-        guard let panel, panel.frame != frame else { return }
-        panel.setFrame(frame, display: false)
-        vm.setActualPanelFrame(panel.frame)
-      }
+    vm.setActualPanelFrame(panel.frame)
 
     vm.apply(.clickedNotch)  // expand at the base tier
     pump(0.5)
@@ -72,9 +65,9 @@ final class TallTierHostingTests: XCTestCase {
     vm.apply(.clickedOutside)  // collapse cleanly
     pump(0.6)
 
-    _ = sink
-    panel.close()
+    XCTAssertEqual(panel.frame, vm.reservedPanelFrame)
     XCTAssertEqual(vm.expandedHeight, Metrics.expandedSize.height)
+    panel.close()
   }
 
   /// T5 — the tall transition with NO window resize at all: the panel is created big enough for
@@ -111,22 +104,16 @@ final class TallTierHostingTests: XCTestCase {
     panel.close()
   }
 
-  /// Compact activities resize the AppKit panel from a SwiftUI geometry callback. The hosting view
-  /// must not simultaneously derive min/max window constraints from that animated content.
-  func testCompactWidthChangesSurviveRealHostingWithoutWindowSizingConstraints() {
+  /// Compact activities resize the drawn island, never its AppKit host. This is the production
+  /// arrangement that prevents a geometry callback from racing NSHostingView's constraint pass.
+  func testCompactWidthChangesSurviveRealHostingInAFixedPanel() {
     let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
-    let panel = NotchPanel(frame: vm.panelFrame)
+    let panel = NotchPanel(frame: vm.reservedPanelFrame)
     let hostingView = NotchHosting.view(for: vm)
     XCTAssertEqual(hostingView.sizingOptions.rawValue, 0)
     panel.contentView = hostingView
     panel.orderFrontRegardless()
-    let sink = vm.$panelFrame
-      .removeDuplicates()
-      .sink { [weak panel] frame in
-        guard let panel, panel.frame != frame else { return }
-        panel.setFrame(frame, display: false)
-        vm.setActualPanelFrame(panel.frame)
-      }
+    vm.setActualPanelFrame(panel.frame)
 
     for width in stride(from: CGFloat(20), through: 260, by: 12) {
       vm.updateCompactWidths(leading: width, trailing: width / 2)
@@ -134,8 +121,8 @@ final class TallTierHostingTests: XCTestCase {
     }
     pump(0.5)
 
-    _ = sink
-    panel.close()
+    XCTAssertEqual(panel.frame, vm.reservedPanelFrame)
     XCTAssertEqual(vm.actualPanelFrame, panel.frame)
+    panel.close()
   }
 }
