@@ -12,6 +12,19 @@ enum NotchHosting {
   }
 }
 
+struct CompactHUDSlot: View {
+  let alignment: Alignment
+  let underlying: AnyView
+  let hud: AnyView
+
+  var body: some View {
+    ZStack(alignment: alignment) {
+      underlying.opacity(0).accessibilityHidden(true)
+      hud
+    }
+  }
+}
+
 struct NotchRootView: View {
   @ObservedObject var vm: NotchViewModel
   @ObservedObject private var center = ActivityCenter.shared
@@ -21,11 +34,8 @@ struct NotchRootView: View {
   @State private var compactLeadingWidth: CGFloat = 0
   @State private var compactTrailingWidth: CGFloat = 0
 
-  /// Compact content precedence: HUD > in-flight sneak > primary activity > idle dashboard hint.
-  private var compactContent: (leading: AnyView, trailing: AnyView)? {
-    if !vm.state.isExpanded, let snapshot = hud.hud {
-      return (AnyView(HUDIconView(snapshot: snapshot)), AnyView(HUDBarView(snapshot: snapshot)))
-    }
+  /// Content that should return after a temporary HUD leaves.
+  private var underlyingCompactContent: (leading: AnyView, trailing: AnyView)? {
     if !vm.state.isExpanded, let sneak = sneaks.current {
       return (sneak.leading, sneak.trailing)
     }
@@ -52,6 +62,31 @@ struct NotchRootView: View {
       )
     }
     return nil
+  }
+
+  /// Compact content precedence: HUD > in-flight sneak > primary activity > idle dashboard hint.
+  ///
+  /// A HUD is temporary, so keep its underlying content in the layout at zero opacity. The slots
+  /// then take the larger of the HUD and underlying widths. Pressing a media key cannot collapse
+  /// an active activity's island only to grow it again when the HUD leaves.
+  private var compactContent: (leading: AnyView, trailing: AnyView)? {
+    guard !vm.state.isExpanded else { return underlyingCompactContent }
+    guard let snapshot = hud.hud else { return underlyingCompactContent }
+    guard let underlying = underlyingCompactContent else {
+      return (AnyView(HUDIconView(snapshot: snapshot)), AnyView(HUDBarView(snapshot: snapshot)))
+    }
+    return (
+      AnyView(
+        CompactHUDSlot(
+          alignment: .leading,
+          underlying: underlying.leading,
+          hud: AnyView(HUDIconView(snapshot: snapshot)))),
+      AnyView(
+        CompactHUDSlot(
+          alignment: .trailing,
+          underlying: underlying.trailing,
+          hud: AnyView(HUDBarView(snapshot: snapshot))))
+    )
   }
 
   private var radii: (top: CGFloat, bottom: CGFloat) {

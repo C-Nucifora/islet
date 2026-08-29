@@ -19,6 +19,20 @@ final class TallTierHostingTests: XCTestCase {
       safeAreaTop: 32, auxLeftWidth: 716, auxRightWidth: 716, menuBarHeight: 37)
   }
 
+  func testCompactHUDSlotKeepsUnderlyingActivityAsAWidthFloor() {
+    let narrowerHUD = CompactHUDSlot(
+      alignment: .leading,
+      underlying: AnyView(Color.clear.frame(width: 180, height: 20)),
+      hud: AnyView(Color.clear.frame(width: 40, height: 20)))
+    let widerHUD = CompactHUDSlot(
+      alignment: .trailing,
+      underlying: AnyView(Color.clear.frame(width: 40, height: 20)),
+      hud: AnyView(Color.clear.frame(width: 180, height: 20)))
+
+    XCTAssertEqual(NSHostingView(rootView: narrowerHUD).fittingSize.width, 180)
+    XCTAssertEqual(NSHostingView(rootView: widerHUD).fittingSize.width, 180)
+  }
+
   /// The power screen's content alone, at tall-tier size, with a real one-shot hardware read.
   func testBatteryExpandedViewSurvivesRealHosting() {
     let contentSize = CGSize(
