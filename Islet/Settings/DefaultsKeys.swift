@@ -130,6 +130,8 @@ extension HapticStrength: Defaults.Serializable {}
 
 extension Defaults.Keys {
   static let onboardingVersion = Key<Int>("onboardingVersion", default: 0)
+  static let appTheme = Key<AppTheme>("appTheme", default: .classic)
+  static let batteryGraphStyle = Key<BatteryGraphStyle>("batteryGraphStyle", default: .coloured)
   static let mediaSourceMode = Key<MediaSourceMode>("mediaSourceMode", default: .auto)
   static let mediaPriorityList = Key<[String]>(
     "mediaPriorityList",

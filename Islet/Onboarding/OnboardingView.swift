@@ -244,6 +244,7 @@ private enum LegacyMigrationState {
 }
 
 private struct OnboardingView: View {
+  @Default(.appTheme) private var appTheme
   @Default(.interactionMode) private var interactionMode
   @Default(.hapticsEnabled) private var hapticsEnabled
   @Default(.launchAtLogin) private var launchAtLogin
@@ -279,6 +280,8 @@ private struct OnboardingView: View {
       controls
     }
     .frame(width: 720, height: 560)
+    .tint(appTheme.accentColor)
+    .environment(\.appTheme, appTheme)
   }
 
   private var header: some View {

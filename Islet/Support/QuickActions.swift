@@ -1,4 +1,5 @@
 import AppKit
+import Defaults
 import SwiftUI
 
 @MainActor
@@ -163,6 +164,7 @@ enum QuickActionsOpener {
 }
 
 private struct QuickActionsView: View {
+  @Default(.appTheme) private var appTheme
   @ObservedObject private var timer = AppState.timer
   @ObservedObject private var pulse = PulseCenter.shared
   @ObservedObject private var clipboard = ClipboardModel.shared
@@ -241,6 +243,8 @@ private struct QuickActionsView: View {
       .padding(.horizontal, 14)
       .padding(.vertical, 8)
     }
+    .tint(appTheme.accentColor)
+    .environment(\.appTheme, appTheme)
     .frame(minWidth: 440, minHeight: 320)
   }
 

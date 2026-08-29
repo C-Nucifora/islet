@@ -152,6 +152,7 @@ final class TimerActivity: NotchActivity, ObservableObject {
 /// A thin progress ring driven live off the activity, ticking only while running.
 struct TimerRingView: View {
   @ObservedObject var activity: TimerActivity
+  @Environment(\.appTheme) private var appTheme
   var lineWidth: CGFloat = 2
 
   var body: some View {
@@ -161,7 +162,7 @@ struct TimerRingView: View {
         Circle()
           .trim(from: 0, to: activity.progressNow)
           .stroke(
-            activity.finished ? Color.green : .orange,
+            activity.finished ? Color.green : appTheme.color(for: .timer),
             style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
           )
           .rotationEffect(.degrees(-90))
@@ -174,6 +175,7 @@ struct TimerRingView: View {
 
 struct TimerCountdownText: View {
   @ObservedObject var activity: TimerActivity
+  @Environment(\.appTheme) private var appTheme
 
   var body: some View {
     // A paused timer may remain in the island for hours. An animation schedule can be paused,
@@ -181,7 +183,7 @@ struct TimerCountdownText: View {
     TimelineView(.animation(minimumInterval: 0.5, paused: !activity.isRunning)) { _ in
       Text(TimerFormat.mmss(activity.remainingNow))
         .font(.caption.weight(.semibold)).monospacedDigit()
-        .foregroundStyle(activity.finished ? .green : .orange)
+        .foregroundStyle(activity.finished ? Color.green : appTheme.color(for: .timer))
         .accessibilityLabel(activity.label.map { "\($0) timer" } ?? "Timer")
         .accessibilityValue(
           activity.finished
@@ -194,6 +196,7 @@ struct TimerCountdownText: View {
 
 struct TimerExpandedView: View {
   @ObservedObject var activity: TimerActivity
+  @Environment(\.appTheme) private var appTheme
 
   var body: some View {
     HStack(spacing: 20) {
@@ -203,7 +206,7 @@ struct TimerExpandedView: View {
           Circle()
             .trim(from: 0, to: activity.progressNow)
             .stroke(
-              activity.finished ? Color.green : .orange,
+              activity.finished ? Color.green : appTheme.color(for: .timer),
               style: StrokeStyle(lineWidth: 6, lineCap: .round)
             )
             .rotationEffect(.degrees(-90))
@@ -223,7 +226,7 @@ struct TimerExpandedView: View {
           Text("Done").font(.headline).foregroundStyle(.green)
           HStack {
             Button("Repeat") { activity.restartLastTimer() }
-              .buttonStyle(.borderedProminent).tint(.orange)
+              .buttonStyle(.borderedProminent).tint(appTheme.color(for: .timer))
             Button("Dismiss") { activity.cancel() }.buttonStyle(.bordered)
           }
         } else {
@@ -253,7 +256,7 @@ struct TimerExpandedView: View {
       Image(systemName: symbol)
         .font(.body)
         .frame(width: 34, height: 34)
-        .background(Circle().fill(.white.opacity(0.12)))
+        .background(Circle().fill(appTheme.color(for: .timer).opacity(0.18)))
     }
     .buttonStyle(.plain)
     .accessibilityLabel(label)

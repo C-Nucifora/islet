@@ -9,6 +9,7 @@ struct ExpandedContainerView: View {
   @ObservedObject var vm: NotchViewModel
   @ObservedObject private var center = ActivityCenter.shared
   @ObservedObject private var shelf = ShelfModel.shared
+  @Environment(\.appTheme) private var appTheme
   /// nil selection means the dashboard ("Home"); otherwise an activity id.
   @State private var selection: String? = nil
   private static let homeTab = "\u{0000}home"  // sentinel id for the dashboard chip
@@ -156,7 +157,7 @@ struct ExpandedContainerView: View {
         Image(systemName: "bolt.fill")
           .font(.caption)
           .frame(width: Self.chipWidth, height: Self.chipHeight)
-          .foregroundStyle(.secondary)
+          .appThemeForeground(.interaction)
       }
       .buttonStyle(.plain)
       .accessibilityLabel("Quick Actions")
@@ -166,7 +167,7 @@ struct ExpandedContainerView: View {
         Image(systemName: "gearshape.fill")
           .font(.caption)
           .frame(width: Self.chipWidth, height: Self.chipHeight)
-          .foregroundStyle(.secondary)
+          .appThemeForeground(.interaction)
       }
       .buttonStyle(.plain)
       .accessibilityLabel("Settings")
@@ -183,9 +184,9 @@ struct ExpandedContainerView: View {
         .frame(width: Self.chipWidth, height: Self.chipHeight)
         .background(
           RoundedRectangle(cornerRadius: 6)
-            .fill(.white.opacity(selected ? 0.22 : 0.06))
+            .fill(selected ? appTheme.accentColor.opacity(0.24) : .white.opacity(0.06))
         )
-        .foregroundStyle(selected ? .white : .secondary)
+        .foregroundStyle(selected ? appTheme.accentColor : .secondary)
     }
     .buttonStyle(.plain)
     .accessibilityLabel(tab.id == Self.homeTab ? "Home" : ActivityCatalog.name(for: tab.id))

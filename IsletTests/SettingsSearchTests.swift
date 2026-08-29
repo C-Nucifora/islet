@@ -6,6 +6,7 @@ final class SettingsSearchTests: XCTestCase {
   func testEveryDetailPageMatchesAControlBelowItsPageTitle() {
     let deepQueries: [SettingsDetailPage: String] = [
       .startupDisplays: "run setup",
+      .appearance: "catppuccin battery graph",
       .interaction: "collapse after",
       .energy: "automatic low power",
       .activityOrder: "file shelf",
