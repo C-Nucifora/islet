@@ -57,16 +57,23 @@ final class SystemActivity: NotchActivity, ObservableObject {
   // every second would re-measure through `onGeometryChange` and resize the NSPanel at 1 Hz. The
   // symbol only changes when `SystemPresenceGate.reason` does, which is minutes apart at worst.
   var compactLeading: AnyView {
-    AnyView(Image(systemName: "cpu").foregroundStyle(.orange).font(.caption2))
+    AnyView(Image(systemName: "cpu").appThemeForeground(.system).font(.caption2))
   }
 
   var compactTrailing: AnyView {
     let thermal = gate.reason == .thermal
+    if thermal {
+      return AnyView(
+        Image(systemName: "thermometer.high")
+          .foregroundStyle(.red)
+          .font(.caption2)
+          .accessibilityLabel("Thermal pressure"))
+    }
     return AnyView(
-      Image(systemName: thermal ? "thermometer.high" : "gauge.with.dots.needle.67percent")
-        .foregroundStyle(thermal ? Color.red : Color.orange)
+      Image(systemName: "gauge.with.dots.needle.67percent")
+        .appThemeForeground(.system)
         .font(.caption2)
-        .accessibilityLabel(thermal ? "Thermal pressure" : "High CPU"))
+        .accessibilityLabel("High CPU"))
   }
 
   var expandedView: AnyView { AnyView(SystemExpandedView(monitor: monitor)) }

@@ -1,3 +1,4 @@
+import Defaults
 import SwiftUI
 
 @MainActor
@@ -31,6 +32,8 @@ struct NotchRootView: View {
   @ObservedObject private var sneaks = SneakQueue.shared
   @ObservedObject private var hud = HUDController.shared
   @ObservedObject private var reminders = RemindersProvider.shared
+  @Default(.appTheme) private var appTheme
+  @Default(.batteryGraphStyle) private var batteryGraphStyle
   @State private var compactLeadingWidth: CGFloat = 0
   @State private var compactTrailingWidth: CGFloat = 0
 
@@ -55,10 +58,11 @@ struct NotchRootView: View {
     if !reminders.reminders.isEmpty {
       // Idle affordance: a small checklist badge so pending reminders are visible at a glance.
       return (
-        AnyView(Image(systemName: "checklist").foregroundStyle(.orange).font(.caption2)),
+        AnyView(Image(systemName: "checklist").appThemeForeground(.reminders).font(.caption2)),
         AnyView(
           Text("\(reminders.reminders.count)")
-            .font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(.orange))
+            .font(.caption.weight(.semibold)).monospacedDigit()
+            .appThemeForeground(.reminders))
       )
     }
     return nil
@@ -175,6 +179,9 @@ struct NotchRootView: View {
     .onChange(of: compactLeadingWidth, initial: true) { _, _ in syncPanelWidths() }
     .onChange(of: compactTrailingWidth) { _, _ in syncPanelWidths() }
     .onChange(of: compactVisible) { _, _ in syncPanelWidths() }
+    .tint(appTheme.accentColor)
+    .environment(\.appTheme, appTheme)
+    .environment(\.batteryGraphStyle, batteryGraphStyle)
     .preferredColorScheme(.dark)
   }
 

@@ -273,7 +273,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
 
   let tabIcon = "calendar"
   var compactLeading: AnyView {
-    AnyView(Image(systemName: "calendar").foregroundStyle(.orange).font(.caption2))
+    AnyView(Image(systemName: "calendar").appThemeForeground(.calendar).font(.caption2))
   }
 
   var compactTrailing: AnyView {
@@ -291,7 +291,7 @@ struct CalendarCountdownView: View {
       if let next = activity.nextEvent {
         Text(CalendarLogic.countdownText(to: next.start, now: context.date))
           .font(.caption.weight(.semibold)).monospacedDigit()
-          .foregroundStyle(.orange)
+          .appThemeForeground(.calendar)
       }
     }
   }
@@ -302,7 +302,7 @@ struct CalendarAgendaView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("Today").font(.headline).foregroundStyle(.white)
+      Text("Today").font(.headline).appThemeForeground(.calendar)
       if activity.events.isEmpty {
         Text("No more events today").font(.callout).foregroundStyle(.secondary)
       } else {

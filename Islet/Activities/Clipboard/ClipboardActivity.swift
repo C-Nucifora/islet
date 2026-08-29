@@ -307,12 +307,12 @@ final class ClipboardActivity: NotchActivity, ObservableObject {
   }
 
   var compactLeading: AnyView {
-    AnyView(Image(systemName: "doc.on.clipboard").foregroundStyle(.purple).font(.caption2))
+    AnyView(Image(systemName: "doc.on.clipboard").appThemeForeground(.clipboard).font(.caption2))
   }
   var compactTrailing: AnyView {
     AnyView(
       Text("\(model.items.count)")
-        .font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(.purple))
+        .font(.caption.weight(.semibold)).monospacedDigit().appThemeForeground(.clipboard))
   }
   var expandedView: AnyView { AnyView(ClipboardView(model: model)) }
 }
@@ -324,7 +324,7 @@ struct ClipboardView: View {
     VStack(alignment: .leading, spacing: 6) {
       HStack {
         Label("Clipboard", systemImage: "doc.on.clipboard")
-          .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+          .font(.caption.weight(.semibold)).appThemeForeground(.clipboard)
         Spacer()
         Button {
           model.setPaused(!model.isPaused)
@@ -364,7 +364,7 @@ struct ClipboardView: View {
                 _ = model.copyBack(item)
               } label: {
                 HStack(spacing: 8) {
-                  Image(systemName: item.icon).font(.caption2).foregroundStyle(.purple)
+                  Image(systemName: item.icon).font(.caption2).appThemeForeground(.clipboard)
                     .frame(width: 16)
                   Text(item.preview).font(.caption).lineLimit(1)
                   Spacer(minLength: 0)

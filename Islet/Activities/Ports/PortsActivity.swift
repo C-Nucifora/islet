@@ -42,12 +42,12 @@ final class PortsActivity: NotchActivity, ObservableObject {
   }
 
   var compactLeading: AnyView {
-    AnyView(Image(systemName: "cable.connector").foregroundStyle(.cyan).font(.caption2))
+    AnyView(Image(systemName: "cable.connector").appThemeForeground(.ports).font(.caption2))
   }
   var compactTrailing: AnyView {
     AnyView(
       Text("\(monitor.devices.count)")
-        .font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(.cyan))
+        .font(.caption.weight(.semibold)).monospacedDigit().appThemeForeground(.ports))
   }
   var expandedView: AnyView { AnyView(PortsView(monitor: monitor)) }
 }
@@ -58,7 +58,7 @@ struct PortsView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       Label("\(monitor.devices.count) connected", systemImage: "cable.connector")
-        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+        .font(.caption.weight(.semibold)).appThemeForeground(.ports)
       if monitor.devices.isEmpty {
         Text("No USB devices").font(.caption).foregroundStyle(.secondary)
       } else {
@@ -67,7 +67,7 @@ struct PortsView: View {
             ForEach(monitor.devices) { device in
               HStack(spacing: 8) {
                 Image(systemName: "cable.connector.horizontal")
-                  .font(.caption2).foregroundStyle(.cyan).frame(width: 16)
+                  .font(.caption2).appThemeForeground(.ports).frame(width: 16)
                 VStack(alignment: .leading, spacing: 0) {
                   Text(device.name).font(.caption).lineLimit(1)
                   if let vendor = device.vendor {

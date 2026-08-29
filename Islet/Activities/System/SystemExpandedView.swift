@@ -139,7 +139,7 @@ struct SystemExpandedView: View {
     HStack(spacing: 8) {
       Text(label)
         .font(.system(size: 10, weight: .semibold))
-        .foregroundStyle(.secondary)
+        .appThemeForeground(.system)
         .frame(width: 34, alignment: .leading)
       if style != .sparkline {
         Text(text)
@@ -215,12 +215,13 @@ struct SystemExpandedView: View {
 /// The bar half of `.numberAndBar`.
 private struct MetricBar: View {
   let fraction: Double
+  @Environment(\.appTheme) private var appTheme
 
   var body: some View {
     GeometryReader { geometry in
       ZStack(alignment: .leading) {
         Capsule().fill(.white.opacity(0.12))
-        Capsule().fill(.white.opacity(0.75))
+        Capsule().fill(appTheme.color(for: .system).opacity(0.85))
           .frame(width: geometry.size.width * min(max(fraction, 0), 1))
       }
     }

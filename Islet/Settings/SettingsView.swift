@@ -59,6 +59,7 @@ private enum SystemMetricPreset: String, CaseIterable, Identifiable {
 
 enum SettingsDetailPage: String, CaseIterable, Identifiable {
   case startupDisplays
+  case appearance
   case interaction
   case energy
   case activityOrder
@@ -80,6 +81,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
   var title: String {
     switch self {
     case .startupDisplays: "Startup and displays"
+    case .appearance: "Appearance"
     case .interaction: "Interaction"
     case .energy: "Energy"
     case .activityOrder: "Activity order"
@@ -101,6 +103,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
   var subtitle: String {
     switch self {
     case .startupDisplays: "Login item and display placement"
+    case .appearance: "Choose the colours used across Islet"
     case .interaction: "How the notch opens and closes"
     case .energy: "Refresh rates and Low Power Mode"
     case .activityOrder: "Show, hide and reorder activities"
@@ -122,6 +125,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
   var icon: String {
     switch self {
     case .startupDisplays: "macwindow.on.rectangle"
+    case .appearance: "paintpalette"
     case .interaction: "cursorarrow.motionlines"
     case .energy: "leaf"
     case .activityOrder: "list.number"
@@ -142,7 +146,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
 
   var category: SettingsCategory {
     switch self {
-    case .startupDisplays, .interaction, .energy: .general
+    case .startupDisplays, .appearance, .interaction, .energy: .general
     case .activityOrder, .calendarReminders, .nowPlaying, .continuity, .systemMetrics, .clipboard,
       .systemHUD:
       .activities
@@ -161,6 +165,11 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "Startup", "Launch Islet at login", "Login item status", "Run setup again",
         "Displays", "Show Islet on every display", "Hide Islet while an app is fullscreen",
         "screen multiple monitors",
+      ]
+    case .appearance:
+      pageContent + [
+        "Theme", "Classic", "Mono", "Ocean", "Violet", "Sunset", "Forest", "Catppuccin",
+        "icons text controls buttons selected tabs battery graph colour color palette tint",
       ]
     case .interaction:
       pageContent + [
@@ -253,7 +262,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .reset:
       pageContent + [
         "Appearance and interaction", "Restore appearance and interaction", "Reset defaults",
-        "notch haptics HUD style player order activity order metric styles layout presentation",
+        "theme colours notch haptics HUD style player order activity order metric styles layout presentation",
       ]
     }
   }
@@ -320,6 +329,8 @@ struct SettingsView: View {
   @ObservedObject private var t3Code = AppState.t3Code
   @ObservedObject private var launchAtLoginStatus = LaunchAtLoginStatus.shared
 
+  @Default(.appTheme) private var appTheme
+  @Default(.batteryGraphStyle) private var batteryGraphStyle
   @Default(.interactionMode) private var mode
   @Default(.hoverCollapseTimeout) private var collapseTimeout
   @Default(.hapticsEnabled) private var haptics
@@ -593,6 +604,8 @@ struct SettingsView: View {
       }
     }
     .frame(minWidth: 760, minHeight: 560)
+    .tint(appTheme.accentColor)
+    .environment(\.appTheme, appTheme)
     .onChange(of: searchText) { _, _ in
       if let current = selection, !filteredCategories.contains(current),
         let first = filteredCategories.first
@@ -635,7 +648,7 @@ struct SettingsView: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "Resets notch interaction, haptics, HUD style, player order, activity order and metric styles. It keeps enabled activities, permissions, paired machines and activity data."
+        "Resets the theme, notch interaction, haptics, HUD style, player order, activity order and metric styles. It keeps enabled activities, permissions, paired machines and activity data."
       )
     }
     .confirmationDialog(
@@ -664,7 +677,7 @@ struct SettingsView: View {
   @ViewBuilder private var categoryView: some View {
     switch selection ?? .general {
     case .general:
-      settingsLanding(pages: [.startupDisplays, .interaction, .energy])
+      settingsLanding(pages: [.startupDisplays, .appearance, .interaction, .energy])
     case .activities:
       settingsLanding(pages: [
         .activityOrder, .calendarReminders, .nowPlaying, .continuity, .systemMetrics,
@@ -684,6 +697,7 @@ struct SettingsView: View {
   @ViewBuilder private func detailView(_ page: SettingsDetailPage) -> some View {
     switch page {
     case .startupDisplays: startupDisplaysForm
+    case .appearance: appearanceForm
     case .interaction: interactionForm
     case .energy: energyForm
     case .activityOrder: activityOrderForm
@@ -708,7 +722,7 @@ struct SettingsView: View {
     case .overview: nil
     case .activities: .activityOrder
     case .events: .eventSources
-    case .appearance: .interaction
+    case .appearance: .appearance
     case .permissions: .permissions
     case .integrations: nil
     case .pulse: .pulse
@@ -755,6 +769,31 @@ struct SettingsView: View {
         Toggle("Hide Islet while an app is fullscreen", isOn: $hideInFullscreen)
         Text("When this is off, Islet uses one display at a time.")
           .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+    .formStyle(.grouped)
+  }
+
+  private var appearanceForm: some View {
+    Form {
+      Section("Theme") {
+        AppThemePicker(selection: $appTheme)
+        Text("Themes colour icons, key text, selected tabs and controls. The island stays black.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      Section("Battery graph") {
+        Picker("Power-flow colours", selection: $batteryGraphStyle) {
+          ForEach(BatteryGraphStyle.allCases) { style in
+            Text(style.title).tag(style)
+          }
+        }
+        .pickerStyle(.segmented)
+        Text(
+          "Coloured distinguishes external power, battery flow, Mac load and USB output. Monochrome keeps the graph white."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
       }
     }
     .formStyle(.grouped)
@@ -1390,7 +1429,7 @@ struct SettingsView: View {
           confirmingRestore = true
         }
         Text(
-          "Resets notch interaction, haptics, HUD style, player order, activity order and metric styles. It keeps enabled activities, permissions, paired machines and activity data."
+          "Resets the theme, notch interaction, haptics, HUD style, player order, activity order and metric styles. It keeps enabled activities, permissions, paired machines and activity data."
         )
         .font(.caption).foregroundStyle(.secondary)
       }
@@ -1524,6 +1563,8 @@ struct SettingsView: View {
   }
 
   private func restoreInterfaceDefaults() {
+    appTheme = .classic
+    batteryGraphStyle = .coloured
     mode = .hover
     collapseTimeout = 0.5
     haptics = true
@@ -1535,6 +1576,86 @@ struct SettingsView: View {
     systemAlwaysVisible = false
     metricStyles = [:]
     hudStyle = .bar
+  }
+}
+
+private struct AppThemePicker: View {
+  @Binding var selection: AppTheme
+
+  var body: some View {
+    LazyVGrid(
+      columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12
+    ) {
+      ForEach(AppTheme.allCases) { theme in
+        Button {
+          selection = theme
+        } label: {
+          VStack(spacing: 8) {
+            AppThemePreview(theme: theme)
+              .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                  .stroke(
+                    selection == theme ? theme.accentColor : Color.secondary.opacity(0.24),
+                    lineWidth: selection == theme ? 3 : 1)
+              }
+            HStack(spacing: 5) {
+              Text(theme.title)
+              if selection == theme {
+                Image(systemName: "checkmark.circle.fill")
+                  .foregroundStyle(theme.accentColor)
+              }
+            }
+            .font(.callout.weight(selection == theme ? .semibold : .regular))
+          }
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(theme.title) theme")
+        .accessibilityAddTraits(selection == theme ? .isSelected : [])
+      }
+    }
+    .padding(.vertical, 4)
+  }
+}
+
+private struct AppThemePreview: View {
+  let theme: AppTheme
+
+  var body: some View {
+    ZStack {
+      Color.black
+      VStack(spacing: 9) {
+        HStack(spacing: 10) {
+          ForEach(previewRoles, id: \.self) { role in
+            Image(systemName: symbol(for: role))
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(theme.color(for: role))
+          }
+        }
+        HStack(spacing: 7) {
+          Capsule().fill(.white.opacity(0.82)).frame(width: 42, height: 5)
+          Capsule().fill(theme.accentColor).frame(width: 26, height: 5)
+        }
+        HStack(spacing: 5) {
+          Circle().fill(theme.color(for: .calendar)).frame(width: 6, height: 6)
+          Capsule().fill(.white.opacity(0.24)).frame(width: 54, height: 4)
+        }
+      }
+    }
+    .frame(height: 76)
+    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+  }
+
+  private var previewRoles: [AppThemeRole] { [.calendar, .clipboard, .battery, .system] }
+
+  private func symbol(for role: AppThemeRole) -> String {
+    switch role {
+    case .calendar: "calendar"
+    case .clipboard: "doc.on.clipboard"
+    case .battery: "battery.75percent"
+    case .system: "cpu"
+    default: "circle.fill"
+    }
   }
 }
 
