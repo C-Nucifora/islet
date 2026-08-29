@@ -40,13 +40,13 @@ final class ShelfActivity: NotchActivity, ObservableObject {
   }
 
   var compactLeading: AnyView {
-    AnyView(Image(systemName: "tray.full.fill").foregroundStyle(.blue).font(.caption2))
+    AnyView(Image(systemName: "tray.full.fill").appThemeForeground(.shelf).font(.caption2))
   }
 
   var compactTrailing: AnyView {
     AnyView(
       Text("\(model.items.count)")
-        .font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(.blue))
+        .font(.caption.weight(.semibold)).monospacedDigit().appThemeForeground(.shelf))
   }
 
   var expandedView: AnyView { AnyView(ShelfView(model: model)) }
@@ -54,12 +54,13 @@ final class ShelfActivity: NotchActivity, ObservableObject {
 
 struct ShelfView: View {
   @ObservedObject var model: ShelfModel
+  @Environment(\.appTheme) private var appTheme
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack {
         Label("Shelf", systemImage: "tray.full.fill")
-          .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+          .font(.caption.weight(.semibold)).appThemeForeground(.shelf)
         Spacer()
         if model.pendingImportCount > 0 {
           ProgressView()
@@ -130,7 +131,8 @@ struct ShelfView: View {
     .contentShape(Rectangle())
     .overlay {
       if model.isDragActive {
-        RoundedRectangle(cornerRadius: 12).strokeBorder(.blue, lineWidth: 2)
+        RoundedRectangle(cornerRadius: 12)
+          .strokeBorder(appTheme.color(for: .shelf), lineWidth: 2)
       }
     }
   }

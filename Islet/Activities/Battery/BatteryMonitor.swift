@@ -25,7 +25,8 @@ final class BatteryMonitor: ObservableObject {
 
   /// Seeded snapshots keep off-screen previews deterministic without starting the IOKit readers.
   init(
-    state: BatteryState? = nil, metrics: BatteryMetrics? = nil,
+    state: BatteryState? = nil,
+    metrics: BatteryMetrics? = nil,
     peripherals: [PeripheralBattery] = []
   ) {
     self.state = state

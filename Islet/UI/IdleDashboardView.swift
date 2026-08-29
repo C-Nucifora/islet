@@ -36,7 +36,7 @@ struct IdleDashboardView: View {
     VStack(alignment: .leading, spacing: 6) {
       Label(title, systemImage: systemImage)
         .font(.caption.weight(.semibold))
-        .foregroundStyle(.secondary)
+        .appThemeForeground(systemImage == "calendar" ? .calendar : .reminders)
       content()
     }
     .frame(maxWidth: .infinity, alignment: .leading)

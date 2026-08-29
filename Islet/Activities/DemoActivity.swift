@@ -12,11 +12,11 @@ final class DemoActivity: NotchActivity, ObservableObject {
 
   let tabIcon = "circle.dashed"
   var compactLeading: AnyView {
-    AnyView(Circle().fill(.orange).frame(width: 16, height: 16))
+    AnyView(Circle().appThemeForeground(.interaction).frame(width: 16, height: 16))
   }
 
   var compactTrailing: AnyView {
-    AnyView(Image(systemName: "waveform").foregroundStyle(.orange).font(.caption))
+    AnyView(Image(systemName: "waveform").appThemeForeground(.interaction).font(.caption))
   }
 
   var expandedView: AnyView {
