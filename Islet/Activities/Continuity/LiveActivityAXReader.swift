@@ -65,8 +65,10 @@ final class LiveActivityAXReader {
     // for its pairing state going stale. A dead observer would leave the tab frozen on whatever it
     // last saw, so re-attach whenever it comes back.
     let center = NSWorkspace.shared.notificationCenter
-    for name in [NSWorkspace.didLaunchApplicationNotification,
-                 NSWorkspace.didTerminateApplicationNotification] {
+    for name in [
+      NSWorkspace.didLaunchApplicationNotification,
+      NSWorkspace.didTerminateApplicationNotification,
+    ] {
       let token = center.addObserver(forName: name, object: nil, queue: .main) { note in
         let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
         guard app?.bundleIdentifier == "com.apple.controlcenter" else { return }
@@ -84,7 +86,7 @@ final class LiveActivityAXReader {
     coalesce = nil
     detach()
     let center = NSWorkspace.shared.notificationCenter
-    workspaceObservers.forEach { center.removeObserver($0) }
+    for observer in workspaceObservers { center.removeObserver(observer) }
     workspaceObservers.removeAll()
     onChange = nil
   }
@@ -110,7 +112,8 @@ final class LiveActivityAXReader {
     ] as [String] {
       AXObserverAddNotification(created, app, name as CFString, nil)
     }
-    Log.app.notice("Continuity: observing ControlCenter accessibility (pid \(pid, privacy: .public))")
+    Log.app.notice(
+      "Continuity: observing ControlCenter accessibility (pid \(pid, privacy: .public))")
   }
 
   private func detach() {

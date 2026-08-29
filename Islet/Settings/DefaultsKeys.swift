@@ -70,12 +70,21 @@ struct EnergyPolicy: Equatable, Sendable {
   }
 
   func batteryInterval(viewIsLive: Bool) -> TimeInterval {
+    // Selecting Battery is an explicit request to watch its continuously changing telemetry.
+    // Live mode updates every second. Automatic retains the established 12-second foreground
+    // cadence, while explicit or system-imposed constrained profiles remain at 30 seconds.
+    if viewIsLive {
+      switch mode {
+      case .live: return BatteryMonitor.liveInterval
+      case .lowEnergy: return 30
+      case .automatic: return systemLowPowerMode ? 30 : 12
+      }
+    }
     switch mode {
-    case .live: return viewIsLive ? 3 : 15
-    case .lowEnergy: return viewIsLive ? 30 : 120
+    case .live: return 15
+    case .lowEnergy: return 120
     case .automatic:
-      if systemLowPowerMode { return viewIsLive ? 30 : 120 }
-      return viewIsLive ? 12 : 60
+      return systemLowPowerMode ? 120 : 60
     }
   }
 
@@ -129,7 +138,8 @@ extension Defaults.Keys {
   static let hoverCollapseTimeout = Key<Double>("hoverCollapseTimeout", default: 0.5)
   static let hapticsEnabled = Key<Bool>("hapticsEnabled", default: true)
   static let hapticStrength = Key<HapticStrength>("hapticStrength", default: .medium)
-  static let barrierPushDistance = Key<Double>("barrierPushDistance", default: 288)
+  static let barrierPushDistance = Key<Double>(
+    "barrierPushDistance", default: Double(Metrics.barrierPushDistance))
   static let energyMode = Key<EnergyMode>("energyMode", default: .automatic)
   static let hideFromScreenRecording = Key<Bool>("hideFromScreenRecording", default: false)
   static let batteryEnabled = Key<Bool>("batteryEnabled", default: true)

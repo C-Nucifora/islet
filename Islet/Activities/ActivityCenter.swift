@@ -81,5 +81,33 @@ final class ActivityCenter: ObservableObject {
     return cachedActiveActivities
   }
 
+  /// Activities shown as expanded tabs. Utility surfaces such as the File Shelf stay reachable
+  /// without claiming the compact notch when they have no live content.
+  var expandedActivities: [any NotchActivity] {
+    let order = Defaults[.activityOrder]
+    let disabled = Set(Defaults[.disabledActivities])
+    return sorted(
+      activities.filter {
+        ($0.isActive || $0.isAvailableWhenInactive) && !disabled.contains($0.id)
+      },
+      order: order)
+  }
+
   var primaryActivity: (any NotchActivity)? { activeActivities.first }
+
+  func isAvailableInExpandedSwitcher(_ id: String) -> Bool {
+    expandedActivities.contains { $0.id == id }
+  }
+
+  private func sorted(
+    _ candidates: [any NotchActivity], order: [String]
+  ) -> [any NotchActivity] {
+    candidates.sorted {
+      let firstRank = order.firstIndex(of: $0.id) ?? Int.max
+      let secondRank = order.firstIndex(of: $1.id) ?? Int.max
+      if firstRank != secondRank { return firstRank < secondRank }
+      if $0.priority != $1.priority { return $0.priority > $1.priority }
+      return ($0.activationDate ?? .distantPast) > ($1.activationDate ?? .distantPast)
+    }
+  }
 }

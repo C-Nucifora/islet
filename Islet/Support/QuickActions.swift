@@ -15,131 +15,121 @@ struct IsletQuickAction: Identifiable {
     [
       .init(
         id: "show", title: "Show Islet", detail: "Expand the notch panel",
-        symbol: "waveform.path.ecg", keywords: "open expand island notch", isAvailable: { true }
-      ) {
-        ScreenManager.shared.viewModel?.apply(.clickedNotch)
-      },
+        symbol: "waveform.path.ecg", keywords: "open expand island notch", isAvailable: { true },
+        perform: { ScreenManager.shared.viewModel?.apply(.clickedNotch) }),
+      .init(
+        id: "shelf-open", title: "Open File Shelf", detail: "View files held in Islet",
+        symbol: "tray.full.fill", keywords: "files drop drag tray open",
+        isAvailable: { ActivityCenter.shared.isAvailableInExpandedSwitcher("shelf") },
+        perform: {
+          ShelfModel.shared.requestPresentation()
+          let viewModel = ScreenManager.shared.viewModel
+          if viewModel?.state.isExpanded != true { viewModel?.apply(.clickedNotch) }
+        }),
       .init(
         id: "timer-5", title: "Start 5-minute timer", detail: "Set a five-minute countdown",
-        symbol: "timer", keywords: "countdown short break", isAvailable: { true }
-      ) {
-        AppState.timer.start(5 * 60, label: "Timer")
-      },
+        symbol: "timer", keywords: "countdown short break", isAvailable: { true },
+        perform: { AppState.timer.start(5 * 60, label: "Timer") }),
       .init(
         id: "timer-25", title: "Start focus session", detail: "Start a 25-minute timer",
-        symbol: "brain.head.profile", keywords: "pomodoro timer work", isAvailable: { true }
-      ) {
-        AppState.timer.start(25 * 60, label: "Focus")
-      },
+        symbol: "brain.head.profile", keywords: "pomodoro timer work", isAvailable: { true },
+        perform: { AppState.timer.start(25 * 60, label: "Focus") }),
       .init(
         id: "timer-cancel", title: "Cancel timer", detail: "Stop the current countdown",
-        symbol: "timer.square", keywords: "stop dismiss", isAvailable: { AppState.timer.isActive }
-      ) {
-        AppState.timer.cancel()
-      },
+        symbol: "timer.square", keywords: "stop dismiss", isAvailable: { AppState.timer.isActive },
+        perform: { AppState.timer.cancel() }),
       .init(
         id: "timer-toggle",
         title: AppState.timer.isPaused ? "Resume timer" : "Pause timer",
-        detail: AppState.timer.isPaused ? "Continue the current countdown" : "Hold the current countdown",
+        detail: AppState.timer.isPaused
+          ? "Continue the current countdown" : "Hold the current countdown",
         symbol: AppState.timer.isPaused ? "play.circle" : "pause.circle",
-        keywords: "timer hold continue", isAvailable: {
+        keywords: "timer hold continue",
+        isAvailable: {
           AppState.timer.isActive && !AppState.timer.finished
-        }
-      ) {
-        AppState.timer.togglePause()
-      },
+        },
+        perform: { AppState.timer.togglePause() }),
       .init(
         id: "timer-add-5", title: "Add 5 minutes", detail: "Extend the current countdown",
-        symbol: "plus.circle", keywords: "timer extend more", isAvailable: {
+        symbol: "plus.circle", keywords: "timer extend more",
+        isAvailable: {
           AppState.timer.isActive && !AppState.timer.finished
-        }
-      ) {
-        AppState.timer.adjust(by: 5 * 60)
-      },
+        },
+        perform: { AppState.timer.adjust(by: 5 * 60) }),
       .init(
-        id: "pulse-focus", title: "Focus Pulse", detail: "Allow high-priority and actionable updates",
-        symbol: "scope", keywords: "filter rules profile notifications", isAvailable: {
+        id: "pulse-focus", title: "Focus Pulse",
+        detail: "Allow high-priority and actionable updates",
+        symbol: "scope", keywords: "filter rules profile notifications",
+        isAvailable: {
           PulseCenter.shared.deliveryProfile != .focused
-        }
-      ) {
-        PulseCenter.shared.deliveryProfile = .focused
-      },
+        },
+        perform: { PulseCenter.shared.deliveryProfile = .focused }),
       .init(
         id: "pulse-critical", title: "Critical Pulse only",
         detail: "Allow only critical and failed provider updates",
-        symbol: "exclamationmark.shield", keywords: "filter rules profile urgent", isAvailable: {
+        symbol: "exclamationmark.shield", keywords: "filter rules profile urgent",
+        isAvailable: {
           PulseCenter.shared.deliveryProfile != .criticalOnly
-        }
-      ) {
-        PulseCenter.shared.deliveryProfile = .criticalOnly
-      },
+        },
+        perform: { PulseCenter.shared.deliveryProfile = .criticalOnly }),
       .init(
         id: "pulse-pause", title: "Pause Pulse delivery",
         detail: "Retain provider state without showing new items",
-        symbol: "pause.circle", keywords: "filter rules profile mute notifications", isAvailable: {
+        symbol: "pause.circle", keywords: "filter rules profile mute notifications",
+        isAvailable: {
           PulseCenter.shared.deliveryProfile != .paused
-        }
-      ) {
-        PulseCenter.shared.deliveryProfile = .paused
-      },
+        },
+        perform: { PulseCenter.shared.deliveryProfile = .paused }),
       .init(
-        id: "pulse-resume", title: "Show all Pulse updates", detail: "Return to the Everything profile",
-        symbol: "waveform.path.ecg", keywords: "resume unpause all rules", isAvailable: {
+        id: "pulse-resume", title: "Show all Pulse updates",
+        detail: "Return to the Everything profile",
+        symbol: "waveform.path.ecg", keywords: "resume unpause all rules",
+        isAvailable: {
           PulseCenter.shared.deliveryProfile != .everything
-        }
-      ) {
-        PulseCenter.shared.deliveryProfile = .everything
-      },
+        },
+        perform: { PulseCenter.shared.deliveryProfile = .everything }),
       .init(
         id: "pulse-clear", title: "Dismiss all Pulse items",
         detail: "Clear visible, filtered, and muted provider state",
-        symbol: "xmark.circle", keywords: "end clear notifications", isAvailable: {
+        symbol: "xmark.circle", keywords: "end clear notifications",
+        isAvailable: {
           PulseCenter.shared.retainedItemCount > 0
-        }
-      ) {
-        PulseCenter.shared.removeAll()
-      },
+        },
+        perform: { PulseCenter.shared.removeAll() }),
       .init(
         id: "pulse-settings", title: "Open Pulse providers",
         detail: "Review providers, routing rules and session history",
         symbol: "point.3.connected.trianglepath.dotted",
-        keywords: "integration settings history sources token", isAvailable: { true }
-      ) {
-        SettingsOpener.open(destination: .pulse)
-      },
+        keywords: "integration settings history sources token", isAvailable: { true },
+        perform: { SettingsOpener.open(destination: .pulse) }),
       .init(
         id: "clipboard-pause", title: "Pause clipboard history",
         detail: "Clear retained copies and stop capturing this session",
-        symbol: "clipboard", keywords: "privacy secret stop clear", isAvailable: {
+        symbol: "clipboard", keywords: "privacy secret stop clear",
+        isAvailable: {
           !ClipboardModel.shared.isPaused
-        }
-      ) {
-        ClipboardModel.shared.setPaused(true)
-      },
+        },
+        perform: { ClipboardModel.shared.setPaused(true) }),
       .init(
         id: "clipboard-resume", title: "Resume clipboard history",
         detail: "Capture new copies without backfilling missed items",
-        symbol: "clipboard.fill", keywords: "privacy start capture", isAvailable: {
+        symbol: "clipboard.fill", keywords: "privacy start capture",
+        isAvailable: {
           ClipboardModel.shared.isPaused
-        }
-      ) {
-        ClipboardModel.shared.setPaused(false)
-      },
+        },
+        perform: { ClipboardModel.shared.setPaused(false) }),
       .init(
         id: "clipboard-clear", title: "Clear clipboard history",
         detail: "Remove all copies retained by Islet",
-        symbol: "trash", keywords: "privacy remove copies", isAvailable: {
+        symbol: "trash", keywords: "privacy remove copies",
+        isAvailable: {
           !ClipboardModel.shared.items.isEmpty
-        }
-      ) {
-        ClipboardModel.shared.clear()
-      },
+        },
+        perform: { ClipboardModel.shared.clear() }),
       .init(
         id: "settings", title: "Open Settings", detail: "Configure activities and integrations",
-        symbol: "gearshape", keywords: "preferences configuration", isAvailable: { true }
-      ) {
-        SettingsOpener.open(destination: .overview)
-      },
+        symbol: "gearshape", keywords: "preferences configuration", isAvailable: { true },
+        perform: { SettingsOpener.open(destination: .overview) }),
     ]
   }
 }
@@ -194,10 +184,14 @@ private struct QuickActionsView: View {
           .font(.title3)
           .onSubmit { performFirst() }
         if !query.isEmpty {
-          Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Clear search")
+          Button {
+            query = ""
+          } label: {
+            Image(systemName: "xmark.circle.fill")
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(.secondary)
+          .accessibilityLabel("Clear search")
         }
       }
       .padding(14)
@@ -209,7 +203,9 @@ private struct QuickActionsView: View {
         ScrollView {
           LazyVStack(spacing: 4) {
             ForEach(actions) { action in
-              Button { perform(action) } label: {
+              Button {
+                perform(action)
+              } label: {
                 HStack(spacing: 12) {
                   Image(systemName: action.symbol)
                     .font(.title3)

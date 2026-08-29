@@ -3,7 +3,7 @@ import Combine
 import Defaults
 import SwiftUI
 
-/// One notch panel plus the frame plumbing that keeps its window where the model says it should be.
+/// One notch panel plus the frame plumbing that keeps its reserved host window in place.
 ///
 /// A class rather than a struct because re-asserting a frame needs per-panel mutable state: the
 /// re-entrancy guard has to outlive any single call, or a `didMove` fired by our own `setFrame`
@@ -15,6 +15,7 @@ private final class PanelInstance {
   let viewModel: NotchViewModel
   var cancellables: Set<AnyCancellable> = []
   private var isApplying = false
+  private let pointerMonitoringID = UUID()
 
   init(screenUUID: String, panel: NotchPanel, viewModel: NotchViewModel) {
     self.screenUUID = screenUUID
@@ -22,18 +23,19 @@ private final class PanelInstance {
     self.viewModel = viewModel
   }
 
-  /// The single place a notch panel's frame is ever set.
+  /// Reasserts the panel's one reserved frame.
   ///
-  /// The window's real frame is read straight back and pushed into the model. `NotchPanel` now
-  /// returns `constrainFrameRect` unchanged so the two should always agree, but "should" is not
-  /// "does": the island is drawn centred in the REAL window, so any divergence lands 1:1 on the
-  /// drawn island, and a divergence nobody measures is a drift nobody can explain.
+  /// The window's real frame is read straight back and pushed into the model. `NotchPanel` returns
+  /// `constrainFrameRect` unchanged so the two should always agree, but the island is positioned
+  /// inside the real frame, so any system adjustment still has to be measured.
   ///
-  /// `display: false` — the view reports its slot widths from inside a SwiftUI update, so this can
-  /// run mid-layout, and forcing a synchronous display pass there re-enters layout.
-  func apply(_ frame: CGRect) {
+  /// The visible island changes size inside this frame. Resizing the NSWindow in response to a
+  /// SwiftUI geometry callback races NSHostingView constraint maintenance and AppKit terminates
+  /// the process in `_postWindowNeedsUpdateConstraints`.
+  private func applyReservedFrame() {
     guard !isApplying else { return }
     isApplying = true
+    let frame = viewModel.reservedPanelFrame
     panel.setFrame(frame, display: false)
     let actual = panel.frame
     if actual != frame {
@@ -48,24 +50,37 @@ private final class PanelInstance {
   /// Feeds the window's real frame into the model without touching the window.
   func syncActualFrame() { viewModel.setActualPanelFrame(panel.frame) }
 
-  /// Unconditional re-push of the model's frame, deliberately bypassing the `removeDuplicates` on
-  /// `$panelFrame`: republishing an unchanged value emits nothing, so a window the system moved
-  /// behind our back would otherwise never be corrected. `targetPanelFrame` also returns the same
-  /// value for `.closed` and `.peek`, so hovering the notch republishes nothing either — a drift
-  /// used to survive every hover and clear only on a real expand.
-  func reassert() { apply(viewModel.panelFrame) }
+  /// Unconditional re-push of the reserved frame. A display or Space transition can move a panel
+  /// behind our back without changing any model value that could trigger a Combine publisher.
+  func reassert() { applyReservedFrame() }
 
   /// The panel is `isMovable = false` and Islet never drags it, so a move we did not cause is the
   /// system relocating the window — put it back. Gated on an actual mismatch, which makes this a
   /// fixed point: a `setFrame` that lands exactly where asked posts no move, so it cannot loop.
   func reassertIfMoved() {
     guard !isApplying else { return }
-    guard panel.frame != viewModel.panelFrame else {
+    guard panel.frame != viewModel.reservedPanelFrame else {
       syncActualFrame()
       return
     }
     Log.app.notice("Panel on \(self.screenUUID, privacy: .public) moved; re-asserting its frame")
     reassert()
+  }
+
+  func updateMousePassthrough(
+    at location: CGPoint = NSEvent.mouseLocation, allowingCompactFileDrag: Bool = false
+  ) {
+    EventMonitors.shared.setPointerPassthroughNeeded(
+      viewModel.needsPointerPassthroughMonitoring, sourceID: pointerMonitoringID)
+    let shouldIgnore = viewModel.shouldIgnorePanelMouseEvents(
+      at: location, allowingCompactFileDrag: allowingCompactFileDrag)
+    if panel.ignoresMouseEvents != shouldIgnore { panel.ignoresMouseEvents = shouldIgnore }
+  }
+
+  func stop() {
+    EventMonitors.shared.setPointerPassthroughNeeded(false, sourceID: pointerMonitoringID)
+    cancellables.removeAll()
+    panel.close()
   }
 }
 
@@ -122,8 +137,10 @@ final class ScreenManager {
     Defaults.publisher(.hideFromScreenRecording)
       .sink { [weak self] change in
         Task { @MainActor in
-          self?.instances.values.forEach {
-            $0.panel.sharingType = change.newValue ? .none : .readOnly
+          if let instances = self?.instances.values {
+            for instance in instances {
+              instance.panel.sharingType = change.newValue ? .none : .readOnly
+            }
           }
         }
       }
@@ -141,10 +158,7 @@ final class ScreenManager {
   func stop() {
     fullscreenTimer = nil
     cancellables.removeAll()
-    for instance in instances.values {
-      instance.cancellables.removeAll()
-      instance.panel.close()
-    }
+    for instance in instances.values { instance.stop() }
     instances.removeAll()
   }
 
@@ -155,7 +169,7 @@ final class ScreenManager {
   }
 
   func rebuild() {
-    instances.values.forEach { $0.panel.close() }
+    for instance in instances.values { instance.stop() }
     instances.removeAll()
 
     for screen in targetScreens() {
@@ -171,21 +185,47 @@ final class ScreenManager {
       }
       let geometry = screen.notchGeometry(reading: reading)
       let vm = NotchViewModel(geometry: geometry)
-      let panel = NotchPanel(frame: vm.panelFrame)
-      panel.contentView = NSHostingView(rootView: NotchRootView(vm: vm))
+      let panel = NotchPanel(frame: vm.reservedPanelFrame)
+      let dropZoneID = UUID()
+      panel.contentView = NotchHosting.view(for: vm)
+      let inst = PanelInstance(screenUUID: uuid, panel: panel, viewModel: vm)
+      panel.acceptsFileDrops = {
+        ActivityCenter.shared.isAvailableInExpandedSwitcher("shelf")
+          && !vm.shouldIgnorePanelMouseEvents(
+            at: NSEvent.mouseLocation, allowingCompactFileDrag: true)
+      }
+      panel.fileDragTargetChanged = { [weak inst] targeted in
+        ShelfModel.shared.setDropTarget(dropZoneID, active: targeted)
+        if targeted { vm.apply(.fileDragEntered) }
+        if !targeted { inst?.updateMousePassthrough() }
+      }
+      panel.fileURLsDropped = { urls in
+        ShelfModel.shared.importDroppedURLs(urls)
+      }
       panel.alphaValue = 0
       panel.orderFrontRegardless()
-      panel.setFrame(vm.panelFrame, display: true)
-      panel.alphaValue = 1  // alpha-flash hides ghost frames
+      panel.setFrame(vm.reservedPanelFrame, display: true)
       panel.sharingType = Defaults[.hideFromScreenRecording] ? .none : .readOnly
 
-      let inst = PanelInstance(screenUUID: uuid, panel: panel, viewModel: vm)
       inst.syncActualFrame()  // seed from the window we just placed, before anything is drawn
-      // The panel only claims the space the island actually occupies, so the rest of the menu bar
-      // stays clickable; it grows on expand and back down on collapse.
-      vm.$panelFrame
-        .removeDuplicates()
-        .sink { [weak inst] frame in inst?.apply(frame) }
+      inst.updateMousePassthrough()
+      panel.alphaValue = 1  // alpha-flash hides ghost frames
+      Publishers.CombineLatest4(
+        vm.$state, vm.$expandedWidth, vm.$expandedHeight, vm.$actualPanelFrame
+      )
+      .sink { [weak inst] _ in inst?.updateMousePassthrough() }
+      .store(in: &inst.cancellables)
+      vm.$compactTargetRevision
+        .dropFirst()
+        .sink { [weak inst] _ in inst?.updateMousePassthrough() }
+        .store(in: &inst.cancellables)
+      EventMonitors.shared.pointerMovement
+        .sink { [weak inst] location in inst?.updateMousePassthrough(at: location) }
+        .store(in: &inst.cancellables)
+      EventMonitors.shared.fileDragMovement
+        .sink { [weak inst] location in
+          inst?.updateMousePassthrough(at: location, allowingCompactFileDrag: true)
+        }
         .store(in: &inst.cancellables)
       NotificationCenter.default
         .publisher(for: NSWindow.didMoveNotification, object: panel)
@@ -197,8 +237,7 @@ final class ScreenManager {
     applyFullscreenVisibility()
   }
 
-  /// Re-pushes every panel's frame. See `PanelInstance.reassert()` for why this cannot go through
-  /// the `$panelFrame` publisher.
+  /// Re-pushes every panel's reserved frame after a display, Space or app activation change.
   private func reassertAll() {
     for inst in instances.values { inst.reassert() }
   }
@@ -216,7 +255,9 @@ final class ScreenManager {
     } else {
       fullscreenTimer = nil
       // Restore any panel we hid.
-      instances.values.forEach { if !$0.panel.isVisible { $0.panel.orderFrontRegardless() } }
+      for instance in instances.values where !instance.panel.isVisible {
+        instance.panel.orderFrontRegardless()
+      }
     }
   }
 

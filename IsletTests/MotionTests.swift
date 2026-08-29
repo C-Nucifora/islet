@@ -8,6 +8,7 @@ final class MotionTests: XCTestCase {
     XCTAssertEqual(Motion.gated(Motion.opening, reduceMotion: false), Motion.opening)
     XCTAssertEqual(Motion.gated(Motion.closing, reduceMotion: false), Motion.closing)
     XCTAssertEqual(Motion.gated(Motion.compact, reduceMotion: false), Motion.compact)
+    XCTAssertEqual(Motion.gated(Motion.hudAppearing, reduceMotion: false), Motion.hudAppearing)
   }
 
   func testGatedCollapsesToNilUnderReduceMotion() {
@@ -16,6 +17,13 @@ final class MotionTests: XCTestCase {
     XCTAssertNil(Motion.gated(Motion.opening, reduceMotion: true))
     XCTAssertNil(Motion.gated(Motion.closing, reduceMotion: true))
     XCTAssertNil(Motion.gated(Motion.compact, reduceMotion: true))
+    XCTAssertNil(Motion.gated(Motion.hudAppearing, reduceMotion: true))
+  }
+
+  func testHUDEntryIsShortAndExitUsesNormalCompactMotion() {
+    XCTAssertEqual(Motion.compactChange(hudVisible: true), Motion.hudAppearing)
+    XCTAssertEqual(Motion.compactChange(hudVisible: false), Motion.compact)
+    XCTAssertNotEqual(Motion.hudAppearing, Motion.compact)
   }
 
   func testPanelShrinkDelayOutlastsTheClosingAnimation() {

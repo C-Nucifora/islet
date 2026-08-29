@@ -44,12 +44,21 @@ final class EventMonitors {
 
   let mouseMovement = CurrentValueSubject<MouseMovement, Never>(
     MouseMovement(location: .zero, deviceDeltaY: 0))
+  /// Pointer movement in the top interaction band, including in click-to-pin mode. The oversized
+  /// expanded hosting window uses this to pass events through wherever no island is drawn.
+  let pointerMovement = PassthroughSubject<CGPoint, Never>()
+  let fileDragMovement = PassthroughSubject<CGPoint, Never>()
   let mouseDown = PassthroughSubject<CGPoint, Never>()
 
   private var movementMonitor: PairedMonitor?
+  private var fileDragMonitor: PairedMonitor?
   private var downMonitor: PairedMonitor?
   private var interactionModeCancellable: AnyCancellable?
   private var wasInTopInteractionBand = false
+  private var wasPointerInTopInteractionBand = false
+  private var wasFileDragInTopInteractionBand = false
+  private var forwardsHoverMovement = false
+  private var pointerPassthroughDemand: Set<UUID> = []
 
   func start() {
     guard downMonitor == nil else { return }
@@ -58,6 +67,15 @@ final class EventMonitors {
     }
     downMonitor = down
     down.start()
+    let fileDrag = PairedMonitor(mask: [.leftMouseDragged]) { [weak self] _ in
+      guard Self.dragPasteboardContainsFileURLs() else { return }
+      guard let self else { return }
+      self.forwardFileDragIfRelevant(
+        NSEvent.mouseLocation,
+        shelfAvailable: ActivityCenter.shared.isAvailableInExpandedSwitcher("shelf"))
+    }
+    fileDragMonitor = fileDrag
+    fileDrag.start()
     interactionModeCancellable = Defaults.publisher(.interactionMode)
       .sink { [weak self] change in
         Task { @MainActor in self?.setMovementMonitoring(change.newValue == .hover) }
@@ -68,37 +86,82 @@ final class EventMonitors {
   func stop() {
     movementMonitor?.stop()
     movementMonitor = nil
+    fileDragMonitor?.stop()
+    fileDragMonitor = nil
     downMonitor?.stop()
     downMonitor = nil
     interactionModeCancellable = nil
+    pointerPassthroughDemand.removeAll()
     wasInTopInteractionBand = false
+    wasPointerInTopInteractionBand = false
+    wasFileDragInTopInteractionBand = false
   }
 
   private func setMovementMonitoring(_ enabled: Bool) {
-    if enabled {
-      guard movementMonitor == nil else { return }
-      let move = PairedMonitor(mask: [.mouseMoved, .leftMouseDragged]) { [weak self] event in
-        guard let self else { return }
-        self.forwardMovementIfRelevant(event)
-      }
-      movementMonitor = move
-      move.start()
-    } else {
-      if movementMonitor != nil {
-        // Resolve any hover-owned peek/unpinned expansion before removing the only producer that
-        // can deliver an exit. Without this, changing to click-to-pin while peeking can strand the
-        // island in `.peek` until the next click.
-        mouseMovement.send(
-          MouseMovement(location: CGPoint(x: -1_000_000, y: -1_000_000), deviceDeltaY: 0))
-      }
-      movementMonitor?.stop()
-      movementMonitor = nil
+    if !enabled, forwardsHoverMovement {
+      // Resolve any hover-owned peek/unpinned expansion before stopping hover delivery. The
+      // underlying pointer monitor stays active because window passthrough needs it in both modes.
+      mouseMovement.send(
+        MouseMovement(location: CGPoint(x: -1_000_000, y: -1_000_000), deviceDeltaY: 0))
       wasInTopInteractionBand = false
     }
+    forwardsHoverMovement = enabled
+    updateMovementMonitor()
   }
 
-  private func forwardMovementIfRelevant(_ event: NSEvent) {
-    let location = NSEvent.mouseLocation
+  func setPointerPassthroughNeeded(_ needed: Bool, sourceID: UUID) {
+    if needed {
+      pointerPassthroughDemand.insert(sourceID)
+    } else {
+      pointerPassthroughDemand.remove(sourceID)
+    }
+    updateMovementMonitor()
+  }
+
+  private func updateMovementMonitor() {
+    let shouldRun = Self.shouldRunMovementMonitor(
+      hoverEnabled: forwardsHoverMovement,
+      pointerPassthroughDemandCount: pointerPassthroughDemand.count)
+    guard shouldRun != (movementMonitor != nil) else { return }
+    guard shouldRun else {
+      movementMonitor?.stop()
+      movementMonitor = nil
+      wasPointerInTopInteractionBand = false
+      return
+    }
+
+    let move = PairedMonitor(mask: [.mouseMoved, .leftMouseDragged]) { [weak self] event in
+      guard let self else { return }
+      let location = NSEvent.mouseLocation
+      if !self.pointerPassthroughDemand.isEmpty {
+        self.forwardPointerMovementIfRelevant(location)
+      }
+      // A Finder drag hovering over the notch opens the Shelf immediately. Do not also feed the
+      // same event into the ordinary hover barrier.
+      if event.type == .leftMouseDragged, Self.dragPasteboardContainsFileURLs() { return }
+      guard self.forwardsHoverMovement else { return }
+      self.forwardMovementIfRelevant(event, location: location)
+    }
+    movementMonitor = move
+    move.start()
+  }
+
+  nonisolated static func shouldRunMovementMonitor(
+    hoverEnabled: Bool, pointerPassthroughDemandCount: Int
+  ) -> Bool {
+    hoverEnabled || pointerPassthroughDemandCount > 0
+  }
+
+  nonisolated static func pasteboardContainsFileURLs(_ pasteboard: NSPasteboard) -> Bool {
+    pasteboard.canReadObject(
+      forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+  }
+
+  private nonisolated static func dragPasteboardContainsFileURLs() -> Bool {
+    pasteboardContainsFileURLs(NSPasteboard(name: .drag))
+  }
+
+  private func forwardMovementIfRelevant(_ event: NSEvent, location: CGPoint) {
     let isRelevant = Self.isInTopInteractionBand(
       location, screenFrames: NSScreen.screens.map(\.frame))
     // Forward the first event outside the band as well. That is the event that tells an expanded
@@ -113,6 +176,50 @@ final class EventMonitors {
       MouseMovement(
         location: location,
         deviceDeltaY: rawDelta == 0 ? event.deltaY : CGFloat(rawDelta)))
+  }
+
+  private func forwardPointerMovementIfRelevant(_ location: CGPoint) {
+    let screenFrames = NSScreen.screens.map(\.frame)
+    let isRelevant = Self.isInTopInteractionBand(location, screenFrames: screenFrames)
+    let shouldForward = Self.shouldForwardTopBandMovement(
+      location, screenFrames: screenFrames,
+      wasInTopInteractionBand: wasPointerInTopInteractionBand)
+    wasPointerInTopInteractionBand = isRelevant
+    if shouldForward { pointerMovement.send(location) }
+  }
+
+  private func forwardFileDragIfRelevant(_ location: CGPoint, shelfAvailable: Bool) {
+    guard shelfAvailable else {
+      if wasFileDragInTopInteractionBand {
+        fileDragMovement.send(CGPoint(x: -1_000_000, y: -1_000_000))
+      }
+      wasFileDragInTopInteractionBand = false
+      return
+    }
+
+    let screenFrames = NSScreen.screens.map(\.frame)
+    let isRelevant = Self.isInTopInteractionBand(location, screenFrames: screenFrames)
+    let shouldForward = Self.shouldForwardFileDrag(
+      location, screenFrames: screenFrames, shelfAvailable: shelfAvailable,
+      wasInTopInteractionBand: wasFileDragInTopInteractionBand)
+    wasFileDragInTopInteractionBand = isRelevant
+    if shouldForward { fileDragMovement.send(location) }
+  }
+
+  nonisolated static func shouldForwardTopBandMovement(
+    _ location: CGPoint, screenFrames: [CGRect], wasInTopInteractionBand: Bool
+  ) -> Bool {
+    isInTopInteractionBand(location, screenFrames: screenFrames) || wasInTopInteractionBand
+  }
+
+  nonisolated static func shouldForwardFileDrag(
+    _ location: CGPoint, screenFrames: [CGRect], shelfAvailable: Bool,
+    wasInTopInteractionBand: Bool
+  ) -> Bool {
+    shelfAvailable
+      && shouldForwardTopBandMovement(
+        location, screenFrames: screenFrames,
+        wasInTopInteractionBand: wasInTopInteractionBand)
   }
 
   nonisolated static func isInTopInteractionBand(

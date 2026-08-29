@@ -34,8 +34,11 @@ final class SneakSnapshotTests: XCTestCase {
     window.backgroundColor = .clear
     // A desktop-grey backdrop so the black island's edges are reviewable.
     let host = NSHostingView(
-      rootView: ZStack { Color(white: 0.4); NotchRootView(vm: vm) }
-        .environment(\.colorScheme, .dark))
+      rootView: ZStack {
+        Color(white: 0.4)
+        NotchRootView(vm: vm)
+      }
+      .environment(\.colorScheme, .dark))
     window.contentView = host
     window.orderFrontRegardless()
 

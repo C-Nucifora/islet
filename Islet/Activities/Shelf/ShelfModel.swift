@@ -16,23 +16,61 @@ final class ShelfModel: ObservableObject {
   static let shared = ShelfModel()
   nonisolated static let maximumItemCount = 100
 
+  private struct ImportBatch {
+    let urls: [URL]
+    let generation: UInt
+  }
+
+  typealias CopyItem = @Sendable (URL, URL) async -> Result<Void, Error>
+
   @Published private(set) var items: [ShelfItem] = []
   @Published private(set) var lastError: String?
-  /// True while a file drag is hovering the notch, so the UI can reveal the shelf.
-  @Published var isDragActive = false
+  @Published private var dropState = ShelfDropState()
+  @Published private(set) var presentationRequest: UUID?
 
   private let dir: URL
+  private let copyItem: CopyItem
   private var reservedDestinations: Set<URL> = []
+  private var importQueue: [ImportBatch] = []
+  private var importWorker: Task<Void, Never>?
+  private var importGeneration: UInt = 0
+  private(set) var isClearing = false
 
-  init() {
-    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent("Islet/Shelf", isDirectory: true)
+  init(directory: URL? = nil, copyItem: CopyItem? = nil) {
+    let base =
+      directory
+      ?? FileManager.default.urls(
+        for: .applicationSupportDirectory, in: .userDomainMask
+      )[0].appendingPathComponent("Islet/Shelf", isDirectory: true)
+    self.copyItem =
+      copyItem
+      ?? { source, destination in
+        await Task.detached(priority: .utility) {
+          Result { try FileManager.default.copyItem(at: source, to: destination) }
+        }.value
+      }
     try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
     dir = base
     load()
   }
 
   var urls: [URL] { items.map(\.url) }
+  /// True while at least one notch window is under the current file drag.
+  var isDragActive: Bool { dropState.isTargeted }
+  /// Keeps the Shelf selected until every provider resolves and every copy finishes.
+  var isDropPresentationActive: Bool { dropState.isActive }
+  var pendingImportCount: Int { dropState.pendingImportCount }
+
+  func setDropTarget(_ id: UUID, active: Bool) {
+    dropState.setTarget(id, active: active)
+  }
+
+  func requestPresentation() { presentationRequest = UUID() }
+
+  func consumePresentationRequest(_ id: UUID) {
+    guard presentationRequest == id else { return }
+    presentationRequest = nil
+  }
 
   private func load() {
     let found =
@@ -52,42 +90,69 @@ final class ShelfModel: ObservableObject {
   /// hover/click animation while FileManager performs disk I/O.
   @discardableResult
   func add(_ source: URL) async -> Bool {
+    let result = await add(source, updatesLastError: true)
+    return result.error == nil
+  }
+
+  private func add(
+    _ source: URL, updatesLastError: Bool,
+    expectedImportGeneration: UInt? = nil
+  ) async -> (item: ShelfItem?, error: String?) {
+    if let expectedImportGeneration, expectedImportGeneration != importGeneration {
+      return (nil, nil)
+    }
     guard
       ShelfLogic.hasCapacity(
         currentCount: items.count, pendingCount: reservedDestinations.count,
         maximum: Self.maximumItemCount)
     else {
-      lastError = "Shelf is full (\(Self.maximumItemCount) items)."
-      return false
+      let error = "Shelf is full (\(Self.maximumItemCount) items)."
+      if updatesLastError { lastError = error }
+      return (nil, error)
     }
     guard source.isFileURL else {
-      lastError = "Only files and folders can be added."
-      return false
+      let error = "Only files and folders can be added."
+      if updatesLastError { lastError = error }
+      return (nil, error)
     }
     guard FileManager.default.fileExists(atPath: source.path) else {
-      lastError = "That item is no longer available."
-      return false
+      let error = "That item is no longer available."
+      if updatesLastError { lastError = error }
+      return (nil, error)
     }
 
     let dest = reserveDestination(named: source.lastPathComponent)
-    let result: Result<Void, Error> = await Task.detached(priority: .utility) {
-      Result { try FileManager.default.copyItem(at: source, to: dest) }
-    }.value
+    let result = await copyItem(source, dest)
     reservedDestinations.remove(dest)
+
+    if let expectedImportGeneration, expectedImportGeneration != importGeneration {
+      // A failed copy may still have created a partial file or directory before Clear invalidated
+      // the import. Remove the reserved destination regardless of the reported result.
+      await Task.detached(priority: .utility) {
+        try? FileManager.default.removeItem(at: dest)
+      }.value
+      return (nil, nil)
+    }
 
     switch result {
     case .success:
-      lastError = nil
+      if updatesLastError { lastError = nil }
       let item = ShelfItem(id: UUID(), url: dest, name: dest.lastPathComponent, thumbnail: nil)
       items.append(item)
       generateThumbnail(id: item.id, url: item.url)
-      return true
+      return (item, nil)
     case .failure(let error):
+      // FileManager can create part of a file or directory before reporting failure. Never leave
+      // an untracked destination for the next launch to load as a valid Shelf item.
+      await Task.detached(priority: .utility) {
+        try? FileManager.default.removeItem(at: dest)
+      }.value
       // A file can disappear between Finder producing its drag payload and the async copy. Give a
       // useful, non-technical error while retaining the detailed failure in the log.
-      lastError = "Couldn’t add \(source.lastPathComponent)."
+      let message = "Couldn’t add \(source.lastPathComponent)."
+      if updatesLastError { lastError = message }
       Log.app.error("Shelf copy failed: \(error.localizedDescription)")
-      return false
+      return (nil, message)
     }
   }
 
@@ -111,12 +176,20 @@ final class ShelfModel: ObservableObject {
   }
 
   func clear() async {
+    guard !isClearing else { return }
+    isClearing = true
+    defer { isClearing = false }
+    await cancelPendingImports()
     let current = items
+    let originalIDs = Set(current.map(\.id))
     let removedIDs: Set<UUID> = await Task.detached(priority: .utility) {
       var removed: Set<UUID> = []
       for item in current {
         do {
           try FileManager.default.removeItem(at: item.url)
+          removed.insert(item.id)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+          // Finder or a concurrent single-item removal already achieved Clear's requested state.
           removed.insert(item.id)
         } catch {
           Log.app.error("Shelf clear failed for \(item.name): \(error.localizedDescription)")
@@ -125,7 +198,17 @@ final class ShelfModel: ObservableObject {
       return removed
     }.value
     items.removeAll { removedIDs.contains($0.id) }
-    lastError = items.isEmpty ? nil : "Some Shelf items couldn’t be removed."
+    lastError =
+      originalIDs.subtracting(removedIDs).isEmpty
+      ? nil : "Some Shelf items couldn’t be removed."
+  }
+
+  func open(_ item: ShelfItem) {
+    guard NSWorkspace.shared.open(item.url) else {
+      lastError = "Couldn’t open \(item.name)."
+      return
+    }
+    lastError = nil
   }
 
   func dismissError() { lastError = nil }
@@ -169,15 +252,92 @@ final class ShelfModel: ObservableObject {
     NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:])
   }
 
-  /// Extracts file URLs from dropped item providers; `add` is called per URL (off-main).
-  nonisolated static func loadURLs(
-    from providers: [NSItemProvider], add: @escaping @Sendable (URL) -> Void
-  ) {
-    for provider in providers {
-      _ = provider.loadObject(ofClass: URL.self) { url, _ in
-        if let url { add(url) }
+  /// AppKit window destinations already resolve Finder's pasteboard to file URLs, so imports can
+  /// begin without waiting for an item-provider callback.
+  @discardableResult
+  func importDroppedURLs(_ urls: [URL]) -> Bool {
+    guard !isClearing else { return false }
+    let fileURLs = urls.filter(\.isFileURL)
+    guard !fileURLs.isEmpty else { return false }
+
+    dropState.beginImports(fileURLs.count)
+    importQueue.append(ImportBatch(urls: fileURLs, generation: importGeneration))
+    startImportWorkerIfNeeded()
+    return true
+  }
+
+  private func startImportWorkerIfNeeded() {
+    guard importWorker == nil, !importQueue.isEmpty else { return }
+    let generation = importGeneration
+    importWorker = Task { [weak self] in
+      await self?.drainImportQueue(generation: generation)
+    }
+  }
+
+  private func drainImportQueue(generation: UInt) async {
+    var firstError: String?
+    while generation == importGeneration, !Task.isCancelled, !importQueue.isEmpty {
+      let batch = importQueue.removeFirst()
+      guard batch.generation == generation else { continue }
+      for url in batch.urls {
+        guard generation == importGeneration, !Task.isCancelled else { return }
+        let result = await add(
+          url, updatesLastError: false, expectedImportGeneration: generation)
+        guard generation == importGeneration, !Task.isCancelled else { return }
+        if firstError == nil, let error = result.error {
+          firstError = error
+          lastError = error
+        }
+        dropState.finishImport()
       }
     }
+    guard generation == importGeneration else { return }
+    lastError = firstError
+    importWorker = nil
+    startImportWorkerIfNeeded()
+  }
+
+  private func cancelPendingImports() async {
+    importGeneration &+= 1
+    importQueue.removeAll()
+    let activeWorker = importWorker
+    activeWorker?.cancel()
+    // Clear only the generation being invalidated. New drops are rejected while Clear awaits the
+    // old worker, so no fresh progress state can be erased by this reset.
+    dropState.cancelImports()
+    await activeWorker?.value
+    importWorker = nil
+    startImportWorkerIfNeeded()
+  }
+}
+
+struct ShelfDropState: Equatable {
+  private(set) var targetedDropZones: Set<UUID> = []
+  private(set) var pendingImportCount = 0
+
+  var isTargeted: Bool { !targetedDropZones.isEmpty }
+  var isActive: Bool { isTargeted || pendingImportCount > 0 }
+
+  mutating func setTarget(_ id: UUID, active: Bool) {
+    if active {
+      targetedDropZones.insert(id)
+    } else {
+      targetedDropZones.remove(id)
+    }
+  }
+
+  mutating func beginImports(_ count: Int) {
+    guard count > 0 else { return }
+    pendingImportCount += count
+  }
+
+  mutating func finishImport() {
+    guard pendingImportCount > 0 else { return }
+    pendingImportCount -= 1
+  }
+
+  mutating func cancelImports() {
+    pendingImportCount = 0
   }
 }
 

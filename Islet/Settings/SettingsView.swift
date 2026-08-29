@@ -2,7 +2,7 @@ import AppKit
 import Defaults
 import SwiftUI
 
-private enum SettingsCategory: String, CaseIterable, Identifiable {
+enum SettingsCategory: String, CaseIterable, Identifiable {
   case general = "General"
   case activities = "Activities"
   case notifications = "Notifications"
@@ -36,11 +36,14 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
   var searchTerms: String {
     switch self {
     case .general: "launch login displays fullscreen recording hover click haptics energy"
-    case .activities: "tabs order battery calendar reminders clipboard ports audio hud timer shelf system media iphone continuity live activities"
-    case .notifications: "events usb wifi bluetooth airdrop vpn focus screenshot sleep power volume display"
-    case .integrations: "t3 code agents remote media spotify music pulse api cli providers history rules focus shortcuts"
+    case .activities:
+      "tabs order battery calendar reminders clipboard ports audio hud timer shelf system media iphone continuity live activities"
+    case .notifications:
+      "events usb wifi bluetooth airdrop vpn focus screenshot sleep power volume display"
+    case .integrations:
+      "t3 code agents remote media spotify music pulse api cli providers history rules focus shortcuts"
     case .privacy: "calendar reminders accessibility privacy grant denied restricted clipboard"
-    case .advanced: "diagnostics identity version defaults reset"
+    case .advanced: "diagnostics identity version defaults reset about github contributors"
     }
   }
 }
@@ -54,7 +57,7 @@ private enum SystemMetricPreset: String, CaseIterable, Identifiable {
   var id: Self { self }
 }
 
-private enum SettingsDetailPage: String, CaseIterable, Identifiable {
+enum SettingsDetailPage: String, CaseIterable, Identifiable {
   case startupDisplays
   case interaction
   case energy
@@ -150,25 +153,139 @@ private enum SettingsDetailPage: String, CaseIterable, Identifiable {
     }
   }
 
-  var searchTerms: String {
-    switch self {
-    case .startupDisplays: "launch login screen display fullscreen recording multiple monitors"
-    case .interaction: "hover push squeeze snap distance click pin collapse haptic strength notch"
-    case .energy: "battery low power live polling performance"
-    case .activityOrder: "enable disable stop hide tabs priority reorder"
-    case .calendarReminders: "agenda countdown meetings due snooze permission"
-    case .nowPlaying: "music spotify player bundle priority media"
-    case .continuity: "iphone live activities control center accessibility announce remote"
-    case .systemMetrics: "cpu gpu memory disk network thermal sparkline"
-    case .clipboard: "history secrets pause privacy copy"
-    case .systemHUD: "volume brightness media keys accessibility bar gauge"
-    case .eventSources: "usb wifi bluetooth airdrop vpn focus screenshot sleep power display"
-    case .t3Code: "agents provider remote pairing machine"
-    case .pulse: "api cli providers token history delivery"
-    case .permissions: "calendar reminders accessibility privacy diagnostics"
-    case .diagnostics: "bundle signing version copy support"
-    case .reset: "restore defaults layout presentation"
+  var searchableContent: [String] {
+    let pageContent = [title, subtitle]
+    return switch self {
+    case .startupDisplays:
+      pageContent + [
+        "Startup", "Launch Islet at login", "Login item status", "Run setup again",
+        "Displays", "Show Islet on every display", "Hide Islet while an app is fullscreen",
+        "screen multiple monitors",
+      ]
+    case .interaction:
+      pageContent + [
+        "Open the island", "Expand", "Push through", "Click to pin", "Push distance",
+        "Collapse after", "Haptic feedback", "Strength", "Test haptics",
+        "hover squeeze snap top edge notch",
+      ]
+    case .energy:
+      pageContent + [
+        "Energy use", "Mode", "Automatic", "Low Energy", "Live", "Low Power Mode",
+        "refresh rates hidden activity remote T3 polling performance battery",
+      ]
+    case .activityOrder:
+      pageContent + [
+        "Activities", "Drag to reorder", "Home", "Reminders",
+        "show hide enable disable stop tabs priority activity switcher",
+      ] + ActivityCatalog.orderable.flatMap { [$0.id, $0.name] }
+    case .calendarReminders:
+      pageContent + [
+        "Calendar", "Activity", "Upcoming-event countdown", "Calendars shown in Islet",
+        "Manage Calendar permission", "Reminders", "Show incomplete reminders on Home",
+        "Manage Reminders permission", "agenda meetings due snooze complete meeting links",
+      ]
+    case .nowPlaying:
+      pageContent + [
+        "Primary player", "Whatever is playing", "My order", "Add Detected Player",
+        "Add Other App by Bundle Identifier", "music Spotify Apple Music media priority",
+      ]
+    case .continuity:
+      pageContent + [
+        "iPhone Live Activities", "Show iPhone Live Activities", "Availability", "Detected now",
+        "Keep iPhone in the activity switcher when idle",
+        "Announce when a Live Activity starts or ends", "Request Accessibility access",
+        "Open Accessibility Settings", "Control Centre remote app names",
+      ]
+    case .systemMetrics:
+      pageContent + [
+        "Visibility", "System activity", "Always show System in the activity switcher",
+        "Metric presentation", "Presentation", "Compact", "Balanced", "Detailed", "Custom",
+        "Customize individual metrics", "current value recent graph state labels",
+      ] + SystemMetricKind.allCases.map(\.displayName)
+        + MetricDisplayStyle.allCases.map(\.displayName)
+    case .clipboard:
+      pageContent + [
+        "Clipboard history", "Activity", "Pause and Clear", "Quick Actions", "Privacy",
+        "history stays in memory", "concealed items credential formats sensitive text secrets copy",
+      ]
+    case .systemHUD:
+      pageContent + [
+        "Media-key HUD", "Replace the volume and brightness HUD", "Style", "Bar", "Gauge",
+        "Test Volume", "Test Brightness", "Accessibility", "Review Accessibility permission",
+        "active device display media keys",
+      ]
+    case .eventSources:
+      pageContent + [
+        "Activity notifications", "brief alerts system changes", "enable disable source observing",
+      ] + SourceCatalog.all.flatMap { [$0.id, $0.name] }
+        + SystemEventTier.allCases.map(\.label)
+    case .t3Code:
+      pageContent + [
+        "T3 Code agents", "Monitor T3 Code", "Paste a T3 Code pairing link", "Add machine",
+        "Allow plain HTTP for this pairing", "Reconnect now", "Remove machine", "This Mac",
+        "remote paired machines pairing credentials Keychain HTTPS Tailscale credential error",
+      ]
+    case .pulse:
+      pageContent + [
+        "Pulse providers", "Local activity API", "Pulse items", "Authentication",
+        "Shared bearer token", "Quick Actions", "Reveal token folder", "Dismiss visible",
+        "Rotate provider token", "Provider examples", "Allow Mute Revoke Policy",
+        "Other sources seen this session", "Pulse history", "Show session history",
+        "History filter", "All Accepted Filtered Rejected", "Clear history",
+        "source result priority time local scripts CLI access token delivery",
+      ]
+    case .permissions:
+      pageContent + [
+        "Screen recording", "Hide Islet from screen recordings", "Calendar access",
+        "Reminders access", "Accessibility access", "Request access", "Open System Settings",
+        "Nearby devices and networks", "Location for Wi-Fi names", "Open Location Settings",
+        "Bluetooth devices", "Open Bluetooth Privacy Settings", "Local network",
+        "Open Local Network Settings", "Refresh permission status",
+        "agenda countdowns meeting links media keys HUD iPhone Live Activities privacy diagnostics",
+      ]
+    case .diagnostics:
+      pageContent + [
+        "Diagnostics", "Bundle identifier", "Version", "Energy mode", "Copy diagnostics",
+        "Open logs folder", "Quit Islet", "Integration health", "Media adapter",
+        "T3 Code credentials", "Pulse", "Media-key HUD", "signing support status", "About",
+        "GitHub contributors C-Nucifora nedlane",
+      ]
+    case .reset:
+      pageContent + [
+        "Appearance and interaction", "Restore appearance and interaction", "Reset defaults",
+        "notch haptics HUD style player order activity order metric styles layout presentation",
+      ]
     }
+  }
+
+  func matchesSearch(_ query: String) -> Bool {
+    SettingsSearch.matches(query, in: searchableContent)
+  }
+}
+
+enum SettingsSearch {
+  static func matches(_ query: String, in content: [String]) -> Bool {
+    let queryTokens = words(in: query)
+    guard !queryTokens.isEmpty else { return true }
+
+    let searchableText = content.joined(separator: " ")
+    let searchableWords = words(in: searchableText).joined(separator: " ")
+    let compactSearchableText = searchableText.unicodeScalars
+      .filter { CharacterSet.alphanumerics.contains($0) }
+      .map(String.init)
+      .joined()
+      .lowercased()
+
+    return queryTokens.allSatisfy {
+      searchableWords.contains($0) || compactSearchableText.contains($0)
+    }
+  }
+
+  private static func words(in text: String) -> [String] {
+    text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .lowercased()
+      .components(separatedBy: CharacterSet.alphanumerics.inverted)
+      .filter { !$0.isEmpty }
   }
 }
 
@@ -263,9 +380,7 @@ struct SettingsView: View {
   private var filteredDetailPages: [SettingsDetailPage] {
     let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard !query.isEmpty else { return [] }
-    return SettingsDetailPage.allCases.filter {
-      $0.title.lowercased().contains(query) || $0.searchTerms.contains(query)
-    }
+    return SettingsDetailPage.allCases.filter { $0.matchesSearch(query) }
   }
 
   private var filteredPulseHistory: [PulseHistoryEntry] {
@@ -365,12 +480,16 @@ struct SettingsView: View {
         switch preset {
         case .compact:
           metricStyles = Dictionary(
-            uniqueKeysWithValues: SystemMetricKind.allCases.map { ($0.rawValue, MetricDisplayStyle.number.rawValue) })
+            uniqueKeysWithValues: SystemMetricKind.allCases.map {
+              ($0.rawValue, MetricDisplayStyle.number.rawValue)
+            })
         case .balanced:
           metricStyles = [:]
         case .detailed:
           metricStyles = Dictionary(
-            uniqueKeysWithValues: SystemMetricKind.allCases.map { ($0.rawValue, MetricDisplayStyle.combined.rawValue) })
+            uniqueKeysWithValues: SystemMetricKind.allCases.map {
+              ($0.rawValue, MetricDisplayStyle.combined.rawValue)
+            })
         case .custom: break
         }
       })
@@ -423,7 +542,14 @@ struct SettingsView: View {
                 navigate(to: page)
                 searchText = ""
               } label: {
-                Label(page.title, systemImage: page.icon)
+                Label {
+                  VStack(alignment: .leading, spacing: 1) {
+                    Text(page.title)
+                    Text(page.subtitle).font(.caption).foregroundStyle(.secondary)
+                  }
+                } icon: {
+                  Image(systemName: page.icon)
+                }
               }
               .buttonStyle(.plain)
             }
@@ -484,7 +610,8 @@ struct SettingsView: View {
     .onChange(of: detailPage) { _, _ in
       updateWindowTitle()
     }
-    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) {
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
+    {
       _ in refreshPermissionState()
     }
     .onAppear { updateWindowTitle() }
@@ -507,7 +634,9 @@ struct SettingsView: View {
       }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("Resets notch interaction, haptics, HUD style, player order, activity order and metric styles. It keeps enabled activities, permissions, paired machines and activity data.")
+      Text(
+        "Resets notch interaction, haptics, HUD style, player order, activity order and metric styles. It keeps enabled activities, permissions, paired machines and activity data."
+      )
     }
     .confirmationDialog(
       "Rotate the Pulse provider token?", isPresented: $confirmingPulseTokenRotation,
@@ -516,10 +645,13 @@ struct SettingsView: View {
       Button("Rotate token and disconnect providers", role: .destructive) { rotatePulseToken() }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("Disconnects every provider. Scripts must read the new token before publishing again. Revoking one source is not enough because providers choose their own source name.")
+      Text(
+        "Disconnects every provider. Scripts must read the new token before publishing again. Revoking one source is not enough because providers choose their own source name."
+      )
     }
     .alert(
-      "Pulse authentication", isPresented: Binding(
+      "Pulse authentication",
+      isPresented: Binding(
         get: { pulseTokenRotationResult != nil },
         set: { if !$0 { pulseTokenRotationResult = nil } })
     ) {
@@ -535,9 +667,9 @@ struct SettingsView: View {
       settingsLanding(pages: [.startupDisplays, .interaction, .energy])
     case .activities:
       settingsLanding(pages: [
-          .activityOrder, .calendarReminders, .nowPlaying, .continuity, .systemMetrics,
-          .clipboard, .systemHUD,
-        ])
+        .activityOrder, .calendarReminders, .nowPlaying, .continuity, .systemMetrics,
+        .clipboard, .systemHUD,
+      ])
     case .notifications:
       settingsLanding(pages: [.eventSources])
     case .integrations:
@@ -570,7 +702,8 @@ struct SettingsView: View {
     }
   }
 
-  private static func defaultDetailPage(for destination: SettingsDestination) -> SettingsDetailPage? {
+  private static func defaultDetailPage(for destination: SettingsDestination) -> SettingsDetailPage?
+  {
     switch destination {
     case .overview: nil
     case .activities: .activityOrder
@@ -658,8 +791,10 @@ struct SettingsView: View {
   private var eventsForm: some View {
     Form {
       Section {
-        Text("Enabled sources show a brief alert when something changes. Disabled sources stop observing.")
-          .foregroundStyle(.secondary)
+        Text(
+          "Enabled sources show a brief alert when something changes. Disabled sources stop observing."
+        )
+        .foregroundStyle(.secondary)
       }
       Section("Activity notifications") {
         ForEach(["battery", "timer", "nowPlaying"], id: \.self) { id in
@@ -677,8 +812,10 @@ struct SettingsView: View {
         if !ids.isEmpty {
           Section(tier.label) {
             if tier == .heuristic {
-              Text("These start off. AirDrop is detected after transfer, and a network tunnel may be iCloud Private Relay.")
-                .font(.caption).foregroundStyle(.orange)
+              Text(
+                "These start off. AirDrop is detected after transfer, and a network tunnel may be iCloud Private Relay."
+              )
+              .font(.caption).foregroundStyle(.orange)
             }
             ForEach(ids, id: \.self) { id in
               Toggle(isOn: eventSourceEnabled(id)) {
@@ -700,8 +837,10 @@ struct SettingsView: View {
           Text("Click to pin").tag(InteractionMode.clickToPin)
         }
         if mode == .hover {
-          Text("Move upward into the notch and keep pushing against the top edge until the island snaps open.")
-            .font(.caption).foregroundStyle(.secondary)
+          Text(
+            "Move upward into the notch and keep pushing against the top edge until the island snaps open."
+          )
+          .font(.caption).foregroundStyle(.secondary)
           LabeledContent("Push distance") {
             HStack(spacing: 10) {
               Text("20 pt").font(.caption).foregroundStyle(.secondary)
@@ -712,7 +851,9 @@ struct SettingsView: View {
           }
           Text("Current distance: \(Int(barrierPushDistance)) points")
             .font(.caption).foregroundStyle(.secondary)
-          LabeledContent("Collapse after: \(collapseTimeout, format: .number.precision(.fractionLength(1)))s") {
+          LabeledContent(
+            "Collapse after: \(collapseTimeout, format: .number.precision(.fractionLength(1)))s"
+          ) {
             Slider(value: $collapseTimeout, in: 0.2...3.0, step: 0.1).frame(minWidth: 180)
           }
         }
@@ -727,8 +868,9 @@ struct SettingsView: View {
                 if !editing, hapticStrengthBinding.wrappedValue != .off {
                   Haptics.perform(.generic)
                 }
-              })
-              .frame(minWidth: 220)
+              }
+            )
+            .frame(minWidth: 220)
             Button("Test") { Haptics.performDelayedTest() }
               .disabled(hapticStrengthBinding.wrappedValue == .off)
             Text("Strong").font(.caption).foregroundStyle(.secondary)
@@ -767,8 +909,8 @@ struct SettingsView: View {
                 }
               }
             }
-              .onMove { priorityList.move(fromOffsets: $0, toOffset: $1) }
-              .onDelete { priorityList.remove(atOffsets: $0) }
+            .onMove { priorityList.move(fromOffsets: $0, toOffset: $1) }
+            .onDelete { priorityList.remove(atOffsets: $0) }
           }
           .frame(minHeight: 130, idealHeight: 180)
           if !unprioritizedDetectedPlayers.isEmpty {
@@ -785,7 +927,8 @@ struct SettingsView: View {
                 .disabled(
                   newBundleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || priorityList.contains(
-                      newBundleID.trimmingCharacters(in: .whitespacesAndNewlines)))
+                      newBundleID.trimmingCharacters(in: .whitespacesAndNewlines))
+                )
             }
           }
         }
@@ -868,8 +1011,10 @@ struct SettingsView: View {
               }
             }
           }
-          Text("Balanced shows the current value with a recent graph. Thermal uses state labels instead of a sparkline.")
-            .font(.caption).foregroundStyle(.secondary)
+          Text(
+            "Balanced shows the current value with a recent graph. Thermal uses state labels instead of a sparkline."
+          )
+          .font(.caption).foregroundStyle(.secondary)
         }
       }
     }
@@ -919,8 +1064,9 @@ struct SettingsView: View {
       Section("Privacy") {
         Label(
           "History stays in memory and clears when Islet quits. Islet filters concealed items and common credential formats, but it may miss sensitive text.",
-          systemImage: "lock.shield")
-          .font(.caption).foregroundStyle(.orange)
+          systemImage: "lock.shield"
+        )
+        .font(.caption).foregroundStyle(.orange)
       }
     }
     .formStyle(.grouped)
@@ -962,8 +1108,10 @@ struct SettingsView: View {
         }
       }
       Section {
-        Text("If Islet cannot change the active device or display, macOS handles the key and shows its own HUD.")
-          .font(.caption).foregroundStyle(.secondary)
+        Text(
+          "If Islet cannot change the active device or display, macOS handles the key and shows its own HUD."
+        )
+        .font(.caption).foregroundStyle(.secondary)
       }
     }
     .formStyle(.grouped)
@@ -993,8 +1141,11 @@ struct SettingsView: View {
           .font(.caption).foregroundStyle(.secondary)
       }
       Section("Calendar") {
-        PermissionStatusRow(title: "Calendar access", icon: "calendar", status: eventStatusText, color: eventStatusColor)
-        Text("Shows today's agenda, event countdowns and meeting links.").font(.caption).foregroundStyle(.secondary)
+        PermissionStatusRow(
+          title: "Calendar access", icon: "calendar", status: eventStatusText,
+          color: eventStatusColor)
+        Text("Shows today's agenda, event countdowns and meeting links.").font(.caption)
+          .foregroundStyle(.secondary)
         permissionButtons(
           status: permissions.diagnostics.calendar, pane: .calendars,
           requestEnabled: calendarEnabled
@@ -1006,8 +1157,11 @@ struct SettingsView: View {
         }
       }
       Section("Reminders") {
-        PermissionStatusRow(title: "Reminders access", icon: "checklist", status: reminderStatusText, color: reminderStatusColor)
-        Text("Shows incomplete reminders and lets you complete them.").font(.caption).foregroundStyle(.secondary)
+        PermissionStatusRow(
+          title: "Reminders access", icon: "checklist", status: reminderStatusText,
+          color: reminderStatusColor)
+        Text("Shows incomplete reminders and lets you complete them.").font(.caption)
+          .foregroundStyle(.secondary)
         permissionButtons(
           status: permissions.diagnostics.reminders, pane: .reminders,
           requestEnabled: remindersEnabled
@@ -1055,8 +1209,10 @@ struct SettingsView: View {
         PermissionStatusRow(
           title: "Local network", icon: "network", status: "Managed by macOS",
           color: .secondary)
-        Text("macOS asks when Islet first connects to T3 Code on another local Mac. macOS does not report this permission's status.")
-          .font(.caption).foregroundStyle(.secondary)
+        Text(
+          "macOS asks when Islet first connects to T3 Code on another local Mac. macOS does not report this permission's status."
+        )
+        .font(.caption).foregroundStyle(.secondary)
         Button("Open Local Network Settings") { permissions.open(.localNetwork) }
       }
       Section { Button("Refresh permission status") { refreshPermissionState() } }
@@ -1082,8 +1238,10 @@ struct SettingsView: View {
       Section("Pulse providers") {
         PermissionStatusRow(
           title: "Local activity API", icon: "waveform.path.ecg",
-          status: pulseServer.lastError ?? (pulseServer.isRunning ? "Listening on 127.0.0.1:47717" : "Stopped"),
-          color: pulseServer.lastError == nil ? (pulseServer.isRunning ? .green : .secondary) : .red)
+          status: pulseServer.lastError
+            ?? (pulseServer.isRunning ? "Listening on 127.0.0.1:47717" : "Stopped"),
+          color: pulseServer.lastError == nil ? (pulseServer.isRunning ? .green : .secondary) : .red
+        )
         LabeledContent("Pulse items") {
           Text(
             pulse.hiddenItemCount == 0
@@ -1095,10 +1253,14 @@ struct SettingsView: View {
         LabeledContent("Authentication") {
           Text("Shared bearer token").foregroundStyle(.secondary)
         }
-        Text("Local scripts publish status and web actions over 127.0.0.1:47717. A private token authenticates each connection.")
-          .font(.caption).foregroundStyle(.secondary)
-        Text("Turning Pulse off under Activity order closes the listener and disconnects providers.")
-          .font(.caption).foregroundStyle(.secondary)
+        Text(
+          "Local scripts publish status and web actions over 127.0.0.1:47717. A private token authenticates each connection."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Text(
+          "Turning Pulse off under Activity order closes the listener and disconnects providers."
+        )
+        .font(.caption).foregroundStyle(.secondary)
         HStack {
           Button("Quick Actions…") { QuickActionsOpener.open() }
           Button("Reveal token folder") { NSWorkspace.shared.open(PulsePaths.supportDirectory) }
@@ -1112,10 +1274,14 @@ struct SettingsView: View {
         }
       }
       Section("Provider examples") {
-        Text("Providers run outside Islet. They can publish only the listed data and cannot read other activities.")
-          .font(.caption).foregroundStyle(.secondary)
-        Text("Allow, Mute and Revoke match a provider's self-reported source name. Rotate the token to revoke access for every client.")
-          .font(.caption).foregroundStyle(.orange)
+        Text(
+          "Providers run outside Islet. They can publish only the listed data and cannot read other activities."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Text(
+          "Allow, Mute and Revoke match a provider's self-reported source name. Rotate the token to revoke access for every client."
+        )
+        .font(.caption).foregroundStyle(.orange)
         ForEach(pulse.providerStatuses) { status in
           PulseProviderRow(status: status, center: pulse)
         }
@@ -1138,23 +1304,30 @@ struct SettingsView: View {
       }
       Section("Pulse history") {
         Toggle("Show session history", isOn: $showPulseHistory)
-        Text("Stored in memory until Islet quits. History includes source, result, priority and time. It excludes payload text, links, tokens and errors.")
-          .font(.caption).foregroundStyle(.secondary)
+        Text(
+          "Stored in memory until Islet quits. History includes source, result, priority and time. It excludes payload text, links, tokens and errors."
+        )
+        .font(.caption).foregroundStyle(.secondary)
         if showPulseHistory {
           Picker("History filter", selection: $pulseHistoryFilter) {
             ForEach(PulseHistoryFilter.allCases) { filter in Text(filter.rawValue).tag(filter) }
           }
           .pickerStyle(.segmented)
           if filteredPulseHistory.isEmpty {
-            Text(pulse.history.isEmpty ? "No provider activity this session." : "No matching history entries.")
-              .foregroundStyle(.secondary)
+            Text(
+              pulse.history.isEmpty
+                ? "No provider activity this session." : "No matching history entries."
+            )
+            .foregroundStyle(.secondary)
           } else {
             ForEach(filteredPulseHistory.prefix(30)) { entry in
               PulseHistoryRow(entry: entry)
             }
             HStack {
-              Text("Showing \(min(30, filteredPulseHistory.count)) of \(filteredPulseHistory.count)")
-                .font(.caption).foregroundStyle(.secondary)
+              Text(
+                "Showing \(min(30, filteredPulseHistory.count)) of \(filteredPulseHistory.count)"
+              )
+              .font(.caption).foregroundStyle(.secondary)
               Spacer()
               Button("Clear history") { pulse.clearHistory() }
             }
@@ -1194,12 +1367,17 @@ struct SettingsView: View {
         PermissionStatusRow(
           title: "Pulse", icon: "waveform.path.ecg",
           status: pulseServer.lastError ?? (pulseServer.isRunning ? "Listening" : "Stopped"),
-          color: pulseServer.lastError == nil ? (pulseServer.isRunning ? .green : .secondary) : .red)
+          color: pulseServer.lastError == nil ? (pulseServer.isRunning ? .green : .secondary) : .red
+        )
         PermissionStatusRow(
           title: "Media-key HUD", icon: "keyboard",
           status: hud.lastControlFailure ?? hud.eventTapStatus.summary,
           color: hud.lastControlFailure == nil
             ? (hud.eventTapStatus == .active ? .green : .secondary) : .orange)
+      }
+      Section("About") {
+        Link("C-Nucifora on GitHub", destination: URL(string: "https://github.com/C-Nucifora")!)
+        Link("nedlane on GitHub", destination: URL(string: "https://github.com/nedlane")!)
       }
     }
     .formStyle(.grouped)
@@ -1211,8 +1389,10 @@ struct SettingsView: View {
         Button("Restore appearance and interaction…", role: .destructive) {
           confirmingRestore = true
         }
-        Text("Resets notch interaction, haptics, HUD style, player order, activity order and metric styles. It keeps enabled activities, permissions, paired machines and activity data.")
-          .font(.caption).foregroundStyle(.secondary)
+        Text(
+          "Resets notch interaction, haptics, HUD style, player order, activity order and metric styles. It keeps enabled activities, permissions, paired machines and activity data."
+        )
+        .font(.caption).foregroundStyle(.secondary)
       }
     }
     .formStyle(.grouped)
@@ -1297,7 +1477,9 @@ struct SettingsView: View {
   }
 
   private var versionText: String {
-    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development"
+    let version =
+      Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+      ?? "Development"
     let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
     return build.map { "\(version) (\($0))" } ?? version
   }
@@ -1322,7 +1504,8 @@ struct SettingsView: View {
   }
 
   private func copyDiagnostics() {
-    let text = permissions.diagnostics.text
+    let text =
+      permissions.diagnostics.text
       + "\nHUD event tap: \(hud.eventTapStatus.summary)"
       + "\nPulse: \(pulseServer.isRunning ? "Running" : "Stopped")"
       + "\nPulse items: \(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
@@ -1333,7 +1516,8 @@ struct SettingsView: View {
   private func rotatePulseToken() {
     do {
       try pulseServer.rotateToken()
-      pulseTokenRotationResult = "The token was replaced and all provider connections were disconnected. Providers must read the new token before reconnecting."
+      pulseTokenRotationResult =
+        "The token was replaced and all provider connections were disconnected. Providers must read the new token before reconnecting."
     } catch {
       pulseTokenRotationResult = "The token could not be rotated: \(error.localizedDescription)"
     }
@@ -1344,7 +1528,7 @@ struct SettingsView: View {
     collapseTimeout = 0.5
     haptics = true
     hapticStrength = .medium
-    barrierPushDistance = 288
+    barrierPushDistance = Double(Metrics.barrierPushDistance)
     sourceMode = .auto
     priorityList = ["com.spotify.client", "com.apple.Music"]
     activityOrder = ActivityCatalog.defaultOrder

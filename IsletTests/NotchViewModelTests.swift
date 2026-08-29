@@ -1,3 +1,5 @@
+import Combine
+import Defaults
 import XCTest
 
 @testable import Islet
@@ -16,10 +18,55 @@ final class NotchViewModelTests: XCTestCase {
       geometry: g, modeOverride: mode, barrierPushDistanceOverride: barrierPushDistance)
   }
 
+  func expandedPanel(_ vm: NotchViewModel) -> CGRect {
+    vm.geometry.panelFrame(
+      width: vm.maximumExpandedWidth, height: Metrics.tallExpandedHeight)
+  }
+
   func testMouseIntoHitRectPeeks() {
     let vm = makeVM()
     vm.handleMouseMoved(CGPoint(x: 864, y: 1110))  // inside notch
     XCTAssertEqual(vm.state, .peek)
+  }
+
+  func testFileDragIntoCollapsedNotchExpandsFullyWithoutPush() {
+    let vm = makeVM()
+    XCTAssertEqual(vm.panelFrame, vm.geometry.collapsedPanelFrame())
+    vm.handleFileDragMoved(CGPoint(x: 864, y: 1060))
+    XCTAssertEqual(vm.state, .closed)
+    XCTAssertEqual(vm.panelFrame, vm.geometry.collapsedPanelFrame())
+
+    vm.handleFileDragMoved(CGPoint(x: 864, y: 1110))
+
+    XCTAssertEqual(vm.state, .expanded(pinned: false))
+    XCTAssertEqual(vm.panelFrame, expandedPanel(vm))
+    XCTAssertEqual(vm.barrierProgress, 0)
+  }
+
+  func testFileDragExpandsWhenPointerWasAlreadyHoveringTheNotch() {
+    let vm = makeVM()
+    let notchPoint = CGPoint(x: 864, y: 1110)
+    vm.handleMouseMoved(notchPoint)
+    XCTAssertEqual(vm.state, .peek)
+
+    vm.handleFileDragMoved(notchPoint)
+
+    XCTAssertEqual(vm.state, .expanded(pinned: false))
+    XCTAssertEqual(vm.barrierProgress, 0)
+  }
+
+  func testFileDragReenteringTheNotchExpandsAgainWithoutPush() {
+    let vm = makeVM()
+    let notchPoint = CGPoint(x: 864, y: 1110)
+    vm.handleFileDragMoved(notchPoint)
+    vm.handleFileDragMoved(CGPoint(x: 100, y: 500))
+    vm.apply(.collapseTimeoutElapsed)
+    XCTAssertEqual(vm.state, .closed)
+
+    vm.handleFileDragMoved(notchPoint)
+
+    XCTAssertEqual(vm.state, .expanded(pinned: false))
+    XCTAssertEqual(vm.barrierProgress, 0)
   }
 
   func testHoverPeekPanelMakesRoomForTheFullBarrierStretch() {
@@ -43,7 +90,7 @@ final class NotchViewModelTests: XCTestCase {
     let vm = makeVM()
     vm.handleMouseMoved(CGPoint(x: 864, y: 1082))
     vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -34)
-    vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -254)
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -366)
     XCTAssertEqual(vm.state, .expanded(pinned: false))
     XCTAssertEqual(vm.barrierProgress, 0)
   }
@@ -53,7 +100,7 @@ final class NotchViewModelTests: XCTestCase {
     vm.handleMouseMoved(CGPoint(x: 864, y: 1090))
     vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -27)
     XCTAssertEqual(vm.state, .peek)
-    vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -261)
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1116), deviceDeltaY: -373)
     XCTAssertEqual(vm.state, .expanded(pinned: false))
   }
 
@@ -61,7 +108,7 @@ final class NotchViewModelTests: XCTestCase {
     let vm = makeVM()
     vm.handleMouseMoved(CGPoint(x: 864, y: 1117))
     XCTAssertEqual(vm.state, .peek)
-    vm.handleMouseMoved(CGPoint(x: 864, y: 1117), deviceDeltaY: -288)
+    vm.handleMouseMoved(CGPoint(x: 864, y: 1117), deviceDeltaY: -400)
     XCTAssertEqual(vm.state, .expanded(pinned: false))
   }
 
@@ -129,7 +176,7 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(vm.state, .expanded(pinned: true))
     // Grown synchronously, and straight to the TALLEST tier: the panel never resizes while
     // expanded, because a setFrame during the tier cross-fade throws inside AppKit layout.
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
+    XCTAssertEqual(vm.panelFrame, expandedPanel(vm))
   }
 
   func testPanelFrameStaysGrownUntilTheClosingAnimationEnds() {
@@ -138,7 +185,7 @@ final class NotchViewModelTests: XCTestCase {
     vm.handleMouseDown(CGPoint(x: 100, y: 500))
     XCTAssertEqual(vm.state, .closed)
     // Still expanded-sized: shrinking here would clip the island mid-collapse.
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
+    XCTAssertEqual(vm.panelFrame, expandedPanel(vm))
   }
 
   func testPanelFrameShrinksAfterCollapsing() async throws {
@@ -171,12 +218,94 @@ final class NotchViewModelTests: XCTestCase {
       vm.panelFrame, vm.geometry.collapsedPanelFrame(compactLeading: 18, compactTrailing: 76))
   }
 
+  func testCompactTargetChangePublishesBeforeDelayedShrink() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.updateCompactWidths(leading: 80, trailing: 80)
+    vm.setActualPanelFrame(vm.reservedPanelFrame)
+    var revisions: [UInt] = []
+    let cancellable = vm.$compactTargetRevision.dropFirst()
+      .sink { revisions.append($0) }
+
+    vm.updateCompactWidths(leading: 10, trailing: 10)
+
+    XCTAssertEqual(revisions, [2])
+    XCTAssertFalse(vm.needsPointerPassthroughMonitoring)
+    withExtendedLifetime(cancellable) {}
+  }
+
   // MARK: - Per-tab height tiers
 
   func testExpandedHeightStartsAtTheBaseTier() {
     let vm = makeVM()
     XCTAssertEqual(vm.expandedHeight, Metrics.expandedSize.height)
     XCTAssertEqual(vm.expandedRect, vm.geometry.expandedRect(height: Metrics.expandedSize.height))
+  }
+
+  func testExpandedWidthTracksTheTabCountWithoutMovingThePanel() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    let panel = expandedPanel(vm)
+    XCTAssertEqual(vm.panelFrame, panel)
+
+    vm.setExpandedWidth(700)
+    XCTAssertEqual(vm.expandedWidth, 700)
+    XCTAssertEqual(vm.expandedRect.width, 700)
+    XCTAssertEqual(vm.panelFrame, panel)
+
+    vm.setExpandedWidth(vm.maximumExpandedWidth + 100)
+    XCTAssertEqual(vm.expandedWidth, vm.maximumExpandedWidth)
+    XCTAssertEqual(vm.panelFrame, panel)
+  }
+
+  func testTransparentExpandedPanelMarginsIgnoreMouseEvents() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+
+    XCTAssertFalse(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 864, y: 1000)))
+    XCTAssertTrue(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 1_250, y: 1_000)))
+    XCTAssertTrue(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 864, y: 880)))
+  }
+
+  func testWholeReservedPanelBecomesTransparentAsClosingStarts() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    vm.handleMouseDown(CGPoint(x: 100, y: 500))
+
+    XCTAssertEqual(vm.state, .closed)
+    XCTAssertEqual(vm.panelFrame, expandedPanel(vm))
+    XCTAssertTrue(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 864, y: 1110)))
+    XCTAssertTrue(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 1_250, y: 1_000)))
+  }
+
+  func testWidthShrinkPastStationaryCursorSchedulesCollapse() async throws {
+    let savedTimeout = Defaults[.hoverCollapseTimeout]
+    Defaults[.hoverCollapseTimeout] = 0.01
+    defer { Defaults[.hoverCollapseTimeout] = savedTimeout }
+    let vm = makeVM()
+    vm.handleFileDragMoved(CGPoint(x: 864, y: 1110))
+    vm.setExpandedWidth(700)
+    vm.handleMouseMoved(CGPoint(x: 1_150, y: 1_000))
+    XCTAssertEqual(vm.state, .expanded(pinned: false))
+
+    vm.setExpandedWidth(Metrics.expandedSize.width)
+    try await Task.sleep(for: .milliseconds(50))
+
+    XCTAssertEqual(vm.state, .closed)
+  }
+
+  func testWidthGrowthAroundStationaryCursorCancelsPendingCollapse() async throws {
+    let savedTimeout = Defaults[.hoverCollapseTimeout]
+    Defaults[.hoverCollapseTimeout] = 0.03
+    defer { Defaults[.hoverCollapseTimeout] = savedTimeout }
+    let vm = makeVM()
+    vm.handleFileDragMoved(CGPoint(x: 864, y: 1110))
+    vm.handleMouseMoved(CGPoint(x: 1_150, y: 1_000))
+    XCTAssertEqual(vm.state, .expanded(pinned: false))
+
+    vm.setExpandedWidth(700)
+    try await Task.sleep(for: .milliseconds(80))
+
+    XCTAssertEqual(vm.state, .expanded(pinned: false))
   }
 
   /// The height tier drives the drawn island and the hit region ONLY. The panel holds the tallest
@@ -186,7 +315,7 @@ final class NotchViewModelTests: XCTestCase {
   func testHeightTierNeverMovesThePanel() {
     let vm = makeVM(mode: .clickToPin)
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
-    let expanded = vm.geometry.panelFrame(height: Metrics.tallExpandedHeight)
+    let expanded = expandedPanel(vm)
     XCTAssertEqual(vm.panelFrame, expanded)
 
     vm.setExpandedHeight(Metrics.tallExpandedHeight)
@@ -259,7 +388,7 @@ final class NotchViewModelTests: XCTestCase {
     vm.cancelPendingShrink()
     try await Task.sleep(for: Motion.panelShrinkDelay + .milliseconds(200))
     // cancelled, so nothing shrank (the expanded panel is always the tallest tier)
-    XCTAssertEqual(vm.panelFrame, vm.geometry.panelFrame(height: Metrics.tallExpandedHeight))
+    XCTAssertEqual(vm.panelFrame, expandedPanel(vm))
 
     // A later slot measurement must still be able to schedule a fresh shrink.
     vm.updateCompactWidths(leading: 10, trailing: 10)
@@ -285,6 +414,15 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(vm.expandedRect.height, Metrics.expandedSize.height)
   }
 
+  func testCollapsingResetsTheWidthTier() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    vm.setExpandedWidth(700)
+
+    vm.handleMouseDown(CGPoint(x: 100, y: 500))
+    XCTAssertEqual(vm.expandedWidth, Metrics.expandedSize.width)
+  }
+
   func testMouseMonitorTopBandCoversTallIslandButNotTheDesktop() {
     let frame = CGRect(x: 0, y: 0, width: 1728, height: 1117)
     XCTAssertTrue(
@@ -303,5 +441,63 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertFalse(
       EventMonitors.isInTopInteractionBand(
         CGPoint(x: 100, y: secondary.maxY), screenFrames: [secondary]))
+  }
+
+  func testPointerPassthroughForwardsOnlyTheTopBandAndItsFirstExit() {
+    let frame = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+    let desktop = CGPoint(x: 864, y: 500)
+    XCTAssertFalse(
+      EventMonitors.shouldForwardTopBandMovement(
+        desktop, screenFrames: [frame], wasInTopInteractionBand: false))
+    XCTAssertTrue(
+      EventMonitors.shouldForwardTopBandMovement(
+        desktop, screenFrames: [frame], wasInTopInteractionBand: true))
+  }
+
+  func testMovementMonitorRunsOnlyForHoverOrExpandedPassthrough() {
+    XCTAssertFalse(
+      EventMonitors.shouldRunMovementMonitor(
+        hoverEnabled: false, pointerPassthroughDemandCount: 0))
+    XCTAssertTrue(
+      EventMonitors.shouldRunMovementMonitor(
+        hoverEnabled: true, pointerPassthroughDemandCount: 0))
+    XCTAssertTrue(
+      EventMonitors.shouldRunMovementMonitor(
+        hoverEnabled: false, pointerPassthroughDemandCount: 1))
+  }
+
+  func testPointerPassthroughMonitoringRunsOnlyWhileExpanded() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.setActualPanelFrame(vm.reservedPanelFrame)
+    XCTAssertFalse(vm.needsPointerPassthroughMonitoring)
+
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    XCTAssertTrue(vm.needsPointerPassthroughMonitoring)
+
+    vm.handleMouseDown(CGPoint(x: 100, y: 500))
+    XCTAssertFalse(vm.needsPointerPassthroughMonitoring)
+  }
+
+  func testCollapsedReservedPanelIsTransparentExceptForARelevantFileDrag() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.setActualPanelFrame(vm.reservedPanelFrame)
+    let notch = CGPoint(x: vm.geometry.notchRect.midX, y: vm.geometry.screenFrame.maxY - 1)
+
+    XCTAssertTrue(vm.shouldIgnorePanelMouseEvents(at: notch))
+    XCTAssertFalse(
+      vm.shouldIgnorePanelMouseEvents(at: notch, allowingCompactFileDrag: true))
+  }
+
+  func testDisabledShelfDoesNotForwardMonitorDrivenFileDrags() {
+    let frame = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+    let notch = CGPoint(x: 864, y: 1110)
+    XCTAssertFalse(
+      EventMonitors.shouldForwardFileDrag(
+        notch, screenFrames: [frame], shelfAvailable: false,
+        wasInTopInteractionBand: false))
+    XCTAssertTrue(
+      EventMonitors.shouldForwardFileDrag(
+        notch, screenFrames: [frame], shelfAvailable: true,
+        wasInTopInteractionBand: false))
   }
 }

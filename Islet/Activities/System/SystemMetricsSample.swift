@@ -1,7 +1,9 @@
 import Foundation
 
 /// The six series the System tab can render. Raw values are the keys of `Defaults[.metricStyles]`.
-enum SystemMetricKind: String, CaseIterable, Codable { case cpu, gpu, memory, disk, network, thermal }
+enum SystemMetricKind: String, CaseIterable, Codable {
+  case cpu, gpu, memory, disk, network, thermal
+}
 
 extension SystemMetricKind {
   var displayName: String {

@@ -1,8 +1,10 @@
 import SwiftUI
 
 enum Metrics {
-  /// The base height tier. Width is fixed for every tier; only the height varies per tab.
+  /// Minimum expanded size. The width grows from here to fit the live activity tabs.
   static let expandedSize = CGSize(width: 520, height: 190)
+  /// Keeps the expanded panel and its shadow clear of the screen edges at maximum tab width.
+  static let expandedScreenMargin: CGFloat = 12
   /// The tall tier, for information-dense tabs (power, system stats).
   static let tallExpandedHeight: CGFloat = 250
   static let shadowPadding: CGFloat = 20
@@ -12,7 +14,7 @@ enum Metrics {
   static let peekGrowth: CGFloat = 4
   /// Default upward cursor travel needed to push through the hover barrier. The user-facing value
   /// is persisted in Defaults and clamped by NotchViewModel.
-  static let barrierPushDistance: CGFloat = 288
+  static let barrierPushDistance: CGFloat = 400
   /// Extra downward stretch at maximum pressure, before the island snaps open.
   static let barrierStretch: CGFloat = 24
   /// Point in the push where the trackpad acknowledges contact with the barrier.

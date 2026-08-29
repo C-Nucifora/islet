@@ -38,7 +38,7 @@ final class NotchGeometryTests: XCTestCase {
     let tall = mbp.expandedRect(height: Metrics.tallExpandedHeight)
     XCTAssertEqual(base.height, 190)
     XCTAssertEqual(tall.height, 250)
-    // Both hang off the top edge and stay centred on the screen; only the bottom edge moves.
+    // Both hang off the top edge and stay centred on the notch; only the bottom edge moves.
     XCTAssertEqual(base.maxY, 1117)
     XCTAssertEqual(tall.maxY, 1117)
     XCTAssertEqual(tall.midX, 864, accuracy: 0.5)
@@ -168,6 +168,12 @@ final class NotchGeometryTests: XCTestCase {
     XCTAssertEqual(offCentre.notchRect.minX, 716, accuracy: 0.01)
     XCTAssertEqual(offCentre.notchRect.maxX, 1728 - 708, accuracy: 0.01)
     XCTAssertNotEqual(offCentre.notchRect.midX, offCentre.screenFrame.midX)
+    XCTAssertEqual(
+      offCentre.expandedRect(height: Metrics.expandedSize.height).midX,
+      offCentre.notchRect.midX, accuracy: 0.01)
+    XCTAssertEqual(
+      offCentre.panelFrame(height: Metrics.expandedSize.height).midX,
+      offCentre.notchRect.midX, accuracy: 0.01)
   }
 
   func testPanelsCentreOnTheNotchForAScreenAtANonZeroOrigin() {

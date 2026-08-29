@@ -3,6 +3,10 @@ import XCTest
 @testable import Islet
 
 final class PushDistanceScaleTests: XCTestCase {
+  func testDefaultDistanceIsFourHundredPoints() {
+    XCTAssertEqual(Metrics.barrierPushDistance, 400)
+  }
+
   func testScalePreservesEndpoints() {
     XCTAssertEqual(PushDistanceScale.distance(for: 0), 20, accuracy: 0.001)
     XCTAssertEqual(PushDistanceScale.distance(for: 1), 1_000, accuracy: 0.001)
@@ -15,7 +19,7 @@ final class PushDistanceScaleTests: XCTestCase {
   }
 
   func testScaleRoundTripsPhysicalDistance() {
-    for distance in [20.0, 64, 196, 288, 1_000] {
+    for distance in [20.0, 64, 196, 400, 1_000] {
       let position = PushDistanceScale.sliderPosition(for: distance)
       XCTAssertEqual(PushDistanceScale.distance(for: position), distance, accuracy: 0.001)
     }

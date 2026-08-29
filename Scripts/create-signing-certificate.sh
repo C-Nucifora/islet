@@ -7,7 +7,7 @@
 # app and silently drops Accessibility, Calendar, Reminders and the rest. You re-grant forever.
 #
 # Signing with one certificate makes the requirement
-#     identifier "dev.cnucifora.Islet" and certificate root = H"<cert hash>"
+#     identifier "dev.islet" and certificate root = H"<cert hash>"
 # which is identical across rebuilds, so grants persist.
 #
 # Self-signed is enough — TCC only needs the requirement to be stable, not the certificate to be
@@ -21,7 +21,10 @@
 # Toggling one of those on grants the *old* requirement and the new build stays untrusted, which
 # looks exactly like the fix not working. Clear them first:
 #
-#     tccutil reset Accessibility dev.cnucifora.Islet
+#     tccutil reset Accessibility dev.islet
+#
+# If Islet.local.xcconfig overrides ISLET_PRODUCT_BUNDLE_IDENTIFIER, substitute that effective
+# identifier in the reset command.
 #
 # then add /Applications/Islet.app in System Settings. Repeat per service as needed
 # (Calendar, Reminders, Bluetooth, Location).
@@ -76,5 +79,5 @@ security find-identity -v -p codesigning | grep "\"$NAME\"" || {
   exit 1
 }
 echo
-echo "Done. Build normally — project.yml already sets CODE_SIGN_IDENTITY to \"$NAME\"."
+echo "Done. Set ISLET_CODE_SIGN_IDENTITY = $NAME in Config/Islet.local.xcconfig."
 echo "Grant Islet its permissions once more; from then on they survive rebuilds."

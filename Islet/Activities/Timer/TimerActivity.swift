@@ -186,7 +186,8 @@ struct TimerCountdownText: View {
         .accessibilityValue(
           activity.finished
             ? "Done"
-            : "\(TimerFormat.accessible(activity.remainingNow)) remaining\(activity.isPaused ? ", paused" : "")")
+            : "\(TimerFormat.accessible(activity.remainingNow)) remaining\(activity.isPaused ? ", paused" : "")"
+        )
     }
   }
 }
@@ -283,7 +284,6 @@ enum TimerFormat {
     if s >= 3600 { return String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60) }
     return String(format: "%d:%02d", s / 60, s % 60)
   }
-
 
   static func accessible(_ t: TimeInterval) -> String {
     guard t.isFinite else { return "0 seconds" }

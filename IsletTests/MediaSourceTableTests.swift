@@ -110,7 +110,8 @@ final class MediaSourceTableTests: XCTestCase {
 
   func testNextDeadlineIsTheEarliest() {
     var table = MediaSourceTable(idleTimeout: 60)
-    table.upsert(key("com.apple.Music", 2), state("B", playing: false), now: t0.addingTimeInterval(30))
+    table.upsert(
+      key("com.apple.Music", 2), state("B", playing: false), now: t0.addingTimeInterval(30))
     table.upsert(key("com.spotify.client", 1), state("A", playing: false), now: t0)
     XCTAssertEqual(table.nextDeadline, t0.addingTimeInterval(60))
   }
@@ -131,10 +132,12 @@ final class MediaSourceTableTests: XCTestCase {
     table.upsert(spotify, state("A", playing: true), now: t0)
     table.upsert(music, state("B", playing: true), now: t0)
     XCTAssertEqual(
-      table.primaryKey(mode: .prioritized, priorityList: ["com.apple.Music", "com.spotify.client"]),
+      table.primaryKey(
+        mode: .prioritized, priorityList: ["com.apple.Music", "com.spotify.client"]),
       music)
     XCTAssertEqual(
-      table.primaryKey(mode: .prioritized, priorityList: ["com.spotify.client", "com.apple.Music"]),
+      table.primaryKey(
+        mode: .prioritized, priorityList: ["com.spotify.client", "com.apple.Music"]),
       spotify)
   }
 

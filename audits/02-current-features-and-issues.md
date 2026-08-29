@@ -54,7 +54,7 @@ Brightness availability similarly checks only whether private DisplayServices sy
 
 System Settings showed two `Islet.app` entries enabled under both Calendars and Accessibility. Code-sign inspection found:
 
-- both builds identify as `dev.nedlane.Islet`;
+- both builds used the same development bundle identifier;
 - both are ad-hoc signed;
 - neither has a TeamIdentifier;
 - the builds have different CDHashes.

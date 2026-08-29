@@ -49,7 +49,7 @@ final class BluetoothEventSource: NSObject, SystemEventSource {
     let registered = disconnectNotifications
     disconnectNotifications.removeAll()
     lock.unlock()
-    registered.forEach { $0.unregister() }
+    for notification in registered { notification.unregister() }
   }
 
   // MARK: - IOBluetooth callbacks (CoreBluetooth XPC queue — never assume the main actor here)
