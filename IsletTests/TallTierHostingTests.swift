@@ -9,6 +9,20 @@ import XCTest
 /// which no pure-logic test can reach.
 @MainActor
 final class TallTierHostingTests: XCTestCase {
+  private final class MorphActivity: NotchActivity, ObservableObject {
+    let id = "morph-test"
+    let priority = ActivityPriority.media
+    let isActive = true
+    let activationDate: Date? = Date()
+    var compactLeading: AnyView {
+      AnyView(Image(systemName: "waveform").frame(width: 28, height: 20))
+    }
+    var compactTrailing: AnyView {
+      AnyView(Text("Active").frame(width: 64, height: 20))
+    }
+    var expandedView: AnyView { AnyView(Color.clear) }
+  }
+
   private func pump(_ seconds: TimeInterval) {
     RunLoop.main.run(until: Date().addingTimeInterval(seconds))
   }
@@ -31,6 +45,27 @@ final class TallTierHostingTests: XCTestCase {
 
     XCTAssertEqual(NSHostingView(rootView: narrowerHUD).fittingSize.width, 180)
     XCTAssertEqual(NSHostingView(rootView: widerHUD).fittingSize.width, 180)
+  }
+
+  func testClosingMorphSurvivesRealHostingWithCompactContent() {
+    ActivityCenter.shared.register(MorphActivity())
+    let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
+    let panel = NotchPanel(frame: vm.reservedPanelFrame)
+    panel.contentView = NotchHosting.view(for: vm)
+    panel.orderFrontRegardless()
+    vm.setActualPanelFrame(panel.frame)
+    pump(0.3)
+
+    vm.apply(.clickedNotch)
+    pump(0.6)
+
+    vm.apply(.clickedOutside)
+    for delay in [0.06, 0.08, 0.08, 0.08] { pump(delay) }
+    pump(0.3)
+
+    XCTAssertEqual(panel.frame, vm.reservedPanelFrame)
+    XCTAssertEqual(vm.state, .closed)
+    panel.close()
   }
 
   /// The power screen's content alone, at tall-tier size, with a real one-shot hardware read.

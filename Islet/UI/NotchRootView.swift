@@ -36,7 +36,7 @@ struct NotchRootView: View {
 
   /// Content that should return after a temporary HUD leaves.
   private var underlyingCompactContent: (leading: AnyView, trailing: AnyView)? {
-    if !vm.state.isExpanded, let sneak = sneaks.current {
+    if let sneak = sneaks.current {
       return (sneak.leading, sneak.trailing)
     }
     if let primary = center.primaryActivity {
@@ -52,7 +52,7 @@ struct NotchRootView: View {
         })
       return (primary.compactLeading, trailing)
     }
-    if !vm.state.isExpanded, !reminders.reminders.isEmpty {
+    if !reminders.reminders.isEmpty {
       // Idle affordance: a small checklist badge so pending reminders are visible at a glance.
       return (
         AnyView(Image(systemName: "checklist").foregroundStyle(.orange).font(.caption2)),
@@ -70,7 +70,6 @@ struct NotchRootView: View {
   /// then take the larger of the HUD and underlying widths. Pressing a media key cannot collapse
   /// an active activity's island only to grow it again when the HUD leaves.
   private var compactContent: (leading: AnyView, trailing: AnyView)? {
-    guard !vm.state.isExpanded else { return underlyingCompactContent }
     guard let snapshot = hud.hud else { return underlyingCompactContent }
     guard let underlying = underlyingCompactContent else {
       return (AnyView(HUDIconView(snapshot: snapshot)), AnyView(HUDBarView(snapshot: snapshot)))
@@ -109,10 +108,8 @@ struct NotchRootView: View {
 
   /// Horizontal offset that lines the island's notch cut-out up with the hardware notch.
   ///
-  /// `vm.actualPanelFrame` — the frame the window really has — NOT `vm.panelFrame`, the frame we
-  /// asked for. The island is drawn centred in the real window, so aligning it against the request
-  /// maps any divergence 1:1 onto a horizontal shift that no hover ever clears: `targetPanelFrame`
-  /// returns the same value for `.closed` and `.peek`, so hovering republishes nothing.
+  /// The AppKit host is wider than the compact island and stays fixed. This offset positions the
+  /// animated shape inside that real host frame while accounting for asymmetric compact slots.
   private var islandOffset: CGFloat {
     vm.geometry.islandOffset(
       inPanel: vm.actualPanelFrame,
@@ -137,33 +134,35 @@ struct NotchRootView: View {
     }
   }
 
+  private var shapeWidth: CGFloat {
+    bodySize.width + radii.top * 2
+  }
+
+  private var islandShape: NotchShape {
+    NotchShape(topRadius: radii.top, bottomRadius: radii.bottom)
+  }
+
   var body: some View {
     ZStack(alignment: .top) {
+      // Keep the black island alive across every state. Expanded and compact content cross-fade
+      // inside this one animating shape instead of each state removing its own black backdrop.
+      islandShape
+        .fill(.black)
+        .frame(width: shapeWidth, height: bodySize.height)
+        .padding(.horizontal, -0.5)
+        .shadow(color: .black.opacity(vm.state.isExpanded ? 0.8 : 0), radius: 16)
+
       content
-        // Compact content is left unconstrained horizontally. Constraining it to `bodySize.width`
-        // — which is itself derived from the slots' measured widths — makes each measurement the
-        // next layout pass's proposal, so flexible content (a sneak's track title) creeps out to
-        // its real width a few points per frame, resizing the panel the whole way. The black
-        // shape is sized from the measurement regardless: that's the mask, below.
-        .frame(
-          width: compactVisible ? nil : bodySize.width, height: bodySize.height, alignment: .top
-        )
-        .background { Rectangle().fill(.black).padding(-50) }
         .mask {
-          NotchShape(topRadius: radii.top, bottomRadius: radii.bottom)
-            .frame(
-              width: bodySize.width + radii.top * 2,
-              height: bodySize.height
-            )
+          islandShape
+            .frame(width: shapeWidth, height: bodySize.height)
             .padding(.horizontal, -0.5)
         }
-        .shadow(color: .black.opacity(vm.state.isExpanded ? 0.8 : 0), radius: 16)
-        .offset(x: islandOffset)
-        // Only the expanded island is interactive via SwiftUI; collapsed clicks pass through
-        // to windows beneath (hover/click detection is monitor-driven).
-        .allowsHitTesting(vm.state.isExpanded)
-
     }
+    .offset(x: islandOffset)
+    // Only the expanded island is interactive via SwiftUI; collapsed clicks pass through to
+    // windows beneath (hover/click detection is monitor-driven).
+    .allowsHitTesting(vm.state.isExpanded)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .animation(
       Motion.gated(vm.state.isExpanded ? Motion.opening : Motion.closing), value: vm.state
@@ -172,7 +171,7 @@ struct NotchRootView: View {
     .animation(Motion.gated(compactChangeAnimation), value: compactVisible)
     .animation(Motion.gated(compactChangeAnimation), value: compactLeadingWidth)
     .animation(Motion.gated(compactChangeAnimation), value: compactTrailingWidth)
-    // The panel is only as wide as the island, so it has to know how wide the slots rendered.
+    // The visible island still follows the slots even though its AppKit host stays fixed.
     .onChange(of: compactLeadingWidth, initial: true) { _, _ in syncPanelWidths() }
     .onChange(of: compactTrailingWidth) { _, _ in syncPanelWidths() }
     .onChange(of: compactVisible) { _, _ in syncPanelWidths() }
@@ -211,23 +210,39 @@ struct NotchRootView: View {
     }
   }
 
-  @ViewBuilder private var content: some View {
-    if vm.state.isExpanded {
-      ZStack {
-        // The switcher (tabs + gear) sits in the notch band, flanking the hardware notch, and the
-        // content fills the rest — so nothing is wasted below the notch.
-        ExpandedContainerView(notchSize: vm.geometry.notchSize, vm: vm)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Media keys can arrive while the island is open. Keep their feedback above expanded
-        // content so replacing the system OSD never produces an invisible change.
-        if let snapshot = hud.hud {
-          ExpandedHUDOverlay(snapshot: snapshot)
-            .transition(.opacity.combined(with: .scale(scale: 0.94)))
-            .zIndex(2)
-        }
+  private var content: some View {
+    ZStack(alignment: .top) {
+      compactLayer
+        .opacity(vm.state.isExpanded ? 0 : 1)
+        .zIndex(vm.state.isExpanded ? 0 : 1)
+
+      if vm.state.isExpanded {
+        expandedLayer
+          .transition(.opacity)
+          .zIndex(1)
       }
-      .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .top)))
-    } else if let slots = compactContent {
+    }
+  }
+
+  private var expandedLayer: some View {
+    ZStack {
+      // The switcher (tabs + gear) sits in the notch band, flanking the hardware notch, and the
+      // content fills the rest — so nothing is wasted below the notch.
+      ExpandedContainerView(notchSize: vm.geometry.notchSize, vm: vm)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      // Media keys can arrive while the island is open. Keep their feedback above expanded
+      // content so replacing the system OSD never produces an invisible change.
+      if let snapshot = hud.hud {
+        ExpandedHUDOverlay(snapshot: snapshot)
+          .transition(.opacity.combined(with: .scale(scale: 0.94)))
+          .zIndex(2)
+      }
+    }
+    .frame(width: vm.expandedWidth, height: vm.expandedHeight)
+  }
+
+  @ViewBuilder private var compactLayer: some View {
+    if let slots = compactContent {
       let identity = slotIdentity
       HStack(spacing: 0) {
         // The measured width already includes the padding — don't add it a second time, or the
@@ -246,9 +261,9 @@ struct NotchRootView: View {
       }
       .frame(height: vm.geometry.notchSize.height)
       .id(identity)
-      .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+      .transition(.opacity)
     } else {
-      Color.clear
+      Color.clear.frame(width: vm.geometry.notchSize.width, height: vm.geometry.notchSize.height)
     }
   }
 }
