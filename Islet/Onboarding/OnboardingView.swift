@@ -34,7 +34,12 @@ enum LegacyInstallMigrationError: LocalizedError {
 
 @MainActor
 enum LegacyInstallMigrator {
-  static let currentBundleIdentifier = "dev.islet"
+  static let canonicalBundleIdentifier = "dev.islet"
+  static let onboardingVersionKey = "onboardingVersion"
+
+  static var currentBundleIdentifier: String {
+    resolvedBundleIdentifier(Bundle.main.bundleIdentifier)
+  }
 
   static var isAvailable: Bool {
     hasLegacyPreferences || T3CredentialStore.hasLegacyVault
@@ -45,28 +50,46 @@ enum LegacyInstallMigrator {
   ) -> [String: Any] {
     var merged = current
     for domain in legacy {
-      for (key, value) in domain where merged[key] == nil {
+      for (key, value) in domain
+      where key != onboardingVersionKey && merged[key] == nil {
         merged[key] = value
       }
     }
     return merged
   }
 
+  static func resolvedBundleIdentifier(_ bundleIdentifier: String?) -> String {
+    bundleIdentifier ?? canonicalBundleIdentifier
+  }
+
+  static func migratePreferences(
+    defaults: UserDefaults, currentBundleIdentifier: String,
+    legacyDomains: [[String: Any]]
+  ) throws -> Int {
+    let current = defaults.persistentDomain(forName: currentBundleIdentifier) ?? [:]
+    let merged = merging(current: current, legacy: legacyDomains)
+    let imported = merged.filter { current[$0.key] == nil }
+
+    // `setPersistentDomain` replaces the dictionary without producing the per-key changes that
+    // Defaults publishers observe. Write each imported value through UserDefaults so the running
+    // app immediately rebuilds displays, providers, login state and panel visibility as needed.
+    for (key, value) in imported { defaults.set(value, forKey: key) }
+    defaults.synchronize()
+
+    let written = defaults.persistentDomain(forName: currentBundleIdentifier) ?? [:]
+    guard NSDictionary(dictionary: written).isEqual(to: merged) else {
+      throw LegacyInstallMigrationError.preferencesVerificationFailed
+    }
+    return imported.count
+  }
+
   static func migrate(defaults: UserDefaults = .standard) throws -> LegacyInstallMigrationResult {
     let legacyDomains = LegacyInstallIdentifiers.applicationDomains.compactMap {
       defaults.persistentDomain(forName: $0)
     }
-    let current = defaults.persistentDomain(forName: currentBundleIdentifier) ?? [:]
-    let merged = merging(current: current, legacy: legacyDomains)
-
-    if !legacyDomains.isEmpty {
-      defaults.setPersistentDomain(merged, forName: currentBundleIdentifier)
-      defaults.synchronize()
-      let written = defaults.persistentDomain(forName: currentBundleIdentifier) ?? [:]
-      guard NSDictionary(dictionary: written).isEqual(to: merged) else {
-        throw LegacyInstallMigrationError.preferencesVerificationFailed
-      }
-    }
+    let importedPreferenceCount = try migratePreferences(
+      defaults: defaults, currentBundleIdentifier: currentBundleIdentifier,
+      legacyDomains: legacyDomains)
 
     let importedCredentialCount = try T3CredentialStore.migrateLegacyVaults()
 
@@ -78,7 +101,7 @@ enum LegacyInstallMigrator {
     NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
 
     return LegacyInstallMigrationResult(
-      importedPreferenceCount: merged.count - current.count,
+      importedPreferenceCount: importedPreferenceCount,
       importedCredentialCount: importedCredentialCount)
   }
 

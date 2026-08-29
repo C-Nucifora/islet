@@ -313,4 +313,24 @@ final class ShelfLogicTests: XCTestCase {
         at: shelfDirectory, includingPropertiesForKeys: nil)) ?? []
     XCTAssertTrue(remaining.isEmpty)
   }
+
+  @MainActor
+  func testClearTreatsAnAlreadyMissingFileAsRemoved() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    try FileManager.default.createDirectory(at: shelfDirectory, withIntermediateDirectories: true)
+    let stored = shelfDirectory.appendingPathComponent("removed-in-finder.txt")
+    try Data("gone".utf8).write(to: stored)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(directory: shelfDirectory)
+    XCTAssertEqual(model.items.count, 1)
+    try FileManager.default.removeItem(at: stored)
+
+    await model.clear()
+
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertNil(model.lastError)
+  }
 }

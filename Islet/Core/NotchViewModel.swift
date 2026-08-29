@@ -95,10 +95,12 @@ final class NotchViewModel: ObservableObject {
     geometry.expandedRect(width: expandedWidth, height: expandedHeight)
   }
 
-  /// The reserved window has transparent margins that must pass pointer events through. Keep the
-  /// global movement monitor while expanded or whenever its frame exceeds the visible footprint.
+  /// The reserved window has transparent margins that must pass pointer events through. Expanded
+  /// content can straddle those margins as the pointer moves, so only that state needs the global
+  /// passthrough monitor. Collapsed content is always mouse-transparent and opens through the
+  /// separate global click or hover monitors.
   var needsPointerPassthroughMonitoring: Bool {
-    state.isExpanded || actualPanelFrame != targetPanelFrame(for: state)
+    state.isExpanded
   }
 
   /// The region that counts as "hovering" for the current state.
@@ -108,7 +110,10 @@ final class NotchViewModel: ObservableObject {
 
   /// The AppKit window is deliberately fixed at its maximum size. Only the rendered island inside
   /// it should take mouse events; transparent margins behave like the menu bar or app beneath them.
-  func shouldIgnorePanelMouseEvents(at location: CGPoint) -> Bool {
+  func shouldIgnorePanelMouseEvents(
+    at location: CGPoint, allowingCompactFileDrag: Bool = false
+  ) -> Bool {
+    guard state.isExpanded || allowingCompactFileDrag else { return true }
     let interactiveRect = state.isExpanded ? expandedRect : targetPanelFrame(for: state)
     return !region(interactiveRect, contains: location)
   }

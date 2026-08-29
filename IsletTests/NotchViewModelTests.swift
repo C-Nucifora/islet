@@ -221,7 +221,7 @@ final class NotchViewModelTests: XCTestCase {
   func testCompactTargetChangePublishesBeforeDelayedShrink() {
     let vm = makeVM(mode: .clickToPin)
     vm.updateCompactWidths(leading: 80, trailing: 80)
-    vm.setActualPanelFrame(vm.panelFrame)
+    vm.setActualPanelFrame(vm.reservedPanelFrame)
     var revisions: [UInt] = []
     let cancellable = vm.$compactTargetRevision.dropFirst()
       .sink { revisions.append($0) }
@@ -229,7 +229,7 @@ final class NotchViewModelTests: XCTestCase {
     vm.updateCompactWidths(leading: 10, trailing: 10)
 
     XCTAssertEqual(revisions, [2])
-    XCTAssertTrue(vm.needsPointerPassthroughMonitoring)
+    XCTAssertFalse(vm.needsPointerPassthroughMonitoring)
     withExtendedLifetime(cancellable) {}
   }
 
@@ -266,14 +266,14 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertTrue(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 864, y: 880)))
   }
 
-  func testTransparentMarginsStayIgnoredUntilTheClosingPanelShrinks() {
+  func testWholeReservedPanelBecomesTransparentAsClosingStarts() {
     let vm = makeVM(mode: .clickToPin)
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
     vm.handleMouseDown(CGPoint(x: 100, y: 500))
 
     XCTAssertEqual(vm.state, .closed)
     XCTAssertEqual(vm.panelFrame, expandedPanel(vm))
-    XCTAssertFalse(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 864, y: 1110)))
+    XCTAssertTrue(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 864, y: 1110)))
     XCTAssertTrue(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 1_250, y: 1_000)))
   }
 
@@ -466,19 +466,26 @@ final class NotchViewModelTests: XCTestCase {
         hoverEnabled: false, pointerPassthroughDemandCount: 1))
   }
 
-  func testPointerPassthroughMonitoringCoversExpandedAndClosingFrames() {
+  func testPointerPassthroughMonitoringRunsOnlyWhileExpanded() {
     let vm = makeVM(mode: .clickToPin)
+    vm.setActualPanelFrame(vm.reservedPanelFrame)
     XCTAssertFalse(vm.needsPointerPassthroughMonitoring)
 
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
-    vm.setActualPanelFrame(expandedPanel(vm))
     XCTAssertTrue(vm.needsPointerPassthroughMonitoring)
 
     vm.handleMouseDown(CGPoint(x: 100, y: 500))
-    XCTAssertTrue(vm.needsPointerPassthroughMonitoring)
-
-    vm.setActualPanelFrame(vm.geometry.collapsedPanelFrame())
     XCTAssertFalse(vm.needsPointerPassthroughMonitoring)
+  }
+
+  func testCollapsedReservedPanelIsTransparentExceptForARelevantFileDrag() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.setActualPanelFrame(vm.reservedPanelFrame)
+    let notch = CGPoint(x: vm.geometry.notchRect.midX, y: vm.geometry.screenFrame.maxY - 1)
+
+    XCTAssertTrue(vm.shouldIgnorePanelMouseEvents(at: notch))
+    XCTAssertFalse(
+      vm.shouldIgnorePanelMouseEvents(at: notch, allowingCompactFileDrag: true))
   }
 
   func testDisabledShelfDoesNotForwardMonitorDrivenFileDrags() {

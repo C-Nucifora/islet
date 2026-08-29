@@ -188,6 +188,9 @@ final class ShelfModel: ObservableObject {
         do {
           try FileManager.default.removeItem(at: item.url)
           removed.insert(item.id)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+          // Finder or a concurrent single-item removal already achieved Clear's requested state.
+          removed.insert(item.id)
         } catch {
           Log.app.error("Shelf clear failed for \(item.name): \(error.localizedDescription)")
         }

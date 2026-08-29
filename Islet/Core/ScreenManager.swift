@@ -67,10 +67,13 @@ private final class PanelInstance {
     reassert()
   }
 
-  func updateMousePassthrough(at location: CGPoint = NSEvent.mouseLocation) {
+  func updateMousePassthrough(
+    at location: CGPoint = NSEvent.mouseLocation, allowingCompactFileDrag: Bool = false
+  ) {
     EventMonitors.shared.setPointerPassthroughNeeded(
       viewModel.needsPointerPassthroughMonitoring, sourceID: pointerMonitoringID)
-    let shouldIgnore = viewModel.shouldIgnorePanelMouseEvents(at: location)
+    let shouldIgnore = viewModel.shouldIgnorePanelMouseEvents(
+      at: location, allowingCompactFileDrag: allowingCompactFileDrag)
     if panel.ignoresMouseEvents != shouldIgnore { panel.ignoresMouseEvents = shouldIgnore }
   }
 
@@ -184,24 +187,26 @@ final class ScreenManager {
       let vm = NotchViewModel(geometry: geometry)
       let panel = NotchPanel(frame: vm.reservedPanelFrame)
       let dropZoneID = UUID()
+      panel.contentView = NotchHosting.view(for: vm)
+      let inst = PanelInstance(screenUUID: uuid, panel: panel, viewModel: vm)
       panel.acceptsFileDrops = {
         ActivityCenter.shared.isAvailableInExpandedSwitcher("shelf")
-          && !vm.shouldIgnorePanelMouseEvents(at: NSEvent.mouseLocation)
+          && !vm.shouldIgnorePanelMouseEvents(
+            at: NSEvent.mouseLocation, allowingCompactFileDrag: true)
       }
-      panel.fileDragTargetChanged = { targeted in
+      panel.fileDragTargetChanged = { [weak inst] targeted in
         ShelfModel.shared.setDropTarget(dropZoneID, active: targeted)
         if targeted { vm.apply(.fileDragEntered) }
+        if !targeted { inst?.updateMousePassthrough() }
       }
       panel.fileURLsDropped = { urls in
         ShelfModel.shared.importDroppedURLs(urls)
       }
-      panel.contentView = NotchHosting.view(for: vm)
       panel.alphaValue = 0
       panel.orderFrontRegardless()
       panel.setFrame(vm.reservedPanelFrame, display: true)
       panel.sharingType = Defaults[.hideFromScreenRecording] ? .none : .readOnly
 
-      let inst = PanelInstance(screenUUID: uuid, panel: panel, viewModel: vm)
       inst.syncActualFrame()  // seed from the window we just placed, before anything is drawn
       inst.updateMousePassthrough()
       panel.alphaValue = 1  // alpha-flash hides ghost frames
@@ -218,7 +223,9 @@ final class ScreenManager {
         .sink { [weak inst] location in inst?.updateMousePassthrough(at: location) }
         .store(in: &inst.cancellables)
       EventMonitors.shared.fileDragMovement
-        .sink { [weak inst] location in inst?.updateMousePassthrough(at: location) }
+        .sink { [weak inst] location in
+          inst?.updateMousePassthrough(at: location, allowingCompactFileDrag: true)
+        }
         .store(in: &inst.cancellables)
       NotificationCenter.default
         .publisher(for: NSWindow.didMoveNotification, object: panel)
