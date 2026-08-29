@@ -52,22 +52,21 @@ struct NotchGeometry: Equatable {
       height: notchRect.height + Metrics.hitSlop)
   }
 
-  /// The expanded island on screen. Height is a per-tab tier — `Metrics.expandedSize.height` for
-  /// the base one, `Metrics.tallExpandedHeight` for the dense ones — so it is a parameter rather
-  /// than a constant. The island always hangs off the top edge, so only the bottom edge moves.
-  func expandedRect(height: CGFloat) -> CGRect {
+  /// The expanded island on screen. Height follows the selected tab and width follows the live tab
+  /// count. The island always hangs off the top edge, so height changes move only the bottom edge.
+  func expandedRect(width: CGFloat = Metrics.expandedSize.width, height: CGFloat) -> CGRect {
     CGRect(
-      x: screenFrame.midX - Metrics.expandedSize.width / 2,
+      x: notchRect.midX - width / 2,
       y: screenFrame.maxY - height,
-      width: Metrics.expandedSize.width, height: height)
+      width: width, height: height)
   }
 
   /// The panel hosting the expanded island: wide enough for the ear margins, tall enough for the
   /// drop shadow below the island's bottom edge.
-  func panelFrame(height: CGFloat) -> CGRect {
-    let w = Metrics.expandedSize.width + Metrics.earMargin * 2
+  func panelFrame(width: CGFloat = Metrics.expandedSize.width, height: CGFloat) -> CGRect {
+    let w = width + Metrics.earMargin * 2
     let h = height + Metrics.shadowPadding
-    return CGRect(x: screenFrame.midX - w / 2, y: screenFrame.maxY - h, width: w, height: h)
+    return CGRect(x: notchRect.midX - w / 2, y: screenFrame.maxY - h, width: w, height: h)
   }
 
   /// Panel frame while collapsed. A window swallows every mouse event inside its frame, so the

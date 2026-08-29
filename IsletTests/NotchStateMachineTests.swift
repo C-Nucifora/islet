@@ -17,6 +17,20 @@ final class NotchStateMachineTests: XCTestCase {
 
   func testPeekExitCloses() { XCTAssertEqual(t(.peek, .hoverExited, .hover), .closed) }
 
+  func testFileDragHoverExpandsImmediatelyWithoutPushInEitherMode() {
+    XCTAssertEqual(t(.closed, .fileDragEntered, .hover), .expanded(pinned: false))
+    XCTAssertEqual(t(.peek, .fileDragEntered, .hover), .expanded(pinned: false))
+    XCTAssertEqual(t(.closed, .fileDragEntered, .clickToPin), .expanded(pinned: false))
+    XCTAssertEqual(t(.peek, .fileDragEntered, .clickToPin), .expanded(pinned: false))
+  }
+
+  func testFileDragHoverDoesNotToggleAnExpandedNotchClosed() {
+    XCTAssertEqual(
+      t(.expanded(pinned: false), .fileDragEntered, .hover), .expanded(pinned: false))
+    XCTAssertEqual(
+      t(.expanded(pinned: true), .fileDragEntered, .hover), .expanded(pinned: true))
+  }
+
   func testClickNotchPinsFromClosedOrPeek() {
     XCTAssertEqual(t(.peek, .clickedNotch, .clickToPin), .expanded(pinned: true))
     XCTAssertEqual(t(.closed, .clickedNotch, .hover), .expanded(pinned: true))

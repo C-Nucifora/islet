@@ -7,6 +7,111 @@ enum OnboardingState {
   static var isComplete: Bool { Defaults[.onboardingVersion] >= currentVersion }
 }
 
+struct LegacyInstallMigrationResult {
+  let importedPreferenceCount: Int
+  let importedCredentialCount: Int
+
+  var summary: String {
+    let settings =
+      importedPreferenceCount == 1 ? "1 setting" : "\(importedPreferenceCount) settings"
+    let credentials =
+      importedCredentialCount == 1
+      ? "1 saved T3 Code pairing" : "\(importedCredentialCount) saved T3 Code pairings"
+    return "Imported \(settings) and \(credentials)."
+  }
+}
+
+enum LegacyInstallMigrationError: LocalizedError {
+  case preferencesVerificationFailed
+
+  var errorDescription: String? {
+    switch self {
+    case .preferencesVerificationFailed:
+      "The imported settings could not be verified. The previous settings were left in place."
+    }
+  }
+}
+
+@MainActor
+enum LegacyInstallMigrator {
+  static let canonicalBundleIdentifier = "dev.islet"
+  static let onboardingVersionKey = "onboardingVersion"
+
+  static var currentBundleIdentifier: String {
+    resolvedBundleIdentifier(Bundle.main.bundleIdentifier)
+  }
+
+  static var isAvailable: Bool {
+    hasLegacyPreferences || T3CredentialStore.hasLegacyVault
+  }
+
+  static func merging(
+    current: [String: Any], legacy: [[String: Any]]
+  ) -> [String: Any] {
+    var merged = current
+    for domain in legacy {
+      for (key, value) in domain
+      where key != onboardingVersionKey && merged[key] == nil {
+        merged[key] = value
+      }
+    }
+    return merged
+  }
+
+  static func resolvedBundleIdentifier(_ bundleIdentifier: String?) -> String {
+    bundleIdentifier ?? canonicalBundleIdentifier
+  }
+
+  static func migratePreferences(
+    defaults: UserDefaults, currentBundleIdentifier: String,
+    legacyDomains: [[String: Any]]
+  ) throws -> Int {
+    let current = defaults.persistentDomain(forName: currentBundleIdentifier) ?? [:]
+    let merged = merging(current: current, legacy: legacyDomains)
+    let imported = merged.filter { current[$0.key] == nil }
+
+    // `setPersistentDomain` replaces the dictionary without producing the per-key changes that
+    // Defaults publishers observe. Write each imported value through UserDefaults so the running
+    // app immediately rebuilds displays, providers, login state and panel visibility as needed.
+    for (key, value) in imported { defaults.set(value, forKey: key) }
+    defaults.synchronize()
+
+    let written = defaults.persistentDomain(forName: currentBundleIdentifier) ?? [:]
+    guard NSDictionary(dictionary: written).isEqual(to: merged) else {
+      throw LegacyInstallMigrationError.preferencesVerificationFailed
+    }
+    return imported.count
+  }
+
+  static func migrate(defaults: UserDefaults = .standard) throws -> LegacyInstallMigrationResult {
+    let legacyDomains = LegacyInstallIdentifiers.applicationDomains.compactMap {
+      defaults.persistentDomain(forName: $0)
+    }
+    let importedPreferenceCount = try migratePreferences(
+      defaults: defaults, currentBundleIdentifier: currentBundleIdentifier,
+      legacyDomains: legacyDomains)
+
+    let importedCredentialCount = try T3CredentialStore.migrateLegacyVaults()
+
+    for identifier in LegacyInstallIdentifiers.applicationDomains
+    where defaults.persistentDomain(forName: identifier) != nil {
+      defaults.removePersistentDomain(forName: identifier)
+    }
+    defaults.synchronize()
+    NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
+
+    return LegacyInstallMigrationResult(
+      importedPreferenceCount: importedPreferenceCount,
+      importedCredentialCount: importedCredentialCount)
+  }
+
+  private static var hasLegacyPreferences: Bool {
+    LegacyInstallIdentifiers.applicationDomains.contains {
+      !(UserDefaults.standard.persistentDomain(forName: $0) ?? [:]).isEmpty
+    }
+  }
+}
+
 enum OnboardingPreferences {
   static let knownActivityIDs = Set(ActivityCatalog.defaultOrder)
 
@@ -125,6 +230,19 @@ private struct OnboardingActivity: Identifiable {
   ]
 }
 
+private enum LegacyMigrationState {
+  case unavailable
+  case available
+  case migrating
+  case migrated(String)
+  case failed(String)
+
+  var isMigrating: Bool {
+    if case .migrating = self { return true }
+    return false
+  }
+}
+
 private struct OnboardingView: View {
   @Default(.interactionMode) private var interactionMode
   @Default(.hapticsEnabled) private var hapticsEnabled
@@ -137,6 +255,7 @@ private struct OnboardingView: View {
   @State private var selectedActivities: Set<String>
   @State private var remindersEnabled: Bool
   @State private var bluetoothEventsEnabled: Bool
+  @State private var legacyMigrationState: LegacyMigrationState
 
   init() {
     _selectedActivities = State(
@@ -146,6 +265,8 @@ private struct OnboardingView: View {
     _bluetoothEventsEnabled = State(
       initialValue: OnboardingState.isComplete
         && !Defaults[.disabledEventSources].contains("bluetooth"))
+    _legacyMigrationState = State(
+      initialValue: LegacyInstallMigrator.isAvailable ? .available : .unavailable)
   }
 
   var body: some View {
@@ -193,23 +314,62 @@ private struct OnboardingView: View {
   }
 
   private var welcomePage: some View {
-    VStack(spacing: 22) {
+    VStack(spacing: 18) {
       ZStack {
         RoundedRectangle(cornerRadius: 22).fill(.black)
         IsletNotchMarkShape().fill(.white).frame(width: 72, height: 64)
       }
-      .frame(width: 132, height: 112)
+      .frame(width: 118, height: 96)
       VStack(spacing: 8) {
-        Text("Islet puts timers, media controls and live system information around the MacBook notch.")
-          .font(.title3.weight(.medium))
-          .multilineTextAlignment(.center)
+        Text(
+          "Islet puts timers, media controls and live system information around the MacBook notch."
+        )
+        .font(.title3.weight(.medium))
+        .multilineTextAlignment(.center)
         Text("It has no Dock or menu-bar icon. Everything starts at the notch.")
           .foregroundStyle(.secondary)
           .multilineTextAlignment(.center)
       }
       .frame(maxWidth: 500)
+      legacyMigrationCard
     }
-    .padding(36)
+    .padding(28)
+  }
+
+  @ViewBuilder private var legacyMigrationCard: some View {
+    switch legacyMigrationState {
+    case .unavailable:
+      EmptyView()
+    case .available, .migrating:
+      HStack(spacing: 14) {
+        Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
+          .font(.title2).foregroundStyle(.tint)
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Previous Islet setup found").font(.body.weight(.medium))
+          Text("Move its settings and saved T3 Code pairings into this installation.")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        Spacer()
+        Button(legacyMigrationState.isMigrating ? "Importing…" : "Import") {
+          migrateLegacyInstall()
+        }
+        .disabled(legacyMigrationState.isMigrating)
+      }
+      .padding(14)
+      .frame(maxWidth: 540)
+      .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+    case .migrated(let summary):
+      Label(summary, systemImage: "checkmark.circle.fill")
+        .foregroundStyle(.green)
+        .frame(maxWidth: 540, alignment: .leading)
+    case .failed(let message):
+      VStack(alignment: .leading, spacing: 8) {
+        Label(message, systemImage: "exclamationmark.triangle.fill")
+          .foregroundStyle(.orange)
+        Button("Try import again") { migrateLegacyInstall() }
+      }
+      .frame(maxWidth: 540, alignment: .leading)
+    }
   }
 
   private var interactionPage: some View {
@@ -220,10 +380,12 @@ private struct OnboardingView: View {
           Text("Click to open and pin").tag(InteractionMode.clickToPin)
         }
         .pickerStyle(.radioGroup)
-        Text(interactionMode == .hover
-          ? "Move the pointer into the notch, then keep pushing upward until Islet opens."
-          : "Click the notch to open Islet. Click outside it to close.")
-          .font(.caption).foregroundStyle(.secondary)
+        Text(
+          interactionMode == .hover
+            ? "Move the pointer into the notch, then keep pushing upward until Islet opens."
+            : "Click the notch to open Islet. Click outside it to close."
+        )
+        .font(.caption).foregroundStyle(.secondary)
       }
       Section("Startup") {
         Toggle("Launch Islet at login", isOn: $launchAtLogin)
@@ -246,13 +408,18 @@ private struct OnboardingView: View {
   }
 
   private func activityToggle(_ activity: OnboardingActivity) -> some View {
-    Toggle(isOn: Binding(
-      get: { selectedActivities.contains(activity.id) },
-      set: { enabled in
-        if enabled { selectedActivities.insert(activity.id) }
-        else { selectedActivities.remove(activity.id) }
-      }
-    )) {
+    Toggle(
+      isOn: Binding(
+        get: { selectedActivities.contains(activity.id) },
+        set: { enabled in
+          if enabled {
+            selectedActivities.insert(activity.id)
+          } else {
+            selectedActivities.remove(activity.id)
+          }
+        }
+      )
+    ) {
       HStack(spacing: 11) {
         Image(systemName: ActivityCatalog.icon(for: activity.id))
           .frame(width: 24).foregroundStyle(.tint)
@@ -271,8 +438,10 @@ private struct OnboardingView: View {
   private var permissionsPage: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 12) {
-        Text("Islet asks only for access used by the activities you chose. You can skip any request.")
-          .foregroundStyle(.secondary)
+        Text(
+          "Islet asks only for access used by the activities you chose. You can skip any request."
+        )
+        .foregroundStyle(.secondary)
 
         if selectedActivities.contains("calendar") {
           permissionRow(
@@ -289,7 +458,8 @@ private struct OnboardingView: View {
 
         Toggle(isOn: $remindersEnabled) {
           permissionLabel(
-            title: "Reminders", detail: "Shows incomplete reminders on Home and lets you complete them.",
+            title: "Reminders",
+            detail: "Shows incomplete reminders on Home and lets you complete them.",
             status: reminders.authorization.summary)
         }
         .toggleStyle(.checkbox)
@@ -308,7 +478,8 @@ private struct OnboardingView: View {
         if selectedActivities.contains("continuity") {
           permissionRow(
             title: "Accessibility",
-            detail: "Reads the app names macOS shows for iPhone Live Activities. Islet cannot read their contents.",
+            detail:
+              "Reads the app names macOS shows for iPhone Live Activities. Islet cannot read their contents.",
             status: permissions.diagnostics.accessibilityGranted ? "Allowed" : "Not allowed",
             actionTitle: permissions.diagnostics.accessibilityGranted ? nil : "Allow"
           ) {
@@ -318,7 +489,8 @@ private struct OnboardingView: View {
 
         permissionRow(
           title: "Wi-Fi network names",
-          detail: "Adds the network name to Wi-Fi connection alerts. The alert still works without access.",
+          detail:
+            "Adds the network name to Wi-Fi connection alerts. The alert still works without access.",
           status: permissions.diagnostics.location.summary,
           actionTitle: permissions.diagnostics.location == .notDetermined ? "Allow" : nil
         ) {
@@ -328,7 +500,8 @@ private struct OnboardingView: View {
         Toggle(isOn: $bluetoothEventsEnabled) {
           permissionLabel(
             title: "Bluetooth alerts",
-            detail: "Shows when Bluetooth devices connect or disconnect. macOS may ask for access after setup.",
+            detail:
+              "Shows when Bluetooth devices connect or disconnect. macOS may ask for access after setup.",
             status: bluetoothEventsEnabled ? "On" : "Off")
         }
         .toggleStyle(.checkbox)
@@ -342,7 +515,8 @@ private struct OnboardingView: View {
   }
 
   private func permissionRow(
-    title: String, detail: String, status: String, actionTitle: String?, action: @escaping () -> Void
+    title: String, detail: String, status: String, actionTitle: String?,
+    action: @escaping () -> Void
   ) -> some View {
     HStack(spacing: 16) {
       permissionLabel(title: title, detail: detail, status: status)
@@ -359,7 +533,8 @@ private struct OnboardingView: View {
         Text(title).font(.body.weight(.medium))
         Text(status).font(.caption).foregroundStyle(.secondary)
       }
-      Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+      Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(
+        horizontal: false, vertical: true)
     }
   }
 
@@ -400,6 +575,20 @@ private struct OnboardingView: View {
   private func move(by offset: Int) {
     let next = min(max(page.rawValue + offset, 0), OnboardingPage.allCases.count - 1)
     if let resolved = OnboardingPage(rawValue: next) { page = resolved }
+  }
+
+  private func migrateLegacyInstall() {
+    legacyMigrationState = .migrating
+    do {
+      let result = try LegacyInstallMigrator.migrate()
+      selectedActivities = Set(
+        ActivityCatalog.defaultOrder.filter { OnboardingPreferences.isActivityEnabled($0) })
+      remindersEnabled = Defaults[.remindersEnabled]
+      bluetoothEventsEnabled = !Defaults[.disabledEventSources].contains("bluetooth")
+      legacyMigrationState = .migrated(result.summary)
+    } catch {
+      legacyMigrationState = .failed(error.localizedDescription)
+    }
   }
 
   private func finish() {

@@ -30,7 +30,7 @@ final class PulseServer: ObservableObject {
   private var commandPipelines: [ObjectIdentifier: PulseCommandPipeline] = [:]
   private var commandTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
   private var authenticationTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
-  private let queue = DispatchQueue(label: "dev.cnucifora.Islet.pulse", qos: .utility)
+  private let queue = DispatchQueue(label: "dev.islet.pulse", qos: .utility)
   @Published private(set) var isRunning = false
   @Published private(set) var lastError: String?
   @Published private(set) var tokenRotatedAt: Date?

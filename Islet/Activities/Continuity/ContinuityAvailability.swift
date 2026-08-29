@@ -37,7 +37,8 @@ enum ContinuityAvailability: Equatable, Sendable {
       // Deliberately not "keep your iPhone nearby": during development this Mac sat with a
       // connected phone and an empty menu bar for two days because ControlCenter was holding stale
       // pairing state. Telling the user to move their phone would have been useless advice.
-      return "Nothing running on your iPhone. If the menu bar shows one and this doesn't, restart Control Centre."
+      return
+        "Nothing running on your iPhone. If the menu bar shows one and this doesn't, restart Control Centre."
     case .active:
       return "Nothing running on your iPhone right now."
     }

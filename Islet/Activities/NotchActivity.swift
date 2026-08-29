@@ -20,6 +20,8 @@ protocol NotchActivity: AnyObject {
   var expandedView: AnyView { get }
   /// SF Symbol used for this activity's chip in the expanded switcher.
   var tabIcon: String { get }
+  /// Whether the activity remains available in the expanded switcher while it has no live status.
+  var isAvailableWhenInactive: Bool { get }
   /// Height tier this activity's expanded view wants. Defaults to the base tier; dense tabs
   /// (power, system stats) return `Metrics.tallExpandedHeight`.
   var preferredExpandedHeight: CGFloat { get }
@@ -27,5 +29,6 @@ protocol NotchActivity: AnyObject {
 
 extension NotchActivity {
   var tabIcon: String { "app.dashed" }
+  var isAvailableWhenInactive: Bool { false }
   var preferredExpandedHeight: CGFloat { Metrics.expandedSize.height }
 }

@@ -13,14 +13,19 @@ final class ActivityCenterTests: XCTestCase {
       didSet { activationDate = isActive ? Date() : nil }
     }
     var activationDate: Date?
+    var isAvailableWhenInactive: Bool
     var compactLeading: AnyView { AnyView(EmptyView()) }
     var compactTrailing: AnyView { AnyView(EmptyView()) }
     var expandedView: AnyView { AnyView(EmptyView()) }
 
-    init(id: String, priority: ActivityPriority, active: Bool = false) {
+    init(
+      id: String, priority: ActivityPriority, active: Bool = false,
+      isAvailableWhenInactive: Bool = false
+    ) {
       self.id = id
       self.priority = priority
       self.isActive = active
+      self.isAvailableWhenInactive = isAvailableWhenInactive
       if active { activationDate = Date() }
     }
   }
@@ -56,6 +61,36 @@ final class ActivityCenterTests: XCTestCase {
     let center = ActivityCenter()
     center.register(Fake(id: "media", priority: .media, active: false))
     XCTAssertNil(center.primaryActivity)
+  }
+
+  func testInactiveUtilityIsAvailableOnlyInExpandedSwitcher() {
+    let saved = Defaults[.disabledActivities]
+    defer { Defaults[.disabledActivities] = saved }
+    Defaults[.disabledActivities] = []
+
+    let center = ActivityCenter()
+    center.register(
+      Fake(
+        id: "shelf", priority: .ambient, active: false,
+        isAvailableWhenInactive: true))
+
+    XCTAssertTrue(center.activeActivities.isEmpty)
+    XCTAssertNil(center.primaryActivity)
+    XCTAssertEqual(center.expandedActivities.map(\.id), ["shelf"])
+
+    Defaults[.disabledActivities] = ["shelf"]
+    XCTAssertTrue(center.expandedActivities.isEmpty)
+    XCTAssertFalse(center.isAvailableInExpandedSwitcher("shelf"))
+  }
+
+  func testHiddenShelfQuickActionIsUnavailable() {
+    let saved = Defaults[.disabledActivities]
+    defer { Defaults[.disabledActivities] = saved }
+    Defaults[.disabledActivities] = ["shelf"]
+
+    let action = IsletQuickAction.all.first { $0.id == "shelf-open" }
+    XCTAssertNotNil(action)
+    XCTAssertFalse(action?.isAvailable() ?? true)
   }
 
   func testActivityLifecyclePolicyUsesFeatureStateRatherThanVisibility() {

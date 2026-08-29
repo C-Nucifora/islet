@@ -53,7 +53,9 @@ struct T3CodeExpandedView: View {
 
   private var connectionSummary: String {
     let connected = activity.environments.filter { $0.state == .connected }.count
-    return connected == 0 ? "Open T3 Code or add a machine in Settings" : "Connected to \(connected) machine\(connected == 1 ? "" : "s")"
+    return connected == 0
+      ? "Open T3 Code or add a machine in Settings"
+      : "Connected to \(connected) machine\(connected == 1 ? "" : "s")"
   }
 
   private func environmentGroup(_ environment: T3EnvironmentSnapshot) -> some View {
@@ -134,19 +136,24 @@ struct T3SettingsSection: View {
   var body: some View {
     Section("T3 Code agents") {
       Toggle("Monitor T3 Code", isOn: $enabled)
-      Text("Shows active agents from each explicitly paired T3 Code machine. Islet cannot control agents, and pairing credentials stay in Keychain.")
-        .font(.caption2).foregroundStyle(.secondary)
+      Text(
+        "Shows active agents from each explicitly paired T3 Code machine. Islet cannot control agents, and pairing credentials stay in Keychain."
+      )
+      .font(.caption2).foregroundStyle(.secondary)
       machineRows
       HStack {
         SecureField("Paste a T3 Code pairing link", text: $pairingLink)
         Button(isPairing ? "Pairing…" : "Add") { pair() }
-          .disabled(pairingLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPairing)
+          .disabled(
+            pairingLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPairing)
       }
       if pairingUsesPlainHTTP {
         Toggle("Allow plain HTTP for this pairing", isOn: $allowInsecureHTTP)
           .font(.caption)
-        Text("Plain HTTP exposes the pairing credential. Use it only on a network you trust. HTTPS and Tailscale encrypt the connection.")
-          .font(.caption2).foregroundStyle(.orange)
+        Text(
+          "Plain HTTP exposes the pairing credential. Use it only on a network you trust. HTTPS and Tailscale encrypt the connection."
+        )
+        .font(.caption2).foregroundStyle(.orange)
       }
       if let statusMessage {
         Text(statusMessage).font(.caption2)
@@ -198,8 +205,9 @@ struct T3SettingsSection: View {
     }
     ForEach(profiles) { profile in
       let snapshot = activity.environments.first {
-        $0.id == T3CodeActivity.remoteSnapshotID(
-          environmentID: profile.id, baseURL: profile.baseURL)
+        $0.id
+          == T3CodeActivity.remoteSnapshotID(
+            environmentID: profile.id, baseURL: profile.baseURL)
       }
       HStack {
         Toggle(
@@ -210,7 +218,9 @@ struct T3SettingsSection: View {
         Spacer()
         Text(snapshot?.state.label ?? (profile.enabled ? "Connecting" : "Off"))
           .font(.caption).foregroundStyle(connectionColor(snapshot?.state))
-        Button(role: .destructive) { pendingRemoval = profile } label: {
+        Button(role: .destructive) {
+          pendingRemoval = profile
+        } label: {
           Image(systemName: "trash")
         }
         .buttonStyle(.borderless).accessibilityLabel("Remove \(profile.label)")

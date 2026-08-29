@@ -3,6 +3,7 @@
 build/
 DerivedData/
 Vendor/mediaremote-adapter-src/
+Config/Islet.local.xcconfig
 
 # Internal process documents
 docs/audit/

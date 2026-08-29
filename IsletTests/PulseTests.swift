@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Islet
 
 final class PulseTests: XCTestCase {
@@ -218,19 +219,22 @@ final class PulseTests: XCTestCase {
 
   func testWireValidatorRejectsUnknownFieldsAtEveryProtocolLevel() throws {
     let valid = Data(
-      #"{"token":"token","operation":"show","activity":{"id":"id","source":"tests","title":"Title","actions":[{"id":"open","title":"Open","url":"https://example.com"}]}}"#.utf8)
+      #"{"token":"token","operation":"show","activity":{"id":"id","source":"tests","title":"Title","actions":[{"id":"open","title":"Open","url":"https://example.com"}]}}"#
+        .utf8)
     XCTAssertNoThrow(try PulseWireValidator.validate(valid))
 
     let unknownCommand = Data(#"{"token":"token","operation":"end","id":"id","typo":true}"#.utf8)
     XCTAssertThrowsError(try PulseWireValidator.validate(unknownCommand))
     let unknownAction = Data(
-      #"{"token":"token","operation":"show","activity":{"id":"id","source":"tests","title":"Title","actions":[{"id":"open","title":"Open","url":"https://example.com","script":"no"}]}}"#.utf8)
+      #"{"token":"token","operation":"show","activity":{"id":"id","source":"tests","title":"Title","actions":[{"id":"open","title":"Open","url":"https://example.com","script":"no"}]}}"#
+        .utf8)
     XCTAssertThrowsError(try PulseWireValidator.validate(unknownAction))
   }
 
   func testWireDecoderAcceptsFractionalISO8601Expiry() throws {
     let data = Data(
-      #"{"token":"token","operation":"event","activity":{"id":"id","source":"tests","title":"Title","expiresAt":"2026-08-28T12:34:56.789Z"}}"#.utf8)
+      #"{"token":"token","operation":"event","activity":{"id":"id","source":"tests","title":"Title","expiresAt":"2026-08-28T12:34:56.789Z"}}"#
+        .utf8)
     let command = try PulseWireCodec.decoder().decode(PulseCommand.self, from: data)
     XCTAssertNotNil(command.activity?.expiresAt)
   }

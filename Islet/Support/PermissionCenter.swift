@@ -227,10 +227,12 @@ final class PermissionCenter: NSObject, ObservableObject, CLLocationManagerDeleg
 
     let identifier = information[kSecCodeInfoIdentifier as String] as? String ?? "Unavailable"
     let team = information[kSecCodeInfoTeamIdentifier as String] as? String ?? "None"
-    let cdHash = (information[kSecCodeInfoUnique as String] as? Data)?
+    let cdHash =
+      (information[kSecCodeInfoUnique as String] as? Data)?
       .map { String(format: "%02x", $0) }.joined() ?? "Unavailable"
     let certificate = (information[kSecCodeInfoCertificates as String] as? [SecCertificate])?.first
-    let identity = certificate.flatMap { SecCertificateCopySubjectSummary($0) as String? }
+    let identity =
+      certificate.flatMap { SecCertificateCopySubjectSummary($0) as String? }
       ?? "Ad hoc or unsigned"
     return (identifier, team, identity, cdHash)
   }

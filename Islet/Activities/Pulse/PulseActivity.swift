@@ -134,7 +134,9 @@ private struct PulseItemRow: View {
         .accessibilityLabel("Actions for \(item.title)")
         .help("Actions for \(item.title)")
       }
-      Button { center.dismiss(item.id) } label: {
+      Button {
+        center.dismiss(item.id)
+      } label: {
         Image(systemName: "xmark")
           .font(.caption2)
           .frame(width: 24, height: 24)

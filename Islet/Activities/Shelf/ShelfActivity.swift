@@ -1,21 +1,21 @@
 import Combine
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// Surfaces the file shelf in the island: a tray indicator in the compact view and a drop grid
-/// (drag-out + AirDrop) when expanded. Active while it holds files or a drag is hovering the notch.
+/// (open, drag-out, and AirDrop) when expanded. Active while it holds files or a drop is underway.
 @MainActor
 final class ShelfActivity: NotchActivity, ObservableObject {
   let id = "shelf"
   let priority = ActivityPriority.ambient
   let tabIcon = "tray.full.fill"
+  let isAvailableWhenInactive = true
   private(set) var activationDate: Date?
 
   private let model = ShelfModel.shared
   private var cancellables: Set<AnyCancellable> = []
   private var isMonitoring = false
 
-  var isActive: Bool { !model.items.isEmpty || model.isDragActive }
+  var isActive: Bool { !model.items.isEmpty || model.isDropPresentationActive }
 
   func start() {
     guard !isMonitoring else { return }
@@ -54,7 +54,6 @@ final class ShelfActivity: NotchActivity, ObservableObject {
 
 struct ShelfView: View {
   @ObservedObject var model: ShelfModel
-  @State private var targeted = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -62,6 +61,15 @@ struct ShelfView: View {
         Label("Shelf", systemImage: "tray.full.fill")
           .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
         Spacer()
+        if model.pendingImportCount > 0 {
+          ProgressView()
+            .controlSize(.small)
+            .help(
+              "Adding \(model.pendingImportCount) item\(model.pendingImportCount == 1 ? "" : "s")"
+            )
+            .accessibilityLabel("Adding files to Shelf")
+            .accessibilityValue("\(model.pendingImportCount) remaining")
+        }
         if !model.items.isEmpty {
           Button {
             airdropAll()
@@ -120,14 +128,8 @@ struct ShelfView: View {
     .foregroundStyle(.white)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .contentShape(Rectangle())
-    .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
-      ShelfModel.loadURLs(from: providers) { url in
-        Task { @MainActor in await ShelfModel.shared.add(url) }
-      }
-      return true
-    }
     .overlay {
-      if targeted {
+      if model.isDragActive {
         RoundedRectangle(cornerRadius: 12).strokeBorder(.blue, lineWidth: 2)
       }
     }
@@ -149,16 +151,25 @@ struct ShelfItemView: View {
 
   var body: some View {
     VStack(spacing: 3) {
-      ZStack {
-        RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.08))
-        if let img = thumbnailImage {
-          Image(nsImage: img).resizable().aspectRatio(contentMode: .fit).padding(4)
-        } else {
-          Image(systemName: "doc").font(.title2).foregroundStyle(.secondary)
+      ZStack(alignment: .topTrailing) {
+        Button {
+          model.open(item)
+        } label: {
+          ZStack {
+            RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.08))
+            if let img = thumbnailImage {
+              Image(nsImage: img).resizable().aspectRatio(contentMode: .fit).padding(4)
+            } else {
+              Image(systemName: "doc").font(.title2).foregroundStyle(.secondary)
+            }
+          }
         }
-      }
-      .frame(width: 56, height: 56)
-      .overlay(alignment: .topTrailing) {
+        .buttonStyle(.plain)
+        .frame(width: 56, height: 56)
+        .accessibilityLabel("Open \(item.name)")
+        .accessibilityHint("Drag to copy it into another app")
+        .help("Open \(item.name)")
+
         Button {
           Task { await model.remove(item) }
         } label: {
@@ -176,7 +187,6 @@ struct ShelfItemView: View {
     .onAppear { updateThumbnail() }
     .onChange(of: item.thumbnail) { _, _ in updateThumbnail() }
     .accessibilityElement(children: .contain)
-    .accessibilityLabel("\(item.name), file on Shelf")
     .contextMenu {
       Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
       Button("Remove from Shelf", role: .destructive) {

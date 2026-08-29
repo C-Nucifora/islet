@@ -143,8 +143,9 @@ enum VolumeController {
       return false
     }
     var value: UInt32 = muted ? 1 : 0
-    guard AudioObjectSetPropertyData(
-      device, &addr, 0, nil, UInt32(MemoryLayout<UInt32>.size), &value) == noErr
+    guard
+      AudioObjectSetPropertyData(
+        device, &addr, 0, nil, UInt32(MemoryLayout<UInt32>.size), &value) == noErr
     else { return false }
     return readMuted() == muted
   }

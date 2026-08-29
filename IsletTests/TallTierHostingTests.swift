@@ -9,6 +9,20 @@ import XCTest
 /// which no pure-logic test can reach.
 @MainActor
 final class TallTierHostingTests: XCTestCase {
+  private final class MorphActivity: NotchActivity, ObservableObject {
+    let id = "morph-test"
+    let priority = ActivityPriority.media
+    let isActive = true
+    let activationDate: Date? = Date()
+    var compactLeading: AnyView {
+      AnyView(Image(systemName: "waveform").frame(width: 28, height: 20))
+    }
+    var compactTrailing: AnyView {
+      AnyView(Text("Active").frame(width: 64, height: 20))
+    }
+    var expandedView: AnyView { AnyView(Color.clear) }
+  }
+
   private func pump(_ seconds: TimeInterval) {
     RunLoop.main.run(until: Date().addingTimeInterval(seconds))
   }
@@ -17,6 +31,41 @@ final class TallTierHostingTests: XCTestCase {
     NotchGeometry(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
       safeAreaTop: 32, auxLeftWidth: 716, auxRightWidth: 716, menuBarHeight: 37)
+  }
+
+  func testCompactHUDSlotKeepsUnderlyingActivityAsAWidthFloor() {
+    let narrowerHUD = CompactHUDSlot(
+      alignment: .leading,
+      underlying: AnyView(Color.clear.frame(width: 180, height: 20)),
+      hud: AnyView(Color.clear.frame(width: 40, height: 20)))
+    let widerHUD = CompactHUDSlot(
+      alignment: .trailing,
+      underlying: AnyView(Color.clear.frame(width: 40, height: 20)),
+      hud: AnyView(Color.clear.frame(width: 180, height: 20)))
+
+    XCTAssertEqual(NSHostingView(rootView: narrowerHUD).fittingSize.width, 180)
+    XCTAssertEqual(NSHostingView(rootView: widerHUD).fittingSize.width, 180)
+  }
+
+  func testClosingMorphSurvivesRealHostingWithCompactContent() {
+    ActivityCenter.shared.register(MorphActivity())
+    let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
+    let panel = NotchPanel(frame: vm.reservedPanelFrame)
+    panel.contentView = NotchHosting.view(for: vm)
+    panel.orderFrontRegardless()
+    vm.setActualPanelFrame(panel.frame)
+    pump(0.3)
+
+    vm.apply(.clickedNotch)
+    pump(0.6)
+
+    vm.apply(.clickedOutside)
+    for delay in [0.06, 0.08, 0.08, 0.08] { pump(delay) }
+    pump(0.3)
+
+    XCTAssertEqual(panel.frame, vm.reservedPanelFrame)
+    XCTAssertEqual(vm.state, .closed)
+    panel.close()
   }
 
   /// The power screen's content alone, at tall-tier size, with a real one-shot hardware read.
@@ -36,20 +85,13 @@ final class TallTierHostingTests: XCTestCase {
     panel.close()
   }
 
-  /// The whole island: expand, then switch to the tall tier while a ScreenManager-style sink
-  /// applies every published frame to the real window — the exact sequence a chip click runs.
+  /// The whole island: expand, then switch to the tall tier inside the production reserved panel.
   func testTallTierSelectionSurvivesRealHosting() {
     let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
-    let panel = NotchPanel(frame: vm.panelFrame)
-    panel.contentView = NSHostingView(rootView: NotchRootView(vm: vm))
+    let panel = NotchPanel(frame: vm.reservedPanelFrame)
+    panel.contentView = NotchHosting.view(for: vm)
     panel.orderFrontRegardless()
-    let sink = vm.$panelFrame
-      .removeDuplicates()
-      .sink { [weak panel] frame in
-        guard let panel, panel.frame != frame else { return }
-        panel.setFrame(frame, display: false)
-        vm.setActualPanelFrame(panel.frame)
-      }
+    vm.setActualPanelFrame(panel.frame)
 
     vm.apply(.clickedNotch)  // expand at the base tier
     pump(0.5)
@@ -58,9 +100,9 @@ final class TallTierHostingTests: XCTestCase {
     vm.apply(.clickedOutside)  // collapse cleanly
     pump(0.6)
 
-    _ = sink
-    panel.close()
+    XCTAssertEqual(panel.frame, vm.reservedPanelFrame)
     XCTAssertEqual(vm.expandedHeight, Metrics.expandedSize.height)
+    panel.close()
   }
 
   /// T5 — the tall transition with NO window resize at all: the panel is created big enough for
@@ -69,8 +111,10 @@ final class TallTierHostingTests: XCTestCase {
   func testTallTransitionWithAFixedOversizedWindow() {
     let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
     let panel = NotchPanel(
-      frame: geometry.panelFrame(height: Metrics.tallExpandedHeight).insetBy(dx: -20, dy: -20))
-    panel.contentView = NSHostingView(rootView: NotchRootView(vm: vm))
+      frame: geometry.panelFrame(
+        width: vm.maximumExpandedWidth, height: Metrics.tallExpandedHeight
+      ).insetBy(dx: -20, dy: -20))
+    panel.contentView = NotchHosting.view(for: vm)
     panel.orderFrontRegardless()
 
     vm.apply(.clickedNotch)
@@ -86,10 +130,34 @@ final class TallTierHostingTests: XCTestCase {
     let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
     vm.apply(.clickedNotch)
     vm.setExpandedHeight(Metrics.tallExpandedHeight)
-    let panel = NotchPanel(frame: geometry.panelFrame(height: Metrics.tallExpandedHeight))
-    panel.contentView = NSHostingView(rootView: NotchRootView(vm: vm))
+    let panel = NotchPanel(
+      frame: geometry.panelFrame(
+        width: vm.maximumExpandedWidth, height: Metrics.tallExpandedHeight))
+    panel.contentView = NotchHosting.view(for: vm)
     panel.orderFrontRegardless()
     pump(1.0)
+    panel.close()
+  }
+
+  /// Compact activities resize the drawn island, never its AppKit host. This is the production
+  /// arrangement that prevents a geometry callback from racing NSHostingView's constraint pass.
+  func testCompactWidthChangesSurviveRealHostingInAFixedPanel() {
+    let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
+    let panel = NotchPanel(frame: vm.reservedPanelFrame)
+    let hostingView = NotchHosting.view(for: vm)
+    XCTAssertEqual(hostingView.sizingOptions.rawValue, 0)
+    panel.contentView = hostingView
+    panel.orderFrontRegardless()
+    vm.setActualPanelFrame(panel.frame)
+
+    for width in stride(from: CGFloat(20), through: 260, by: 12) {
+      vm.updateCompactWidths(leading: width, trailing: width / 2)
+      pump(0.01)
+    }
+    pump(0.5)
+
+    XCTAssertEqual(panel.frame, vm.reservedPanelFrame)
+    XCTAssertEqual(vm.actualPanelFrame, panel.frame)
     panel.close()
   }
 }

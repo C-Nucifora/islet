@@ -55,8 +55,8 @@ final class ContinuityMonitor: ObservableObject {
       cardCount: fresh.count)
 
     guard Defaults[.continuitySneaks] else { return }
-    diff.added.forEach { submitSneak(for: $0, appearing: true) }
-    diff.removed.forEach { submitSneak(for: $0, appearing: false) }
+    for card in diff.added { submitSneak(for: card, appearing: true) }
+    for card in diff.removed { submitSneak(for: card, appearing: false) }
   }
 
   private func submitSneak(for card: LiveActivityCard, appearing: Bool) {

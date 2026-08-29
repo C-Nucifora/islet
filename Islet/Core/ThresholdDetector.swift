@@ -15,11 +15,6 @@ struct ThresholdDetector: Equatable {
   let thresholds: [Double]
   let direction: Direction
 
-  init(thresholds: [Double], direction: Direction) {
-    self.thresholds = thresholds
-    self.direction = direction
-  }
-
   /// Thresholds crossed going from `old` to `new`, in the order they were declared. Empty when
   /// `old` is nil — the first sample is a baseline, not a crossing, or every launch would announce
   /// whatever state the machine happened to already be in.

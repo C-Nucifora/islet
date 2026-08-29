@@ -100,7 +100,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     {
       throw T3ClientError.environmentIdentityConflict
     }
-    let incomingCredentialID = isLocal
+    let incomingCredentialID =
+      isLocal
       ? Self.localCredentialID(
         environmentID: descriptor.environmentId,
         baseURL: target.endpoint.baseURL.absoluteString)
@@ -114,7 +115,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
             != incomingCredentialID)
     }) {
       Log.app.error(
-        "Rejected duplicate T3 environment id from \(target.endpoint.baseURL.absoluteString, privacy: .public); already paired with \(existing.baseURL, privacy: .public)")
+        "Rejected duplicate T3 environment id from \(target.endpoint.baseURL.absoluteString, privacy: .public); already paired with \(existing.baseURL, privacy: .public)"
+      )
       throw T3ClientError.environmentIdentityConflict
     }
     if isLocal, !T3LocalDiscovery.isTrusted(target.endpoint) {
@@ -294,7 +296,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
             updateCredentialError(nil, for: "local")
           } catch {
             updateCredentialError(error, for: "local")
-            Log.app.error("Could not remove rejected local T3 credential: \(error.localizedDescription)")
+            Log.app.error(
+              "Could not remove rejected local T3 credential: \(error.localizedDescription)")
           }
         }
       } catch {
@@ -378,7 +381,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       // A successful response ends the outage. Without this callback, a later unrelated failure
       // resumed at the old exponential-backoff ceiling even after days of healthy polling.
       onConnected()
-      let snapshotID = isLocal
+      let snapshotID =
+        isLocal
         ? Self.localSnapshotID(descriptor.environmentId)
         : Self.remoteSnapshotID(
           environmentID: descriptor.environmentId,
@@ -501,7 +505,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   }
 
   nonisolated private static func canonicalEndpointIdentity(_ value: String) -> String {
-    guard let url = URL(string: value), let endpoint = try? T3Endpoint(url, allowInsecureRemoteHTTP: true)
+    guard let url = URL(string: value),
+      let endpoint = try? T3Endpoint(url, allowInsecureRemoteHTTP: true)
     else { return value }
     return endpoint.baseURL.absoluteString
   }

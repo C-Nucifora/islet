@@ -66,7 +66,8 @@ struct AddTimeToIsletTimerIntent: AppIntent {
 
 struct RestartIsletTimerIntent: AppIntent {
   static let title: LocalizedStringResource = "Restart the Last Islet Timer"
-  static let description = IntentDescription("Starts the most recent timer duration and label again.")
+  static let description = IntentDescription(
+    "Starts the most recent timer duration and label again.")
   static let openAppWhenRun = false
 
   @MainActor
@@ -119,7 +120,8 @@ struct PublishPulseEventIntent: AppIntent {
     let payload = PulsePayload(
       id: id, source: "shortcuts", title: eventTitle, subtitle: details,
       symbol: "sparkles", accentHex: "#64D2FF", progress: nil, state: .active,
-      priority: eventPriority.pulseValue, expiresAt: Date().addingTimeInterval(TimeInterval(seconds)),
+      priority: eventPriority.pulseValue,
+      expiresAt: Date().addingTimeInterval(TimeInterval(seconds)),
       actions: nil)
     let center = PulseCenter.shared
     let response = center.applyIfEnabled(
@@ -256,7 +258,8 @@ struct DismissPulseItemsIntent: AppIntent {
     let center = PulseCenter.shared
     let count = center.retainedItemCount
     center.removeAll()
-    return .result(dialog: count == 1 ? "Dismissed one Pulse item." : "Dismissed \(count) Pulse items.")
+    return .result(
+      dialog: count == 1 ? "Dismissed one Pulse item." : "Dismissed \(count) Pulse items.")
   }
 }
 
@@ -305,7 +308,9 @@ struct IsletShortcuts: AppShortcutsProvider {
       systemImageName: "timer")
     AppShortcut(
       intent: ToggleIsletTimerIntent(),
-      phrases: ["Pause the timer in \(.applicationName)", "Resume the timer in \(.applicationName)"],
+      phrases: [
+        "Pause the timer in \(.applicationName)", "Resume the timer in \(.applicationName)",
+      ],
       shortTitle: "Pause Timer",
       systemImageName: "pause.circle")
     AppShortcut(
