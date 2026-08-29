@@ -50,6 +50,10 @@ struct NotchRootView: View {
     !vm.state.isExpanded && compactContent != nil
   }
 
+  private var compactChangeAnimation: Animation {
+    Motion.compactChange(hudVisible: hud.hud != nil)
+  }
+
   /// Slot widths as layout should use them: zero whenever no compact content is drawn, so neither
   /// the offset nor the body size can carry a stale measurement from a slot that isn't on screen.
   private var effectiveCompact: (leading: CGFloat, trailing: CGFloat) {
@@ -117,7 +121,10 @@ struct NotchRootView: View {
     .animation(
       Motion.gated(vm.state.isExpanded ? Motion.opening : Motion.closing), value: vm.state
     )
-    .animation(Motion.gated(Motion.compact), value: compactVisible)
+    .animation(Motion.gated(compactChangeAnimation), value: slotIdentity)
+    .animation(Motion.gated(compactChangeAnimation), value: compactVisible)
+    .animation(Motion.gated(compactChangeAnimation), value: compactLeadingWidth)
+    .animation(Motion.gated(compactChangeAnimation), value: compactTrailingWidth)
     // The panel is only as wide as the island, so it has to know how wide the slots rendered.
     .onChange(of: compactLeadingWidth, initial: true) { _, _ in syncPanelWidths() }
     .onChange(of: compactTrailingWidth) { _, _ in syncPanelWidths() }
@@ -135,7 +142,10 @@ struct NotchRootView: View {
   private var slotIdentity: String {
     if hud.hud != nil { return "hud" }
     if let sneak = sneaks.current { return "sneak-\(sneak.id.uuidString)" }
-    return "activity"
+    let activityIDs = center.activeActivities.map(\.id)
+    if !activityIDs.isEmpty { return "activities-\(activityIDs.joined(separator: "|"))" }
+    if !reminders.reminders.isEmpty { return "reminders-\(reminders.reminders.count)" }
+    return "idle"
   }
 
   /// Accepts a slot measurement only from the subtree that is currently on screen.
@@ -189,7 +199,7 @@ struct NotchRootView: View {
       }
       .frame(height: vm.geometry.notchSize.height)
       .id(identity)
-      .transition(.opacity)
+      .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
     } else {
       Color.clear
     }

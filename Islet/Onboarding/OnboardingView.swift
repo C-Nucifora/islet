@@ -7,6 +7,88 @@ enum OnboardingState {
   static var isComplete: Bool { Defaults[.onboardingVersion] >= currentVersion }
 }
 
+struct LegacyInstallMigrationResult {
+  let importedPreferenceCount: Int
+  let importedCredentialCount: Int
+
+  var summary: String {
+    let settings =
+      importedPreferenceCount == 1 ? "1 setting" : "\(importedPreferenceCount) settings"
+    let credentials =
+      importedCredentialCount == 1
+      ? "1 saved T3 Code pairing" : "\(importedCredentialCount) saved T3 Code pairings"
+    return "Imported \(settings) and \(credentials)."
+  }
+}
+
+enum LegacyInstallMigrationError: LocalizedError {
+  case preferencesVerificationFailed
+
+  var errorDescription: String? {
+    switch self {
+    case .preferencesVerificationFailed:
+      "The imported settings could not be verified. The previous settings were left in place."
+    }
+  }
+}
+
+@MainActor
+enum LegacyInstallMigrator {
+  static let currentBundleIdentifier = "dev.islet"
+
+  static var isAvailable: Bool {
+    hasLegacyPreferences || T3CredentialStore.hasLegacyVault
+  }
+
+  static func merging(
+    current: [String: Any], legacy: [[String: Any]]
+  ) -> [String: Any] {
+    var merged = current
+    for domain in legacy {
+      for (key, value) in domain where merged[key] == nil {
+        merged[key] = value
+      }
+    }
+    return merged
+  }
+
+  static func migrate(defaults: UserDefaults = .standard) throws -> LegacyInstallMigrationResult {
+    let legacyDomains = LegacyInstallIdentifiers.applicationDomains.compactMap {
+      defaults.persistentDomain(forName: $0)
+    }
+    let current = defaults.persistentDomain(forName: currentBundleIdentifier) ?? [:]
+    let merged = merging(current: current, legacy: legacyDomains)
+
+    if !legacyDomains.isEmpty {
+      defaults.setPersistentDomain(merged, forName: currentBundleIdentifier)
+      defaults.synchronize()
+      let written = defaults.persistentDomain(forName: currentBundleIdentifier) ?? [:]
+      guard NSDictionary(dictionary: written).isEqual(to: merged) else {
+        throw LegacyInstallMigrationError.preferencesVerificationFailed
+      }
+    }
+
+    let importedCredentialCount = try T3CredentialStore.migrateLegacyVaults()
+
+    for identifier in LegacyInstallIdentifiers.applicationDomains
+    where defaults.persistentDomain(forName: identifier) != nil {
+      defaults.removePersistentDomain(forName: identifier)
+    }
+    defaults.synchronize()
+    NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
+
+    return LegacyInstallMigrationResult(
+      importedPreferenceCount: merged.count - current.count,
+      importedCredentialCount: importedCredentialCount)
+  }
+
+  private static var hasLegacyPreferences: Bool {
+    LegacyInstallIdentifiers.applicationDomains.contains {
+      !(UserDefaults.standard.persistentDomain(forName: $0) ?? [:]).isEmpty
+    }
+  }
+}
+
 enum OnboardingPreferences {
   static let knownActivityIDs = Set(ActivityCatalog.defaultOrder)
 
@@ -125,6 +207,19 @@ private struct OnboardingActivity: Identifiable {
   ]
 }
 
+private enum LegacyMigrationState {
+  case unavailable
+  case available
+  case migrating
+  case migrated(String)
+  case failed(String)
+
+  var isMigrating: Bool {
+    if case .migrating = self { return true }
+    return false
+  }
+}
+
 private struct OnboardingView: View {
   @Default(.interactionMode) private var interactionMode
   @Default(.hapticsEnabled) private var hapticsEnabled
@@ -137,6 +232,7 @@ private struct OnboardingView: View {
   @State private var selectedActivities: Set<String>
   @State private var remindersEnabled: Bool
   @State private var bluetoothEventsEnabled: Bool
+  @State private var legacyMigrationState: LegacyMigrationState
 
   init() {
     _selectedActivities = State(
@@ -146,6 +242,8 @@ private struct OnboardingView: View {
     _bluetoothEventsEnabled = State(
       initialValue: OnboardingState.isComplete
         && !Defaults[.disabledEventSources].contains("bluetooth"))
+    _legacyMigrationState = State(
+      initialValue: LegacyInstallMigrator.isAvailable ? .available : .unavailable)
   }
 
   var body: some View {
@@ -193,12 +291,12 @@ private struct OnboardingView: View {
   }
 
   private var welcomePage: some View {
-    VStack(spacing: 22) {
+    VStack(spacing: 18) {
       ZStack {
         RoundedRectangle(cornerRadius: 22).fill(.black)
         IsletNotchMarkShape().fill(.white).frame(width: 72, height: 64)
       }
-      .frame(width: 132, height: 112)
+      .frame(width: 118, height: 96)
       VStack(spacing: 8) {
         Text(
           "Islet puts timers, media controls and live system information around the MacBook notch."
@@ -210,8 +308,45 @@ private struct OnboardingView: View {
           .multilineTextAlignment(.center)
       }
       .frame(maxWidth: 500)
+      legacyMigrationCard
     }
-    .padding(36)
+    .padding(28)
+  }
+
+  @ViewBuilder private var legacyMigrationCard: some View {
+    switch legacyMigrationState {
+    case .unavailable:
+      EmptyView()
+    case .available, .migrating:
+      HStack(spacing: 14) {
+        Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
+          .font(.title2).foregroundStyle(.tint)
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Previous Islet setup found").font(.body.weight(.medium))
+          Text("Move its settings and saved T3 Code pairings into this installation.")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        Spacer()
+        Button(legacyMigrationState.isMigrating ? "Importing…" : "Import") {
+          migrateLegacyInstall()
+        }
+        .disabled(legacyMigrationState.isMigrating)
+      }
+      .padding(14)
+      .frame(maxWidth: 540)
+      .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+    case .migrated(let summary):
+      Label(summary, systemImage: "checkmark.circle.fill")
+        .foregroundStyle(.green)
+        .frame(maxWidth: 540, alignment: .leading)
+    case .failed(let message):
+      VStack(alignment: .leading, spacing: 8) {
+        Label(message, systemImage: "exclamationmark.triangle.fill")
+          .foregroundStyle(.orange)
+        Button("Try import again") { migrateLegacyInstall() }
+      }
+      .frame(maxWidth: 540, alignment: .leading)
+    }
   }
 
   private var interactionPage: some View {
@@ -417,6 +552,20 @@ private struct OnboardingView: View {
   private func move(by offset: Int) {
     let next = min(max(page.rawValue + offset, 0), OnboardingPage.allCases.count - 1)
     if let resolved = OnboardingPage(rawValue: next) { page = resolved }
+  }
+
+  private func migrateLegacyInstall() {
+    legacyMigrationState = .migrating
+    do {
+      let result = try LegacyInstallMigrator.migrate()
+      selectedActivities = Set(
+        ActivityCatalog.defaultOrder.filter { OnboardingPreferences.isActivityEnabled($0) })
+      remindersEnabled = Defaults[.remindersEnabled]
+      bluetoothEventsEnabled = !Defaults[.disabledEventSources].contains("bluetooth")
+      legacyMigrationState = .migrated(result.summary)
+    } catch {
+      legacyMigrationState = .failed(error.localizedDescription)
+    }
   }
 
   private func finish() {

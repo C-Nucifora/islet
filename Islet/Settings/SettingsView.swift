@@ -43,7 +43,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     case .integrations:
       "t3 code agents remote media spotify music pulse api cli providers history rules focus shortcuts"
     case .privacy: "calendar reminders accessibility privacy grant denied restricted clipboard"
-    case .advanced: "diagnostics identity version defaults reset"
+    case .advanced: "diagnostics identity version defaults reset about github contributors"
     }
   }
 }
@@ -247,7 +247,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       pageContent + [
         "Diagnostics", "Bundle identifier", "Version", "Energy mode", "Copy diagnostics",
         "Open logs folder", "Quit Islet", "Integration health", "Media adapter",
-        "T3 Code credentials", "Pulse", "Media-key HUD", "signing support status",
+        "T3 Code credentials", "Pulse", "Media-key HUD", "signing support status", "About",
+        "GitHub contributors C-Nucifora nedlane",
       ]
     case .reset:
       pageContent + [
@@ -1373,6 +1374,10 @@ struct SettingsView: View {
           status: hud.lastControlFailure ?? hud.eventTapStatus.summary,
           color: hud.lastControlFailure == nil
             ? (hud.eventTapStatus == .active ? .green : .secondary) : .orange)
+      }
+      Section("About") {
+        Link("C-Nucifora on GitHub", destination: URL(string: "https://github.com/C-Nucifora")!)
+        Link("nedlane on GitHub", destination: URL(string: "https://github.com/nedlane")!)
       }
     }
     .formStyle(.grouped)

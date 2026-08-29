@@ -4,16 +4,22 @@ import XCTest
 
 @MainActor
 final class T3CodeTests: XCTestCase {
-  func testCredentialVaultUsesTheAppIdentity() {
-    XCTAssertEqual(
-      T3CredentialStore.credentialService(for: "dev.cnucifora.Islet"),
-      "dev.cnucifora.islet.t3-code")
-    XCTAssertEqual(
-      T3CredentialStore.credentialService(for: "dev.review.override"),
-      "dev.review.override")
-    XCTAssertEqual(
-      T3CredentialStore.credentialService(for: nil),
-      "dev.cnucifora.islet.t3-code")
+  func testCredentialVaultUsesTheCanonicalService() {
+    XCTAssertEqual(T3CredentialStore.service, "dev.islet")
+  }
+
+  func testCredentialMigrationPreservesCanonicalValuesAndImportsMissingLegacyValues() {
+    let merged = T3CredentialStore.merging(
+      current: ["shared": "current", "current-only": "current-token"],
+      legacy: [
+        ["shared": "old", "first": "first-token"],
+        ["first": "older-token", "second": "second-token"],
+      ])
+
+    XCTAssertEqual(merged["shared"], "current")
+    XCTAssertEqual(merged["current-only"], "current-token")
+    XCTAssertEqual(merged["first"], "first-token")
+    XCTAssertEqual(merged["second"], "second-token")
   }
 
   func testParsesHostedPairingLink() throws {

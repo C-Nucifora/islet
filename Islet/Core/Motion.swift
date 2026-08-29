@@ -8,6 +8,13 @@ enum Motion {
   static let opening: Animation = .bouncy(duration: 0.4)
   static let closing: Animation = .smooth(duration: closingDuration)
   static let compact: Animation = .snappy(duration: 0.4)
+  static let hudAppearing: Animation = .snappy(duration: 0.16)
+
+  /// Media-key feedback should arrive almost immediately. Returning to the underlying compact
+  /// activity uses the normal duration, as do activity lineup changes.
+  static func compactChange(hudVisible: Bool) -> Animation {
+    hudVisible ? hudAppearing : compact
+  }
   /// The panel has to stay oversized until the closing animation has finished drawing — but not a
   /// frame longer, since every extra millisecond is menu bar nobody can click.
   static let panelShrinkDelay: Duration = .milliseconds(Int(closingDuration * 1000) + 32)

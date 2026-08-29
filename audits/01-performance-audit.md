@@ -16,7 +16,7 @@ The “Always show the System stats tab” setting is not, by itself, the primar
 
 ## Live measurements
 
-The live process was the user's existing Debug build at `/Users/nedlane/projects/islet/DerivedData/Build/Products/Debug/Islet.app`. T3 local and remote connections, media playback, battery, Calendar/Reminders, and system metrics were active. These results therefore represent a realistic active background workload, not a clean “all optional features off” idle baseline.
+The live process was the user's existing Debug build from `DerivedData/Build/Products/Debug/Islet.app`. T3 local and remote connections, media playback, battery, Calendar/Reminders, and system metrics were active. These results therefore represent a realistic active background workload, not a clean “all optional features off” idle baseline.
 
 | Measurement | Result | Interpretation |
 |---|---:|---|
