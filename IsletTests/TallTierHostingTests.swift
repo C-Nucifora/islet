@@ -41,7 +41,7 @@ final class TallTierHostingTests: XCTestCase {
   func testTallTierSelectionSurvivesRealHosting() {
     let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
     let panel = NotchPanel(frame: vm.panelFrame)
-    panel.contentView = NSHostingView(rootView: NotchRootView(vm: vm))
+    panel.contentView = NotchHosting.view(for: vm)
     panel.orderFrontRegardless()
     let sink = vm.$panelFrame
       .removeDuplicates()
@@ -72,7 +72,7 @@ final class TallTierHostingTests: XCTestCase {
       frame: geometry.panelFrame(
         width: vm.maximumExpandedWidth, height: Metrics.tallExpandedHeight
       ).insetBy(dx: -20, dy: -20))
-    panel.contentView = NSHostingView(rootView: NotchRootView(vm: vm))
+    panel.contentView = NotchHosting.view(for: vm)
     panel.orderFrontRegardless()
 
     vm.apply(.clickedNotch)
@@ -91,9 +91,37 @@ final class TallTierHostingTests: XCTestCase {
     let panel = NotchPanel(
       frame: geometry.panelFrame(
         width: vm.maximumExpandedWidth, height: Metrics.tallExpandedHeight))
-    panel.contentView = NSHostingView(rootView: NotchRootView(vm: vm))
+    panel.contentView = NotchHosting.view(for: vm)
     panel.orderFrontRegardless()
     pump(1.0)
     panel.close()
+  }
+
+  /// Compact activities resize the AppKit panel from a SwiftUI geometry callback. The hosting view
+  /// must not simultaneously derive min/max window constraints from that animated content.
+  func testCompactWidthChangesSurviveRealHostingWithoutWindowSizingConstraints() {
+    let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
+    let panel = NotchPanel(frame: vm.panelFrame)
+    let hostingView = NotchHosting.view(for: vm)
+    XCTAssertEqual(hostingView.sizingOptions.rawValue, 0)
+    panel.contentView = hostingView
+    panel.orderFrontRegardless()
+    let sink = vm.$panelFrame
+      .removeDuplicates()
+      .sink { [weak panel] frame in
+        guard let panel, panel.frame != frame else { return }
+        panel.setFrame(frame, display: false)
+        vm.setActualPanelFrame(panel.frame)
+      }
+
+    for width in stride(from: CGFloat(20), through: 260, by: 12) {
+      vm.updateCompactWidths(leading: width, trailing: width / 2)
+      pump(0.01)
+    }
+    pump(0.5)
+
+    _ = sink
+    panel.close()
+    XCTAssertEqual(vm.actualPanelFrame, panel.frame)
   }
 }

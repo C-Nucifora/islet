@@ -197,7 +197,7 @@ final class ScreenManager {
       panel.fileURLsDropped = { urls in
         ShelfModel.shared.importDroppedURLs(urls)
       }
-      panel.contentView = NSHostingView(rootView: NotchRootView(vm: vm))
+      panel.contentView = NotchHosting.view(for: vm)
       panel.alphaValue = 0
       panel.orderFrontRegardless()
       panel.setFrame(vm.panelFrame, display: true)

@@ -1,5 +1,17 @@
 import SwiftUI
 
+@MainActor
+enum NotchHosting {
+  static func view(for viewModel: NotchViewModel) -> NSHostingView<NotchRootView> {
+    let hostingView = NSHostingView(rootView: NotchRootView(vm: viewModel))
+    // The panel frame is owned by NotchViewModel. NSHostingView's defaults also derive window
+    // min/max constraints from the animated SwiftUI tree; resizing that same window while AppKit
+    // is updating those constraints throws an uncaught NSException. Disable that second owner.
+    hostingView.sizingOptions = []
+    return hostingView
+  }
+}
+
 struct NotchRootView: View {
   @ObservedObject var vm: NotchViewModel
   @ObservedObject private var center = ActivityCenter.shared
