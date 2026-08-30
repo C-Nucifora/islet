@@ -7,6 +7,29 @@ import XCTest
 final class ShelfLogicTests: XCTestCase {
   private enum CopyFailure: Error { case expected }
 
+  private final class RetryableStorage: @unchecked Sendable {
+    private let lock = NSLock()
+    private var available = false
+
+    func setAvailable(_ available: Bool) {
+      lock.lock()
+      self.available = available
+      lock.unlock()
+    }
+
+    func createDirectory(at _: URL) -> Result<Void, Error> {
+      lock.lock()
+      defer { lock.unlock() }
+      return available ? .success(()) : .failure(CopyFailure.expected)
+    }
+
+    func listDirectory(at _: URL) -> Result<[URL], Error> {
+      lock.lock()
+      defer { lock.unlock() }
+      return available ? .success([]) : .failure(CopyFailure.expected)
+    }
+  }
+
   private actor CopyProbe {
     private var started = false
 
@@ -25,6 +48,48 @@ final class ShelfLogicTests: XCTestCase {
     XCTAssertFalse(ShelfLogic.hasCapacity(currentCount: -1, pendingCount: 0, maximum: 100))
     XCTAssertFalse(ShelfLogic.hasCapacity(currentCount: 0, pendingCount: -1, maximum: 100))
     XCTAssertFalse(ShelfLogic.hasCapacity(currentCount: 0, pendingCount: 0, maximum: 0))
+  }
+
+  @MainActor
+  func testStorageInitializationFailureIsNotAnEmptyShelf() {
+    let model = ShelfModel(
+      directory: URL(fileURLWithPath: "/unavailable-shelf"),
+      createDirectory: { _ in .failure(CopyFailure.expected) },
+      listDirectory: { _ in .success([]) })
+
+    XCTAssertEqual(model.storageFailure, .initialization)
+    XCTAssertFalse(model.isStorageAvailable)
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertTrue(model.canRevealStorageLocation)
+  }
+
+  @MainActor
+  func testStorageListingFailureIsNotAnEmptyShelf() {
+    let model = ShelfModel(
+      directory: URL(fileURLWithPath: "/unreadable-shelf"),
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .failure(CopyFailure.expected) })
+
+    XCTAssertEqual(model.storageFailure, .listing)
+    XCTAssertFalse(model.isStorageAvailable)
+    XCTAssertTrue(model.items.isEmpty)
+  }
+
+  @MainActor
+  func testRetryClearsStorageFailureAfterStorageRecovers() {
+    let storage = RetryableStorage()
+    let model = ShelfModel(
+      directory: URL(fileURLWithPath: "/recoverable-shelf"),
+      createDirectory: storage.createDirectory,
+      listDirectory: storage.listDirectory)
+    XCTAssertEqual(model.storageFailure, .initialization)
+
+    storage.setAvailable(true)
+    model.retryStorage()
+
+    XCTAssertNil(model.storageFailure)
+    XCTAssertTrue(model.isStorageAvailable)
+    XCTAssertTrue(model.items.isEmpty)
   }
 
   func testDropTargetCanLeaveAndReenter() {

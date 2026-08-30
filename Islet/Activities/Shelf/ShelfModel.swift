@@ -9,6 +9,27 @@ struct ShelfItem: Identifiable, Equatable, Sendable {
   var thumbnail: Data?  // PNG; Sendable-friendly so it can cross the QL callback boundary
 }
 
+enum ShelfStorageFailure: Equatable, Sendable {
+  case initialization
+  case listing
+
+  var message: String {
+    switch self {
+    case .initialization:
+      "Shelf storage couldn't be prepared."
+    case .listing:
+      "Shelf storage couldn't be read."
+    }
+  }
+
+  fileprivate var logOperation: String {
+    switch self {
+    case .initialization: "initialization"
+    case .listing: "listing"
+    }
+  }
+}
+
 /// A temporary file tray: dropped files are copied into app storage, thumbnailed, and can be
 /// dragged back out or AirDropped. Persists across launches.
 @MainActor
@@ -22,21 +43,32 @@ final class ShelfModel: ObservableObject {
   }
 
   typealias CopyItem = @Sendable (URL, URL) async -> Result<Void, Error>
+  typealias CreateDirectory = @Sendable (URL) -> Result<Void, Error>
+  typealias ListDirectory = @Sendable (URL) -> Result<[URL], Error>
 
   @Published private(set) var items: [ShelfItem] = []
   @Published private(set) var lastError: String?
+  /// `nil` means the Shelf storage is available. It must not be inferred from an empty item list.
+  @Published private(set) var storageFailure: ShelfStorageFailure?
   @Published private var dropState = ShelfDropState()
   @Published private(set) var presentationRequest: UUID?
 
   private let dir: URL
   private let copyItem: CopyItem
+  private let createDirectory: CreateDirectory
+  private let listDirectory: ListDirectory
   private var reservedDestinations: Set<URL> = []
   private var importQueue: [ImportBatch] = []
   private var importWorker: Task<Void, Never>?
   private var importGeneration: UInt = 0
   private(set) var isClearing = false
 
-  init(directory: URL? = nil, copyItem: CopyItem? = nil) {
+  init(
+    directory: URL? = nil,
+    copyItem: CopyItem? = nil,
+    createDirectory: CreateDirectory? = nil,
+    listDirectory: ListDirectory? = nil
+  ) {
     let base =
       directory
       ?? FileManager.default.urls(
@@ -49,9 +81,24 @@ final class ShelfModel: ObservableObject {
           Result { try FileManager.default.copyItem(at: source, to: destination) }
         }.value
       }
-    try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+    self.createDirectory =
+      createDirectory
+      ?? { directory in
+        Result {
+          try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true)
+        }
+      }
+    self.listDirectory =
+      listDirectory
+      ?? { directory in
+        Result {
+          try FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.contentModificationDateKey])
+        }
+      }
     dir = base
-    load()
+    refreshStorage()
   }
 
   var urls: [URL] { items.map(\.url) }
@@ -60,6 +107,8 @@ final class ShelfModel: ObservableObject {
   /// Keeps the Shelf selected until every provider resolves and every copy finishes.
   var isDropPresentationActive: Bool { dropState.isActive }
   var pendingImportCount: Int { dropState.pendingImportCount }
+  var isStorageAvailable: Bool { storageFailure == nil }
+  var canRevealStorageLocation: Bool { dir.isFileURL }
 
   func setDropTarget(_ id: UUID, active: Bool) {
     dropState.setTarget(id, active: active)
@@ -72,13 +121,51 @@ final class ShelfModel: ObservableObject {
     presentationRequest = nil
   }
 
-  private func load() {
-    let found =
-      (try? FileManager.default.contentsOfDirectory(
-        at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+  func retryStorage() { refreshStorage() }
+
+  func revealStorageLocation() {
+    let location = isStorageAvailable ? dir : dir.deletingLastPathComponent()
+    guard NSWorkspace.shared.open(location) else {
+      lastError = "Couldn't open the Shelf storage location."
+      return
+    }
+    lastError = nil
+  }
+
+  private func refreshStorage() {
+    switch createDirectory(dir) {
+    case .success:
+      break
+    case .failure(let error):
+      setStorageFailure(.initialization, error: error)
+      return
+    }
+
+    switch listDirectory(dir) {
+    case .success(let found):
+      storageFailure = nil
+      lastError = nil
+      setItems(from: found)
+    case .failure(let error):
+      setStorageFailure(.listing, error: error)
+    }
+  }
+
+  private func setItems(from found: [URL]) {
     items = found.sorted { modDate($0) < modDate($1) }
       .map { ShelfItem(id: UUID(), url: $0, name: $0.lastPathComponent, thumbnail: nil) }
     for item in items { generateThumbnail(id: item.id, url: item.url) }
+  }
+
+  private func setStorageFailure(_ failure: ShelfStorageFailure, error: Error) {
+    items = []
+    storageFailure = failure
+    lastError = nil
+
+    let nsError = error as NSError
+    Log.app.error(
+      "Shelf storage \(failure.logOperation, privacy: .public) failed [\(nsError.domain, privacy: .public):\(nsError.code, privacy: .public)]: \(nsError.localizedDescription, privacy: .private)"
+    )
   }
 
   private func modDate(_ url: URL) -> Date {
@@ -100,6 +187,11 @@ final class ShelfModel: ObservableObject {
   ) async -> (item: ShelfItem?, error: String?) {
     if let expectedImportGeneration, expectedImportGeneration != importGeneration {
       return (nil, nil)
+    }
+    guard isStorageAvailable else {
+      let error = "Shelf storage is unavailable."
+      if updatesLastError { lastError = error }
+      return (nil, error)
     }
     guard
       ShelfLogic.hasCapacity(
