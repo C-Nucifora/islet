@@ -52,6 +52,9 @@ final class BatteryMonitor: ObservableObject {
   nonisolated static let stableInterval: TimeInterval = 5 * 60
 
   @Published private(set) var state: BatteryState?
+  /// `state` may briefly retain the last valid UI value. Event detection uses this to distinguish
+  /// that display grace period from a fresh IOPS reading.
+  @Published private(set) var hasFreshState = false
   @Published private(set) var metrics: BatteryMetrics?
   @Published private(set) var peripherals: [PeripheralBattery] = []
 
@@ -80,6 +83,7 @@ final class BatteryMonitor: ObservableObject {
   private var samplingTask: Task<Void, Never>?
   private var lastStableRead: Date?
   private var generation = 0
+  private var stateGracePeriod = BatteryStateGracePeriod()
 
   /// Temperature/power/charger change continuously, so refresh at a human-readable cadence while
   /// a battery view is on screen and slowly otherwise. Charge-source callbacks remain immediate.
@@ -135,9 +139,11 @@ final class BatteryMonitor: ObservableObject {
     // again. The first fresh sample becomes a baseline, so charger/low-battery transitions that
     // occurred while the feature was disabled are not announced after restart.
     state = nil
+    hasFreshState = false
     metrics = nil
     peripherals = []
     lastStableRead = nil
+    stateGracePeriod.reset()
   }
 
   private func setFastMetrics(_ live: Bool) {
@@ -168,8 +174,7 @@ final class BatteryMonitor: ObservableObject {
   /// Every value here is `Equatable`; assigning an unchanged snapshot still redraws the whole
   /// expanded island, so manual/test reads follow the same diff-before-publish policy.
   func refresh() {
-    let freshState = Self.readState()
-    if freshState != state { state = freshState }
+    applyState(Self.readState())
 
     let fresh = SmartBatteryReader.read()
     let smoothed = fresh.map { PowerSmoothing.smooth(metrics, into: $0) }
@@ -222,7 +227,7 @@ final class BatteryMonitor: ObservableObject {
   }
 
   private func apply(_ snapshot: BatteryReadSnapshot, includeStable: Bool) {
-    if snapshot.state != state { state = snapshot.state }
+    applyState(snapshot.state)
 
     var fresh = snapshot.metrics
     if !includeStable, var current = fresh, let previous = metrics {
@@ -238,6 +243,13 @@ final class BatteryMonitor: ObservableObject {
     if includeStable { lastStableRead = Date() }
   }
 
+  private func applyState(_ sample: BatteryState?, now: Date = Date()) {
+    let resolved = stateGracePeriod.resolve(sample, at: now)
+    if resolved != state { state = resolved }
+    let hasFreshState = sample != nil
+    if hasFreshState != self.hasFreshState { self.hasFreshState = hasFreshState }
+  }
+
   nonisolated static func readState() -> BatteryState? {
     guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
       let list = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef]
@@ -247,12 +259,7 @@ final class BatteryMonitor: ObservableObject {
     }
     guard let desc = IOPSPowerSourceSelector.internalBattery(in: descriptions) else { return nil }
 
-    let current = desc[kIOPSCurrentCapacityKey] as? Int ?? 0
-    let max = desc[kIOPSMaxCapacityKey] as? Int ?? 100
-    let charging = desc[kIOPSIsChargingKey] as? Bool ?? false
-    let onAC = (desc[kIOPSPowerSourceStateKey] as? String) == kIOPSACPowerValue
-    let percent = max > 0 ? Int((Double(current) / Double(max) * 100).rounded()) : 0
-    return BatteryState(percent: percent, isCharging: charging, onAC: onAC)
+    return BatteryMetricsParser.batteryState(from: desc)
   }
 }
 
