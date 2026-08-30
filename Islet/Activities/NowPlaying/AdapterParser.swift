@@ -67,7 +67,12 @@ enum AdapterParser {
       state.elapsedAt = Date()
     }
     if let v = payload["artworkData"] as? String {
-      state.artwork = Data(base64Encoded: v)
+      let policy = ArtworkDecodePolicy.standard
+      state.artwork =
+        v.utf8.count <= policy.maximumBase64Characters ? Data(base64Encoded: v) : nil
+      if let artwork = state.artwork, artwork.count > policy.maximumEncodedBytes {
+        state.artwork = nil
+      }
     }
     if payload["artworkData"] is NSNull { state.artwork = nil }
     if let v = payload["shuffleMode"] as? Int { state.shuffleMode = v }

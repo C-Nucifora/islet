@@ -195,6 +195,67 @@ final class ControlCenterSettingsTests: XCTestCase {
   }
 }
 
+final class LiveActivityAXConversionTests: XCTestCase {
+  func testConvertsAXUIElementAfterTypeCheck() throws {
+    let input = AXUIElementCreateSystemWide()
+
+    let output = try LiveActivityAXConversion.element(
+      from: input, attribute: "AXExtrasMenuBar")
+
+    XCTAssertTrue(CFEqual(input, output))
+  }
+
+  func testRejectsWrongCFTypeBeforeConvertingElement() {
+    let value = NSString(string: "not an accessibility element")
+
+    XCTAssertThrowsError(
+      try LiveActivityAXConversion.element(from: value, attribute: "AXExtrasMenuBar")
+    ) { error in
+      XCTAssertEqual(
+        error as? LiveActivityAXCompatibilityError,
+        .unexpectedCFType(
+          attribute: "AXExtrasMenuBar", expected: AXUIElementGetTypeID(),
+          actual: CFGetTypeID(value)))
+    }
+  }
+
+  func testRejectsWrongAXValueSubtypeBeforeReadingRect() throws {
+    var point = CGPoint(x: 12, y: 34)
+    let value = try XCTUnwrap(AXValueCreate(.cgPoint, &point))
+
+    XCTAssertThrowsError(
+      try LiveActivityAXConversion.rect(from: value, attribute: "AXFrame")
+    ) { error in
+      XCTAssertEqual(
+        error as? LiveActivityAXCompatibilityError,
+        .unexpectedAXValueType(
+          attribute: "AXFrame", expected: AXValueType.cgRect.rawValue,
+          actual: AXValueType.cgPoint.rawValue))
+    }
+  }
+
+  func testRejectsWrongCFTypeBeforeConvertingAXValue() {
+    let value = NSString(string: "not an accessibility value")
+
+    XCTAssertThrowsError(
+      try LiveActivityAXConversion.rect(from: value, attribute: "AXFrame")
+    ) { error in
+      XCTAssertEqual(
+        error as? LiveActivityAXCompatibilityError,
+        .unexpectedCFType(
+          attribute: "AXFrame", expected: AXValueGetTypeID(), actual: CFGetTypeID(value)))
+    }
+  }
+
+  func testReadsCGRectAXValue() throws {
+    var input = CGRect(x: 10, y: 20, width: 300, height: 40)
+    let value = try XCTUnwrap(AXValueCreate(.cgRect, &input))
+
+    XCTAssertEqual(
+      try LiveActivityAXConversion.rect(from: value, attribute: "AXFrame"), input)
+  }
+}
+
 /// Exercises the real accessibility read against the running ControlCenter.
 ///
 /// Everything above is pure and would keep passing if macOS renamed `AXExtrasMenuBar`, changed the
@@ -209,7 +270,7 @@ final class LiveActivityAXReaderIntegrationTests: XCTestCase {
     guard AccessibilityPermission.isTrusted else {
       throw XCTSkip("Accessibility not granted to the test host")
     }
-    let items = LiveActivityAXReader.shared.read()
+    let items = try LiveActivityAXReader.shared.read()
     let reachable = try XCTUnwrap(
       items, "ControlCenter is running but exposed no AXExtrasMenuBar — the attribute has moved")
 

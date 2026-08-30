@@ -90,7 +90,8 @@ struct ExpandedPlayerView: View {
   /// the ceiling of the non-fork approach, and it is why the design spec's "Upgrade path — fork the
   /// MediaRemote adapter for true per-source media" section exists.
   private var sourceStrip: some View {
-    let layout = SourceStrip.layout(activity.strip)
+    let layout = MediaSourceChooser.layout(
+      primary: activity.primaryKey, secondary: activity.strip)
     return HStack(spacing: 6) {
       ForEach(layout.shown, id: \.self) { source in
         Button {
@@ -99,21 +100,72 @@ struct ExpandedPlayerView: View {
           chip(source)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(
-          "Switch to \(activity.sourceName(for: source))")
+        .accessibilityLabel(activity.sourceAccessibilityLabel(for: source, isPrimary: false))
+        .accessibilityHint(activity.sourceSelectionAccessibilityHint(for: source))
       }
-      if layout.overflow > 0 {
-        Text("+\(layout.overflow)")
-          .font(.caption2.weight(.semibold)).monospacedDigit()
-          .foregroundStyle(.secondary)
-          .padding(.horizontal, 6)
-          .frame(height: 22)
-          .background(Capsule().fill(.white.opacity(0.08)))
-          .accessibilityLabel("\(layout.overflow) more sources")
+      if !layout.hidden.isEmpty {
+        sourceChooser(layout)
       }
       Spacer(minLength: 0)
     }
     .frame(height: 22)
+  }
+
+  @ViewBuilder
+  private func sourceChooser(_ layout: MediaSourceChooser.Layout) -> some View {
+    Menu {
+      if let primary = layout.primary {
+        Section("Primary source") {
+          sourceChooserRow(primary, isPrimary: true)
+            .accessibilityLabel(activity.sourceAccessibilityLabel(for: primary, isPrimary: true))
+        }
+      }
+      Section("More sources") {
+        ForEach(layout.hidden, id: \.self) { source in
+          Button {
+            activity.promote(source)
+          } label: {
+            sourceChooserRow(source, isPrimary: false)
+          }
+          .accessibilityLabel(activity.sourceAccessibilityLabel(for: source, isPrimary: false))
+          .accessibilityHint(activity.sourceSelectionAccessibilityHint(for: source))
+        }
+      }
+    } label: {
+      Text("+\(layout.hidden.count)")
+        .font(.caption2.weight(.semibold)).monospacedDigit()
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 6)
+        .frame(height: 22)
+        .background(Capsule().fill(.white.opacity(0.08)))
+    }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .fixedSize()
+    .accessibilityLabel("Choose from \(layout.hidden.count) more sources")
+    .accessibilityHint("Opens a list of additional media sources")
+  }
+
+  private func sourceChooserRow(_ source: SourceID, isPrimary: Bool) -> some View {
+    let isPlaying = activity.sources[source]?.isPlaying ?? true
+    return HStack(spacing: 8) {
+      if let icon = activity.sourceIcon(for: source) {
+        Image(nsImage: icon).resizable().frame(width: 16, height: 16)
+      } else {
+        Image(systemName: "speaker.wave.2.fill").frame(width: 16, height: 16)
+      }
+      VStack(alignment: .leading, spacing: 1) {
+        Text(activity.sourceName(for: source))
+        Text(isPlaying ? "Playing" : "Paused")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      if isPrimary {
+        Text("Primary")
+          .font(.caption.weight(.medium))
+          .foregroundStyle(.secondary)
+      }
+    }
   }
 
   private func chip(_ source: SourceID) -> some View {
@@ -153,6 +205,9 @@ struct ExpandedPlayerView: View {
   private func scrubber(_ pb: PlaybackState) -> some View {
     // Only tick while actually playing; a paused track's position is fixed, so no redraw is needed.
     TimelineView(.animation(minimumInterval: 0.5, paused: pb.isPlaying == false)) { _ in
+      let elapsedText = MediaDurationFormatter.string(
+        for: scrubbing ? scrubValue : pb.currentElapsed)
+      let durationText = MediaDurationFormatter.string(for: pb.duration)
       VStack(spacing: 2) {
         Slider(
           value: Binding(
@@ -164,12 +219,11 @@ struct ExpandedPlayerView: View {
           if !editing { MediaRemoteCommands.shared.seek(to: scrubValue) }
         }
         .accessibilityLabel("Playback position")
-        .accessibilityValue(
-          "\(format(scrubbing ? scrubValue : pb.currentElapsed)) of \(format(pb.duration))")
+        .accessibilityValue("\(elapsedText) of \(durationText)")
         HStack {
-          Text(format(pb.currentElapsed)).monospacedDigit()
+          Text(elapsedText).monospacedDigit()
           Spacer()
-          Text(format(pb.duration)).monospacedDigit()
+          Text(durationText).monospacedDigit()
         }
         .font(.caption2).foregroundStyle(.secondary)
       }
@@ -223,11 +277,48 @@ struct ExpandedPlayerView: View {
     .disabled(pb.isAdvertisement)
     .opacity(pb.isAdvertisement ? 0.4 : 1)
   }
+}
 
-  private func format(_ t: TimeInterval) -> String {
-    guard t.isFinite else { return "0:00" }
-    let s = max(0, Int(t.rounded()))
-    return String(format: "%d:%02d", s / 60, s % 60)
+enum MediaDurationFormatter {
+  static func string(for duration: TimeInterval, locale: Locale = .current) -> String {
+    guard duration.isFinite else {
+      let zero = localizedInteger(0, locale: locale)
+      let paddedZero = localizedInteger(0, minimumDigits: 2, locale: locale)
+      return "\(zero):\(paddedZero)"
+    }
+
+    let roundedSeconds = max(0, duration.rounded())
+    let seconds = Int(roundedSeconds.truncatingRemainder(dividingBy: 60))
+    let minutes = Int((roundedSeconds / 60).truncatingRemainder(dividingBy: 60))
+
+    if roundedSeconds < 3_600 {
+      let minutesText = localizedInteger(minutes, locale: locale)
+      let secondsText = localizedInteger(seconds, minimumDigits: 2, locale: locale)
+      return "\(minutesText):\(secondsText)"
+    }
+
+    let hours = (roundedSeconds / 3_600).rounded(.down)
+    let hoursText = localizedNumber(hours, locale: locale)
+    let minutesText = localizedInteger(minutes, minimumDigits: 2, locale: locale)
+    let secondsText = localizedInteger(seconds, minimumDigits: 2, locale: locale)
+    return "\(hoursText):\(minutesText):\(secondsText)"
   }
 
+  private static func localizedInteger(
+    _ value: Int, minimumDigits: Int = 1, locale: Locale
+  ) -> String {
+    localizedNumber(Double(value), minimumDigits: minimumDigits, locale: locale)
+  }
+
+  private static func localizedNumber(
+    _ value: Double, minimumDigits: Int = 1, locale: Locale
+  ) -> String {
+    let formatter = NumberFormatter()
+    formatter.locale = locale
+    formatter.numberStyle = .decimal
+    formatter.usesGroupingSeparator = false
+    formatter.minimumIntegerDigits = minimumDigits
+    formatter.maximumFractionDigits = 0
+    return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.0f", value)
+  }
 }

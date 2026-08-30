@@ -1,6 +1,70 @@
 import Defaults
 import SwiftUI
 
+/// Display values for the two thermal readings shown by the System activity.
+///
+/// macOS reports system-wide thermal pressure as a state. The battery temperature comes from a
+/// separate hardware sensor, so this model keeps their labels and availability independent.
+struct SystemThermalPresentation: Equatable, Sendable {
+  enum Pressure: Equatable, Sendable {
+    case nominal
+    case fair
+    case serious
+    case critical
+    case unavailable
+
+    init(rawValue: Int?) {
+      switch rawValue {
+      case 0: self = .nominal
+      case 1: self = .fair
+      case 2: self = .serious
+      case 3: self = .critical
+      default: self = .unavailable
+      }
+    }
+
+    var name: String {
+      switch self {
+      case .nominal: "nominal"
+      case .fair: "fair"
+      case .serious: "serious"
+      case .critical: "critical"
+      case .unavailable: "unavailable"
+      }
+    }
+  }
+
+  let pressure: Pressure
+  let batteryTemperatureC: Double?
+
+  init(thermalState: Int?, batteryTemperatureC: Double?) {
+    pressure = Pressure(rawValue: thermalState)
+    self.batteryTemperatureC = batteryTemperatureC?.isFinite == true ? batteryTemperatureC : nil
+  }
+
+  var pressureText: String { "System: \(pressure.name)" }
+
+  var batteryTemperatureText: String {
+    guard let batteryTemperatureC else { return "Battery: unavailable" }
+    return String(format: "Battery: %.1f °C", batteryTemperatureC)
+  }
+
+  var accessibilityValue: String {
+    let battery: String
+    if let batteryTemperatureC {
+      battery = String(format: "Battery temperature %.1f degrees Celsius.", batteryTemperatureC)
+    } else {
+      battery = "Battery temperature unavailable."
+    }
+    return
+      "System thermal pressure \(pressure.name). \(battery) The readings do not map directly."
+  }
+
+  static let helpText =
+    "System thermal pressure and battery sensor temperature are separate readings and do not map "
+    + "directly."
+}
+
 /// The System tab's readout.
 ///
 /// ```
@@ -9,7 +73,7 @@ import SwiftUI
 /// RAM   14.2 / 36 GB  ▃▃▄▄▄▅▅▅   wired 4.2   swap 12 MB
 /// Disk  ↓ 1.2 MB/s  ↑ 340 KB/s   412 GB free
 /// Net   ↓ 8.4 Mb/s  ↑ 1.1 Mb/s   en0
-/// Therm nominal   31.2 °C
+/// Therm System: nominal   Battery: 31.2 °C
 /// ```
 ///
 /// The trailing detail on each row is shown only for `.combined` — that is what makes it the
@@ -118,14 +182,19 @@ struct SystemExpandedView: View {
   }
 
   private var thermalRow: some View {
-    row(
-      "Therm", kind: .thermal, fraction: nil, text: thermalName(sample.thermalState),
+    let presentation = SystemThermalPresentation(
+      thermalState: sample.thermalState,
+      batteryTemperatureC: sample.batteryTemperatureC)
+    return row(
+      "Therm", kind: .thermal, fraction: nil, text: presentation.pressureText,
       scale: .fixed(min: 0, max: 1)
     ) {
-      if let temperature = sample.batteryTemperatureC {
-        detail(String(format: "%.1f °C", temperature))
-      }
+      detail(presentation.batteryTemperatureText)
     }
+    .help(SystemThermalPresentation.helpText)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Thermal readings")
+    .accessibilityValue(presentation.accessibilityValue)
   }
 
   // MARK: - Row scaffold
@@ -199,16 +268,6 @@ struct SystemExpandedView: View {
     if bits >= 1_000_000 { return String(format: "%.1f Mb/s", bits / 1_000_000) }
     if bits >= 1_000 { return String(format: "%.0f Kb/s", bits / 1_000) }
     return String(format: "%.0f b/s", bits)
-  }
-
-  private func thermalName(_ raw: Int?) -> String {
-    switch raw {
-    case 0: "nominal"
-    case 1: "fair"
-    case 2: "serious"
-    case 3: "critical"
-    default: "—"
-    }
   }
 }
 

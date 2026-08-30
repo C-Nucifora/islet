@@ -51,6 +51,7 @@ enum AppState {
   /// `SourceCatalog` regardless.
   /// Named so the shelf's share observer can report completions into it.
   static let airdropOut = AirDropOutEventSource()
+  static let focus = FocusEventSource()
 
   static let eventSources: [any SystemEventSource] = [
     PortEventSource(),
@@ -65,7 +66,7 @@ enum AppState {
     ScreenshotEventSource(),
     airdropOut,
     AirDropInEventSource(),
-    FocusEventSource(),
+    focus,
     VPNEventSource(),
   ]
 }

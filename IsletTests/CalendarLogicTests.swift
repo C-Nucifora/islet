@@ -79,30 +79,101 @@ final class CalendarLogicTests: XCTestCase {
       ["all-day", "future"])
   }
 
-  func testMeetingLinksRecognizeGenericCorporateJoinRoutes() throws {
-    XCTAssertTrue(
-      CalendarActivity.isMeetingLink(
-        try XCTUnwrap(URL(string: "https://collab.example.org/meeting/team-sync"))))
-    XCTAssertTrue(
-      CalendarActivity.isMeetingLink(
-        try XCTUnwrap(URL(string: "https://video.example.org/r/opaque-token"))))
-    XCTAssertTrue(
-      CalendarActivity.isMeetingLink(
-        try XCTUnwrap(URL(string: "facetime://person@example.com"))))
+  func testKnownProviderLinksOpenWithoutConfirmation() throws {
+    let links = [
+      "https://zoom.us/j/123456789",
+      "https://meet.google.com/abc-defg-hij",
+      "https://company.webex.com/meet/person",
+      "https://8x8.vc/company/team-room",
+    ]
+
+    for value in links {
+      let url = try XCTUnwrap(URL(string: value))
+      let candidate = try XCTUnwrap(CalendarMeetingLinkPolicy.candidate(url))
+      XCTAssertFalse(candidate.trust.requiresConfirmation)
+    }
   }
 
-  func testMeetingLinksRejectOrdinaryAndSpoofedWebLinks() throws {
-    XCTAssertFalse(
-      CalendarActivity.isMeetingLink(
-        try XCTUnwrap(URL(string: "https://example.org/project/status"))))
-    XCTAssertFalse(
-      CalendarActivity.isMeetingLink(
-        try XCTUnwrap(URL(string: "https://zoom.us.attacker.example/path"))))
-    XCTAssertFalse(
-      CalendarActivity.isMeetingLink(
-        try XCTUnwrap(URL(string: "javascript:alert(1)"))))
-    XCTAssertFalse(
-      CalendarActivity.isMeetingLink(
-        try XCTUnwrap(URL(string: "http://meet.example.org/join/123"))))
+  func testKnownProviderMatchingRejectsDeceptiveDomains() throws {
+    let deceptive = [
+      "https://zoom.us.attacker.example/j/123",
+      "https://notzoom.us/j/123",
+      "https://teams.microsoft.com.attacker.example/l/meetup-join/123",
+      "https://meet.google.com.attacker.example/abc-defg-hij",
+      "https://video.zoom.us.attacker.example/room/123",
+    ]
+
+    for value in deceptive {
+      let url = try XCTUnwrap(URL(string: value))
+      XCTAssertNil(CalendarMeetingLinkPolicy.candidate(url))
+    }
+  }
+
+  func testPathOnlyMeetingMarkersAreNotCandidates() throws {
+    let pathOnly = [
+      "https://example.org/meeting/team-sync",
+      "https://example.org/join/123",
+      "https://example.org/project?meeting_id=123",
+    ]
+
+    for value in pathOnly {
+      let url = try XCTUnwrap(URL(string: value))
+      XCTAssertNil(CalendarMeetingLinkPolicy.candidate(url))
+    }
+  }
+
+  func testCredentialBearingWebLinksAreRejected() throws {
+    let links = [
+      "https://person@zoom.us/j/123",
+      "https://person:secret@meet.example.org/opaque",
+      "facetime://person:secret@example.com",
+    ]
+
+    for value in links {
+      let url = try XCTUnwrap(URL(string: value))
+      XCTAssertNil(CalendarMeetingLinkPolicy.candidate(url))
+    }
+  }
+
+  func testEnterpriseMeetingHostRequiresConfirmation() throws {
+    let url = try XCTUnwrap(URL(string: "https://video.corp.example/r/opaque-token"))
+    let candidate = try XCTUnwrap(CalendarMeetingLinkPolicy.candidate(url))
+
+    XCTAssertEqual(candidate.trust, .unrecognized(host: "video.corp.example"))
+    XCTAssertTrue(candidate.trust.requiresConfirmation)
+  }
+
+  func testStructuredEventURLIsPreferredAndRequiresConfirmationWhenUnknown() throws {
+    let structured = try XCTUnwrap(URL(string: "https://video.corp.example/session/opaque"))
+    let knownProvider = try XCTUnwrap(URL(string: "https://zoom.us/j/123"))
+
+    XCTAssertEqual(
+      CalendarActivity.selectJoinURL(
+        structuredURL: structured, detectedURLs: [knownProvider]),
+      structured)
+    XCTAssertEqual(
+      CalendarMeetingLinkPolicy.candidate(structured)?.trust,
+      .unrecognized(host: "video.corp.example"))
+  }
+
+  func testFaceTimeLinksRemainDirectNativeCalls() throws {
+    let url = try XCTUnwrap(URL(string: "facetime://person@example.com"))
+    let candidate = try XCTUnwrap(CalendarMeetingLinkPolicy.candidate(url))
+
+    XCTAssertEqual(candidate.trust, .nativeCall)
+    XCTAssertFalse(candidate.trust.requiresConfirmation)
+  }
+
+  func testUnsupportedAndInsecureSchemesAreRejected() throws {
+    let links = [
+      "https://example.org/project/status",
+      "javascript:alert(1)",
+      "http://meet.example.org/join/123",
+    ]
+
+    for value in links {
+      let url = try XCTUnwrap(URL(string: value))
+      XCTAssertNil(CalendarMeetingLinkPolicy.candidate(url))
+    }
   }
 }

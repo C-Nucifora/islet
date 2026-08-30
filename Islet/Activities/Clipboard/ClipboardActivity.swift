@@ -177,13 +177,7 @@ final class ClipboardModel: ObservableObject {
   func start() {
     guard !isRunning else { return }
     isRunning = true
-    if Defaults[.clipboardEnabled] { startPolling() }
-    Defaults.publisher(.clipboardEnabled)
-      .dropFirst()
-      .sink { [weak self] change in
-        if change.newValue { self?.startPolling() } else { self?.stopPolling() }
-      }
-      .store(in: &cancellables)
+    startPolling()
   }
 
   func stop() {
@@ -338,7 +332,7 @@ final class ClipboardActivity: NotchActivity, ObservableObject {
   private var cancellables: Set<AnyCancellable> = []
   private var isMonitoring = false
 
-  var isActive: Bool { Defaults[.clipboardEnabled] && !model.items.isEmpty }
+  var isActive: Bool { !model.items.isEmpty }
 
   func start() {
     guard !isMonitoring else { return }
