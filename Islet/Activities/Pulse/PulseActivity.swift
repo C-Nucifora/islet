@@ -59,6 +59,7 @@ private struct PulseCompactIcon: View {
 
 struct PulseExpandedView: View {
   @ObservedObject var center: PulseCenter
+  @ObservedObject private var contextRules = ContextRuleCenter.shared
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -95,6 +96,15 @@ struct PulseExpandedView: View {
         .fixedSize()
         .accessibilityLabel("Pulse delivery and stack actions")
         .help("Pulse delivery: \(center.deliveryProfile.title)")
+      }
+      if let title = contextRules.resolution.title,
+        let reason = contextRules.resolution.reason
+      {
+        Label("\(title): \(reason)", systemImage: "switch.2")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .help("Active context rule: \(title). \(reason)")
       }
       ScrollView(.vertical, showsIndicators: false) {
         LazyVStack(spacing: 6) {

@@ -249,7 +249,7 @@ enum PulseOperation: String, Codable, Sendable {
 /// Persisted delivery rules. Providers still receive a successful response when a rule
 /// suppresses an item, which lets focus modes remain an Islet concern rather than something each
 /// integration has to understand.
-enum PulseDeliveryProfile: String, CaseIterable, Identifiable, Sendable {
+enum PulseDeliveryProfile: String, CaseIterable, Codable, Identifiable, Sendable {
   case everything
   case focused
   case criticalOnly

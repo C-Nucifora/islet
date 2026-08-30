@@ -64,6 +64,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
   case appearance
   case interaction
   case energy
+  case contextRules
   case activityOrder
   case calendarReminders
   case nowPlaying
@@ -87,6 +88,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .appearance: "Appearance"
     case .interaction: "Interaction"
     case .energy: "Energy"
+    case .contextRules: "Context rules"
     case .activityOrder: "Activity order"
     case .calendarReminders: "Calendar and reminders"
     case .nowPlaying: "Now playing"
@@ -110,6 +112,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .appearance: "Choose the colours used across Islet"
     case .interaction: "How the notch opens and closes"
     case .energy: "Refresh rates, sleep and battery protection"
+    case .contextRules: "Adapt Islet to your current context"
     case .activityOrder: "Show, hide and reorder activities"
     case .calendarReminders: "Agenda, countdown and reminder options"
     case .nowPlaying: "Choose which active player opens first"
@@ -133,6 +136,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .appearance: "paintpalette"
     case .interaction: "cursorarrow.motionlines"
     case .energy: "leaf"
+    case .contextRules: "switch.2"
     case .activityOrder: "list.number"
     case .calendarReminders: "calendar.badge.clock"
     case .nowPlaying: "music.note"
@@ -152,7 +156,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
 
   var category: SettingsCategory {
     switch self {
-    case .startupDisplays, .appearance, .interaction, .energy: .general
+    case .startupDisplays, .appearance, .interaction, .energy, .contextRules: .general
     case .activityOrder, .calendarReminders, .nowPlaying, .continuity, .systemMetrics, .clipboard,
       .systemHUD:
       .activities
@@ -191,6 +195,13 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "Power Protect", "Stop on low battery", "Indefinitely",
         "prevent idle system sleep display sleep assertions closed clamshell session timer",
         "refresh rates hidden activity remote T3 polling performance battery",
+      ]
+    case .contextRules:
+      pageContent + [
+        "Context rules", "Focus mode", "power source", "AC battery", "Low Power Mode",
+        "frontmost app", "fullscreen presentation", "time range", "active display",
+        "Wi-Fi network", "Pulse delivery", "activity visibility", "manual override",
+        "precedence active rule match reason expiry local deterministic",
       ]
     case .activityOrder:
       pageContent + [
@@ -722,7 +733,7 @@ struct SettingsView: View {
   @ViewBuilder private var categoryView: some View {
     switch selection ?? .general {
     case .general:
-      settingsLanding(pages: [.startupDisplays, .appearance, .interaction, .energy])
+      settingsLanding(pages: [.startupDisplays, .appearance, .interaction, .energy, .contextRules])
     case .activities:
       settingsLanding(pages: [
         .activityOrder, .calendarReminders, .nowPlaying, .continuity, .systemMetrics,
@@ -745,6 +756,7 @@ struct SettingsView: View {
     case .appearance: appearanceForm
     case .interaction: interactionForm
     case .energy: energyForm
+    case .contextRules: ContextRulesSettingsView()
     case .activityOrder: activityOrderForm
     case .calendarReminders: calendarRemindersForm
     case .nowPlaying: nowPlayingForm
