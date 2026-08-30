@@ -276,9 +276,9 @@ final class ClipboardModel: ObservableObject {
   }
 
   @discardableResult
-  func copyBack(_ item: ClipboardItem) -> Bool {
+  func copyBack(_ item: ClipboardItem) async -> Bool {
     let pb = pasteboard
-    let succeeded = ClipboardPasteboardTransaction.replace(on: pb) {
+    let succeeded = await ClipboardPasteboardTransaction.replace(on: pb) {
       switch item.kind {
       case .text(let s): pb.setString(s, forType: .string)
       case .fileURLs(let urls): ClipboardFileURLs.write(urls, to: pb)
@@ -406,23 +406,102 @@ enum ClipboardFileURLs {
 }
 
 enum ClipboardPasteboardTransaction {
-  /// NSPasteboard requires clearing before a write. Clone the current items first and restore them
-  /// if the replacement is rejected so a failed history action never destroys the user's clipboard.
-  static func replace(on pasteboard: NSPasteboard, write: () -> Bool) -> Bool {
-    let previous = (pasteboard.pasteboardItems ?? []).map { source in
-      let copy = NSPasteboardItem()
-      for type in source.types {
-        if let data = source.data(forType: type) { copy.setData(data, forType: type) }
-      }
-      return copy
+  static let maximumItemCount = 64
+  static let maximumTypeCount = 256
+  static let maximumTypesPerItem = 64
+  static let maximumTypeIdentifierBytes = 4 * 1024
+  static let maximumSnapshotBytes = 32 * 1024 * 1024
+
+  private struct Representation: Sendable {
+    let typeRawValue: String
+    let data: Data
+  }
+
+  private struct PreparedRollback: Sendable {
+    let changeCount: Int
+    let items: [[Representation]]
+  }
+
+  /// NSPasteboard requires clearing before a write. Prepare a complete, bounded rollback first.
+  /// AppKit marks pasteboard access as sendable, so reading promised data and building the copies
+  /// happens away from the main actor. Type and item checks run before asking lazy providers for
+  /// bytes. Once materialization starts, every representation is required for an exact rollback.
+  @MainActor
+  static func replace(on pasteboard: NSPasteboard, write: @MainActor () -> Bool) async -> Bool {
+    let expectedChangeCount = pasteboard.changeCount
+    let pasteboardName = pasteboard.name
+    let previous = await Task.detached(priority: .userInitiated) {
+      prepareRollback(
+        from: NSPasteboard(name: pasteboardName), expectedChangeCount: expectedChangeCount)
+    }.value
+    guard !Task.isCancelled, let previous, pasteboard.changeCount == previous.changeCount else {
+      return false
     }
+    guard let rollbackItems = makePasteboardItems(from: previous) else { return false }
+
     pasteboard.clearContents()
     guard write() else {
       pasteboard.clearContents()
-      if !previous.isEmpty { _ = pasteboard.writeObjects(previous) }
+      if !rollbackItems.isEmpty { _ = pasteboard.writeObjects(rollbackItems) }
       return false
     }
     return true
+  }
+
+  private nonisolated static func prepareRollback(
+    from pasteboard: NSPasteboard, expectedChangeCount: Int
+  ) -> PreparedRollback? {
+    guard pasteboard.changeCount == expectedChangeCount else { return nil }
+    guard let sourceItems = pasteboard.pasteboardItems else { return nil }
+    guard sourceItems.count <= maximumItemCount else { return nil }
+
+    var typeCount = 0
+    for source in sourceItems {
+      guard !source.types.isEmpty, source.types.count <= maximumTypesPerItem else { return nil }
+      guard typeCount <= maximumTypeCount - source.types.count else { return nil }
+      typeCount += source.types.count
+      guard
+        source.types.allSatisfy({
+          $0.rawValue.lengthOfBytes(using: .utf8) <= maximumTypeIdentifierBytes
+        })
+      else { return nil }
+    }
+
+    var byteCount = 0
+    var rollbackItems: [[Representation]] = []
+    rollbackItems.reserveCapacity(sourceItems.count)
+    for source in sourceItems {
+      var representations: [Representation] = []
+      representations.reserveCapacity(source.types.count)
+      for type in source.types {
+        guard let data = source.data(forType: type),
+          data.count <= maximumSnapshotBytes - byteCount
+        else { return nil }
+        byteCount += data.count
+        representations.append(Representation(typeRawValue: type.rawValue, data: data))
+      }
+      rollbackItems.append(representations)
+    }
+    guard pasteboard.changeCount == expectedChangeCount else { return nil }
+    return PreparedRollback(changeCount: expectedChangeCount, items: rollbackItems)
+  }
+
+  @MainActor
+  private static func makePasteboardItems(from snapshot: PreparedRollback) -> [NSPasteboardItem]? {
+    var items: [NSPasteboardItem] = []
+    items.reserveCapacity(snapshot.items.count)
+    for representations in snapshot.items {
+      let item = NSPasteboardItem()
+      for representation in representations {
+        guard
+          item.setData(
+            representation.data,
+            forType: NSPasteboard.PasteboardType(rawValue: representation.typeRawValue))
+        else { return nil }
+      }
+      items.append(item)
+    }
+    return items
   }
 }
 
@@ -526,7 +605,7 @@ struct ClipboardView: View {
             ForEach(model.items) { item in
               HStack(spacing: 4) {
                 Button {
-                  _ = model.copyBack(item)
+                  Task { _ = await model.copyBack(item) }
                 } label: {
                   HStack(spacing: 8) {
                     Image(systemName: item.icon).font(.caption2).appThemeForeground(.clipboard)
