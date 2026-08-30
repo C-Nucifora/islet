@@ -297,6 +297,13 @@ extension Defaults.Keys {
     "systemAutoPresentDiskThroughput", default: true)
   static let systemAutoPresentNetworkThroughput = Key<Bool>(
     "systemAutoPresentNetworkThroughput", default: true)
+  static let processAttributionEnabled = Key<Bool>("processAttributionEnabled", default: true)
+  static let processCPUThreshold = Key<Double>("processCPUThreshold", default: 0.8)
+  static let processMemoryThreshold = Key<Double>("processMemoryThreshold", default: 0.9)
+  static let processDiskThresholdMBPerSecond = Key<Double>(
+    "processDiskThresholdMBPerSecond", default: 50)
+  static let processNetworkThresholdMBPerSecond = Key<Double>(
+    "processNetworkThresholdMBPerSecond", default: 25)
   /// Keyed by `SystemMetricKind.rawValue`, valued by `MetricDisplayStyle.rawValue`. Stored as
   /// strings so an unknown value from a future build resolves to the fallback instead of failing
   /// to decode the whole dictionary.
