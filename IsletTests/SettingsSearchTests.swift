@@ -20,7 +20,7 @@ final class SettingsSearchTests: XCTestCase {
       .t3Code: "pairing keychain",
       .pulse: "clear history",
       .permissions: "location wifi names",
-      .diagnostics: "open logs folder",
+      .diagnostics: "restart islet",
       .reset: "restore appearance",
     ]
 

@@ -10,6 +10,24 @@ final class MediaWatcherTests: XCTestCase {
     XCTAssertEqual(MediaWatcher.backoffDelay(failureCount: 10), 60)
   }
 
+  func testInitialSnapshotIsRejectedAfterIdleStreamRecord() {
+    XCTAssertFalse(
+      MediaWatcher.shouldAcceptInitialSnapshot(
+        streamHasEmittedRecord: true, currentSource: nil))
+  }
+
+  func testInitialSnapshotIsAcceptedBeforeAnyStreamRecord() {
+    XCTAssertTrue(
+      MediaWatcher.shouldAcceptInitialSnapshot(
+        streamHasEmittedRecord: false, currentSource: nil))
+  }
+
+  func testInitialSnapshotIsRejectedWhenStreamHasCurrentSource() {
+    XCTAssertFalse(
+      MediaWatcher.shouldAcceptInitialSnapshot(
+        streamHasEmittedRecord: false, currentSource: key("com.spotify.client", 1)))
+  }
+
   func key(_ bundle: String, _ pid: Int32) -> SourceID {
     SourceID(bundleIdentifier: bundle, pid: pid, parentBundleIdentifier: "")
   }
