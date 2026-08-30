@@ -88,6 +88,46 @@ final class ShelfLogicTests: XCTestCase {
     XCTAssertFalse(ShelfLogic.hasCapacity(currentCount: 0, pendingCount: 0, maximum: 0))
   }
 
+  func testStorageBudgetAcceptsExactByteAndFreeSpaceBoundaries() {
+    let policy = ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 25)
+
+    XCTAssertEqual(
+      ShelfLogic.storageDecision(
+        currentBytes: 40, reservedBytes: [60], unstagedBytes: [60],
+        availableBytes: 85, policy: policy),
+      .accepted)
+  }
+
+  func testStorageBudgetRejectsOneByteOverEitherLimit() {
+    let policy = ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 25)
+
+    XCTAssertEqual(
+      ShelfLogic.storageDecision(
+        currentBytes: 41, reservedBytes: [60], unstagedBytes: [60],
+        availableBytes: 1_000, policy: policy),
+      .overBudget)
+    XCTAssertEqual(
+      ShelfLogic.storageDecision(
+        currentBytes: 40, reservedBytes: [60], unstagedBytes: [60],
+        availableBytes: 84, policy: policy),
+      .lowFreeSpace)
+  }
+
+  func testStorageBudgetFailsClosedForOverflowAndNegativeMeasurements() {
+    let policy = ShelfStoragePolicy(maximumBytes: .max, minimumFreeSpaceBytes: 0)
+
+    XCTAssertEqual(
+      ShelfLogic.storageDecision(
+        currentBytes: .max, reservedBytes: [1], unstagedBytes: [],
+        availableBytes: .max, policy: policy),
+      .invalidMeasurement)
+    XCTAssertEqual(
+      ShelfLogic.storageDecision(
+        currentBytes: 0, reservedBytes: [-1], unstagedBytes: [],
+        availableBytes: .max, policy: policy),
+      .invalidMeasurement)
+  }
+
   @MainActor
   func testStorageInitializationFailureIsNotAnEmptyShelf() {
     let model = ShelfModel(
@@ -580,5 +620,277 @@ final class ShelfLogicTests: XCTestCase {
 
     XCTAssertTrue(model.items.isEmpty)
     XCTAssertNil(model.lastError)
+  }
+
+  @MainActor
+  func testExactBudgetBoundaryCommitsAndPublishesUsage() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("boundary.bin")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data([0]).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      measureItem: { _ in .success(100) },
+      measureAvailableCapacity: { _ in .success(125) },
+      storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 25))
+
+    let added = await model.add(source)
+    XCTAssertTrue(added)
+    XCTAssertEqual(model.currentUsageBytes, 100)
+    XCTAssertEqual(model.items.map(\.name), ["boundary.bin"])
+  }
+
+  @MainActor
+  func testOverBudgetImportReportsRejectedSizeWithoutCopying() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("too-large.bin")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data([0]).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      measureItem: { _ in .success(101) },
+      measureAvailableCapacity: { _ in .success(10_000) },
+      storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 25))
+
+    let added = await model.add(source)
+    XCTAssertFalse(added)
+    XCTAssertEqual(model.lastRejectedImportBytes, 101)
+    XCTAssertEqual(
+      model.lastError,
+      "Can't add too-large.bin (101 bytes). The Shelf limit is 100 bytes.")
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertEqual(
+      try FileManager.default.contentsOfDirectory(
+        at: shelfDirectory, includingPropertiesForKeys: nil),
+      [])
+  }
+
+  @MainActor
+  func testLowDiskImportReportsSizeAndPreservesFreeSpaceReserve() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("low-disk.bin")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data([0]).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      measureItem: { _ in .success(60) },
+      measureAvailableCapacity: { _ in .success(84) },
+      storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 25))
+
+    let added = await model.add(source)
+    XCTAssertFalse(added)
+    XCTAssertEqual(model.lastRejectedImportBytes, 60)
+    XCTAssertEqual(
+      model.lastError,
+      "Can't add low-disk.bin (60 bytes). Islet keeps 25 bytes free for other apps.")
+    XCTAssertTrue(model.items.isEmpty)
+  }
+
+  @MainActor
+  func testStagedCopyIsRemeasuredBeforeCommitWhenTheSourceEstimateChanges() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("growing.bin")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data([0]).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      measureItem: { url in
+        .success(url.lastPathComponent.hasPrefix(".islet-shelf-staging-") ? 101 : 40)
+      },
+      measureAvailableCapacity: { _ in .success(10_000) },
+      storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 0))
+
+    let added = await model.add(source)
+
+    XCTAssertFalse(added)
+    XCTAssertEqual(model.lastRejectedImportBytes, 101)
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertEqual(
+      try FileManager.default.contentsOfDirectory(
+        at: shelfDirectory, includingPropertiesForKeys: nil),
+      [])
+  }
+
+  @MainActor
+  func testConcurrentImportsCannotSpendTheSameBudgetTwice() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let first = temporaryRoot.appendingPathComponent("first.bin")
+    let second = temporaryRoot.appendingPathComponent("second.bin")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data([1]).write(to: first)
+    try Data([2]).write(to: second)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+    let gate = StagedCopyGate()
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      copyItem: { source, staging in await gate.copy(source: source, to: staging) },
+      measureItem: { _ in .success(60) },
+      measureAvailableCapacity: { _ in .success(10_000) },
+      storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 0))
+
+    let firstTask = Task { await model.add(first) }
+    for _ in 0..<100 {
+      if await gate.hasStarted() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let copyStarted = await gate.hasStarted()
+    XCTAssertTrue(copyStarted)
+
+    let secondAdded = await model.add(second)
+    XCTAssertFalse(secondAdded)
+    XCTAssertEqual(model.lastRejectedImportBytes, 60)
+    await gate.release()
+    let firstAdded = await firstTask.value
+    XCTAssertTrue(firstAdded)
+    XCTAssertEqual(model.items.map(\.name), ["first.bin"])
+    XCTAssertEqual(model.currentUsageBytes, 60)
+  }
+
+  @MainActor
+  func testClearReleasesAStorageReservationForTheNextImport() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let pending = temporaryRoot.appendingPathComponent("pending.bin")
+    let next = temporaryRoot.appendingPathComponent("next.bin")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data([1]).write(to: pending)
+    try Data([2]).write(to: next)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+    let gate = StagedCopyGate()
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      copyItem: { source, staging in
+        if source.lastPathComponent == "pending.bin" {
+          return await gate.copy(source: source, to: staging)
+        }
+        return Result { try FileManager.default.copyItem(at: source, to: staging) }
+      },
+      measureItem: { _ in .success(100) },
+      measureAvailableCapacity: { _ in .success(10_000) },
+      storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 0))
+
+    XCTAssertTrue(model.importDroppedURLs([pending]))
+    for _ in 0..<100 {
+      if await gate.hasStarted() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let clearTask = Task { await model.clear() }
+    for _ in 0..<100 where !model.isClearing { await Task.yield() }
+    await gate.release()
+    await clearTask.value
+
+    let nextAdded = await model.add(next)
+    XCTAssertTrue(nextAdded)
+    XCTAssertEqual(model.items.map(\.name), ["next.bin"])
+    XCTAssertEqual(model.currentUsageBytes, 100)
+  }
+
+  @MainActor
+  func testStorageUsageTextIncludesCurrentLimitAndAccessibleFreeSpacePolicy() async throws {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let stored = shelf.appendingPathComponent("stored.bin")
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([stored]) },
+      measureItem: { _ in .success(12) },
+      storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 25))
+    for _ in 0..<100 where model.currentUsageBytes == nil { await Task.yield() }
+
+    XCTAssertEqual(model.currentUsageBytes, 12)
+    XCTAssertEqual(model.storageUsageText, "12 bytes of 100 bytes")
+    XCTAssertEqual(
+      model.storageUsageAccessibilityText,
+      "Shelf storage: 12 bytes used of 100 bytes. Keeps at least 25 bytes free for other apps."
+    )
+  }
+
+  func testFolderAndPackageMeasurementsIncludeTheirDescendants() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let package = temporaryRoot.appendingPathComponent("Example.app", isDirectory: true)
+    let contents = package.appendingPathComponent("Contents", isDirectory: true)
+    let payload = contents.appendingPathComponent("payload.bin")
+    try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+    try Data(repeating: 1, count: 16_384).write(to: payload)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let packageBytes = try ShelfFileMeasurements.estimatedCopyBytes(at: package).get()
+    let payloadBytes = try ShelfFileMeasurements.estimatedCopyBytes(at: payload).get()
+
+    XCTAssertGreaterThan(packageBytes, payloadBytes)
+    XCTAssertGreaterThanOrEqual(packageBytes, payloadBytes + 8_192)
+  }
+
+  func testSparseFileUsesLogicalSizeRatherThanAllocatedBlocks() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    let sparse = temporaryRoot.appendingPathComponent("sparse.bin")
+    let descriptor = open(sparse.path, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR)
+    XCTAssertGreaterThanOrEqual(descriptor, 0)
+    defer {
+      if descriptor >= 0 { close(descriptor) }
+      try? FileManager.default.removeItem(at: temporaryRoot)
+    }
+    XCTAssertEqual(ftruncate(descriptor, 8 * 1024 * 1024), 0)
+
+    let bytes = try ShelfFileMeasurements.estimatedCopyBytes(at: sparse).get()
+
+    XCTAssertEqual(bytes, 8 * 1024 * 1024)
+  }
+
+  func testSymlinkMeasurementDoesNotFollowItsTarget() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let folder = temporaryRoot.appendingPathComponent("links", isDirectory: true)
+    let target = temporaryRoot.appendingPathComponent("large-target.bin")
+    let symlink = folder.appendingPathComponent("shortcut")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try Data(repeating: 1, count: 1024 * 1024).write(to: target)
+    try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: target)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let folderBytes = try ShelfFileMeasurements.estimatedCopyBytes(at: folder).get()
+    let targetBytes = try ShelfFileMeasurements.estimatedCopyBytes(at: target).get()
+
+    XCTAssertEqual(folderBytes, 8_192)
+    XCTAssertLessThan(folderBytes, targetBytes)
+  }
+
+  func testHardLinkedPathsEachReserveTheirFullCopySize() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let folder = temporaryRoot.appendingPathComponent("hard-links", isDirectory: true)
+    let first = folder.appendingPathComponent("first.bin")
+    let second = folder.appendingPathComponent("second.bin")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try Data(repeating: 1, count: 16_384).write(to: first)
+    XCTAssertEqual(link(first.path, second.path), 0)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let fileBytes = try ShelfFileMeasurements.estimatedCopyBytes(at: first).get()
+    let folderBytes = try ShelfFileMeasurements.estimatedCopyBytes(at: folder).get()
+
+    XCTAssertEqual(folderBytes, 4_096 + fileBytes * 2)
   }
 }
