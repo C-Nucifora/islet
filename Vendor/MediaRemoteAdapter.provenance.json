@@ -1,0 +1,34 @@
+{
+  "formatVersion": 1,
+  "source": {
+    "repository": "https://github.com/ungive/mediaremote-adapter",
+    "commit": "3ac3d4bdf862c7b5399b4fba4df5689f5c38609a",
+    "archiveURL": "https://codeload.github.com/ungive/mediaremote-adapter/tar.gz/3ac3d4bdf862c7b5399b4fba4df5689f5c38609a",
+    "archiveSHA256": "111e285e7a8acfb05b7339883e303a360f8a7a9b7acb4f0f5c01b647deb8ceb5"
+  },
+  "toolchain": {
+    "cmakeVersion": "4.2.3",
+    "cmakeArchiveURL": "https://github.com/Kitware/CMake/releases/download/v4.2.3/cmake-4.2.3-macos-universal.tar.gz",
+    "cmakeArchiveSHA256": "c2302d3e9c48daabee5ea7c4db4b2b93b989bcc89dae8b760880e00120641b5b",
+    "xcodeVersion": "26.6",
+    "xcodeBuild": "17F113",
+    "macOSSDKVersion": "26.5",
+    "macOSSDKBuild": "25F70",
+    "clangVersion": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+    "makeVersion": "GNU Make 3.81",
+    "generator": "Unix Makefiles",
+    "deploymentTarget": "26.0"
+  },
+  "artifacts": {
+    "binarySHA256": "84216aec8eb7ec6989433092ffc7d724cb142d509fc32a702baa49a629653d7b",
+    "slices": {
+      "arm64": "ad05d022260ecc04e695eb4514e34de7438c5291b9a52cd657062c90aaabf5c1",
+      "x86_64": "589bf6bb78b888a28f53742df71401f3926409579c85d1214a6f825fc1490bc5"
+    },
+    "exportedSymbolsSHA256": "1aa23fc46e3f10cfbacd913236bf1ce3fd6557a463ce680aeb10619086f97b98",
+    "infoPlistSHA256": "cf7c9699302a8ddacf24465443eb7a0153e1c347bf23c3c0895af41c85368af8",
+    "codeResourcesSHA256": "5ddd46b76ea756abd4e084c1f21566a39b4ff890bd21dce9b6f11ace69563305",
+    "loaderSHA256": "984d622eeebbcb17656d157a49272b02fb741593ae2ec624d1926c12d955c8a1",
+    "licenseSHA256": "a489c16a6be195584fa0b35e28fca54abc8492eb0cc05d851dd24f522f4900a2"
+  }
+}
