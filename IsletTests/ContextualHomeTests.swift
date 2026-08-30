@@ -40,6 +40,20 @@ final class ContextualHomeTests: XCTestCase {
     XCTAssertEqual(disposition.visible([old, update], now: now).map(\.id), ["build:2"])
   }
 
+  func testDismissedOccurrenceCanReturnAfterItDisappears() {
+    let needsInput = item(
+      id: "t3:agent:needsInput", stableID: "agent", source: .t3Code, priority: .critical)
+    let working = item(
+      id: "t3:agent:working", stableID: "agent", source: .t3Code, priority: .high)
+    var disposition = HomeAttentionDisposition()
+
+    disposition.dismiss(needsInput)
+    disposition.reconcile(with: [working])
+    disposition.reconcile(with: [needsInput])
+
+    XCTAssertEqual(disposition.visible([needsInput], now: now), [needsInput])
+  }
+
   func testSnoozeReturnsAnItemAfterTheRequestedTime() {
     let reminder = item(
       id: "reminder", source: .reminders, priority: .urgent, allowsSnooze: true)
@@ -98,6 +112,69 @@ final class ContextualHomeTests: XCTestCase {
     XCTAssertEqual(items.count, 9)
     XCTAssertEqual(Set(items.map(\.source)), Set(HomeAttentionSource.allCases))
     XCTAssertEqual(HomeAttentionOverflow.split(items).overflow.count, 6)
+  }
+
+  func testBuilderOmitsPersistentTimerAndShelfWorkWhenActivitiesAreDisabled() {
+    let timer = HomeTimerSnapshot(
+      occurrenceID: "timer-1", label: "Focus", endDate: now + 45, remaining: 45,
+      isPaused: false, finished: false)
+
+    let items = HomeAttentionBuilder.items(
+      calendarEvents: [], reminders: [], timer: timer, t3Agents: [], pulseItems: [], battery: nil,
+      pendingTransfers: 2, disabledActivities: ["timer", "shelf"], now: now)
+
+    XCTAssertFalse(items.contains { $0.source == .timer })
+    XCTAssertFalse(items.contains { $0.source == .transfer })
+  }
+
+  func testUnrecognizedCalendarMeetingLinkKeepsConfirmationTrust() throws {
+    let url = try XCTUnwrap(URL(string: "https://meet.corp.example/room"))
+    let event = AgendaEvent(
+      id: "event", title: "Design review", start: now + 300, end: now + 1_800,
+      isAllDay: false, calendarColorHex: nil, joinURL: url)
+
+    let item = try XCTUnwrap(
+      HomeAttentionBuilder.items(
+        calendarEvents: [event], reminders: [], timer: nil, t3Agents: [], pulseItems: [],
+        battery: nil, pendingTransfers: 0, now: now
+      ).first)
+    guard case .openMeetingLink(let link) = item.primaryAction?.kind else {
+      return XCTFail("Expected a meeting-link action")
+    }
+
+    XCTAssertEqual(link.url, url)
+    XCTAssertEqual(link.trust, .unrecognized(host: "meet.corp.example"))
+  }
+
+  func testReminderDueTodayUsesTheInjectedClock() throws {
+    let due = try XCTUnwrap(Calendar.current.date(byAdding: .minute, value: 1, to: now))
+    let reminder = ReminderItem(
+      id: "today", title: "Send notes", dueDate: due, priority: 0, listColorHex: nil)
+
+    let item = try XCTUnwrap(
+      HomeAttentionBuilder.items(
+        calendarEvents: [], reminders: [reminder], timer: nil, t3Agents: [], pulseItems: [],
+        battery: nil, pendingTransfers: 0, now: now
+      ).first)
+
+    XCTAssertEqual(item.state, "Due today")
+    XCTAssertEqual(item.priority, .high)
+  }
+
+  func testRankingExplanationCoversDeadlinePresenceAndFinalTieBreaks() {
+    let dated = item(
+      id: "dated", stableID: "same", source: .calendar, priority: .high, dueAt: now + 60)
+    let undated = item(
+      id: "undated", stableID: "same", source: .calendar, priority: .high)
+    XCTAssertTrue(
+      HomeAttentionRanking.explanation(for: dated, above: undated)
+        .contains("has a deadline"))
+
+    let first = item(id: "occurrence-a", stableID: "same", source: .pulse, priority: .normal)
+    let second = item(id: "occurrence-b", stableID: "same", source: .pulse, priority: .normal)
+    XCTAssertTrue(
+      HomeAttentionRanking.explanation(for: first, above: second)
+        .contains("occurrence identifier"))
   }
 
   func testVoiceOverValueNamesStatePriorityAndAvailableActions() {

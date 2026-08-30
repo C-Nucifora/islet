@@ -387,36 +387,24 @@ struct CalendarAgendaView: View {
   }
 }
 
-struct CalendarMeetingLinkButton: View {
-  let link: CalendarMeetingLink
-  let eventTitle: String
-  @State private var confirmationPresented = false
-
-  var body: some View {
-    Button {
-      if link.trust.requiresConfirmation {
-        confirmationPresented = true
-      } else {
-        NSWorkspace.shared.open(link.url)
-      }
-    } label: {
-      if case .unrecognized(let host) = link.trust {
-        Label(host, systemImage: "video.fill")
-          .font(.caption2)
-          .lineLimit(1)
-          .foregroundStyle(.green)
-      } else {
-        Image(systemName: "video.fill").foregroundStyle(.green)
-      }
+enum CalendarMeetingLinkPresentation {
+  static func activate(_ link: CalendarMeetingLink, requestConfirmation: () -> Void) {
+    if link.trust.requiresConfirmation {
+      requestConfirmation()
+    } else {
+      NSWorkspace.shared.open(link.url)
     }
-    .buttonStyle(.plain)
-    .help(link.trust.destinationHost.map { "Join \(eventTitle) at \($0)" } ?? "Join \(eventTitle)")
-    .accessibilityLabel(
-      link.trust.destinationHost.map { "Join \(eventTitle) at \($0)" } ?? "Join \(eventTitle)"
-    )
-    .confirmationDialog(
+  }
+}
+
+private struct CalendarMeetingLinkConfirmationModifier: ViewModifier {
+  let link: CalendarMeetingLink
+  @Binding var isPresented: Bool
+
+  func body(content: Content) -> some View {
+    content.confirmationDialog(
       confirmationTitle,
-      isPresented: $confirmationPresented,
+      isPresented: $isPresented,
       titleVisibility: .visible
     ) {
       if let host = link.trust.destinationHost {
@@ -435,5 +423,45 @@ struct CalendarMeetingLinkButton: View {
   private var confirmationTitle: String {
     guard let host = link.trust.destinationHost else { return "Open meeting link?" }
     return "Open \(host)?"
+  }
+}
+
+extension View {
+  func calendarMeetingLinkConfirmation(
+    link: CalendarMeetingLink, isPresented: Binding<Bool>
+  ) -> some View {
+    modifier(
+      CalendarMeetingLinkConfirmationModifier(
+        link: link, isPresented: isPresented))
+  }
+}
+
+struct CalendarMeetingLinkButton: View {
+  let link: CalendarMeetingLink
+  let eventTitle: String
+  @State private var confirmationPresented = false
+
+  var body: some View {
+    Button {
+      CalendarMeetingLinkPresentation.activate(link) {
+        confirmationPresented = true
+      }
+    } label: {
+      if case .unrecognized(let host) = link.trust {
+        Label(host, systemImage: "video.fill")
+          .font(.caption2)
+          .lineLimit(1)
+          .foregroundStyle(.green)
+      } else {
+        Image(systemName: "video.fill").foregroundStyle(.green)
+      }
+    }
+    .buttonStyle(.plain)
+    .help(link.trust.destinationHost.map { "Join \(eventTitle) at \($0)" } ?? "Join \(eventTitle)")
+    .accessibilityLabel(
+      link.trust.destinationHost.map { "Join \(eventTitle) at \($0)" } ?? "Join \(eventTitle)"
+    )
+    .calendarMeetingLinkConfirmation(
+      link: link, isPresented: $confirmationPresented)
   }
 }
