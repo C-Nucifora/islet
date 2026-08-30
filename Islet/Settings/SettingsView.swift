@@ -2103,6 +2103,14 @@ private struct PulseCredentialRow: View {
         .foregroundStyle(.orange)
       }
 
+      if !credential.isLegacy, !credential.isRevoked {
+        Text(
+          "Bearer credential: trusted processes running as your macOS user can use this file. Source binding separates cooperative tools, not hostile same-user processes."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      }
+
       ForEach(PulseCredentialPermission.allCases) { permission in
         Toggle(permission.title, isOn: permissionBinding(permission))
           .help(permission.detail)
