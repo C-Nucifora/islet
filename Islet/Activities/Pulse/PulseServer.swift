@@ -52,6 +52,10 @@ private final class PulseRetryTask: PulseRetryCancellable {
 @MainActor
 final class PulseServer: ObservableObject {
   static let shared = PulseServer()
+  nonisolated static let loopbackHosts = [
+    NWEndpoint.Host("127.0.0.1"),
+    NWEndpoint.Host("::1"),
+  ]
   nonisolated static let maximumMessageBytes = 64 * 1024
   nonisolated static let maximumCommandsPerConnection = 128
   nonisolated static let authenticationTimeout: Duration = .seconds(10)
@@ -65,7 +69,8 @@ final class PulseServer: ObservableObject {
     TimeInterval, @escaping @MainActor @Sendable () -> Void
   ) -> any PulseRetryCancellable
 
-  private var listener: (any PulseListening)?
+  private var listeners: [any PulseListening] = []
+  private var readyListenerIDs: Set<ObjectIdentifier> = []
   private var connections: [ObjectIdentifier: NWConnection] = [:]
   private var commandPipelines: [ObjectIdentifier: PulseCommandPipeline] = [:]
   private var commandTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
@@ -115,11 +120,11 @@ final class PulseServer: ObservableObject {
   }
 
   var listeningAddress: String? {
-    activePort.map { "127.0.0.1:\($0)" }
+    activePort.map { "localhost:\($0)" }
   }
 
   func start() {
-    guard listener == nil else { return }
+    guard listeners.isEmpty else { return }
     lifecycleGeneration += 1
     cancelScheduledRetries()
     startFreshAttempt()
@@ -148,42 +153,63 @@ final class PulseServer: ObservableObject {
 
   private func startCandidate() throws {
     let port = PulsePaths.candidatePorts[candidateIndex]
-    let parameters = NWParameters.tcp
-    parameters.allowLocalEndpointReuse = true
-    parameters.requiredLocalEndpoint = .hostPort(
-      host: NWEndpoint.Host("127.0.0.1"), port: .any)
-    let listener = try listenerFactory(parameters, port)
-    listener.newConnectionHandler = { [weak self] connection in
-      Task { @MainActor in self?.accept(connection) }
-    }
-    listener.stateUpdateHandler = { [weak self, weak listener] state in
-      Task { @MainActor in
-        guard let self, let listener, self.listener === listener else { return }
-        self.handle(state, from: listener)
+    var createdListeners: [any PulseListening] = []
+    do {
+      for host in Self.loopbackHosts {
+        let parameters = NWParameters.tcp
+        parameters.allowLocalEndpointReuse = true
+        // `requiredLocalEndpoint` constrains the address, while `NWListener(on:)` selects the
+        // candidate port. Use one numeric listener per family rather than `localhost` or an
+        // unspecified address, either of which could select a wildcard/LAN binding.
+        parameters.requiredLocalEndpoint = .hostPort(host: host, port: .any)
+        createdListeners.append(try listenerFactory(parameters, port))
       }
+    } catch {
+      for listener in createdListeners { listener.cancel() }
+      throw error
     }
-    self.listener = listener
-    listener.start(queue: queue)
+    readyListenerIDs.removeAll()
+    listeners = createdListeners
+    for listener in createdListeners {
+      listener.newConnectionHandler = { [weak self] connection in
+        Task { @MainActor in self?.accept(connection) }
+      }
+      listener.stateUpdateHandler = { [weak self, weak listener] state in
+        Task { @MainActor in
+          guard let self, let listener,
+            self.listeners.contains(where: { $0 === listener })
+          else { return }
+          self.handle(state, from: listener)
+        }
+      }
+      listener.start(queue: queue)
+    }
   }
 
   private func handle(_ state: NWListener.State, from listener: any PulseListening) {
     switch state {
     case .ready:
-      guard let port = listener.port?.rawValue else {
+      let expectedPort = PulsePaths.candidatePorts[candidateIndex].rawValue
+      // Network.framework reports the port selected by `NWListener(on:)`; the required endpoint
+      // intentionally uses `.any` because specifying the port in both places is invalid.
+      guard listener.port?.rawValue == expectedPort else {
         fail(PulseServerError.missingActivePort)
         return
       }
+      guard readyListenerIDs.insert(ObjectIdentifier(listener)).inserted,
+        readyListenerIDs.count == listeners.count
+      else { return }
       do {
-        try activePortWriter(port)
-        activePort = port
+        try activePortWriter(expectedPort)
+        activePort = expectedPort
         isRunning = true
         lastError = nil
         nextRetryAt = nil
         portRecoveryMessage =
-          port == PulsePaths.defaultPort.rawValue
+          expectedPort == PulsePaths.defaultPort.rawValue
           ? nil
-          : "Port 47717 is in use. Pulse moved to \(port); bundled clients discover it automatically."
-        scheduleBackoffReset(for: listener)
+          : "Port 47717 is in use. Pulse moved to \(expectedPort); bundled clients discover it automatically."
+        scheduleBackoffReset()
       } catch {
         fail(error)
       }
@@ -204,7 +230,7 @@ final class PulseServer: ObservableObject {
         fail(error)
       }
     case .cancelled:
-      self.listener = nil
+      cancelListeners()
       isRunning = false
       activePort = nil
       portRecoveryMessage = nil
@@ -221,8 +247,7 @@ final class PulseServer: ObservableObject {
   }
 
   private func recoverFromOccupiedPort() {
-    listener?.cancel()
-    listener = nil
+    cancelListeners()
     isRunning = false
     activePort = nil
     nextRetryAt = nil
@@ -250,8 +275,7 @@ final class PulseServer: ObservableObject {
   }
 
   private func fail(_ error: Error) {
-    listener?.cancel()
-    listener = nil
+    cancelListeners()
     isRunning = false
     activePort = nil
     portRecoveryMessage = nil
@@ -293,8 +317,7 @@ final class PulseServer: ObservableObject {
   }
 
   private func scheduleRetry(after error: Error) {
-    listener?.cancel()
-    listener = nil
+    cancelListeners()
     isRunning = false
     activePort = nil
     portRecoveryMessage = nil
@@ -320,14 +343,13 @@ final class PulseServer: ObservableObject {
     }
   }
 
-  private func scheduleBackoffReset(for listener: any PulseListening) {
+  private func scheduleBackoffReset() {
     stableReadyTask?.cancel()
     let generation = lifecycleGeneration
     stableReadyTask = retryScheduler(Self.retryStableReadyPeriod) {
-      [weak self, weak listener] in
-      guard let self, let listener, self.lifecycleGeneration == generation,
-        self.listener === listener,
-        self.isRunning
+      [weak self] in
+      guard let self, self.lifecycleGeneration == generation,
+        !self.listeners.isEmpty, self.isRunning
       else { return }
       self.retryAttempt = 0
       self.stableReadyTask = nil
@@ -342,11 +364,17 @@ final class PulseServer: ObservableObject {
     nextRetryAt = nil
   }
 
+  private func cancelListeners() {
+    let activeListeners = listeners
+    listeners.removeAll()
+    readyListenerIDs.removeAll()
+    for listener in activeListeners { listener.cancel() }
+  }
+
   func stop() {
     lifecycleGeneration += 1
     cancelScheduledRetries()
-    listener?.cancel()
-    listener = nil
+    cancelListeners()
     isRunning = false
     activePort = nil
     portRecoveryMessage = nil
@@ -369,7 +397,7 @@ final class PulseServer: ObservableObject {
   /// Invalidates the one shared provider credential, disconnects every current client, and
   /// atomically replaces the token before optionally restoring the listener.
   func rotateToken() throws {
-    let shouldRestart = listener != nil || retryTask != nil
+    let shouldRestart = !listeners.isEmpty || retryTask != nil
     stop()
     do {
       token = try tokenRotator()
@@ -383,7 +411,7 @@ final class PulseServer: ObservableObject {
   }
 
   private func accept(_ connection: NWConnection) {
-    guard Self.isLoopback(connection.endpoint) else {
+    guard Self.isLoopbackPeer(connection.endpoint) else {
       connection.cancel()
       return
     }
@@ -448,9 +476,9 @@ final class PulseServer: ObservableObject {
     authenticationTasks.removeValue(forKey: id)?.cancel()
   }
 
-  nonisolated private static func isLoopback(_ endpoint: NWEndpoint) -> Bool {
+  nonisolated static func isLoopbackPeer(_ endpoint: NWEndpoint) -> Bool {
     guard case .hostPort(let host, _) = endpoint else { return false }
-    return host == NWEndpoint.Host("127.0.0.1") || host == NWEndpoint.Host("::1")
+    return loopbackHosts.contains(host)
   }
 
   /// `NWListener.newConnectionLimit` is a decreasing lifetime admission allowance, not a

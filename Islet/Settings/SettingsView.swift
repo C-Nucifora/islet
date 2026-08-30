@@ -1513,7 +1513,7 @@ struct SettingsView: View {
           Text("Shared bearer token").foregroundStyle(.secondary)
         }
         Text(
-          "Local scripts publish status and web actions over \(pulseServer.listeningAddress ?? "127.0.0.1:47717"). A private token authenticates each connection."
+          "Local scripts publish status and web actions over \(pulseServer.listeningAddress ?? "localhost:47717"). A private token authenticates each connection."
         )
         .font(.caption).foregroundStyle(.secondary)
         if let nextRetryAt = pulseServer.nextRetryAt {
