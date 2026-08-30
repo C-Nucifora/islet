@@ -5,48 +5,87 @@ import XCTest
 final class MediaRemoteCommandsTests: XCTestCase {
   private actor Harness {
     private var sentCommands: [(MediaCommand, SourceID?)] = []
+    private var events: [String] = []
+    private var currentTarget: SourceID?
     var acceptsCommands = true
 
+    func setCurrentTarget(_ source: SourceID?) { currentTarget = source }
+
+    func resolveCurrentTarget() -> SourceID? {
+      events.append("resolve")
+      return currentTarget
+    }
+
     func send(_ command: MediaCommand, to source: SourceID?) -> Bool {
+      events.append("send")
       sentCommands.append((command, source))
       return acceptsCommands
     }
 
     func rejectCommands() { acceptsCommands = false }
     func commands() -> [(MediaCommand, SourceID?)] { sentCommands }
+    func recordedEvents() -> [String] { events }
   }
 
   private func source(_ bundleID: String, _ pid: Int32) -> SourceID {
     SourceID(bundleIdentifier: bundleID, pid: pid, parentBundleIdentifier: "")
   }
 
-  func testCurrentUnscopedTransportFailsClosedWithoutSending() async {
+  func testVerifiedGlobalTransportResolvesTargetThenSendsGlobally() async {
     let spotify = source("com.spotify.client", 10)
     let harness = Harness()
+    await harness.setCurrentTarget(spotify)
 
     let result = await MediaCommandRouter.perform(
       .togglePlayPause,
       shownSource: spotify,
       sourceIsAdapterBacked: true,
-      supportsSourceScopedCommands: false,
+      targeting: .verifiedGlobal,
+      resolveCurrentTarget: { await harness.resolveCurrentTarget() },
       send: { command, source in await harness.send(command, to: source) })
 
-    XCTAssertEqual(result, .sourceTargetingUnavailable(spotify))
+    XCTAssertEqual(result, .sent(target: spotify, sourceScoped: false))
     let commands = await harness.commands()
-    XCTAssertTrue(commands.isEmpty)
+    XCTAssertEqual(commands.count, 1)
+    XCTAssertEqual(commands.first?.0, .togglePlayPause)
+    XCTAssertNil(commands.first?.1)
+    let events = await harness.recordedEvents()
+    XCTAssertEqual(events, ["resolve", "send"])
   }
 
-  func testExternalTargetSwitchCannotRaceAnUnscopedSend() async {
+  func testVerifiedGlobalTransportRefusesWhenCurrentTargetChanged() async {
     let shownSource = source("com.spotify.client", 10)
+    let actualSource = source("com.apple.Music", 20)
     let harness = Harness()
-    // The old implementation resolved a matching snapshot here, then sent a separate global
-    // command. A player switch between those operations could target another app. The current
-    // transport has no atomic targeting primitive, so the send closure must never be reached.
+    await harness.setCurrentTarget(actualSource)
+
     let result = await MediaCommandRouter.perform(
       .next,
       shownSource: shownSource,
       sourceIsAdapterBacked: true,
-      supportsSourceScopedCommands: false,
+      targeting: .verifiedGlobal,
+      resolveCurrentTarget: { await harness.resolveCurrentTarget() },
+      send: { command, source in await harness.send(command, to: source) })
+
+    XCTAssertEqual(result, .sourceTargetingUnavailable(shownSource))
+    let commands = await harness.commands()
+    XCTAssertTrue(commands.isEmpty)
+    let events = await harness.recordedEvents()
+    XCTAssertEqual(events, ["resolve"])
+  }
+
+  func testVerifiedGlobalTransportRequiresExactProcessIdentity() async {
+    let shownSource = source("com.spotify.client", 10)
+    let replacementProcess = source("com.spotify.client", 11)
+    let harness = Harness()
+    await harness.setCurrentTarget(replacementProcess)
+
+    let result = await MediaCommandRouter.perform(
+      .next,
+      shownSource: shownSource,
+      sourceIsAdapterBacked: true,
+      targeting: .verifiedGlobal,
+      resolveCurrentTarget: { await harness.resolveCurrentTarget() },
       send: { command, source in await harness.send(command, to: source) })
 
     XCTAssertEqual(result, .sourceTargetingUnavailable(shownSource))
@@ -62,7 +101,8 @@ final class MediaRemoteCommandsTests: XCTestCase {
       .togglePlayPause,
       shownSource: call,
       sourceIsAdapterBacked: false,
-      supportsSourceScopedCommands: true,
+      targeting: .sourceScoped,
+      resolveCurrentTarget: { await harness.resolveCurrentTarget() },
       send: { command, source in await harness.send(command, to: source) })
 
     XCTAssertEqual(result, .sourceNotControllable(call))
@@ -78,7 +118,8 @@ final class MediaRemoteCommandsTests: XCTestCase {
       .seek(to: 42),
       shownSource: music,
       sourceIsAdapterBacked: true,
-      supportsSourceScopedCommands: true,
+      targeting: .sourceScoped,
+      resolveCurrentTarget: { await harness.resolveCurrentTarget() },
       send: { command, source in await harness.send(command, to: source) })
 
     XCTAssertEqual(result, .sent(target: music, sourceScoped: true))
@@ -97,21 +138,57 @@ final class MediaRemoteCommandsTests: XCTestCase {
       .next,
       shownSource: music,
       sourceIsAdapterBacked: true,
-      supportsSourceScopedCommands: true,
+      targeting: .sourceScoped,
+      resolveCurrentTarget: { await harness.resolveCurrentTarget() },
       send: { command, source in await harness.send(command, to: source) })
 
     XCTAssertEqual(result, .rejected(target: music))
   }
 
-  func testCurrentAdapterPresentationExplainsUnavailableControls() {
+  func testCurrentAdapterPresentationLabelsVerifiedGlobalControlsHonestly() {
     XCTAssertEqual(
-      MediaControlPresentation.scopeLabel(appName: "Music", sourceScoped: false),
-      "Controls unavailable for Music")
+      MediaControlPresentation.scopeLabel(appName: "Music", targeting: .verifiedGlobal),
+      "Global controls for Music")
     XCTAssertEqual(
-      MediaControlPresentation.help(action: "Pause", appName: "Music", sourceScoped: false),
-      "Pause unavailable because Islet cannot target Music safely")
+      MediaControlPresentation.help(action: "Pause", appName: "Music", targeting: .verifiedGlobal),
+      "Pause in Music after verifying the global media target")
     XCTAssertEqual(
-      MediaControlPresentation.accessibilityLabel(action: "Pause", sourceScoped: false),
-      "Pause unavailable")
+      MediaControlPresentation.accessibilityLabel(action: "Pause", targeting: .verifiedGlobal),
+      "Pause, verified global media control")
   }
+
+  func testCommandQueueDoesNotOverlapOperations() async {
+    let queue = MediaCommandQueue()
+    let probe = QueueOverlapProbe()
+    let spotify = source("com.spotify.client", 10)
+
+    await withTaskGroup(of: MediaCommandResult.self) { group in
+      for _ in 0..<8 {
+        group.addTask {
+          await queue.enqueue {
+            await probe.begin()
+            try? await Task.sleep(for: .milliseconds(20))
+            await probe.end()
+            return .sent(target: spotify, sourceScoped: false)
+          }
+        }
+      }
+      for await _ in group {}
+    }
+
+    let maximumConcurrentOperations = await probe.maximumConcurrentOperations
+    XCTAssertEqual(maximumConcurrentOperations, 1)
+  }
+}
+
+private actor QueueOverlapProbe {
+  private var activeOperations = 0
+  private(set) var maximumConcurrentOperations = 0
+
+  func begin() {
+    activeOperations += 1
+    maximumConcurrentOperations = max(maximumConcurrentOperations, activeOperations)
+  }
+
+  func end() { activeOperations -= 1 }
 }

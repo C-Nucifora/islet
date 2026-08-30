@@ -153,7 +153,10 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
 
   func perform(_ command: MediaCommand, for source: SourceID) async {
     let result = await MediaRemoteCommands.shared.perform(
-      command, shownSource: source, sourceIsAdapterBacked: sources[source] != nil)
+      command,
+      shownSource: source,
+      sourceIsAdapterBacked: sources[source] != nil,
+      resolveCurrentTarget: { [watcher] in await watcher.resolveCurrentCommandTarget() })
     switch result {
     case .sent:
       mediaControlNotice = nil
@@ -168,26 +171,26 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   }
 
   func mediaControlsAvailable(for source: SourceID) -> Bool {
-    sources[source] != nil && MediaRemoteCommands.shared.supportsSourceScopedCommands
+    sources[source] != nil && MediaRemoteCommands.shared.targeting.controlsAvailable
   }
 
   func mediaControlScopeLabel(for source: SourceID) -> String {
     MediaControlPresentation.scopeLabel(
       appName: sourceName(for: source),
-      sourceScoped: MediaRemoteCommands.shared.supportsSourceScopedCommands)
+      targeting: MediaRemoteCommands.shared.targeting)
   }
 
   func mediaControlHelp(action: String, for source: SourceID) -> String {
     MediaControlPresentation.help(
       action: action,
       appName: sourceName(for: source),
-      sourceScoped: MediaRemoteCommands.shared.supportsSourceScopedCommands)
+      targeting: MediaRemoteCommands.shared.targeting)
   }
 
   func mediaControlAccessibilityLabel(action: String) -> String {
     MediaControlPresentation.accessibilityLabel(
       action: action,
-      sourceScoped: MediaRemoteCommands.shared.supportsSourceScopedCommands)
+      targeting: MediaRemoteCommands.shared.targeting)
   }
 
   func artwork(for source: SourceID?) -> NSImage? {

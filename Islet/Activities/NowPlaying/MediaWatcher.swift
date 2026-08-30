@@ -327,6 +327,74 @@ final class MediaWatcher: @unchecked Sendable {
     }
   }
 
+  /// Runs a new no-artwork adapter snapshot for each command. The command queue calls this directly
+  /// before its global send, so a cached card or a restarted stream cannot authorize a command.
+  func resolveCurrentCommandTarget() async -> SourceID? {
+    guard let command = commandProvider(.snapshot) else { return nil }
+    return await Self.resolveCommandTarget(command: command, timeout: 2)
+  }
+
+  static func resolveCommandTarget(
+    command: HelperCommand, timeout: TimeInterval
+  ) async -> SourceID? {
+    guard timeout > 0 else { return nil }
+    return await Task.detached(priority: .userInitiated) {
+      resolveCommandTargetSynchronously(command: command, timeout: timeout)
+    }.value
+  }
+
+  private static func resolveCommandTargetSynchronously(
+    command: HelperCommand, timeout: TimeInterval
+  ) -> SourceID? {
+    let fileManager = FileManager.default
+    let outputURL = fileManager.temporaryDirectory.appendingPathComponent(
+      "islet-media-command-\(UUID().uuidString).json")
+    guard
+      fileManager.createFile(
+        atPath: outputURL.path, contents: nil, attributes: [.posixPermissions: 0o600]),
+      let output = try? FileHandle(forWritingTo: outputURL)
+    else { return nil }
+    defer {
+      try? output.close()
+      try? fileManager.removeItem(at: outputURL)
+    }
+
+    let probe = Process()
+    probe.executableURL = command.executableURL
+    probe.arguments = command.arguments
+    probe.standardOutput = output
+    probe.standardError = FileHandle.nullDevice
+    do {
+      try probe.run()
+    } catch {
+      return nil
+    }
+
+    let deadline = ProcessInfo.processInfo.systemUptime + timeout
+    while probe.isRunning, ProcessInfo.processInfo.systemUptime < deadline {
+      Thread.sleep(forTimeInterval: 0.01)
+    }
+    let timedOut = probe.isRunning
+    if timedOut {
+      probe.terminate()
+      let terminationDeadline = ProcessInfo.processInfo.systemUptime + 0.25
+      while probe.isRunning, ProcessInfo.processInfo.systemUptime < terminationDeadline {
+        Thread.sleep(forTimeInterval: 0.01)
+      }
+      if probe.isRunning { Darwin.kill(probe.processIdentifier, SIGKILL) }
+    }
+    probe.waitUntilExit()
+    try? output.close()
+
+    guard !timedOut, probe.terminationStatus == 0,
+      let size = try? fileManager.attributesOfItem(atPath: outputURL.path)[.size] as? NSNumber,
+      size.intValue <= maximumSnapshotOutputBytes,
+      let data = try? Data(contentsOf: outputURL),
+      case .nowPlaying(let target, _) = parseInitialSnapshot(data: data)
+    else { return nil }
+    return target
+  }
+
   /// Detaches handlers and drops the current process/pipe. Must run on `queue`.
   private func cleanup(terminateStream: Bool) {
     snapshotLaunchWorkItem?.cancel()
