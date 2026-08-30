@@ -106,6 +106,30 @@ final class DisplayStateReconcilerTests: XCTestCase {
 }
 
 @MainActor
+final class MultiDisplayPresentationTests: XCTestCase {
+  func testExpansionAndShelfDropAffectOnlyTheTargetDisplayViewModel() {
+    let leftGeometry = NotchGeometry(
+      screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+      safeAreaTop: 32, auxLeftWidth: 716, auxRightWidth: 708, menuBarHeight: 37)
+    let rightGeometry = NotchGeometry(
+      screenFrame: CGRect(x: 1728, y: 0, width: 2560, height: 1440),
+      safeAreaTop: 0, auxLeftWidth: 0, auxRightWidth: 0, menuBarHeight: 24)
+    let left = NotchViewModel(geometry: leftGeometry, modeOverride: .clickToPin)
+    let right = NotchViewModel(geometry: rightGeometry, modeOverride: .clickToPin)
+    right.apply(.clickedNotch)
+    right.selectActivity("system")
+
+    left.handleFileDragMoved(
+      CGPoint(x: leftGeometry.notchRect.midX, y: leftGeometry.notchRect.midY))
+
+    XCTAssertTrue(left.state.isExpanded)
+    XCTAssertEqual(left.selectedActivityID, "shelf")
+    XCTAssertTrue(right.state.isExpanded)
+    XCTAssertEqual(right.selectedActivityID, "system")
+  }
+}
+
+@MainActor
 final class NotchViewModelTests: XCTestCase {
   func makeVM(
     mode: InteractionMode = .hover,
