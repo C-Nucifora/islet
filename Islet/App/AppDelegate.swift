@@ -74,6 +74,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Kept by the delegate for the entire app lifetime so notification responses still reach the
   /// timer when Islet has no normal application window.
   private let timerCompletionNotifications = TimerCompletionNotifications.shared
+  private var singleInstanceCoordinator: SingleInstanceCoordinator?
+  private var shouldStartServices = false
 
   /// True when the app is running only as XCTest's host process. Every monitor below talks to real
   /// hardware — CoreWLAN, IOBluetooth, Spotlight, the Downloads folder — and several of them prompt
@@ -81,6 +83,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// drive the pure logic directly and need none of it running.
   private var isRunningTests: Bool {
     NSClassFromString("XCTestCase") != nil
+  }
+
+  func applicationWillFinishLaunching(_ notification: Notification) {
+    guard !isRunningTests else { return }
+
+    let owner = SingleInstanceOwner.current()
+    do {
+      let coordinator = try SingleInstanceCoordinator(bundleIdentifier: owner.bundleIdentifier)
+      switch try coordinator.claim(owner: owner) {
+      case .primary:
+        singleInstanceCoordinator = coordinator
+        shouldStartServices = true
+      case .secondary(let existingOwner):
+        let activated = ExistingInstanceActivator.activate(
+          owner: existingOwner,
+          bundleIdentifier: owner.bundleIdentifier)
+        if activated {
+          Log.app.info("Activated the existing Islet process")
+        } else {
+          Log.app.warning("Another Islet process owns the instance lock but is not yet activatable")
+        }
+      }
+    } catch {
+      // A lock setup failure should not make a single installed copy unusable. Fall back to the
+      // process list, which catches normal duplicate launches even though it cannot close a race.
+      if ExistingInstanceActivator.activate(
+        owner: nil,
+        bundleIdentifier: owner.bundleIdentifier)
+      {
+        Log.app.warning("Instance lock failed; activated an existing Islet process: \(error)")
+      } else {
+        shouldStartServices = true
+        Log.app.error("Instance lock failed; continuing without race protection: \(error)")
+      }
+    }
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
@@ -95,6 +132,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     NSApp.setActivationPolicy(.accessory)
     guard !isRunningTests else {
       Log.app.info("Launched as a test host; skipping monitor startup")
+      return
+    }
+    guard shouldStartServices else {
+      NSApp.terminate(nil)
       return
     }
     reminderCommandHotKey.start()
@@ -150,7 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationWillTerminate(_ notification: Notification) {
-    guard !isRunningTests else { return }
+    guard !isRunningTests, shouldStartServices else { return }
     // AppKit invokes this delegate on the main thread. Media shutdown is intentionally synchronous:
     // otherwise the app can exit before the watcher's serial queue terminates its helper process.
     MainActor.assumeIsolated {
