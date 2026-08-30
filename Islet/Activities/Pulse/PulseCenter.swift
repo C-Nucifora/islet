@@ -257,18 +257,22 @@ final class PulseCenter: ObservableObject {
   @discardableResult
   func applyIfEnabled(
     _ command: PulseCommand, now: Date? = nil,
-    activityEnabled: Bool = ActivityEnablement.isEnabled("pulse")
+    activityEnabled: Bool = ActivityEnablement.isEnabled("pulse"),
+    providerIdentity: PulseProviderIdentity? = nil
   ) -> PulseResponse {
     guard activityEnabled else {
       return .failure(
         "Pulse is disabled in Islet Settings", code: .featureDisabled,
         requestID: command.requestID)
     }
-    return apply(command, now: now)
+    return apply(command, now: now, providerIdentity: providerIdentity)
   }
 
   @discardableResult
-  func apply(_ command: PulseCommand, now suppliedNow: Date? = nil) -> PulseResponse {
+  func apply(
+    _ command: PulseCommand, now suppliedNow: Date? = nil,
+    providerIdentity: PulseProviderIdentity? = nil
+  ) -> PulseResponse {
     let now = suppliedNow ?? clock.now
     do {
       processDeadlines(now: now)
@@ -290,6 +294,7 @@ final class PulseCenter: ObservableObject {
         let previous = storedItems.first { $0.id == incomingID }
         let item = try PulseItem(
           payload: payload, now: now, previous: previous,
+          providerIdentity: providerIdentity,
           staleTimeout: stalenessPolicy.timeout, symbolAvailability: symbolAvailability)
         guard policy(for: item.source) != .revoked else {
           record(operation: command.operation, item: nil, result: .rejected, date: now)
@@ -512,6 +517,10 @@ final class PulseCenter: ObservableObject {
     guard let result = historyPersistenceWriter?.flush() else { return }
     completeHistoryPersistence(
       generation: result.generation, errorMessage: result.errorMessage)
+  }
+
+  func item(for id: PulseItem.ID) -> PulseItem? {
+    storedItems.first { $0.id == id }
   }
 
   func removeItems(forSource source: String, now suppliedNow: Date? = nil) {
