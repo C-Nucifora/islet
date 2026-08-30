@@ -136,6 +136,10 @@ extension Defaults.Keys {
   static let mediaPriorityList = Key<[String]>(
     "mediaPriorityList",
     default: ["com.spotify.client", "com.apple.Music"])
+  /// Stable display bundle identifiers the user has hidden from the CoreAudio-only source strip.
+  /// This intentionally stores only explicit exclusions, never the full list of observed apps.
+  static let excludedAudioOnlySourceBundleIdentifiers = Key<[String]>(
+    "excludedAudioOnlySourceBundleIdentifiers", default: [])
   static let interactionMode = Key<InteractionMode>("interactionMode", default: .hover)
   static let hoverCollapseTimeout = Key<Double>("hoverCollapseTimeout", default: 0.5)
   static let hapticsEnabled = Key<Bool>("hapticsEnabled", default: true)

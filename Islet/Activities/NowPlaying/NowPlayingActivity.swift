@@ -56,6 +56,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   func start() {
     guard !isMonitoring else { return }
     isMonitoring = true
+    migrateAudioOnlySourceExclusions()
     watcher.onStatus = { status in
       Task { @MainActor [weak self] in self?.adapterStatus = status }
     }
@@ -69,6 +70,10 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
       .sink { [weak self] _ in self?.publish() }
       .store(in: &preferenceCancellables)
     Defaults.publisher(.mediaPriorityList)
+      .dropFirst()
+      .sink { [weak self] _ in self?.publish() }
+      .store(in: &preferenceCancellables)
+    Defaults.publisher(.excludedAudioOnlySourceBundleIdentifiers)
       .dropFirst()
       .sink { [weak self] _ in self?.publish() }
       .store(in: &preferenceCancellables)
@@ -206,12 +211,42 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   }
 
   var knownBundleIdentifiers: [String] {
-    Array(Set(sources.keys.map(\.displayBundleIdentifier) + strip.map(\.displayBundleIdentifier)))
-      .filter { !$0.isEmpty }
+    Array(
+      Set(
+        sources.keys.map(\.displayBundleIdentifier) + strip.map(\.displayBundleIdentifier)
+          + audio.sources.map(\.displayBundleIdentifier))
+    )
+    .filter { !$0.isEmpty }
+    .sorted {
+      applicationName(for: $0).localizedStandardCompare(applicationName(for: $1))
+        == .orderedAscending
+    }
+  }
+
+  /// The current CoreAudio-only choices for Settings. They are deliberately derived from the live
+  /// process list and never persisted, which avoids retaining a history of apps that made sound.
+  var observedAudioOnlyBundleIdentifiers: [String] {
+    Array(Set(audio.sources.map(\.displayBundleIdentifier)))
+      .filter { !SourceFilter.isDenied($0) }
       .sorted {
         applicationName(for: $0).localizedStandardCompare(applicationName(for: $1))
           == .orderedAscending
       }
+  }
+
+  /// Keeps explicit exclusions manageable even when the app is no longer producing audio. Only
+  /// user-selected exclusions persist; other observed apps disappear when CoreAudio drops them.
+  var manageableAudioOnlyBundleIdentifiers: [String] {
+    Array(
+      Set(
+        observedAudioOnlyBundleIdentifiers
+          + Defaults[.excludedAudioOnlySourceBundleIdentifiers])
+    )
+    .filter { !SourceFilter.isDenied($0) }
+    .sorted {
+      applicationName(for: $0).localizedStandardCompare(applicationName(for: $1))
+        == .orderedAscending
+    }
   }
 
   func applicationName(for bundleIdentifier: String) -> String {
@@ -228,15 +263,21 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   private func publish(audioSources: [SourceID]? = nil) {
     let mode = Defaults[.mediaSourceMode]
     let priorityList = Defaults[.mediaPriorityList]
+    let audioSources = audioSources ?? audio.sources
     let adapterKeys = table.ordered(mode: mode, priorityList: priorityList)
+    let visibleAudioSources = audioSources.filter {
+      SourceFilter.acceptsAudioOnlySource(
+        $0.displayBundleIdentifier,
+        excludedBundleIdentifiers: Set(Defaults[.excludedAudioOnlySourceBundleIdentifiers]))
+    }
     let merged = SourceStrip.merge(
-      adapter: adapterKeys, audio: audioSources ?? audio.sources)
+      adapter: adapterKeys, audio: visibleAudioSources)
     let nextStrip = SourceStrip.secondary(all: merged, primary: adapterKeys.first)
     let nextPrimaryKey = adapterKeys.first
     let presentationChanged = publishedPrimaryKey != nextPrimaryKey
     publishedPrimaryKey = nextPrimaryKey
     if presentationChanged { mediaControlNotice = nil }
-    for source in merged { resolveApplication(for: source.displayBundleIdentifier) }
+    for source in merged + audioSources { resolveApplication(for: source.displayBundleIdentifier) }
     var publishedPropertyChanged = false
     if sources != table.states {
       reconcileArtwork(with: table.states)
@@ -287,6 +328,12 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     }
     appNames[bundleIdentifier] = FileManager.default.displayName(atPath: url.path)
     appIcons[bundleIdentifier] = NSWorkspace.shared.icon(forFile: url.path)
+  }
+
+  private func migrateAudioOnlySourceExclusions() {
+    let stored = Defaults[.excludedAudioOnlySourceBundleIdentifiers]
+    let migrated = SourceFilter.migratedAudioOnlyExclusions(stored)
+    if migrated != stored { Defaults[.excludedAudioOnlySourceBundleIdentifiers] = migrated }
   }
 
   private func resolvedApplicationName(for bundleIdentifier: String) -> String {
