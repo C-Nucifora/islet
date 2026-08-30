@@ -24,6 +24,7 @@ struct BatteryExpandedView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       header
+      insightBanner
       powerGraph
       Divider().overlay(appTheme.color(for: .battery).opacity(0.18))
       detailStrip
@@ -56,7 +57,7 @@ struct BatteryExpandedView: View {
             .lineLimit(1).minimumScaleFactor(0.8)
         }
         if let remaining {
-          Text("\(remaining.label) \(remaining.value)")
+          Text("Estimated \(remaining.label.lowercased()) \(remaining.value)")
             .font(.system(size: 9, weight: .medium)).foregroundStyle(.tertiary)
         }
       }
@@ -68,9 +69,65 @@ struct BatteryExpandedView: View {
       if metrics?.lowPowerMode == true {
         statusPill("Low Power", symbol: "leaf.fill", active: true)
       }
-      statusPill("Live", symbol: "circle.fill", active: flow.hasLivePower)
+      statusPill(refreshLabel, symbol: "circle.fill", active: flow.hasLivePower)
+        .help(refreshExplanation)
     }
     .frame(height: 30)
+  }
+
+  @ViewBuilder private var insightBanner: some View {
+    if let text = monitor.insightSnapshot.status.shortText {
+      HStack(spacing: 6) {
+        Image(systemName: insightSymbol)
+          .font(.system(size: 9, weight: .semibold))
+          .appThemeForeground(.battery)
+        Text(text)
+          .font(.system(size: 9, weight: .medium))
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+        Spacer(minLength: 0)
+      }
+      .frame(height: 14)
+      .accessibilityElement(children: .combine)
+    }
+  }
+
+  private var insightSymbol: String {
+    switch monitor.insightSnapshot.status {
+    case .learningBaseline: "chart.line.uptrend.xyaxis"
+    case .normal: "checkmark.circle"
+    case .unusualDrain, .chargerDischarging, .slowCharging:
+      "exclamationmark.triangle.fill"
+    case .workloadSpike: "waveform.path.ecg"
+    case .telemetryUnavailable: "questionmark.circle"
+    }
+  }
+
+  private var refreshLabel: String {
+    guard let date = monitor.lastLiveRefresh else { return "Waiting" }
+    let age = max(0, Int(Date().timeIntervalSince(date)))
+    if age < 5 { return "Updated now" }
+    if age < 60 { return "Updated \(age)s" }
+    return "Updated \(age / 60)m"
+  }
+
+  private var refreshExplanation: String {
+    let live =
+      monitor.lastLiveRefresh.map { "Live power refreshed \(refreshDescription($0))" }
+      ?? "No live power sample yet"
+    let stable =
+      monitor.lastStableRefresh.map {
+        "capacity and peripherals refreshed \(refreshDescription($0))"
+      } ?? "no capacity or peripheral sample yet"
+    return
+      "\(live); \(stable). CPU power and time remaining are estimates. Diagnostics identify missing or stale hardware readings."
+  }
+
+  private func refreshDescription(_ date: Date) -> String {
+    let age = max(0, Int(Date().timeIntervalSince(date)))
+    if age < 5 { return "just now" }
+    if age < 60 { return "\(age) seconds ago" }
+    return "\(age / 60) minutes ago"
   }
 
   private func statusPill(_ label: String, symbol: String, active: Bool) -> some View {
@@ -418,6 +475,10 @@ struct BatteryExpandedView: View {
         detail(
           "Cycles", metrics?.cycleCount.map(String.init), symbol: "arrow.triangle.2.circlepath")
         detail("Capacity", capacityValue, symbol: "battery.75percent")
+        if let trend = monitor.insightSnapshot.capacityTrend {
+          detail("Capacity trend", trend.wording, symbol: "chart.line.downtrend.xyaxis")
+            .help(trend.explanation)
+        }
         telemetryDiagnostics
         ForEach(monitor.peripherals) { device in
           detail(device.name, "\(device.percent)%", symbol: device.icon)
