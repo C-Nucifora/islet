@@ -245,6 +245,86 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testSourcePoliciesSurviveCenterRecreationBeforeTheFirstProviderItem() throws {
+    let suiteName = "PulseTests.source-policies.\(UUID().uuidString)"
+    let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defer { suite.removePersistentDomain(forName: suiteName) }
+    let deliveryProfileKey = Defaults.Key<PulseDeliveryProfile>(
+      "pulseDeliveryProfile", default: .everything, suite: suite)
+    let sourcePoliciesKey = Defaults.Key<[String: String]>(
+      "pulseSourcePolicies", default: [:], suite: suite)
+
+    let firstLaunch = PulseCenter(
+      deliveryProfileKey: deliveryProfileKey, sourcePoliciesKey: sourcePoliciesKey)
+    firstLaunch.setPolicy(.muted, for: "  Build  ")
+    firstLaunch.setPolicy(.revoked, for: "Agent")
+    XCTAssertEqual(Defaults[sourcePoliciesKey], ["agent": "revoked", "build": "muted"])
+
+    let relaunched = PulseCenter(
+      deliveryProfileKey: deliveryProfileKey, sourcePoliciesKey: sourcePoliciesKey)
+    let muted = PulsePayload(
+      id: "build", source: "BUILD", title: "Build", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    let revoked = PulsePayload(
+      id: "agent", source: "agent", title: "Agent", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+
+    XCTAssertEqual(relaunched.policy(for: "build"), .muted)
+    XCTAssertEqual(relaunched.policy(for: "AGENT"), .revoked)
+    XCTAssertTrue(relaunched.apply(command(.show, muted)).ok)
+    XCTAssertTrue(relaunched.items.isEmpty)
+    XCTAssertEqual(relaunched.history.first?.result, .suppressed)
+    XCTAssertFalse(relaunched.apply(command(.show, revoked)).ok)
+    XCTAssertEqual(relaunched.history.first?.result, .rejected)
+  }
+
+  @MainActor
+  func testSourcePolicyMigrationNormalizesEntriesAndDropsUnknownData() throws {
+    let suiteName = "PulseTests.source-policy-migration.\(UUID().uuidString)"
+    let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defer { suite.removePersistentDomain(forName: suiteName) }
+    let sourcePoliciesKey = Defaults.Key<[String: String]>(
+      "pulseSourcePolicies", default: [:], suite: suite)
+    suite.set(
+      [
+        " Build ": "muted",
+        "build": "revoked",
+        "agent": "allowed",
+        "future": "blocked",
+        "   ": "muted",
+      ], forKey: sourcePoliciesKey.name)
+
+    let center = PulseCenter(sourcePoliciesKey: sourcePoliciesKey)
+
+    XCTAssertEqual(center.sourcePolicies, ["build": .revoked])
+    XCTAssertEqual(Defaults[sourcePoliciesKey], ["build": "revoked"])
+  }
+
+  @MainActor
+  func testCorruptSourcePolicyStorageFallsBackToAllowingUpdates() throws {
+    let suiteName = "PulseTests.corrupt-source-policies.\(UUID().uuidString)"
+    let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defer { suite.removePersistentDomain(forName: suiteName) }
+    let sourcePoliciesKey = Defaults.Key<[String: String]>(
+      "pulseSourcePolicies", default: [:], suite: suite)
+    suite.set("not a source-policy map", forKey: sourcePoliciesKey.name)
+
+    let center = PulseCenter(sourcePoliciesKey: sourcePoliciesKey)
+    let payload = PulsePayload(
+      id: "build", source: "build", title: "Build", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+
+    XCTAssertEqual(center.sourcePolicies, [:])
+    XCTAssertEqual(Defaults[sourcePoliciesKey], [:])
+    XCTAssertEqual(suite.dictionary(forKey: sourcePoliciesKey.name)?.count, 0)
+    XCTAssertTrue(center.apply(command(.show, payload)).ok)
+    XCTAssertEqual(center.items.map(\.id), ["build"])
+  }
+
+  @MainActor
   func testSourcePolicyCanMuteRevealAndRevokeAProvider() throws {
     let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
@@ -522,7 +602,11 @@ final class PulseTests: XCTestCase {
   ) -> PulseCenter {
     let key = Defaults.Key<PulseDeliveryProfile>(
       "pulseDeliveryProfile", default: .everything, suite: deliveryProfileSuite)
-    return PulseCenter(symbolAvailability: symbolAvailability, deliveryProfileKey: key)
+    let sourcePoliciesKey = Defaults.Key<[String: String]>(
+      "pulseSourcePolicies", default: [:], suite: deliveryProfileSuite)
+    return PulseCenter(
+      symbolAvailability: symbolAvailability, deliveryProfileKey: key,
+      sourcePoliciesKey: sourcePoliciesKey)
   }
 
   private static let testToken = Data(repeating: 0, count: 32).base64EncodedString()

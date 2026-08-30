@@ -258,6 +258,10 @@ extension Defaults.Keys {
   /// available instead of silently hiding provider updates.
   static let pulseDeliveryProfile = Key<PulseDeliveryProfile>(
     "pulseDeliveryProfile", default: .everything)
+  /// Source names are normalized by `PulseCenter` before this map is written. Values stay raw
+  /// strings so a newer policy value cannot prevent older Islet versions from restoring the
+  /// policies they understand.
+  static let pulseSourcePolicies = Key<[String: String]>("pulseSourcePolicies", default: [:])
   static let t3RemoteEnvironments = Key<[T3EnvironmentProfile]>(
     "t3RemoteEnvironments", default: [])
   static let timerSessionData = Key<Data?>("timerSessionData")
