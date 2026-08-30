@@ -5,7 +5,10 @@ import SwiftUI
 
 @MainActor
 final class NowPlayingActivity: NotchActivity, ObservableObject {
-  typealias CommandPerformer = @Sendable (MediaCommand, SourceID, Bool) async -> MediaCommandResult
+  typealias CommandPerformer =
+    @Sendable (
+      MediaCommand, SourceID, Bool, @escaping MediaCommandRouter.ResolveCurrentTarget
+    ) async -> MediaCommandResult
 
   let id = "nowPlaying"
   let priority = ActivityPriority.media
@@ -52,9 +55,13 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   private let commandPerformer: CommandPerformer
 
   init(
-    commandPerformer: @escaping CommandPerformer = { command, source, isAdapterBacked in
+    commandPerformer: @escaping CommandPerformer = {
+      command, source, isAdapterBacked, resolveCurrentTarget in
       await MediaRemoteCommands.shared.perform(
-        command, shownSource: source, sourceIsAdapterBacked: isAdapterBacked)
+        command,
+        shownSource: source,
+        sourceIsAdapterBacked: isAdapterBacked,
+        resolveCurrentTarget: resolveCurrentTarget)
     }
   ) {
     self.commandPerformer = commandPerformer
@@ -176,7 +183,11 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     mediaControlNoticeTask?.cancel()
     mediaControlNoticeTask = nil
     mediaControlNotice = nil
-    let result = await commandPerformer(command, source, sources[source] != nil)
+    let result = await commandPerformer(
+      command,
+      source,
+      sources[source] != nil,
+      { [watcher] in await watcher.resolveCurrentCommandTarget() })
 
     if let reason = MediaControlFeedback.logReason(for: result) {
       Log.media.notice(
@@ -204,8 +215,8 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     }
   }
 
-  /// The control stays disabled unless both the player capability and an atomic source-targeting
-  /// transport are available. A future scoped transport can enable only the commands it supports.
+  /// A control stays disabled unless the player capability and either a verified-global or
+  /// source-scoped transport are available.
   func canPerform(_ command: MediaCommand, for source: SourceID) -> Bool {
     guard mediaControlsAvailable(for: source), let state = sources[source], !state.isAdvertisement
     else { return false }
@@ -222,26 +233,26 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   }
 
   func mediaControlsAvailable(for source: SourceID) -> Bool {
-    sources[source] != nil && MediaRemoteCommands.shared.supportsSourceScopedCommands
+    sources[source] != nil && MediaRemoteCommands.shared.targeting.controlsAvailable
   }
 
   func mediaControlScopeLabel(for source: SourceID) -> String {
     MediaControlPresentation.scopeLabel(
       appName: sourceName(for: source),
-      sourceScoped: MediaRemoteCommands.shared.supportsSourceScopedCommands)
+      targeting: MediaRemoteCommands.shared.targeting)
   }
 
   func mediaControlHelp(action: String, for source: SourceID) -> String {
     MediaControlPresentation.help(
       action: action,
       appName: sourceName(for: source),
-      sourceScoped: MediaRemoteCommands.shared.supportsSourceScopedCommands)
+      targeting: MediaRemoteCommands.shared.targeting)
   }
 
   func mediaControlAccessibilityLabel(action: String) -> String {
     MediaControlPresentation.accessibilityLabel(
       action: action,
-      sourceScoped: MediaRemoteCommands.shared.supportsSourceScopedCommands)
+      targeting: MediaRemoteCommands.shared.targeting)
   }
 
   func artwork(for source: SourceID?) -> NSImage? {
