@@ -210,6 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       AppState.system.stop()
       AppState.t3Code.stop()
       AppState.pulse.stop()
+      PulseCenter.shared.flushHistoryPersistence()
       AppState.continuity.stop()
       RemindersProvider.shared.stop()
       AudioDeviceMonitor.shared.stop()
