@@ -4,6 +4,23 @@ import XCTest
 @testable import Islet
 
 final class PulseHistoryStoreTests: XCTestCase {
+  private final class SavedEntryRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var counts: [Int] = []
+    private var mainThreadFlags: [Bool] = []
+
+    func append(_ count: Int) {
+      lock.withLock {
+        counts.append(count)
+        mainThreadFlags.append(Thread.isMainThread)
+      }
+    }
+
+    func snapshot() -> (counts: [Int], mainThreadFlags: [Bool]) {
+      lock.withLock { (counts, mainThreadFlags) }
+    }
+  }
+
   @MainActor
   func testOptInHistoryRestoresBeforeProviderHealthIsRead() throws {
     let fixture = try makeFixture()
@@ -20,6 +37,7 @@ final class PulseHistoryStoreTests: XCTestCase {
 
     XCTAssertTrue(first.apply(command(.show, payload), now: now).ok)
     first.dismiss("private-item-id", now: now.addingTimeInterval(1))
+    first.flushHistoryPersistence()
 
     let restored = PulseCenter(
       historyStore: fixture.store, historyConfiguration: configuration,
@@ -176,6 +194,7 @@ final class PulseHistoryStoreTests: XCTestCase {
       now: now)
 
     XCTAssertEqual(center.history.map(\.source), ["cli"])
+    center.flushHistoryPersistence()
     let rewritten =
       try JSONSerialization.jsonObject(
         with: Data(contentsOf: fixture.store.fileURL)) as? [String: Any]
@@ -243,12 +262,42 @@ final class PulseHistoryStoreTests: XCTestCase {
       accentHex: nil, progress: nil, state: .active, priority: .normal, expiresAt: nil,
       actions: nil)
     XCTAssertTrue(center.apply(command(.show, payload), now: now).ok)
+    center.flushHistoryPersistence()
     XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.store.fileURL.path))
 
     center.clearHistory()
 
     XCTAssertTrue(center.history.isEmpty)
     XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.store.fileURL.path))
+  }
+
+  @MainActor
+  func testPersistenceWriterCoalescesBurstAndFlushesNewestSnapshot() {
+    let recorder = SavedEntryRecorder()
+    let writer = PulseHistoryPersistenceWriter(
+      coalescingDelay: 60,
+      operationHandler: { operation in
+        guard case .save(let entries, _) = operation else { return }
+        recorder.append(entries.count)
+      })
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    for generation in 1...50 {
+      writer.submit(
+        .save(
+          entries: (0..<generation).map {
+            self.entry(id: UUID(), date: now.addingTimeInterval(TimeInterval($0)), source: "cli")
+          },
+          exportedAt: now),
+        generation: UInt64(generation))
+    }
+
+    XCTAssertTrue(recorder.snapshot().counts.isEmpty)
+    let result = writer.flush()
+    XCTAssertEqual(result?.generation, 50)
+    XCTAssertNil(result?.errorMessage)
+    XCTAssertEqual(recorder.snapshot().counts, [50])
+    XCTAssertEqual(recorder.snapshot().mainThreadFlags, [false])
   }
 
   func testSavedHistoryUsesPrivateFilePermissions() throws {

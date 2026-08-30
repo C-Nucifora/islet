@@ -119,8 +119,10 @@ final class PulseCenter: ObservableObject {
   }
   private let symbolAvailability: (String) -> Bool?
   private let historyStore: PulseHistoryStore?
+  private var historyPersistenceWriter: PulseHistoryPersistenceWriter?
   private var historyConfiguration: PulseHistoryConfiguration
   private var historyPersistenceIsReadOnly = false
+  private var historyPersistenceGeneration: UInt64 = 0
   private var storedItems: [PulseItem] = []
   private var revisionRecords: [PulseItem.ID: PulseRevisionRecord]
   private let revisionWriter: PulseRevisionPersistenceWriter?
@@ -140,9 +142,12 @@ final class PulseCenter: ObservableObject {
     deliveryProfileKey: Defaults.Key<PulseDeliveryProfile> = .pulseDeliveryProfile,
     sourcePoliciesKey: Defaults.Key<[String: String]> = .pulseSourcePolicies,
     historyStore: PulseHistoryStore? = nil,
-    historyConfiguration: PulseHistoryConfiguration = .sessionOnly
+    historyConfiguration: PulseHistoryConfiguration = .sessionOnly,
+    now: Date? = nil,
+    historyPersistenceDelay: TimeInterval = 0.25
   ) {
     let resolvedClock = clock ?? PulseSystemClock()
+    let historyReferenceDate = now ?? resolvedClock.now
     self.clock = resolvedClock
     deadlineScheduler = scheduler ?? PulseSystemDeadlineScheduler(clock: resolvedClock)
     stalenessPolicy = PulseStalenessPolicy(
@@ -177,6 +182,13 @@ final class PulseCenter: ObservableObject {
     self.historyStore = historyStore
     self.historyConfiguration = historyConfiguration
     guard let historyStore else { return }
+    historyPersistenceWriter = PulseHistoryPersistenceWriter(
+      store: historyStore, coalescingDelay: historyPersistenceDelay
+    ) { [weak self] generation, errorMessage in
+      Task { @MainActor [weak self] in
+        self?.completeHistoryPersistence(generation: generation, errorMessage: errorMessage)
+      }
+    }
     guard historyConfiguration.isEnabled else {
       do {
         try historyStore.remove()
@@ -188,14 +200,14 @@ final class PulseCenter: ObservableObject {
     }
     do {
       let restored = try historyStore.load(
-        now: resolvedClock.now, retentionDays: historyConfiguration.retentionDays,
+        now: historyReferenceDate, retentionDays: historyConfiguration.retentionDays,
         maximumEntries: historyConfiguration.maximumEntries)
       history = restored.entries
       if restored.needsRewrite {
         if history.isEmpty {
           try historyStore.remove()
         } else {
-          try historyStore.save(history, exportedAt: resolvedClock.now)
+          try historyStore.save(history, exportedAt: historyReferenceDate)
         }
       }
     } catch let error as PulseHistoryStoreError {
@@ -427,13 +439,9 @@ final class PulseCenter: ObservableObject {
 
   func clearHistory() {
     history.removeAll()
-    do {
-      try historyStore?.remove()
-      historyPersistenceError = nil
-      historyPersistenceIsReadOnly = false
-    } catch {
-      historyPersistenceError = "Pulse history could not be removed. \(error.localizedDescription)"
-    }
+    historyPersistenceIsReadOnly = false
+    submitHistoryPersistence(.remove)
+    flushHistoryPersistence()
   }
 
   func configureHistoryPersistence(
@@ -447,14 +455,9 @@ final class PulseCenter: ObservableObject {
         maximumEntries: historyConfiguration.maximumEntries)
       persistHistory(exportedAt: now)
     } else {
-      do {
-        try historyStore?.remove()
-        historyPersistenceError = nil
-        historyPersistenceIsReadOnly = false
-      } catch {
-        historyPersistenceError =
-          "Saved Pulse history could not be removed. \(error.localizedDescription)"
-      }
+      historyPersistenceIsReadOnly = false
+      submitHistoryPersistence(.remove)
+      flushHistoryPersistence()
       if history.count > historyConfiguration.maximumEntries {
         history.removeLast(history.count - historyConfiguration.maximumEntries)
       }
@@ -501,6 +504,14 @@ final class PulseCenter: ObservableObject {
 
   private func persistRevisionRecords() {
     revisionWriter?.submit(revisionRecords)
+  }
+
+  /// Waits for the newest queued history operation. The disk work itself stays on the writer's
+  /// utility queue so shutdown and deterministic tests retain ordered persistence.
+  func flushHistoryPersistence() {
+    guard let result = historyPersistenceWriter?.flush() else { return }
+    completeHistoryPersistence(
+      generation: result.generation, errorMessage: result.errorMessage)
   }
 
   func policy(for source: String) -> PulseSourcePolicy {
@@ -687,19 +698,23 @@ final class PulseCenter: ObservableObject {
   }
 
   private func persistHistory(exportedAt: Date) {
-    guard historyConfiguration.isEnabled, !historyPersistenceIsReadOnly, let historyStore else {
+    guard historyConfiguration.isEnabled, !historyPersistenceIsReadOnly else {
       return
     }
-    do {
-      if history.isEmpty {
-        try historyStore.remove()
-      } else {
-        try historyStore.save(history, exportedAt: exportedAt)
-      }
-      historyPersistenceError = nil
-    } catch {
-      historyPersistenceError = "Pulse history could not be saved. \(error.localizedDescription)"
-    }
+    let operation: PulseHistoryPersistenceOperation =
+      history.isEmpty ? .remove : .save(entries: history, exportedAt: exportedAt)
+    submitHistoryPersistence(operation)
+  }
+
+  private func submitHistoryPersistence(_ operation: PulseHistoryPersistenceOperation) {
+    guard let historyPersistenceWriter else { return }
+    historyPersistenceGeneration &+= 1
+    historyPersistenceWriter.submit(operation, generation: historyPersistenceGeneration)
+  }
+
+  private func completeHistoryPersistence(generation: UInt64, errorMessage: String?) {
+    guard generation == historyPersistenceGeneration else { return }
+    historyPersistenceError = errorMessage
   }
 
   private func sourceKey(_ source: String) -> String {
