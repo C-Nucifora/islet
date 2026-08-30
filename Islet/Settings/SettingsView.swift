@@ -1504,7 +1504,7 @@ struct SettingsView: View {
         PermissionStatusRow(
           title: "Reminders access", icon: "checklist", status: reminderStatusText,
           color: reminderStatusColor)
-        Text("Shows incomplete reminders and lets you complete them.").font(.caption)
+        Text("Shows and manages reminders from Home.").font(.caption)
           .foregroundStyle(.secondary)
         permissionButtons(
           status: permissions.diagnostics.reminders, pane: .reminders,
