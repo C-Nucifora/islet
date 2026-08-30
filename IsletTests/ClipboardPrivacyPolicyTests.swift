@@ -28,7 +28,7 @@ private final class BlockingClipboardDataProvider: NSObject, NSPasteboardItemDat
 {
   private let condition = NSCondition()
   private let data: Data
-  private var wasRequested = false
+  private var requestedTypes: [String] = []
   private var isReleased = false
 
   init(data: Data) { self.data = data }
@@ -38,7 +38,7 @@ private final class BlockingClipboardDataProvider: NSObject, NSPasteboardItemDat
     provideDataForType type: NSPasteboard.PasteboardType
   ) {
     condition.lock()
-    wasRequested = true
+    requestedTypes.append(type.rawValue)
     condition.broadcast()
     while !isReleased { condition.wait() }
     condition.unlock()
@@ -46,7 +46,12 @@ private final class BlockingClipboardDataProvider: NSObject, NSPasteboardItemDat
   }
 
   func waitUntilRequested() async -> Bool {
-    await Task.detached { [self] in waitUntilRequestedSynchronously() }.value
+    await waitUntilRequestCount(1)
+  }
+
+  func waitUntilRequestCount(_ count: Int, timeout: TimeInterval = 5) async -> Bool {
+    await Task.detached { [self] in waitUntilRequestCountSynchronously(count, timeout: timeout) }
+      .value
   }
 
   func release() {
@@ -56,11 +61,15 @@ private final class BlockingClipboardDataProvider: NSObject, NSPasteboardItemDat
     condition.unlock()
   }
 
-  private func waitUntilRequestedSynchronously() -> Bool {
+  func requests() -> [String] {
+    condition.withLock { requestedTypes }
+  }
+
+  private func waitUntilRequestCountSynchronously(_ count: Int, timeout: TimeInterval) -> Bool {
     condition.lock()
     defer { condition.unlock() }
-    let deadline = Date().addingTimeInterval(5)
-    while !wasRequested {
+    let deadline = Date().addingTimeInterval(timeout)
+    while requestedTypes.count < count {
       guard condition.wait(until: deadline) else { return false }
     }
     return true
@@ -451,6 +460,49 @@ final class ClipboardPrivacyPolicyTests: XCTestCase {
       invalidate: { $0.stop() })
   }
 
+  func testNewerCopyBackWaitsForCancelledMaterializationToFinish() async throws {
+    let pasteboard = NSPasteboard(
+      name: NSPasteboard.Name("islet-tests-copy-back-serialization-\(UUID().uuidString)"))
+    let olderType = NSPasteboard.PasteboardType("com.islet.tests.blocked.older")
+    let olderProvider = BlockingClipboardDataProvider(data: Data([1, 2, 3]))
+    defer { olderProvider.release() }
+    let olderPasteboardItem = NSPasteboardItem()
+    XCTAssertTrue(olderPasteboardItem.setDataProvider(olderProvider, forTypes: [olderType]))
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.writeObjects([olderPasteboardItem]))
+
+    let model = ClipboardModel(pasteboard: pasteboard)
+    let olderItem = ClipboardItem(kind: .text("older"), date: .distantPast)
+    let newerItem = ClipboardItem(kind: .text("newer"), date: .distantPast)
+    let olderCopy = Task { await model.copyBack(olderItem) }
+    let olderMaterializationStarted = await olderProvider.waitUntilRequested()
+    XCTAssertTrue(olderMaterializationStarted)
+
+    let newerType = NSPasteboard.PasteboardType("com.islet.tests.blocked.newer")
+    let newerProvider = BlockingClipboardDataProvider(data: Data([4, 5, 6]))
+    defer { newerProvider.release() }
+    let newerPasteboardItem = NSPasteboardItem()
+    XCTAssertTrue(newerPasteboardItem.setDataProvider(newerProvider, forTypes: [newerType]))
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.writeObjects([newerPasteboardItem]))
+
+    let newerCopy = Task { await model.copyBack(newerItem) }
+    let newerMaterializedConcurrently = await newerProvider.waitUntilRequestCount(1, timeout: 0.25)
+    XCTAssertFalse(
+      newerMaterializedConcurrently,
+      "A superseding copy-back must wait for the cancelled materialization to leave the pipeline")
+    olderProvider.release()
+    let newerMaterializationStarted = await newerProvider.waitUntilRequested()
+    XCTAssertTrue(newerMaterializationStarted)
+    newerProvider.release()
+
+    let olderSucceeded = await olderCopy.value
+    let newerSucceeded = await newerCopy.value
+    XCTAssertFalse(olderSucceeded)
+    XCTAssertTrue(newerSucceeded)
+    XCTAssertEqual(pasteboard.string(forType: .string), "newer")
+  }
+
   func testOversizedLazyRollbackLeavesClipboardUnchanged() async throws {
     let pasteboard = NSPasteboard(name: NSPasteboard.Name("islet-tests-large-\(UUID().uuidString)"))
     let type = NSPasteboard.PasteboardType("com.islet.tests.large")
@@ -572,10 +624,12 @@ final class ClipboardPrivacyPolicyTests: XCTestCase {
     XCTAssertEqual(model.items, [historyItem])
 
     let blockedType = NSPasteboard.PasteboardType("com.islet.tests.blocked")
+    let unrequestedType = NSPasteboard.PasteboardType("com.islet.tests.blocked.unrequested")
     let provider = BlockingClipboardDataProvider(data: Data([1, 2, 3]))
     defer { provider.release() }
     let blockedItem = NSPasteboardItem()
-    XCTAssertTrue(blockedItem.setDataProvider(provider, forTypes: [blockedType]))
+    XCTAssertTrue(
+      blockedItem.setDataProvider(provider, forTypes: [blockedType, unrequestedType]))
     pasteboard.clearContents()
     XCTAssertTrue(pasteboard.writeObjects([blockedItem]))
 
@@ -590,6 +644,7 @@ final class ClipboardPrivacyPolicyTests: XCTestCase {
     XCTAssertFalse(copySucceeded)
     XCTAssertNil(pasteboard.string(forType: .string))
     XCTAssertEqual(pasteboard.data(forType: blockedType), Data([1, 2, 3]))
+    XCTAssertEqual(provider.requests(), [blockedType.rawValue])
     XCTAssertTrue(model.items.isEmpty)
   }
 
