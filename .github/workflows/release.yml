@@ -361,6 +361,20 @@ jobs:
           mkdir -p "$RELEASE_OUTPUT"
           ditto -c -k --sequesterRsrc --keepParent "$app" "$artifact"
 
+      - name: Generate Pulse Shortcuts from reviewed sources
+        run: |
+          generated=0
+          for source in Integrations/Pulse/shortcuts/sources/*.wflow; do
+            name=$(basename "$source" .wflow)
+            shortcuts sign \
+              --mode anyone \
+              --input "$source" \
+              --output "$RELEASE_OUTPUT/$name.shortcut"
+            test -s "$RELEASE_OUTPUT/$name.shortcut"
+            generated=$((generated + 1))
+          done
+          test "$generated" -eq 6
+
       - name: Generate release notes from the exact tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -523,8 +537,14 @@ jobs:
             "$RELEASE_OUTPUT/appcast.xml"
             "$RELEASE_OUTPUT/release-manifest.json"
             "$RELEASE_OUTPUT/SHA256SUMS"
+            "$RELEASE_OUTPUT/01-transient-event.shortcut"
+            "$RELEASE_OUTPUT/02-progress-task.shortcut"
+            "$RELEASE_OUTPUT/03-failed-task.shortcut"
+            "$RELEASE_OUTPUT/04-guarded-completion.shortcut"
+            "$RELEASE_OUTPUT/05-focus-profile.shortcut"
+            "$RELEASE_OUTPUT/06-focus-timer.shortcut"
           )
-          [[ "$(find "$RELEASE_OUTPUT" -maxdepth 1 -type f | wc -l | tr -d ' ')" == "4" ]]
+          [[ "$(find "$RELEASE_OUTPUT" -maxdepth 1 -type f | wc -l | tr -d ' ')" == "10" ]]
           for asset in "${expected_assets[@]}"; do
             test -f "$asset"
             gh attestation verify "$asset" \
@@ -556,6 +576,7 @@ jobs:
             "$RELEASE_OUTPUT/appcast.xml" \
             "$RELEASE_OUTPUT/release-manifest.json" \
             "$RELEASE_OUTPUT/SHA256SUMS" \
+            "$RELEASE_OUTPUT"/*.shortcut \
             --draft \
             --verify-tag \
             --target "$RELEASE_COMMIT" \
@@ -589,7 +610,7 @@ jobs:
             -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$release_json"
-          [[ "$(jq '.assets | length' "$release_json")" == "4" ]]
+          [[ "$(jq '.assets | length' "$release_json")" == "10" ]]
           for asset in "$RELEASE_OUTPUT"/*; do
             name=$(basename "$asset")
             size=$(stat -f %z "$asset")
