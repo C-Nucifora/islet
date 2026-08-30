@@ -7,8 +7,12 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
   private final class Store: ReminderWriteStore {
     var authorization: EventKitPermissionState = .fullAccess
     var lists = [
-      ReminderListItem(id: "inbox", title: "Inbox", colorHex: "#FF0000", isDefault: true),
-      ReminderListItem(id: "work", title: "Work", colorHex: "#00FF00", isDefault: false),
+      ReminderListItem(
+        id: "inbox", title: "Inbox", colorHex: "#FF0000", isDefault: true,
+        isWritable: true),
+      ReminderListItem(
+        id: "work", title: "Work", colorHex: "#00FF00", isDefault: false,
+        isWritable: true),
     ]
     var records: [String: ReminderWriteRecord] = [:]
     var nextID = 1
@@ -21,7 +25,7 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
     func create(_ draft: ReminderDraft, inListWithID listID: String) throws
       -> ReminderWriteRecord
     {
-      guard let list = lists.first(where: { $0.id == listID }) else {
+      guard let list = lists.first(where: { $0.id == listID && $0.isWritable }) else {
         throw ReminderWriteError.missingList
       }
       let id = "new-\(nextID)"
@@ -43,7 +47,7 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
     ) throws -> ReminderWriteRecord {
       guard let current = records[record.id] else { throw ReminderWriteError.missingReminder }
       guard current.revision == expectedRevision else { throw ReminderWriteError.changedElsewhere }
-      guard let list = lists.first(where: { $0.id == record.listID }) else {
+      guard let list = lists.first(where: { $0.id == record.listID && $0.isWritable }) else {
         throw ReminderWriteError.missingList
       }
       var saved = record
@@ -111,6 +115,59 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
 
     XCTAssertEqual(result.failure, .missingList)
     XCTAssertTrue(store.records.isEmpty)
+  }
+
+  func testEditorDraftRejectsSubmitAfterExternalMutation() throws {
+    let store = Store()
+    let item = store.addExisting()
+    let coordinator = ReminderWriteCoordinator(store: store)
+    var draft = try coordinator.draft(for: item).get()
+    draft.title = "Updated report"
+    store.changeExternally(item.id)
+
+    let result = coordinator.update(item, with: draft)
+
+    XCTAssertEqual(result.failure, .changedElsewhere)
+    let current = try XCTUnwrap(store.records[item.id])
+    XCTAssertEqual(current.title, "File report")
+    XCTAssertEqual(current.notes, "Changed elsewhere")
+  }
+
+  func testEditorDraftUpdatesItsCapturedRevisionAndPreservesUneditedNotes() throws {
+    let store = Store()
+    let item = store.addExisting()
+    let coordinator = ReminderWriteCoordinator(store: store)
+    var draft = try coordinator.draft(for: item).get()
+    draft.title = "Updated report"
+
+    let updated = try coordinator.update(item, with: draft).get()
+
+    XCTAssertEqual(updated.title, "Updated report")
+    XCTAssertEqual(try XCTUnwrap(store.records[item.id]).notes, "Attach receipts")
+  }
+
+  func testReadOnlyListsAreHiddenAndRejectedAsWriteTargets() throws {
+    let store = Store()
+    store.lists.append(
+      ReminderListItem(
+        id: "shared", title: "Shared", colorHex: nil, isDefault: false,
+        isWritable: false))
+    let item = store.addExisting()
+    let coordinator = ReminderWriteCoordinator(store: store)
+
+    XCTAssertEqual(coordinator.lists().map(\.id), ["inbox", "work"])
+    XCTAssertEqual(
+      coordinator.create(
+        ReminderDraft(
+          title: "Cannot add", listID: "shared", dueDate: nil, hasDueTime: false,
+          priority: 0)
+      ).failure,
+      .missingList)
+    XCTAssertEqual(coordinator.move(item, toListWithID: "shared").failure, .missingList)
+
+    var draft = try coordinator.draft(for: item).get()
+    draft.listID = "shared"
+    XCTAssertEqual(coordinator.update(item, with: draft).failure, .missingList)
   }
 
   func testCustomSnoozeWritesChosenDateAndTime() throws {
