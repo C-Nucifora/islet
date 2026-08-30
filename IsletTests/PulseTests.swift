@@ -18,13 +18,14 @@ final class PulseTests: XCTestCase {
 
     XCTAssertTrue(center.apply(command(.show, normal), now: now).ok)
     XCTAssertTrue(center.apply(command(.show, urgent), now: now).ok)
-    XCTAssertEqual(center.items.map(\.id), ["urgent", "normal"])
+    XCTAssertEqual(center.items.map(\.providerIdentifier), ["urgent", "normal"])
 
     var updated = normal
     updated.title = "Updated"
     XCTAssertTrue(center.apply(command(.update, updated), now: now.addingTimeInterval(1)).ok)
     XCTAssertEqual(center.items.count, 2)
-    XCTAssertEqual(center.items.first(where: { $0.id == "normal" })?.title, "Updated")
+    XCTAssertEqual(
+      center.items.first(where: { $0.providerIdentifier == "normal" })?.title, "Updated")
   }
 
   @MainActor
@@ -62,7 +63,7 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
-  func testEndNormalizesIdentifier() throws {
+  func testLegacyUnscopedEndNormalizesUniqueIdentifier() throws {
     let center = PulseCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     let payload = PulsePayload(
@@ -73,14 +74,14 @@ final class PulseTests: XCTestCase {
     let response = center.apply(
       PulseCommand(
         token: "test", operation: .end, activity: nil, id: "  build  ",
-        requestID: "request-1", source: "tests"), now: now)
+        requestID: "request-1", source: nil), now: now)
     XCTAssertTrue(response.ok)
     XCTAssertEqual(response.requestID, "request-1")
     XCTAssertTrue(center.items.isEmpty)
   }
 
   @MainActor
-  func testCrossSourceIdentifierCollisionAndMismatchedEndAreRejected() throws {
+  func testSameProviderIdentifierCanCoexistAndUpdatesStayWithinTheirSource() throws {
     let center = PulseCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     let first = PulsePayload(
@@ -89,20 +90,94 @@ final class PulseTests: XCTestCase {
       expiresAt: nil, actions: nil)
     var second = first
     second.source = "agent"
+    second.title = "Agent"
 
+    let firstResponse = center.apply(command(.show, first), now: now)
+    let secondResponse = center.apply(command(.show, second), now: now)
+    XCTAssertTrue(firstResponse.ok)
+    XCTAssertTrue(secondResponse.ok)
+    XCTAssertEqual(firstResponse.id, "shared")
+    XCTAssertEqual(secondResponse.id, "shared")
+    XCTAssertEqual(center.items.count, 2)
+    XCTAssertEqual(Set(center.items.map(\.providerIdentifier)), ["shared"])
+    XCTAssertEqual(Set(center.items.map(\.source)), ["build", "agent"])
+
+    var buildUpdate = first
+    buildUpdate.title = "Build updated"
+    buildUpdate.progress = 0.7
+    buildUpdate.state = .progress
+    XCTAssertTrue(
+      center.apply(command(.update, buildUpdate), now: now.addingTimeInterval(1)).ok)
+    XCTAssertEqual(center.items.first { $0.source == "build" }?.title, "Build updated")
+    XCTAssertEqual(center.items.first { $0.source == "agent" }?.title, "Agent")
+    XCTAssertEqual(center.history.first?.providerIdentifier, "shared")
+  }
+
+  @MainActor
+  func testAmbiguousEndRequiresSourceAndScopedEndIsIsolated() throws {
+    let center = PulseCenter()
+    let now = Date(timeIntervalSince1970: 1_000)
+    let first = PulsePayload(
+      id: "shared", source: "build", title: "Build", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    var second = first
+    second.source = "agent"
+    second.title = "Agent"
     XCTAssertTrue(center.apply(command(.show, first), now: now).ok)
-    let collision = center.apply(command(.show, second), now: now)
-    XCTAssertFalse(collision.ok)
-    XCTAssertEqual(collision.errorCode, .identifierConflict)
-    XCTAssertEqual(center.items.first?.source, "build")
+    XCTAssertTrue(center.apply(command(.show, second), now: now).ok)
+
+    let ambiguous = center.apply(
+      PulseCommand(token: "test", operation: .end, activity: nil, id: "shared"), now: now)
+    XCTAssertFalse(ambiguous.ok)
+    XCTAssertEqual(ambiguous.errorCode, .ambiguousIdentifier)
+    XCTAssertEqual(center.items.count, 2)
 
     let mismatchedEnd = center.apply(
       PulseCommand(
-        token: "test", operation: .end, activity: nil, id: "shared", source: "agent"),
+        token: "test", operation: .end, activity: nil, id: "shared", source: "other"),
       now: now)
     XCTAssertFalse(mismatchedEnd.ok)
     XCTAssertEqual(mismatchedEnd.errorCode, .sourceMismatch)
-    XCTAssertEqual(center.items.map(\.id), ["shared"])
+    XCTAssertEqual(center.items.count, 2)
+
+    let scopedEnd = center.apply(
+      PulseCommand(
+        token: "test", operation: .end, activity: nil, id: "shared", source: " AGENT "),
+      now: now)
+    XCTAssertTrue(scopedEnd.ok)
+    XCTAssertEqual(center.items.map(\.source), ["build"])
+
+    let legacyEnd = center.apply(
+      PulseCommand(token: "test", operation: .end, activity: nil, id: "shared"), now: now)
+    XCTAssertTrue(legacyEnd.ok)
+    XCTAssertTrue(center.items.isEmpty)
+  }
+
+  @MainActor
+  func testSourceNormalizationCollisionUpdatesOneNamespacedItem() throws {
+    let center = PulseCenter()
+    let now = Date(timeIntervalSince1970: 1_000)
+    let first = PulsePayload(
+      id: "job", source: " Build ", title: "First", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    var update = first
+    update.source = "build"
+    update.title = "Updated"
+
+    XCTAssertTrue(center.apply(command(.show, first), now: now).ok)
+    XCTAssertTrue(center.apply(command(.update, update), now: now.addingTimeInterval(1)).ok)
+    XCTAssertEqual(center.items.count, 1)
+    XCTAssertEqual(center.items.first?.title, "Updated")
+    XCTAssertEqual(center.items.first?.id.normalizedSource, "build")
+
+    let end = center.apply(
+      PulseCommand(
+        token: "test", operation: .end, activity: nil, id: "job", source: "BUILD"),
+      now: now.addingTimeInterval(2))
+    XCTAssertTrue(end.ok)
+    XCTAssertTrue(center.items.isEmpty)
   }
 
   @MainActor
@@ -147,25 +222,28 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(center.history.first?.result, .suppressed)
 
     center.deliveryProfile = .everything
-    XCTAssertEqual(center.items.map(\.id), ["background"])
+    XCTAssertEqual(center.items.map(\.providerIdentifier), ["background"])
     center.deliveryProfile = .focused
     XCTAssertTrue(center.items.isEmpty)
 
     payload.id = "urgent"
     payload.priority = .high
     XCTAssertTrue(center.apply(command(.show, payload), now: now).ok)
-    XCTAssertEqual(center.items.map(\.id), ["urgent"])
+    XCTAssertEqual(center.items.map(\.providerIdentifier), ["urgent"])
     XCTAssertEqual(center.history.first?.result, .shown)
   }
 
   @MainActor
-  func testSourcePolicyCanMuteRevealAndRevokeAProvider() throws {
+  func testSourcePolicyCanMuteRevealAndRevokeOnlyItsProviderNamespace() throws {
     let center = PulseCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     let payload = PulsePayload(
       id: "build", source: "build", title: "Running", subtitle: nil, symbol: nil,
       accentHex: nil, progress: 0.2, state: .progress, priority: .normal,
       expiresAt: nil, actions: nil)
+    var agentPayload = payload
+    agentPayload.source = "agent"
+    agentPayload.title = "Agent running"
 
     center.setPolicy(.muted, for: "BUILD", now: now)
     XCTAssertTrue(center.apply(command(.show, payload), now: now).ok)
@@ -173,13 +251,15 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(center.history.first?.result, .suppressed)
 
     center.setPolicy(.allowed, for: "build", now: now)
-    XCTAssertEqual(center.items.map(\.id), ["build"])
+    XCTAssertEqual(center.items.map(\.providerIdentifier), ["build"])
+    XCTAssertTrue(center.apply(command(.show, agentPayload), now: now).ok)
 
     center.setPolicy(.revoked, for: "build", now: now)
-    XCTAssertTrue(center.items.isEmpty)
+    XCTAssertEqual(center.items.map(\.source), ["agent"])
     XCTAssertFalse(center.apply(command(.update, payload), now: now).ok)
     XCTAssertEqual(center.history.first?.result, .rejected)
     XCTAssertNil(center.history.first?.source)
+    XCTAssertNil(center.history.first?.providerIdentifier)
   }
 
   @MainActor
@@ -198,6 +278,7 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(center.history.count, PulseCenter.maximumHistoryEntries)
     let entry = try XCTUnwrap(center.history.first)
     XCTAssertEqual(entry.source, "cli")
+    XCTAssertEqual(entry.providerIdentifier, "item-24")
     XCTAssertEqual(entry.operation, .show)
     XCTAssertEqual(entry.result, .updated)
   }
@@ -214,7 +295,7 @@ final class PulseTests: XCTestCase {
 
     let active = try XCTUnwrap(center.providerStatuses.first { $0.id == "cli" })
     XCTAssertEqual(active.health, .active(1))
-    center.dismiss("cli-job", now: now.addingTimeInterval(1))
+    center.dismiss(try XCTUnwrap(center.items.first).id, now: now.addingTimeInterval(1))
     let seen = try XCTUnwrap(center.providerStatuses.first { $0.id == "cli" })
     XCTAssertEqual(seen.health, .seen(now.addingTimeInterval(1)))
   }
@@ -230,6 +311,7 @@ final class PulseTests: XCTestCase {
     XCTAssertFalse(center.apply(command(.show, payload), now: now).ok)
     XCTAssertEqual(center.history.first?.result, .rejected)
     XCTAssertNil(center.history.first?.source)
+    XCTAssertNil(center.history.first?.providerIdentifier)
   }
 
   func testWireValidatorRejectsUnknownFieldsAtEveryProtocolLevel() throws {
@@ -290,8 +372,34 @@ final class PulseTests: XCTestCase {
 
     XCTAssertFalse(response.ok)
     XCTAssertEqual(response.errorCode, .capacityExceeded)
-    XCTAssertFalse(center.items.contains { $0.id == "low" })
+    XCTAssertFalse(center.items.contains { $0.providerIdentifier == "low" })
     XCTAssertEqual(center.history.first?.result, .evicted)
+  }
+
+  @MainActor
+  func testExpiryRemovesOnlyTheMatchingNamespacedIdentifier() throws {
+    let clock = TestPulseClock(now: Date(timeIntervalSince1970: 900))
+    let scheduler = TestPulseDeadlineScheduler(clock: clock)
+    let center = PulseCenter(
+      staleTimeout: 100, staleRetention: 20, clock: clock, scheduler: scheduler)
+    let expiring = PulsePayload(
+      id: "shared", source: "build", title: "Build", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: Date(timeIntervalSince1970: 905), actions: nil)
+    var retained = expiring
+    retained.source = "agent"
+    retained.title = "Agent"
+    retained.expiresAt = nil
+
+    XCTAssertTrue(center.apply(command(.show, expiring)).ok)
+    XCTAssertTrue(center.apply(command(.show, retained)).ok)
+    scheduler.advance(to: Date(timeIntervalSince1970: 905))
+
+    XCTAssertEqual(center.items.map(\.source), ["agent"])
+    XCTAssertEqual(center.items.first?.providerIdentifier, "shared")
+    XCTAssertEqual(center.history.first?.result, .expired)
+    XCTAssertEqual(center.history.first?.source, "build")
+    XCTAssertEqual(center.history.first?.providerIdentifier, "shared")
   }
 
   @MainActor
@@ -372,15 +480,15 @@ final class PulseTests: XCTestCase {
 
     XCTAssertTrue(center.apply(command(.show, payload)).ok)
     scheduler.advance(to: Date(timeIntervalSince1970: 3_010))
-    center.keepStale("kept")
+    center.keepStale(try XCTUnwrap(center.items.first).id)
     XCTAssertTrue(try XCTUnwrap(center.items.first).isStaleKept)
     XCTAssertNil(center.items.first?.expiresAt)
     XCTAssertNil(center.items.first?.staleRemovalAt)
     XCTAssertEqual(center.history.first?.result, .kept)
 
     scheduler.advance(to: Date(timeIntervalSince1970: 4_000))
-    XCTAssertEqual(center.items.map(\.id), ["kept"])
-    center.dismiss("kept")
+    XCTAssertEqual(center.items.map(\.providerIdentifier), ["kept"])
+    center.dismiss(try XCTUnwrap(center.items.first).id)
     XCTAssertTrue(center.items.isEmpty)
     XCTAssertEqual(center.history.first?.result, .dismissed)
 
