@@ -4,6 +4,7 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/.." && pwd)
 manifest="$repo_root/Vendor/MediaRemoteAdapter.provenance.json"
+loader_patch="$repo_root/Vendor/MediaRemoteAdapter-loader.patch"
 cache_dir=${MEDIAREMOTE_ADAPTER_DOWNLOAD_CACHE:-"$repo_root/Vendor/mediaremote-adapter-src"}
 output_dir="$repo_root/Vendor/mediaremote-adapter-build"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/islet-mediaremote-adapter.XXXXXX")
@@ -33,6 +34,7 @@ clang_version=$(read_manifest '.toolchain.clangVersion')
 make_version=$(read_manifest '.toolchain.makeVersion')
 generator=$(read_manifest '.toolchain.generator')
 deployment_target=$(read_manifest '.toolchain.deploymentTarget')
+loader_patch_checksum=$(read_manifest '.artifacts.loaderPatchSHA256')
 
 actual_xcode=$(xcodebuild -version)
 expected_xcode=$(printf 'Xcode %s\nBuild version %s' "$xcode_version" "$xcode_build")
@@ -89,6 +91,9 @@ fi
 "$cmake_bin" --build "$output_dir" --parallel
 install -m 0755 "$source_dir/bin/mediaremote-adapter.pl" \
   "$output_dir/mediaremote-adapter.pl"
+verify_sha256 "$loader_patch_checksum" "$loader_patch"
+/usr/bin/patch --batch --forward --strip=1 --directory="$output_dir" \
+  < "$loader_patch"
 install -m 0644 "$source_dir/LICENSE" "$output_dir/LICENSE"
 
 printf 'Built %s\n' "$output_dir/MediaRemoteAdapter.framework"
