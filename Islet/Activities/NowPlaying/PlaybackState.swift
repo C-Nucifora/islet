@@ -1,5 +1,35 @@
 import Foundation
 
+enum PlaybackSeekability: Equatable {
+  case seekable
+  case live
+  case unavailable
+
+  var title: String {
+    switch self {
+    case .seekable: ""
+    case .live: "Live"
+    case .unavailable: "Seeking unavailable"
+    }
+  }
+
+  var symbol: String {
+    switch self {
+    case .seekable: ""
+    case .live: "dot.radiowaves.left.and.right"
+    case .unavailable: "nosign"
+    }
+  }
+
+  var accessibilityLabel: String {
+    switch self {
+    case .seekable: ""
+    case .live: "Live media. Seeking is unavailable."
+    case .unavailable: "Playback position is unavailable."
+    }
+  }
+}
+
 struct PlaybackState: Equatable {
   var title = ""
   var artist = ""
@@ -12,6 +42,12 @@ struct PlaybackState: Equatable {
   var duration: TimeInterval = 0
   var elapsed: TimeInterval = 0
   var elapsedAt = Date()
+  /// Explicit live metadata takes precedence over a finite duration. Some players expose a rolling
+  /// duration for a live stream, but it is not a range users can seek within.
+  var isLive = false
+  /// `nil` means the adapter did not report a capability. A valid finite duration is then the best
+  /// available evidence that the item can be scrubbed.
+  var supportsSeeking: Bool?
   var artwork: Data?
 
   var shuffleMode = 0  // 0 = off
@@ -39,11 +75,46 @@ struct PlaybackState: Equatable {
     parentBundleIdentifier.isEmpty ? bundleIdentifier : parentBundleIdentifier
   }
 
+  var seekability: PlaybackSeekability {
+    if isLive { return .live }
+    guard supportsSeeking != false, duration.isFinite, duration > 0 else { return .unavailable }
+    return .seekable
+  }
+
   /// Best-guess current position extrapolated from the last update.
   var currentElapsed: TimeInterval {
-    let extrapolated = isPlaying ? elapsed + Date().timeIntervalSince(elapsedAt) : elapsed
+    currentElapsed(at: Date())
+  }
+
+  /// Best-guess current position at a specific time. The explicit date keeps position
+  /// reconciliation deterministic and testable.
+  func currentElapsed(at date: Date = Date()) -> TimeInterval {
+    let extrapolated = isPlaying ? elapsed + date.timeIntervalSince(elapsedAt) : elapsed
     guard extrapolated.isFinite else { return 0 }
     guard duration > 0, duration.isFinite else { return max(0, extrapolated) }
     return min(max(0, extrapolated), duration)
+  }
+
+}
+
+/// Tracks a drag independently of SwiftUI's transient slider state. If the primary source changes
+/// while a drag is in progress, finishing that old drag must not seek whichever source replaced it.
+struct PlaybackScrubSession: Equatable {
+  private(set) var source: SourceID?
+
+  var isActive: Bool { source != nil }
+
+  mutating func begin(for source: SourceID?) {
+    self.source = source
+  }
+
+  mutating func finish(value: TimeInterval, currentSource: SourceID?) -> TimeInterval? {
+    defer { source = nil }
+    guard source != nil, source == currentSource, value.isFinite else { return nil }
+    return value
+  }
+
+  mutating func cancel() {
+    source = nil
   }
 }
