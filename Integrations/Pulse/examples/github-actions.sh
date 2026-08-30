@@ -13,7 +13,7 @@ run_url=${4-}
 progress=${5-}
 
 case "$state" in
-  active|progress|needsAction|succeeded|failed) ;;
+  active|progress|needsAction|succeeded|failed|cancelled) ;;
   *) echo "invalid state: $state" >&2; exit 64 ;;
 esac
 
@@ -24,6 +24,7 @@ case "$state" in
   needsAction) priority=high ;;
   succeeded) operation=event ;;
   failed) operation=event; priority=critical ;;
+  cancelled) operation=event ;;
 esac
 
 set -- swift Tools/islet-pulse.swift "$operation" "github-run-$run_id" "$title" \

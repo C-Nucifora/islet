@@ -69,6 +69,7 @@ jobs:
         run: |
           xcrun swift-format lint --strict --recursive Islet IsletTests Tools
           xcrun swiftc -typecheck Tools/islet-pulse.swift
+          xcrun swiftc -typecheck Tools/islet-xcode-pulse.swift
           jq empty Integrations/Pulse/providers.json Integrations/Pulse/pulse-command.schema.json
           sh -n Integrations/Pulse/examples/github-actions.sh Scripts/*.sh
 

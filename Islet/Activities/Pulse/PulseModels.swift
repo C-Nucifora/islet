@@ -25,6 +25,7 @@ enum PulseState: String, Codable, Sendable {
   case needsAction
   case succeeded
   case failed
+  case cancelled
 }
 
 struct PulseAction: Codable, Equatable, Identifiable, Sendable {
@@ -396,8 +397,14 @@ struct PulseProviderDescriptor: Identifiable, Equatable, Sendable {
       capabilities: [.events, .progress, .webActions],
       setupHint: "Use the example locally or on a self-hosted Mac runner."),
     .init(
+      id: "xcode", name: "Xcode builds",
+      summary: "Shows local xcodebuild and test progress.",
+      symbol: "hammer.fill", sourceIDs: ["xcode"],
+      capabilities: [.events, .progress, .webActions],
+      setupHint: "Wrap xcodebuild with Tools/islet-xcode-pulse.swift."),
+    .init(
       id: "developer-tools", name: "Developer tools", summary: "Build, test, and agent status.",
-      symbol: "hammer.fill", sourceIDs: ["xcode", "build", "tests", "agent"],
+      symbol: "wrench.and.screwdriver.fill", sourceIDs: ["build", "tests", "agent"],
       capabilities: [.events, .progress, .webActions],
       setupHint: "Use a stable source name from your local automation."),
   ]

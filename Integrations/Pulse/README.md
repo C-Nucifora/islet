@@ -15,6 +15,50 @@ swift Tools/islet-pulse.swift event build-1842 "Build succeeded" "All checks pas
 swift Tools/islet-pulse.swift end build-1842 --source build
 ```
 
+## Xcode builds and tests
+
+`Tools/islet-xcode-pulse.swift` is the first-party provider for local command-line Xcode work. Put
+provider options before `--` and pass normal `xcodebuild` arguments after it:
+
+```sh
+swift Tools/islet-xcode-pulse.swift --label Islet -- \
+  -project Islet.xcodeproj -scheme Islet \
+  -destination 'platform=macOS,arch=arm64' test
+```
+
+The wrapper mirrors `xcodebuild` output and exits with the same status. One invocation creates one
+random stable Pulse item ID, then updates that item for the lifetime of the build. Use `--id NAME`
+when an outer build system already has a stable run identifier. Concurrent invocations get distinct
+items unless the caller deliberately reuses an ID.
+
+Pulse reports elapsed time while the command runs. When `xcodebuild` emits bounded `[completed/total]`
+steps, the provider publishes a clamped `0...1` progress value. It does not invent a percentage for
+output that has no total. The final item expires after 8 seconds on success, 15 seconds on
+cancellation, or 60 seconds on failure.
+
+Optional actions must be explicit safe HTTP(S) URLs:
+
+```sh
+swift Tools/islet-xcode-pulse.swift \
+  --project-url https://example.com/project \
+  --report-url https://example.com/builds/1842 \
+  --failure-url https://example.com/builds/1842/failures \
+  -- -workspace App.xcworkspace -scheme App test
+```
+
+The provider sends at most three actions named Open project, Open report, and Open failure.
+It rejects URLs with embedded credentials and never infers a remote URL from Git configuration.
+It parses only the `xcodebuild` byte stream, keeps at most 8 KiB of the current line, and does not
+read source files, result bundles, credentials, or other projects. Pulse receives a bounded display
+label, elapsed time, progress when present, and a truncated test name or source filename and line on
+failure. Terminal controls, newlines, and malformed UTF-8 are removed or replaced before publishing.
+The full build log stays on the wrapper's standard output and is not stored by the provider or Pulse.
+
+The provider supports `xcodebuild` first because the Xcode GUI does not expose the same supported,
+stable output stream. Builds started with Xcode's Run, Test, or Product menu are not reported. To see
+them in Pulse, run the equivalent scheme action through this wrapper. Xcode may omit bounded step
+counts for some build phases, so those runs show elapsed time without a percentage.
+
 The reference tool reads a user-only token from
 `~/Library/Application Support/Islet/pulse-token` and sends one newline-delimited JSON command to
 TCP port `47717` on `127.0.0.1`. The server rejects messages over 64 KiB, invalid tokens, unsafe
@@ -102,7 +146,7 @@ The CLI keeps the positional quick start and adds optional provider fields:
 ```text
 --source NAME
 --progress 0.0...1.0
---state active|progress|needsAction|succeeded|failed
+--state active|progress|needsAction|succeeded|failed|cancelled
 --priority low|normal|high|critical
 --expires 2...86400
 --action "Open run" https://example.com/run/1842

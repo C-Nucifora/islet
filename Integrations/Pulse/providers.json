@@ -23,9 +23,16 @@
       "setup": "Use examples/github-actions.sh locally or on a self-hosted Mac runner."
     },
     {
+      "id": "xcode",
+      "name": "Xcode builds",
+      "sources": ["xcode"],
+      "capabilities": ["events", "progress", "webActions"],
+      "setup": "Wrap xcodebuild with Tools/islet-xcode-pulse.swift."
+    },
+    {
       "id": "developer-tools",
       "name": "Developer tools",
-      "sources": ["xcode", "build", "tests", "agent"],
+      "sources": ["build", "tests", "agent"],
       "capabilities": ["events", "progress", "webActions"],
       "setup": "Use a stable source name from local automation."
     }

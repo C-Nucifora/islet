@@ -44,6 +44,22 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testCancelledStateIsAcceptedAsAProviderTerminalState() throws {
+    let center = PulseCenter()
+    let now = Date(timeIntervalSince1970: 1_000)
+    let payload = PulsePayload(
+      id: "cancelled", source: "xcode", title: "Build cancelled", subtitle: "Islet · 4s",
+      symbol: nil, accentHex: nil, progress: 0.25, state: .cancelled, priority: .normal,
+      expiresAt: now.addingTimeInterval(15), actions: nil)
+
+    XCTAssertTrue(center.apply(command(.event, payload), now: now).ok)
+    let item = try XCTUnwrap(center.items.first)
+    XCTAssertEqual(item.state, .cancelled)
+    XCTAssertEqual(item.progress, 0.25)
+    XCTAssertEqual(item.expiresAt, now.addingTimeInterval(15))
+  }
+
+  @MainActor
   func testRejectsInvalidAccentAndDuplicateActionIdentity() throws {
     let center = PulseCenter()
     let now = Date(timeIntervalSince1970: 1_000)
