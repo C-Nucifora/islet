@@ -68,6 +68,25 @@ jobs:
           mkdir -p "$resolved_dir"
           install -m 0644 Package.resolved "$resolved_dir/Package.resolved"
 
+      - name: Verify generated hardened runtime settings
+        run: |
+          hardened_runtime_value() {
+            xcodebuild \
+              -project Islet.xcodeproj \
+              -scheme Islet \
+              -configuration "$1" \
+              -showBuildSettings |
+              sed -n 's/^[[:space:]]*ENABLE_HARDENED_RUNTIME = //p' |
+              sort -u
+          }
+
+          release_value=$(hardened_runtime_value Release)
+          debug_value=$(hardened_runtime_value Debug)
+          if [[ "$release_value" != "YES" || "$debug_value" != "NO" ]]; then
+            echo "Unexpected hardened runtime settings: Release=$release_value Debug=$debug_value" >&2
+            exit 1
+          fi
+
       - name: Resolve pinned packages
         run: |
           xcodebuild \
@@ -94,7 +113,6 @@ jobs:
             MARKETING_VERSION="$RELEASE_VERSION" \
             CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
             CODE_SIGNING_ALLOWED=NO \
-            ENABLE_HARDENED_RUNTIME=YES \
             build
 
       - name: Verify app contents
@@ -161,6 +179,15 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app"
           codesign --display --verbose=4 "$app" 2>&1 | grep -F "Authority=Developer ID Application:"
           codesign --display --verbose=4 "$app" 2>&1 | grep -F "runtime"
+
+          entitlements="$RUNNER_TEMP/islet-release-entitlements.plist"
+          rm -f "$entitlements"
+          codesign --display --entitlements "$entitlements" --xml "$app"
+          if [[ -s "$entitlements" ]]; then
+            echo "The Release app must not contain entitlements." >&2
+            plutil -p "$entitlements" >&2
+            exit 1
+          fi
 
       - name: Notarize and package app
         env:
