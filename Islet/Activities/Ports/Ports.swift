@@ -192,17 +192,21 @@ final class PortMonitor: ObservableObject {
   private var owners: Set<String> = []
   private let reader: () -> PortEnumerationResult
   private let now: () -> Date
+  private let monotonicNow: () -> TimeInterval
   private let gracePeriod: TimeInterval
   private var lastSuccessfulRead: Date?
+  private var staleStartedAt: TimeInterval?
   private var graceExpiryTask: Task<Void, Never>?
 
   init(
     reader: @escaping () -> PortEnumerationResult = PortsReader.read,
     now: @escaping () -> Date = Date.init,
+    monotonicNow: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
     gracePeriod: TimeInterval = 30
   ) {
     self.reader = reader
     self.now = now
+    self.monotonicNow = monotonicNow
     self.gracePeriod = gracePeriod
   }
 
@@ -267,6 +271,7 @@ final class PortMonitor: ObservableObject {
     devices = []
     eventDevices = []
     lastSuccessfulRead = nil
+    staleStartedAt = nil
     readerHealth = .awaitingFirstRead
   }
 
@@ -293,7 +298,7 @@ final class PortMonitor: ObservableObject {
     case .devices(let next):
       accept(next, at: timestamp)
     case .error(let error):
-      record(error, at: timestamp)
+      record(error)
     }
   }
 
@@ -304,11 +309,16 @@ final class PortMonitor: ObservableObject {
   /// Called by the grace timer and exposed internally for deterministic clock-driven tests.
   func expireGraceIfNeeded() {
     guard case .stale(let error, let lastSuccessfulRead) = readerHealth,
-      now() >= lastSuccessfulRead.addingTimeInterval(gracePeriod)
+      let staleStartedAt
     else { return }
+    guard monotonicNow() >= staleStartedAt + gracePeriod else {
+      scheduleGraceExpiry(from: staleStartedAt)
+      return
+    }
 
     readerHealth = .failed(error: error, lastSuccessfulRead: lastSuccessfulRead)
     if !devices.isEmpty { devices = [] }
+    self.staleStartedAt = nil
     graceExpiryTask = nil
   }
 
@@ -316,6 +326,7 @@ final class PortMonitor: ObservableObject {
     let isFirstSuccess = lastSuccessfulRead == nil
     graceExpiryTask?.cancel()
     graceExpiryTask = nil
+    staleStartedAt = nil
     lastSuccessfulRead = timestamp
     readerHealth = .current(lastSuccessfulRead: timestamp)
 
@@ -325,22 +336,35 @@ final class PortMonitor: ObservableObject {
     eventDevices = next
   }
 
-  private func record(_ error: PortEnumerationError, at timestamp: Date) {
-    guard let lastSuccessfulRead, timestamp >= lastSuccessfulRead,
-      timestamp < lastSuccessfulRead.addingTimeInterval(gracePeriod)
-    else {
+  private func record(_ error: PortEnumerationError) {
+    guard let lastSuccessfulRead, gracePeriod > 0 else {
+      staleStartedAt = nil
+      graceExpiryTask?.cancel()
+      graceExpiryTask = nil
       readerHealth = .failed(error: error, lastSuccessfulRead: lastSuccessfulRead)
       if !devices.isEmpty { devices = [] }
       return
     }
 
+    let current = monotonicNow()
+    let staleStartedAt = self.staleStartedAt ?? current
+    guard current < staleStartedAt + gracePeriod else {
+      self.staleStartedAt = nil
+      graceExpiryTask?.cancel()
+      graceExpiryTask = nil
+      readerHealth = .failed(error: error, lastSuccessfulRead: lastSuccessfulRead)
+      if !devices.isEmpty { devices = [] }
+      return
+    }
+
+    self.staleStartedAt = staleStartedAt
     readerHealth = .stale(error: error, lastSuccessfulRead: lastSuccessfulRead)
-    scheduleGraceExpiry(from: lastSuccessfulRead)
+    scheduleGraceExpiry(from: staleStartedAt)
   }
 
-  private func scheduleGraceExpiry(from lastSuccessfulRead: Date) {
+  private func scheduleGraceExpiry(from staleStartedAt: TimeInterval) {
     graceExpiryTask?.cancel()
-    let delay = max(0, lastSuccessfulRead.addingTimeInterval(gracePeriod).timeIntervalSince(now()))
+    let delay = max(0, staleStartedAt + gracePeriod - monotonicNow())
     graceExpiryTask = Task { [weak self] in
       do {
         try await Task.sleep(for: .seconds(delay))
