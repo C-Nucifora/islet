@@ -541,6 +541,35 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     XCTAssertEqual(cleanupEvents, ["oauth.tombstone", "proof.delete", "oauth.delete"])
   }
 
+  func testSignOutCancelsACommitQueuedBeforeSessionEntry() async throws {
+    let old = try record(grantID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
+    let candidate = try record(
+      grantID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!)
+    let commitAdmissionGate = T3CoordinatorGate()
+    let events = T3CoordinatorEventRecorder()
+    let session = T3CoordinatorSessionFake(
+      storedRecord: old, exchangeRecord: candidate,
+      commitAdmissionGate: commitAdmissionGate, events: events)
+    let relay = T3CoordinatorRelayFake(listOutcomes: [.success([])], events: events)
+    let fixture = makeFixture(session: session, relay: relay, events: events)
+    await fixture.coordinator.loadAccount()
+    let linkTask = Task { await fixture.coordinator.link() }
+    await commitAdmissionGate.waitUntilEntered()
+
+    let signOutTask = Task { try await fixture.coordinator.signOut() }
+    let cleanupFinishedBeforeCommitEntry = await events.wait(
+      for: "oauth.delete", timeout: .seconds(1))
+
+    await commitAdmissionGate.resume()
+    try await signOutTask.value
+    await linkTask.value
+
+    XCTAssertTrue(cleanupFinishedBeforeCommitEntry)
+    let storedAccount = await session.storedAccount()
+    XCTAssertNil(storedAccount)
+    XCTAssertEqual(fixture.coordinator.state, .signedOut)
+  }
+
   func testInventoryFailureKeepsLastGoodInventoryAndMonitorTasks() async throws {
     let old = try record(grantID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
     let environment = environment(id: "old")
@@ -1436,6 +1465,7 @@ private actor T3CoordinatorSessionFake: T3ConnectSessionServing {
   private let loadGate: T3CoordinatorGate?
   private var loadOutcome: T3CoordinatorOutcome
   private let exchangeRecord: T3OAuthRecord?
+  private let commitAdmissionGate: T3CoordinatorGate?
   private let commitOutcome: T3CoordinatorOutcome
   private let commitGate: T3CoordinatorGate?
   private var signOutOutcome: T3CoordinatorOutcome
@@ -1450,6 +1480,7 @@ private actor T3CoordinatorSessionFake: T3ConnectSessionServing {
     loadGate: T3CoordinatorGate? = nil,
     loadOutcome: T3CoordinatorOutcome = .success,
     exchangeRecord: T3OAuthRecord? = nil,
+    commitAdmissionGate: T3CoordinatorGate? = nil,
     commitOutcome: T3CoordinatorOutcome = .success,
     commitGate: T3CoordinatorGate? = nil,
     signOutOutcome: T3CoordinatorOutcome = .success,
@@ -1459,6 +1490,7 @@ private actor T3CoordinatorSessionFake: T3ConnectSessionServing {
     self.loadGate = loadGate
     self.loadOutcome = loadOutcome
     self.exchangeRecord = exchangeRecord
+    self.commitAdmissionGate = commitAdmissionGate
     self.commitOutcome = commitOutcome
     self.commitGate = commitGate
     self.signOutOutcome = signOutOutcome
@@ -1498,6 +1530,8 @@ private actor T3CoordinatorSessionFake: T3ConnectSessionServing {
   }
 
   func commit(_ candidate: T3OAuthRecord) async throws {
+    if let commitAdmissionGate { await commitAdmissionGate.suspend() }
+    try Task.checkCancellation()
     commitCalls += 1
     generation &+= 1
     let capturedGeneration = generation
@@ -1505,6 +1539,7 @@ private actor T3CoordinatorSessionFake: T3ConnectSessionServing {
     defer { commitInProgress = false }
     events?.append("session.commit")
     if let commitGate { await commitGate.suspend() }
+    try Task.checkCancellation()
     guard capturedGeneration == generation else { throw T3ConnectSessionError.staleOperation }
     if commitOutcome == .failure { throw T3CoordinatorTestError.failed }
     record = candidate

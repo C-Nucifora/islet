@@ -323,6 +323,7 @@ final class T3ConnectCoordinator: ObservableObject {
     generation &+= 1
     let listener = activeListener
     let commitTask = linkCommitTask
+    commitTask?.cancel()
     linkTask?.cancel()
     linkTask = nil
     linkAttemptID = nil
