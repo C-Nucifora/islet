@@ -11,9 +11,18 @@ final class ShelfActivity: NotchActivity, ObservableObject {
   let isAvailableWhenInactive = true
   private(set) var activationDate: Date?
 
-  private let model = ShelfModel.shared
+  private let model: ShelfModel
+  let airDrop: AirDropShareController
   private var cancellables: Set<AnyCancellable> = []
   private var isMonitoring = false
+
+  init(
+    model: ShelfModel = .shared,
+    airDrop: AirDropShareController = AirDropShareController()
+  ) {
+    self.model = model
+    self.airDrop = airDrop
+  }
 
   var isActive: Bool { !model.items.isEmpty || model.isDropPresentationActive }
 
@@ -49,15 +58,16 @@ final class ShelfActivity: NotchActivity, ObservableObject {
         .font(.caption.weight(.semibold)).monospacedDigit().appThemeForeground(.shelf))
   }
 
-  var expandedView: AnyView { AnyView(ShelfView(model: model)) }
+  var shelfView: ShelfView { ShelfView(model: model, airDrop: airDrop) }
+  var expandedView: AnyView { AnyView(shelfView) }
 }
 
 struct ShelfView: View {
   @ObservedObject var model: ShelfModel
+  @ObservedObject var airDrop: AirDropShareController
   @Environment(\.appTheme) private var appTheme
   @State private var isCreatingStack = false
   @State private var newStackName = ""
-  @StateObject private var airDrop = AirDropShareController()
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -96,7 +106,7 @@ struct ShelfView: View {
         }
         if !model.items.isEmpty {
           Button {
-            airDrop.share(model.urls)
+            model.shareAllItems(using: airDrop)
           } label: {
             if airDrop.isSharing {
               ProgressView().controlSize(.small)
@@ -189,7 +199,7 @@ struct ShelfView: View {
           Text(airDropFeedback.message).lineLimit(2)
           Spacer(minLength: 0)
           if airDropFeedback.canRetry {
-            Button("Try Again") { airDrop.retry(model.urls) }.buttonStyle(.link)
+            Button("Try Again") { model.shareAllItems(using: airDrop) }.buttonStyle(.link)
           }
           if airDropFeedback.canDismiss {
             Button("Dismiss") { airDrop.dismissFeedback() }.buttonStyle(.link)
@@ -327,6 +337,7 @@ struct ShelfView: View {
     }
     .menuStyle(.borderlessButton)
     .fixedSize()
+    .accessibilityLabel("Shelf workspace options")
     .help("Workspace, expiry, and duplicate options")
   }
 
@@ -364,7 +375,7 @@ struct ShelfItemView: View {
         .buttonStyle(.plain)
         .frame(width: 56, height: 56)
         .accessibilityLabel("Quick Look \(item.name)")
-        .accessibilityHint("Drag to copy it into another app")
+        .accessibilityHint("Opens a preview of this Shelf item")
         .help("Quick Look \(item.name)")
 
         Button {

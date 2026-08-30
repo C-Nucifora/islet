@@ -136,4 +136,121 @@ final class AirDropShareControllerTests: XCTestCase {
     XCTAssertEqual(controller.state, .ready)
     XCTAssertTrue(controller.isActionEnabled)
   }
+
+  @MainActor
+  func testShareCompletionRunsForEveryTerminalOutcome() {
+    let outcomes: [AirDropShareOutcome] = [
+      .shared,
+      .cancelled,
+      .failed("The receiving device disconnected."),
+    ]
+
+    for outcome in outcomes {
+      var finish: ((AirDropShareOutcome) -> Void)?
+      var completionCount = 0
+      let controller = AirDropShareController(
+        serviceAvailable: { true },
+        startShare: { _, completion in
+          finish = completion
+          return .started
+        })
+
+      controller.share([URL(fileURLWithPath: "/Shelf/report.pdf")]) {
+        completionCount += 1
+      }
+      finish?(outcome)
+
+      XCTAssertEqual(completionCount, 1)
+    }
+  }
+
+  @MainActor
+  func testShareCompletionRunsImmediatelyWhenAStartIsRejected() {
+    let url = URL(fileURLWithPath: "/Shelf/report.pdf")
+    var unavailableCompletionCount = 0
+    let unavailable = AirDropShareController(
+      serviceAvailable: { false },
+      startShare: { _, _ in .started })
+    unavailable.share([url]) { unavailableCompletionCount += 1 }
+    XCTAssertEqual(unavailableCompletionCount, 1)
+
+    var busyCompletionCount = 0
+    let busy = AirDropShareController(
+      serviceAvailable: { true },
+      startShare: { _, _ in .busy })
+    busy.share([url]) { busyCompletionCount += 1 }
+    XCTAssertEqual(busyCompletionCount, 1)
+
+    var disappearedCompletionCount = 0
+    let disappeared = AirDropShareController(
+      serviceAvailable: { true },
+      startShare: { _, _ in .unavailable })
+    disappeared.share([url]) { disappearedCompletionCount += 1 }
+    XCTAssertEqual(disappearedCompletionCount, 1)
+  }
+
+  @MainActor
+  func testOverlappingShareReleasesOnlyTheRejectedAttemptImmediately() {
+    var finish: ((AirDropShareOutcome) -> Void)?
+    var firstCompletionCount = 0
+    var secondCompletionCount = 0
+    let controller = AirDropShareController(
+      serviceAvailable: { true },
+      startShare: { _, completion in
+        finish = completion
+        return .started
+      })
+    let url = URL(fileURLWithPath: "/Shelf/report.pdf")
+
+    controller.share([url]) { firstCompletionCount += 1 }
+    controller.share([url]) { secondCompletionCount += 1 }
+
+    XCTAssertEqual(firstCompletionCount, 0)
+    XCTAssertEqual(secondCompletionCount, 1)
+    finish?(.shared)
+    XCTAssertEqual(firstCompletionCount, 1)
+    XCTAssertEqual(secondCompletionCount, 1)
+  }
+
+  @MainActor
+  func testShelfActivityKeepsAirDropFailureAcrossPresentationRecreation() {
+    var finish: ((AirDropShareOutcome) -> Void)?
+    let controller = AirDropShareController(
+      serviceAvailable: { true },
+      startShare: { _, completion in
+        finish = completion
+        return .started
+      })
+    let activity = ShelfActivity(airDrop: controller)
+    var presentation: ShelfView? = activity.shelfView
+
+    presentation?.airDrop.share([URL(fileURLWithPath: "/Shelf/report.pdf")])
+    presentation = nil
+    let recreatedPresentation = activity.shelfView
+    finish?(.failed("The receiving device is no longer available."))
+
+    XCTAssertEqual(
+      recreatedPresentation.airDrop.state,
+      .failed("The receiving device is no longer available."))
+  }
+
+  @MainActor
+  func testShelfActivityKeepsAirDropCancellationAcrossPresentationRecreation() {
+    var finish: ((AirDropShareOutcome) -> Void)?
+    let controller = AirDropShareController(
+      serviceAvailable: { true },
+      startShare: { _, completion in
+        finish = completion
+        return .started
+      })
+    let activity = ShelfActivity(airDrop: controller)
+    var presentation: ShelfView? = activity.shelfView
+
+    presentation?.airDrop.share([URL(fileURLWithPath: "/Shelf/report.pdf")])
+    presentation = nil
+    let recreatedPresentation = activity.shelfView
+    finish?(.cancelled)
+
+    XCTAssertEqual(recreatedPresentation.airDrop.state, .cancelled)
+  }
 }

@@ -1484,6 +1484,56 @@ final class ShelfLogicTests: XCTestCase {
   }
 
   @MainActor
+  func testAirDropLeasesExpiringItemsUntilEveryTerminalOutcome() async throws {
+    let outcomes: [AirDropShareOutcome] = [
+      .shared,
+      .cancelled,
+      .failed("The receiving device disconnected."),
+    ]
+    var roots: [URL] = []
+    defer {
+      for root in roots { try? FileManager.default.removeItem(at: root) }
+    }
+
+    for (index, outcome) in outcomes.enumerated() {
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString, isDirectory: true)
+      roots.append(root)
+      let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+      try FileManager.default.createDirectory(at: shelf, withIntermediateDirectories: true)
+      let stored = shelf.appendingPathComponent("share-\(index).txt")
+      try Data("stored".utf8).write(to: stored)
+      let expiry = Date.now.addingTimeInterval(3_600)
+      let stack = ShelfStack(id: UUID(), name: "Scratch", expiryRule: .oneHour)
+      let record = ShelfItemRecord(
+        id: UUID(), fileName: stored.lastPathComponent, stackID: stack.id,
+        importedAt: expiry.addingTimeInterval(-3_600), expiresAt: expiry, origin: nil)
+      let manifest = ShelfManifest(
+        stacks: [stack], items: [record], pendingImports: [],
+        sameFilePolicy: .reuseExisting, sameNamePolicy: .keepBoth)
+      try await ShelfManifestStore.save(manifest, to: shelf.appendingPathExtension("json")).get()
+      let model = ShelfModel(directory: shelf)
+      var finish: ((AirDropShareOutcome) -> Void)?
+      let controller = AirDropShareController(
+        serviceAvailable: { true },
+        startShare: { _, completion in
+          finish = completion
+          return .started
+        })
+
+      model.shareAllItems(using: controller)
+      await model.cleanupExpired(at: expiry.addingTimeInterval(1))
+      XCTAssertEqual(model.items.map(\.id), [record.id])
+      XCTAssertTrue(FileManager.default.fileExists(atPath: stored.path))
+
+      finish?(outcome)
+      await model.cleanupExpired(at: expiry.addingTimeInterval(1))
+      XCTAssertTrue(model.items.isEmpty)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: stored.path))
+    }
+  }
+
+  @MainActor
   func testExpiryRemovalRejectsANewLeaseAfterDeletionIsReserved() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
       UUID().uuidString, isDirectory: true)

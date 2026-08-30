@@ -345,6 +345,15 @@ final class ShelfModel: ObservableObject {
       + "\(Self.formattedByteCount(storagePolicy.minimumFreeSpaceBytes)) free for other apps."
   }
 
+  func shareAllItems(using airDrop: AirDropShareController) {
+    let leasedItems = items.filter { beginUsing($0) }
+    guard !leasedItems.isEmpty else { return }
+    airDrop.share(leasedItems.map(\.url)) { [weak self] in
+      guard let self else { return }
+      for item in leasedItems { self.endUsing(item) }
+    }
+  }
+
   func setDropTarget(_ id: UUID, active: Bool) {
     dropState.setTarget(id, active: active)
   }
