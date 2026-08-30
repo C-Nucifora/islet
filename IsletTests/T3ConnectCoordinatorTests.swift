@@ -344,12 +344,14 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     await fixture.sleeper.waitForSleep(interval: 60, count: 1)
     await fixture.sleeper.waitForSleep(interval: 10, count: 1)
     let candidates = fixture.coordinator.cloudCandidates
+    XCTAssertEqual(fixture.coordinator.activeCloudMonitorEnvironmentIDs, ["old"])
 
     fixture.coordinator.refreshNow()
     await fixture.sleeper.waitForSleep(interval: 5, count: 1)
 
     XCTAssertEqual(fixture.coordinator.environments, [environment])
     XCTAssertEqual(fixture.coordinator.cloudCandidates, candidates)
+    XCTAssertEqual(fixture.coordinator.activeCloudMonitorEnvironmentIDs, ["old"])
     guard case .unavailable(let account, _) = fixture.coordinator.state else {
       return XCTFail("Expected unavailable state")
     }

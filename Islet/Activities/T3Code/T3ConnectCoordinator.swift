@@ -244,13 +244,11 @@ final class T3ConnectCoordinator: ObservableObject {
     scheduleInventory(initialDelay: nil)
   }
 
-  private func scheduleInventory(
-    initialDelay: TimeInterval?, restartRetainedCloudTasks: Bool = true
-  ) {
+  private func scheduleInventory(initialDelay: TimeInterval?) {
     guard inventoryTask == nil, let account = activeAccount, canRunAccountWork, !signingOut else {
       return
     }
-    if restartRetainedCloudTasks { startRetainedCloudTasks(account: account) }
+    startRetainedCloudTasks(account: account)
     let taskID = UUID()
     let capturedGeneration = generation
     let task = Task { [weak self] in
@@ -277,7 +275,7 @@ final class T3ConnectCoordinator: ObservableObject {
     guard remotePollingAllowed, linkAttemptID == nil else { return }
     cancelInventoryTask()
     cancelCloudTasks()
-    scheduleInventory(initialDelay: nil, restartRetainedCloudTasks: false)
+    scheduleInventory(initialDelay: nil)
   }
 
   func authorization(
