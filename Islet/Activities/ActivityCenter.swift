@@ -36,8 +36,7 @@ final class ActivityCenter: ObservableObject {
         self?.objectWillChange.send()
       }
       .store(in: &cancellables)
-    ContextRuleCenter.shared.$resolution
-      .dropFirst()
+    ContextRuleCenter.shared.resolutionChanges
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
         self?.cacheInvalidated = true

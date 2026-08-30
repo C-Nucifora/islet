@@ -109,8 +109,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.restartMonitors(clearSnapshots: false) }
       .store(in: &cancellables)
-    ContextRuleCenter.shared.$resolution
-      .dropFirst()
+    ContextRuleCenter.shared.resolutionChanges
       .sink { [weak self] _ in
         Task { @MainActor in self?.restartMonitors(clearSnapshots: false) }
       }

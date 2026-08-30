@@ -60,8 +60,7 @@ final class SystemMetricsMonitor: ObservableObject {
       .dropFirst()
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.energyPolicyDidChange() }
-    contextRuleCancellable = ContextRuleCenter.shared.$resolution
-      .dropFirst()
+    contextRuleCancellable = ContextRuleCenter.shared.resolutionChanges
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.energyPolicyDidChange() }
     restartTimer()

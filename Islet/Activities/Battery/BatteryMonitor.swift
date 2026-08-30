@@ -136,8 +136,7 @@ final class BatteryMonitor: ObservableObject {
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.energyPolicyDidChange() }
       .store(in: &cancellables)
-    ContextRuleCenter.shared.$resolution
-      .dropFirst()
+    ContextRuleCenter.shared.resolutionChanges
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.energyPolicyDidChange() }
       .store(in: &cancellables)
