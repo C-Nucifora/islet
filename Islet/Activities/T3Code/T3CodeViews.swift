@@ -1,3 +1,4 @@
+import AppKit
 import Defaults
 import SwiftUI
 
@@ -282,10 +283,8 @@ struct T3SettingsSection: View {
   @ObservedObject var activity: T3CodeActivity
   @Default(.disabledActivities) private var disabledActivities
   @Default(.t3RemoteEnvironments) private var profiles
-  @State private var pairingLink = ""
-  @State private var isPairing = false
-  @State private var statusMessage: String?
-  @State private var allowInsecureHTTP = false
+  @State private var pairingForm = T3PairingFormState()
+  @FocusState private var focusedField: T3PairingFormField?
   @State private var pendingRemoval: T3EnvironmentProfile?
 
   private var activityEnabled: Binding<Bool> {
@@ -318,15 +317,26 @@ struct T3SettingsSection: View {
         .font(.caption2).foregroundStyle(.orange)
       }
       HStack {
-        SecureField("Paste a T3 Code pairing link", text: $pairingLink)
-        Button(isPairing ? "Pairing…" : "Add") { pair() }
+        SecureField(
+          "Paste a T3 Code pairing link",
+          text: Binding(
+            get: { pairingForm.pairingLink },
+            set: { pairingForm.pairingLink = $0 })
+        )
+        .focused($focusedField, equals: .pairingLink)
+        Button(pairingForm.isPairing ? "Pairing…" : "Add") { pair() }
           .disabled(
-            pairingLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPairing
-              || pairingIsBlockedRemoteHTTP)
+            pairingForm.pairingLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              || pairingForm.isPairing || pairingIsBlockedRemoteHTTP)
       }
       if pairingUsesPlainRemoteHTTP, pairingRemoteHTTPIsApproved {
-        Toggle("Allow plain HTTP for this pairing", isOn: $allowInsecureHTTP)
-          .font(.caption)
+        Toggle(
+          "Allow plain HTTP for this pairing",
+          isOn: Binding(
+            get: { pairingForm.allowInsecureHTTP },
+            set: { pairingForm.allowInsecureHTTP = $0 })
+        )
+        .font(.caption)
         Text(
           "Plain HTTP exposes the pairing credential. This build approves only this exact address. Use it only on a network you trust."
         )
@@ -337,7 +347,7 @@ struct T3SettingsSection: View {
         )
         .font(.caption2).foregroundStyle(.orange)
       }
-      if let statusMessage {
+      if let statusMessage = pairingForm.statusMessage {
         Text(statusMessage).font(.caption2)
           .foregroundStyle(
             statusMessage.hasPrefix("Added") || statusMessage.hasPrefix("Removed")
@@ -365,7 +375,7 @@ struct T3SettingsSection: View {
   }
 
   private var pairingEndpointURL: URL? {
-    let trimmed = pairingLink.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmed = pairingForm.pairingLink.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let link = URL(string: trimmed),
       let components = URLComponents(url: link, resolvingAgainstBaseURL: false)
     else { return nil }
@@ -388,7 +398,8 @@ struct T3SettingsSection: View {
   }
 
   private var pairingIsBlockedRemoteHTTP: Bool {
-    pairingUsesPlainRemoteHTTP && (!pairingRemoteHTTPIsApproved || !allowInsecureHTTP)
+    pairingUsesPlainRemoteHTTP
+      && (!pairingRemoteHTTPIsApproved || !pairingForm.allowInsecureHTTP)
   }
 
   private var hasBlockedSavedHTTPProfile: Bool {
@@ -447,30 +458,44 @@ struct T3SettingsSection: View {
   }
 
   private func pair() {
-    let link = pairingLink
-    pairingLink = ""
-    isPairing = true
-    statusMessage = nil
+    guard let submission = pairingForm.begin() else { return }
     Task { @MainActor in
-      defer { isPairing = false }
       do {
         try await activity.addRemote(
-          pairingLink: link, allowInsecureHTTP: allowInsecureHTTP)
-        allowInsecureHTTP = false
-        statusMessage = "Added T3 Code machine."
-        Haptics.perform(.levelChange)
+          pairingLink: submission.pairingLink, allowInsecureHTTP: submission.allowInsecureHTTP)
+        if pairingForm.finish(submission, result: .success) == .succeeded {
+          Haptics.perform(.levelChange)
+        }
       } catch {
-        statusMessage = error.localizedDescription
+        _ = pairingForm.finish(submission, result: .failure(error.localizedDescription))
       }
+      focusFailedPairingLinkIfNeeded()
+    }
+  }
+
+  private func focusFailedPairingLinkIfNeeded() {
+    guard pairingForm.focusedField == .pairingLink else {
+      focusedField = nil
+      return
+    }
+    focusedField = .pairingLink
+    Task { @MainActor in
+      // Focus state takes effect on the next update. Select after it has made this secure field
+      // the responder so a retry can replace the rejected link without exposing its credential.
+      await Task.yield()
+      guard focusedField == .pairingLink,
+        let text = NSApp.keyWindow?.firstResponder as? NSText
+      else { return }
+      text.selectAll(nil)
     }
   }
 
   private func remove(_ profile: T3EnvironmentProfile) {
     do {
       try activity.removeRemote(environmentID: profile.id)
-      statusMessage = "Removed T3 Code machine."
+      pairingForm.statusMessage = "Removed T3 Code machine."
     } catch {
-      statusMessage = "Machine was not removed: \(error.localizedDescription)"
+      pairingForm.statusMessage = "Machine was not removed: \(error.localizedDescription)"
     }
   }
 }
