@@ -13,33 +13,52 @@ struct SystemPresenceGate: Equatable {
   static let activateCPU = 0.80
   /// Falling through this turns it back off. The 20-point band between the two is the hysteresis.
   static let deactivateCPU = 0.60
-  /// Consecutive samples above `activateCPU` required. At 1 Hz that is five seconds of real load,
-  /// which a single compile or a Spotlight index pass will not fake.
-  static let sustainSamples = 5
+  /// CPU must stay at or above `activateCPU` for this long before the tab appears.
+  static let activationDuration: TimeInterval = 5
+  /// CPU must remain at or below `deactivateCPU` for this long before the tab disappears.
+  static let recoveryDuration: TimeInterval = 5
+  /// Matches the rate window. A larger gap means the app was suspended or the timer stalled, so it
+  /// cannot prove continuous CPU load or recovery.
+  static let maximumSampleGap = metricsMaxSampleGap
 
   private(set) var isActive = false
   private(set) var reason: Reason?
-  private var consecutiveHigh = 0
-  private var lastCPU: Double?
+  private var highCPUSince: TimeInterval?
+  private var recoveringSince: TimeInterval?
+  private var lastSampleUptime: TimeInterval?
 
-  /// Activation is a *level* ("sustained above 80%"), so it is a plain comparison. Deactivation
-  /// genuinely is an edge, so it goes through the shared Phase 1.6 detector.
-  private let release = ThresholdDetector(
-    thresholds: [SystemPresenceGate.deactivateCPU], direction: .falling)
-
-  /// Feeds one sample. Returns true when `isActive` OR `reason` changed — the caller redraws the
-  /// compact glyph off both, and the two reasons use different SF Symbols.
-  mutating func update(cpuTotal: Double?, thermalState: Int) -> Bool {
+  /// Feeds one sample at a monotonic uptime. Tests inject `uptime`; production uses system uptime.
+  /// Returns true when `isActive` or `reason` changed. The caller redraws the compact glyph off
+  /// both, and the two reasons use different SF Symbols.
+  mutating func update(
+    cpuTotal: Double?, thermalState: Int,
+    uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+  ) -> Bool {
     let wasActive = isActive
     let wasReason = reason
+
+    let hasLongGap = lastSampleUptime.map { uptime - $0 > Self.maximumSampleGap } ?? false
+    let movedBackward = lastSampleUptime.map { uptime < $0 } ?? false
+    lastSampleUptime = uptime
+
+    if hasLongGap || movedBackward {
+      // CPU samples cover a measurement window. A suspended or otherwise interrupted window is
+      // not evidence that load stayed high or stayed low. Do not retain a stale CPU glyph.
+      highCPUSince = nil
+      recoveringSince = nil
+      if reason == .cpu {
+        isActive = false
+        reason = nil
+      }
+    }
 
     if thermalState != 0 {
       isActive = true
       reason = .thermal
       // Do not bank a CPU streak while thermal is holding the tab open; when thermal clears, CPU
-      // starts from zero rather than inheriting an unearned five seconds.
-      consecutiveHigh = 0
-      if let cpuTotal { lastCPU = cpuTotal }
+      // starts from zero rather than inheriting an unearned duration.
+      highCPUSince = nil
+      recoveringSince = nil
       return isActive != wasActive || reason != wasReason
     }
 
@@ -47,30 +66,54 @@ struct SystemPresenceGate: Equatable {
     if reason == .thermal {
       isActive = false
       reason = nil
+      highCPUSince = nil
+      recoveringSince = nil
     }
 
     guard let cpu = cpuTotal else {
-      // No CPU reading — the first sample, or one discarded after a gap. Hold.
+      // An unavailable CPU value cannot extend an in-progress duration. Keep an already-visible
+      // tab through a transient read failure, but make either direction earn its full duration.
+      highCPUSince = nil
+      recoveringSince = nil
       return isActive != wasActive || reason != wasReason
     }
 
-    let crossedDown = !release.crossings(from: lastCPU, to: cpu).isEmpty
-    lastCPU = cpu
-
-    if cpu >= Self.activateCPU {
-      consecutiveHigh += 1
-      if consecutiveHigh >= Self.sustainSamples {
-        isActive = true
-        reason = .cpu
-      }
+    if isActive {
+      updateActiveCPU(cpu, uptime: uptime)
     } else {
-      consecutiveHigh = 0
-      if crossedDown || cpu < Self.deactivateCPU {
-        isActive = false
-        reason = nil
-      }
+      updateInactiveCPU(cpu, uptime: uptime)
     }
 
     return isActive != wasActive || reason != wasReason
+  }
+
+  private mutating func updateInactiveCPU(_ cpu: Double, uptime: TimeInterval) {
+    recoveringSince = nil
+    guard cpu >= Self.activateCPU else {
+      highCPUSince = nil
+      return
+    }
+
+    let highSince = highCPUSince ?? uptime
+    highCPUSince = highSince
+    guard uptime - highSince >= Self.activationDuration else { return }
+    isActive = true
+    reason = .cpu
+    highCPUSince = nil
+  }
+
+  private mutating func updateActiveCPU(_ cpu: Double, uptime: TimeInterval) {
+    highCPUSince = nil
+    guard cpu <= Self.deactivateCPU else {
+      recoveringSince = nil
+      return
+    }
+
+    let lowSince = recoveringSince ?? uptime
+    recoveringSince = lowSince
+    guard uptime - lowSince >= Self.recoveryDuration else { return }
+    isActive = false
+    reason = nil
+    recoveringSince = nil
   }
 }

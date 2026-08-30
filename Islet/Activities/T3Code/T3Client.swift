@@ -7,6 +7,7 @@ enum T3ClientError: Error, LocalizedError, Sendable {
   case unsupportedScheme
   case credentialsInURL
   case insecureRemoteHTTP
+  case unapprovedInsecureRemoteHTTP
   case environmentIdentityConflict
   case missingPairingToken
   case invalidResponse
@@ -22,6 +23,8 @@ enum T3ClientError: Error, LocalizedError, Sendable {
     case .unsupportedScheme: "T3 Code endpoints must use HTTP or HTTPS."
     case .credentialsInURL: "Usernames and passwords are not allowed in an endpoint URL."
     case .insecureRemoteHTTP: "Remote T3 Code machines must use HTTPS."
+    case .unapprovedInsecureRemoteHTTP:
+      "This build does not approve plain HTTP for that T3 Code address. Pair it over HTTPS."
     case .environmentIdentityConflict:
       "That T3 Code machine reports an identity already used by a different endpoint."
     case .missingPairingToken: "The pairing link has no one-time token."
@@ -36,15 +39,75 @@ enum T3ClientError: Error, LocalizedError, Sendable {
   }
 }
 
+struct T3TransportPolicy: Sendable {
+  nonisolated static let approvedOriginsInfoKey = "T3ApprovedInsecureHTTPOrigins"
+  nonisolated static let app = T3TransportPolicy(
+    infoDictionary: Bundle.main.infoDictionary ?? [:])
+
+  private let approvedInsecureRemoteOrigins: Set<String>
+
+  nonisolated init(infoDictionary: [String: Any]) {
+    let configuredOrigins = infoDictionary[Self.approvedOriginsInfoKey] as? [String] ?? []
+    let exceptionDomains =
+      (infoDictionary["NSAppTransportSecurity"] as? [String: Any])?["NSExceptionDomains"]
+      as? [String: Any] ?? [:]
+    let approvedHosts = Set(
+      exceptionDomains.compactMap { host, value -> String? in
+        guard let settings = value as? [String: Any],
+          settings["NSExceptionAllowsInsecureHTTPLoads"] as? Bool == true,
+          settings["NSIncludesSubdomains"] as? Bool != true
+        else { return nil }
+        return host.lowercased()
+      })
+    approvedInsecureRemoteOrigins = Set(
+      configuredOrigins.compactMap { value in
+        guard let url = URL(string: value), let origin = Self.remoteHTTPOrigin(url),
+          let host = url.host?.lowercased(), approvedHosts.contains(host)
+        else { return nil }
+        return origin
+      })
+  }
+
+  nonisolated func permitsInsecureRemoteHTTP(_ url: URL) -> Bool {
+    guard let origin = Self.remoteHTTPOrigin(url) else { return false }
+    return approvedInsecureRemoteOrigins.contains(origin)
+  }
+
+  nonisolated func requiresHTTPSMigration(_ url: URL) -> Bool {
+    guard url.scheme?.lowercased() == "http", !T3Endpoint.isLoopbackHost(url.host) else {
+      return false
+    }
+    return !permitsInsecureRemoteHTTP(url)
+  }
+
+  nonisolated private static func remoteHTTPOrigin(_ url: URL) -> String? {
+    guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+      components.scheme?.lowercased() == "http",
+      let host = components.host, !host.isEmpty,
+      !T3Endpoint.isLoopbackHost(host),
+      components.user == nil, components.password == nil
+    else { return nil }
+    components.scheme = "http"
+    components.host = host.lowercased()
+    components.path = "/"
+    components.query = nil
+    components.fragment = nil
+    return components.url?.absoluteString
+  }
+}
+
 struct T3Endpoint: Equatable, Sendable {
   let baseURL: URL
 
   var isLoopback: Bool {
-    guard let host = baseURL.host?.lowercased() else { return false }
-    return ["127.0.0.1", "::1", "localhost"].contains(host)
+    Self.isLoopbackHost(baseURL.host)
   }
 
-  init(_ url: URL, allowInsecureRemoteHTTP: Bool = false) throws {
+  init(
+    _ url: URL,
+    allowInsecureRemoteHTTP: Bool = false,
+    transportPolicy: T3TransportPolicy = .app
+  ) throws {
     guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
       let scheme = components.scheme?.lowercased(),
       scheme == "http" || scheme == "https",
@@ -53,9 +116,12 @@ struct T3Endpoint: Equatable, Sendable {
     guard components.user == nil, components.password == nil else {
       throw T3ClientError.credentialsInURL
     }
-    let loopback = ["127.0.0.1", "::1", "localhost"].contains(host.lowercased())
+    let loopback = Self.isLoopbackHost(host)
     if scheme == "http", !loopback, !allowInsecureRemoteHTTP {
       throw T3ClientError.insecureRemoteHTTP
+    }
+    if scheme == "http", !loopback, !transportPolicy.permitsInsecureRemoteHTTP(url) {
+      throw T3ClientError.unapprovedInsecureRemoteHTTP
     }
     components.scheme = scheme
     components.path = "/"
@@ -77,13 +143,24 @@ struct T3Endpoint: Equatable, Sendable {
   func url(_ path: String) -> URL {
     baseURL.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
   }
+
+  nonisolated static func isLoopbackHost(_ host: String?) -> Bool {
+    guard let host else { return false }
+    let normalized = host.lowercased().trimmingCharacters(
+      in: CharacterSet(charactersIn: "[]"))
+    return ["127.0.0.1", "::1", "localhost"].contains(normalized)
+  }
 }
 
 struct T3PairingTarget: Equatable, Sendable {
   let endpoint: T3Endpoint
   let credential: String
 
-  static func parse(_ text: String, allowInsecureRemoteHTTP: Bool = false) throws -> Self {
+  static func parse(
+    _ text: String,
+    allowInsecureRemoteHTTP: Bool = false,
+    transportPolicy: T3TransportPolicy = .app
+  ) throws -> Self {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let link = URL(string: trimmed),
       let linkComponents = URLComponents(url: link, resolvingAgainstBaseURL: false)
@@ -107,7 +184,10 @@ struct T3PairingTarget: Equatable, Sendable {
       endpointURL = link
     }
     return try Self(
-      endpoint: T3Endpoint(endpointURL, allowInsecureRemoteHTTP: allowInsecureRemoteHTTP),
+      endpoint: T3Endpoint(
+        endpointURL,
+        allowInsecureRemoteHTTP: allowInsecureRemoteHTTP,
+        transportPolicy: transportPolicy),
       credential: credential)
   }
 
@@ -120,6 +200,17 @@ struct T3PairingTarget: Equatable, Sendable {
       let value = String(parts[1]).removingPercentEncoding ?? String(parts[1])
       values[key] = value
     }
+  }
+}
+
+enum T3RedirectPolicy {
+  /// T3 requests may carry a one-time pairing credential or a bearer token. Do not replay either
+  /// after a redirect, even when the proposed destination appears to share the endpoint origin.
+  nonisolated static func requestToFollow(
+    _ request: URLRequest,
+    from response: HTTPURLResponse
+  ) -> URLRequest? {
+    nil
   }
 }
 
@@ -277,7 +368,7 @@ private final class T3NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unc
     newRequest request: URLRequest,
     completionHandler: @escaping (URLRequest?) -> Void
   ) {
-    completionHandler(nil)
+    completionHandler(T3RedirectPolicy.requestToFollow(request, from: response))
   }
 }
 

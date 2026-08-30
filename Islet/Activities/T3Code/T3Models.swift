@@ -229,16 +229,34 @@ enum T3ConnectionState: Equatable, Sendable {
   case connecting
   case connected
   case offline(String)
+  case reconnecting(String)
   case needsPairing
+  case credentialError(String)
 
   var label: String {
     switch self {
     case .connecting: "Connecting"
     case .connected: "Connected"
     case .offline: "Offline"
+    case .reconnecting: "Reconnecting"
     case .needsPairing: "Pair again"
+    case .credentialError: "Credential error"
     }
   }
+
+  var detail: String? {
+    switch self {
+    case .offline(let detail), .reconnecting(let detail), .credentialError(let detail): detail
+    case .connecting, .connected, .needsPairing: nil
+    }
+  }
+}
+
+enum T3EnvironmentAction: Equatable, Sendable {
+  case pair
+  case retry
+  case disable
+  case openSettings
 }
 
 struct T3EnvironmentSnapshot: Equatable, Identifiable, Sendable {
