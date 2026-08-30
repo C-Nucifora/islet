@@ -1152,6 +1152,32 @@ struct SettingsView: View {
         )
         .font(.caption).foregroundStyle(.secondary)
       }
+      if !hud.externalBrightnessDisplays.isEmpty {
+        Section("External display brightness") {
+          ForEach(hud.externalBrightnessDisplays) { status in
+            VStack(alignment: .leading, spacing: 3) {
+              Toggle(
+                status.display.name,
+                isOn: Binding(
+                  get: {
+                    if case .disabled = status.capability { return false }
+                    return true
+                  },
+                  set: { enabled in
+                    hud.setExternalBrightnessEnabled(enabled, displayID: status.display.id)
+                  }))
+              Text(status.capability.summary)
+                .font(.caption)
+                .foregroundStyle(
+                  status.capability.isAvailable ? Color.secondary : Color.orange)
+            }
+          }
+          Text(
+            "Islet probes DDC/CI without changing brightness. Disable a display here if its monitor firmware behaves poorly."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
+      }
     }
     .formStyle(.grouped)
   }
@@ -1547,6 +1573,7 @@ struct SettingsView: View {
     let text =
       permissions.diagnostics.text
       + "\nHUD event tap: \(hud.eventTapStatus.summary)"
+      + "\n\(hud.externalBrightnessDiagnostics)"
       + "\nPulse: \(pulseServer.isRunning ? "Running" : "Stopped")"
       + "\nPulse items: \(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
     NSPasteboard.general.clearContents()
@@ -1577,6 +1604,7 @@ struct SettingsView: View {
     systemAlwaysVisible = false
     metricStyles = [:]
     hudStyle = .bar
+    Defaults[.disabledExternalBrightnessDisplays] = []
   }
 }
 

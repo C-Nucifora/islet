@@ -147,6 +147,9 @@ extension Defaults.Keys {
   static let batteryEnabled = Key<Bool>("batteryEnabled", default: true)
   static let hudEnabled = Key<Bool>("hudEnabled", default: false)
   static let hudStyle = Key<HUDStyle>("hudStyle", default: .bar)
+  /// Stable Core Graphics display UUIDs for monitors whose DDC control the user disabled.
+  static let disabledExternalBrightnessDisplays = Key<[String]>(
+    "disabledExternalBrightnessDisplays", default: [])
   static let calendarEnabled = Key<Bool>("calendarEnabled", default: true)
   static let calendarLeadMinutes = Key<Int>("calendarLeadMinutes", default: 10)
   static let hiddenCalendarIDs = Key<[String]>("hiddenCalendarIDs", default: [])
