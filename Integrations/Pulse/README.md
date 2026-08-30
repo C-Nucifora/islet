@@ -7,13 +7,15 @@ loads code into Islet. Islet owns layout, priority, expiry, accessibility, and a
 
 First add a provider in Islet Settings > Integrations > Pulse. Give it the source used by the
 script and only the permissions it needs. Islet writes a user-only credential file for that
-provider. The reference CLI selects the active credential whose source matches `--source`.
-Use **Reveal credential** on a provider row when another local client needs its exact file path.
+provider. Use **Reveal credential** on its row, then explicitly configure that path for the
+reference CLI. It never chooses a credential from the caller-controlled `--source` value and never
+falls back to the legacy token.
 The commands below need Events, Persistent activities, and Progress.
 
 After Islet has started its Pulse server:
 
 ```sh
+export ISLET_PULSE_CREDENTIAL_FILE="$HOME/Library/Application Support/Islet/pulse-credentials/REVEALED-ID.credential"
 swift Tools/islet-pulse.swift show build-1842 "Build running" "UQR-AV" --source build
 swift Tools/islet-pulse.swift update build-1842 "Building" "UQR-AV" \
   --source build --progress 0.65 --priority high
@@ -21,9 +23,9 @@ swift Tools/islet-pulse.swift event build-1842 "Build succeeded" "All checks pas
 swift Tools/islet-pulse.swift end build-1842 --source build
 ```
 
-The reference tool reads a user-only provider credential from
-`~/Library/Application Support/Islet/pulse-credentials/` and sends one newline-delimited JSON
-command to TCP port `47717` on `127.0.0.1`. The server rejects messages over 64 KiB, invalid or
+The reference tool reads only the path supplied through `--credential-file` or
+`ISLET_PULSE_CREDENTIAL_FILE` and sends one newline-delimited JSON command to TCP port `47717` on
+`127.0.0.1`. The server rejects messages over 64 KiB, invalid or
 revoked credentials, commands for another source, missing permissions, replays, unsafe
 action URL schemes, more than three actions, and more than 100 simultaneous items.
 The listener accepts at most 16 concurrent clients, each socket is capped at 128 commands, and the
@@ -38,7 +40,8 @@ with `featureDisabled`.
 
 - `show`: create an item, or replace an existing item with the same source and `id`.
 - `update`: the same idempotent upsert semantics as `show`, named for provider readability.
-- `event`: create an item that expires after eight seconds unless `expiresAt` is supplied.
+- `event`: create an item that expires after at most eight seconds. A later `expiresAt` is clamped
+  to that transient window.
 - `end`: remove an item by source and `id`.
 
 Dates use ISO 8601, with or without fractional seconds. `progress` outside `0...1` is rejected.
@@ -85,11 +88,18 @@ are local and session-scoped; Pulse never contacts a provider when a policy chan
 are bound to provider credentials. A command that declares another source is rejected before it
 reaches activity state.
 
+Provider credentials are cooperative bearer tokens, not a sandbox between processes running as
+the same macOS user. File permissions exclude other user accounts, while any same-user process that
+can read a credential can use its permissions. Give credential paths only to trusted local tools,
+configure each tool with one explicit path, and revoke a credential if its file may have been read
+by another process.
+
 Credential permissions separately control transient events, persistent show/update/end operations,
 progress fields, and web actions. Settings shows the current credential's age, last use,
 permissions, and revocation state. Rotating or revoking one credential disconnects only that
 provider. Rotation atomically replaces its credential file. Revocation removes that file and keeps
-a metadata-only record in Settings.
+a metadata-only record in Settings. If file deletion fails, Islet reports the failure and a repeated
+revoke retries cleanup while the registry remains revoked.
 
 On first launch after upgrading, Islet records the old `pulse-token` as a legacy provider bound to
 the source `legacy`. It receives only the Events permission. Islet rewrites legacy commands to that

@@ -107,12 +107,14 @@ final class PulseCredentialStore: ObservableObject {
   static let maximumRegistryBytes = 1_048_576
   static let maximumCredentialBytes = 4_096
   static let lastUsePersistenceInterval: TimeInterval = 60
+  static let maximumEventLifetime: TimeInterval = 8
 
   @Published private(set) var credentials: [PulseCredentialSummary] = []
   @Published private(set) var lastError: String?
 
   private let supportDirectory: URL
   private let now: () -> Date
+  private let removeItem: (URL) throws -> Void
   private var hasLoaded = false
   private var replayOrder: [String: [String]] = [:]
   private var replaySets: [String: Set<String>] = [:]
@@ -120,10 +122,12 @@ final class PulseCredentialStore: ObservableObject {
 
   init(
     supportDirectory: URL = PulsePaths.supportDirectory,
-    now: @escaping () -> Date = Date.init
+    now: @escaping () -> Date = Date.init,
+    removeItem: @escaping (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }
   ) {
     self.supportDirectory = supportDirectory
     self.now = now
+    self.removeItem = removeItem
   }
 
   var credentialDirectory: URL {
@@ -131,6 +135,7 @@ final class PulseCredentialStore: ObservableObject {
   }
 
   var registryURL: URL { supportDirectory.appendingPathComponent("pulse-providers.json") }
+  var registryLockURL: URL { supportDirectory.appendingPathComponent("pulse-providers.lock") }
   var legacyTokenURL: URL { supportDirectory.appendingPathComponent("pulse-token") }
 
   func credentialFileURL(for id: String) -> URL? {
@@ -143,15 +148,8 @@ final class PulseCredentialStore: ObservableObject {
     guard !hasLoaded else { return }
     do {
       try secureDirectories()
-      if FileManager.default.fileExists(atPath: registryURL.path) {
-        let registry = try readRegistry()
-        guard registry.version == Self.currentVersion else {
-          throw PulseCredentialError.corruptRegistry
-        }
-        credentials = try validatedCredentials(registry.credentials)
-      } else {
-        credentials = try migratedLegacyCredential().map { [$0] } ?? []
-        try persistRegistry()
+      try withRegistryLock {
+        try reloadRegistryLocked()
       }
       hasLoaded = true
       lastError = nil
@@ -167,91 +165,105 @@ final class PulseCredentialStore: ObservableObject {
     permissions: Set<PulseCredentialPermission>
   ) throws -> PulseCredentialSummary {
     try prepare()
-    let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !name.isEmpty, name.count <= 80 else { throw PulseCredentialError.invalidName }
-    guard credentials.count < Self.maximumProviderRecords,
-      credentials.lazy.filter({ !$0.isRevoked }).count < Self.maximumActiveProviders
-    else { throw PulseCredentialError.providerLimitReached }
-    let source = try normalizedSource(rawSource)
-    guard
-      !credentials.contains(where: { !$0.isRevoked && sourceKey($0.source) == sourceKey(source) })
-    else { throw PulseCredentialError.duplicateSource }
+    return try withRegistryLock {
+      try reloadRegistryLocked()
+      let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !name.isEmpty, name.count <= 80 else { throw PulseCredentialError.invalidName }
+      guard credentials.count < Self.maximumProviderRecords,
+        credentials.lazy.filter({ !$0.isRevoked }).count < Self.maximumActiveProviders
+      else { throw PulseCredentialError.providerLimitReached }
+      let source = try normalizedSource(rawSource)
+      guard
+        !credentials.contains(where: {
+          !$0.isRevoked && sourceKey($0.source) == sourceKey(source)
+        })
+      else { throw PulseCredentialError.duplicateSource }
 
-    let date = now()
-    let summary = PulseCredentialSummary(
-      id: UUID().uuidString.lowercased(), name: name, source: source,
-      permissions: permissions, createdAt: date, rotatedAt: nil, lastUsedAt: nil,
-      revokedAt: nil, isLegacy: false)
-    let material = try makeCredential(id: summary.id)
-    try writeCredential(material, id: summary.id)
-    credentials.append(summary)
-    do {
-      try persistRegistry()
-    } catch {
-      credentials.removeAll { $0.id == summary.id }
-      try? FileManager.default.removeItem(at: credentialURL(for: summary.id))
-      throw error
+      let date = now()
+      let summary = PulseCredentialSummary(
+        id: UUID().uuidString.lowercased(), name: name, source: source,
+        permissions: permissions, createdAt: date, rotatedAt: nil, lastUsedAt: nil,
+        revokedAt: nil, isLegacy: false)
+      let material = try makeCredential(id: summary.id)
+      try writeCredential(material, id: summary.id)
+      credentials.append(summary)
+      do {
+        try persistRegistry()
+      } catch {
+        credentials.removeAll { $0.id == summary.id }
+        try? removeItem(credentialURL(for: summary.id))
+        throw error
+      }
+      return summary
     }
-    return summary
   }
 
   func setPermissions(_ permissions: Set<PulseCredentialPermission>, for id: String) throws {
     try prepare()
-    guard let index = credentials.firstIndex(where: { $0.id == id }) else {
-      throw PulseCredentialError.notFound
-    }
-    guard !credentials[index].isRevoked else { throw PulseCredentialError.revoked }
-    let previous = credentials[index].permissions
-    credentials[index].permissions = permissions
-    do {
-      try persistRegistry()
-    } catch {
-      credentials[index].permissions = previous
-      throw error
+    try withRegistryLock {
+      try reloadRegistryLocked()
+      guard let index = credentials.firstIndex(where: { $0.id == id }) else {
+        throw PulseCredentialError.notFound
+      }
+      guard !credentials[index].isRevoked else { throw PulseCredentialError.revoked }
+      let previous = credentials[index].permissions
+      credentials[index].permissions = permissions
+      do {
+        try persistRegistry()
+      } catch {
+        credentials[index].permissions = previous
+        throw error
+      }
     }
   }
 
   func rotate(_ id: String) throws {
     try prepare()
-    guard let index = credentials.firstIndex(where: { $0.id == id }) else {
-      throw PulseCredentialError.notFound
-    }
-    guard !credentials[index].isRevoked, !credentials[index].isLegacy else {
-      throw PulseCredentialError.revoked
-    }
-    let previousSummary = credentials[index]
-    let previousMaterial = try readCredential(id: id)
-    let material = try makeCredential(id: id)
-    try writeCredential(material, id: id)
-    credentials[index].rotatedAt = now()
-    credentials[index].lastUsedAt = nil
-    do {
-      try persistRegistry()
-      clearReplayState(for: id)
-    } catch {
-      credentials[index] = previousSummary
-      try writeCredential(previousMaterial, id: id)
-      throw error
+    try withRegistryLock {
+      try reloadRegistryLocked()
+      guard let index = credentials.firstIndex(where: { $0.id == id }) else {
+        throw PulseCredentialError.notFound
+      }
+      guard !credentials[index].isRevoked, !credentials[index].isLegacy else {
+        throw PulseCredentialError.revoked
+      }
+      let previousSummary = credentials[index]
+      let previousMaterial = try readCredential(id: id)
+      let material = try makeCredential(id: id)
+      try writeCredential(material, id: id)
+      credentials[index].rotatedAt = now()
+      credentials[index].lastUsedAt = nil
+      do {
+        try persistRegistry()
+        clearReplayState(for: id)
+      } catch {
+        credentials[index] = previousSummary
+        try writeCredential(previousMaterial, id: id)
+        throw error
+      }
     }
   }
 
   func revoke(_ id: String) throws {
     try prepare()
-    guard let index = credentials.firstIndex(where: { $0.id == id }) else {
-      throw PulseCredentialError.notFound
+    try withRegistryLock {
+      try reloadRegistryLocked()
+      guard let index = credentials.firstIndex(where: { $0.id == id }) else {
+        throw PulseCredentialError.notFound
+      }
+      let credential = credentials[index]
+      if !credential.isRevoked {
+        credentials[index].revokedAt = now()
+        do {
+          try persistRegistry()
+          clearReplayState(for: id)
+        } catch {
+          credentials[index] = credential
+          throw error
+        }
+      }
+      try removeCredentialFile(for: credentials[index])
     }
-    guard !credentials[index].isRevoked else { return }
-    let previous = credentials[index]
-    credentials[index].revokedAt = now()
-    do {
-      try persistRegistry()
-      clearReplayState(for: id)
-    } catch {
-      credentials[index] = previous
-      throw error
-    }
-    let url = credentials[index].isLegacy ? legacyTokenURL : credentialURL(for: id)
-    try? FileManager.default.removeItem(at: url)
   }
 
   func authorize(_ incoming: PulseCommand, at suppliedDate: Date? = nil) throws
@@ -267,84 +279,94 @@ final class PulseCredentialStore: ObservableObject {
     at suppliedDate: Date? = nil
   ) throws -> (PulseCommand, PulseAuthenticatedProvider) {
     try prepare()
-    let date = suppliedDate ?? now()
-    guard let index = credentials.firstIndex(where: { $0.id == provider.credentialID }) else {
-      throw PulseCredentialError.notFound
-    }
-    guard !credentials[index].isRevoked else { throw PulseCredentialError.revoked }
-    guard credentials[index].source == provider.source,
-      credentials[index].permissions == provider.permissions,
-      credentials[index].isLegacy == provider.isLegacy
-    else { throw PulseCredentialError.unauthorized }
-
-    var command = incoming
-    if provider.isLegacy {
-      command.activity?.source = provider.source
-      command.source = provider.source
-    } else {
-      if let source = command.activity?.source,
-        sourceKey(source) != sourceKey(provider.source)
-      {
-        throw PulseCredentialError.sourceSpoofing
+    return try withRegistryLock {
+      try reloadRegistryLocked()
+      let date = suppliedDate ?? now()
+      guard let index = credentials.firstIndex(where: { $0.id == provider.credentialID }) else {
+        throw PulseCredentialError.notFound
       }
-      if let source = command.source, sourceKey(source) != sourceKey(provider.source) {
-        throw PulseCredentialError.sourceSpoofing
-      }
-      command.activity?.source = provider.source
-      command.source = provider.source
-    }
+      guard !credentials[index].isRevoked else { throw PulseCredentialError.revoked }
+      guard credentials[index].source == provider.source,
+        credentials[index].permissions == provider.permissions,
+        credentials[index].isLegacy == provider.isLegacy
+      else { throw PulseCredentialError.unauthorized }
 
-    try requirePermissions(for: command, provider: provider)
-    if !provider.isLegacy {
-      guard let requestID = command.requestID?.trimmingCharacters(in: .whitespacesAndNewlines),
-        !requestID.isEmpty
-      else { throw PulseCredentialError.requestIDRequired }
-      guard remember(requestID: requestID, for: provider.credentialID) else {
-        throw PulseCredentialError.replayedRequest
+      var command = incoming
+      if provider.isLegacy {
+        command.activity?.source = provider.source
+        command.source = provider.source
+      } else {
+        if let source = command.activity?.source,
+          sourceKey(source) != sourceKey(provider.source)
+        {
+          throw PulseCredentialError.sourceSpoofing
+        }
+        if let source = command.source, sourceKey(source) != sourceKey(provider.source) {
+          throw PulseCredentialError.sourceSpoofing
+        }
+        command.activity?.source = provider.source
+        command.source = provider.source
       }
-    }
 
-    credentials[index].lastUsedAt = date
-    let shouldPersist =
-      persistedLastUsedAt[provider.credentialID].map {
-        date < $0 || date.timeIntervalSince($0) >= Self.lastUsePersistenceInterval
-      } ?? true
-    guard shouldPersist else { return (command, provider) }
-    do {
-      try persistRegistry()
-      lastError = nil
-    } catch {
-      lastError = "Could not save Pulse provider last use: \(error.localizedDescription)"
+      try requirePermissions(for: command, provider: provider)
+      if command.operation == .event, let expiresAt = command.activity?.expiresAt {
+        command.activity?.expiresAt = min(
+          expiresAt, date.addingTimeInterval(Self.maximumEventLifetime))
+      }
+      if !provider.isLegacy {
+        guard let requestID = command.requestID?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !requestID.isEmpty
+        else { throw PulseCredentialError.requestIDRequired }
+        guard remember(requestID: requestID, for: provider.credentialID) else {
+          throw PulseCredentialError.replayedRequest
+        }
+      }
+
+      credentials[index].lastUsedAt = date
+      let shouldPersist =
+        persistedLastUsedAt[provider.credentialID].map {
+          date < $0 || date.timeIntervalSince($0) >= Self.lastUsePersistenceInterval
+        } ?? true
+      guard shouldPersist else { return (command, provider) }
+      do {
+        try persistRegistry()
+        lastError = nil
+      } catch {
+        lastError = "Could not save Pulse provider last use: \(error.localizedDescription)"
+      }
+      return (command, provider)
     }
-    return (command, provider)
   }
 
   func authenticate(_ token: String) throws -> PulseAuthenticatedProvider {
     try prepare()
-    if let parsed = Self.parseCredential(token) {
-      guard let record = credentials.first(where: { $0.id == parsed.id }) else {
-        throw PulseCredentialError.unauthorized
+    return try withRegistryLock {
+      try reloadRegistryLocked()
+      if let parsed = Self.parseCredential(token) {
+        guard let record = credentials.first(where: { $0.id == parsed.id }) else {
+          throw PulseCredentialError.unauthorized
+        }
+        guard !record.isRevoked else { throw PulseCredentialError.revoked }
+        let stored = try readCredential(id: record.id)
+        guard let expected = Self.parseCredential(stored), expected.id == parsed.id,
+          Self.constantTimeEqual(parsed.secret, expected.secret)
+        else { throw PulseCredentialError.unauthorized }
+        return PulseAuthenticatedProvider(
+          credentialID: record.id, source: record.source, permissions: record.permissions,
+          isLegacy: false)
       }
-      guard !record.isRevoked else { throw PulseCredentialError.revoked }
-      let stored = try readCredential(id: record.id)
-      guard let expected = Self.parseCredential(stored), expected.id == parsed.id,
-        Self.constantTimeEqual(parsed.secret, expected.secret)
+
+      guard let legacy = credentials.first(where: { $0.id == Self.legacyCredentialID }),
+        !legacy.isRevoked,
+        let supplied = Data(base64Encoded: token), supplied.count == 32,
+        let storedToken = try? readSecureString(at: legacyTokenURL),
+        let expected = Data(base64Encoded: storedToken), expected.count == 32,
+        Self.constantTimeEqual(supplied, expected)
       else { throw PulseCredentialError.unauthorized }
       return PulseAuthenticatedProvider(
-        credentialID: record.id, source: record.source, permissions: record.permissions,
-        isLegacy: false)
+        credentialID: legacy.id, source: legacy.source, permissions: legacy.permissions,
+        isLegacy: true)
     }
-
-    guard let legacy = credentials.first(where: { $0.id == Self.legacyCredentialID }),
-      !legacy.isRevoked,
-      let supplied = Data(base64Encoded: token), supplied.count == 32,
-      let storedToken = try? readSecureString(at: legacyTokenURL),
-      let expected = Data(base64Encoded: storedToken), expected.count == 32,
-      Self.constantTimeEqual(supplied, expected)
-    else { throw PulseCredentialError.unauthorized }
-    return PulseAuthenticatedProvider(
-      credentialID: legacy.id, source: legacy.source, permissions: legacy.permissions,
-      isLegacy: true)
   }
 
   private func requirePermissions(
@@ -413,6 +435,55 @@ final class PulseCredentialStore: ObservableObject {
     }
   }
 
+  /// Every registry read-modify-write transaction takes this advisory lock. Provider clients are
+  /// separate processes, so actor isolation alone cannot prevent a stale process from replacing a
+  /// newer registry snapshot.
+  private func withRegistryLock<T>(_ operation: () throws -> T) throws -> T {
+    let descriptor = registryLockURL.path.withCString {
+      Darwin.open($0, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
+    }
+    guard descriptor >= 0 else { throw PulseCredentialError.unsafeCredentialFile }
+    defer { Darwin.close(descriptor) }
+    var info = stat()
+    guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
+      info.st_uid == getuid(), (info.st_mode & 0o077) == 0,
+      fchmod(descriptor, 0o600) == 0
+    else { throw PulseCredentialError.unsafeCredentialFile }
+    var lock = Darwin.flock()
+    lock.l_start = 0
+    lock.l_len = 0
+    lock.l_pid = 0
+    lock.l_type = Int16(F_WRLCK)
+    lock.l_whence = Int16(SEEK_SET)
+    while fcntl(descriptor, F_SETLKW, &lock) != 0 {
+      if errno == EINTR { continue }
+      throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+    }
+    defer {
+      lock.l_type = Int16(F_UNLCK)
+      _ = fcntl(descriptor, F_SETLK, &lock)
+    }
+    return try operation()
+  }
+
+  private func reloadRegistryLocked() throws {
+    if FileManager.default.fileExists(atPath: registryURL.path) {
+      let registry = try readRegistry()
+      guard registry.version == Self.currentVersion else {
+        throw PulseCredentialError.corruptRegistry
+      }
+      let loaded = try validatedCredentials(registry.credentials)
+      if credentials != loaded { credentials = loaded }
+      persistedLastUsedAt = Dictionary(
+        uniqueKeysWithValues: loaded.compactMap { summary in
+          summary.lastUsedAt.map { (summary.id, $0) }
+        })
+    } else {
+      credentials = try migratedLegacyCredential().map { [$0] } ?? []
+      try persistRegistry()
+    }
+  }
+
   private func persistRegistry() throws {
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
@@ -425,6 +496,15 @@ final class PulseCredentialStore: ObservableObject {
       uniqueKeysWithValues: credentials.compactMap { summary in
         summary.lastUsedAt.map { (summary.id, $0) }
       })
+  }
+
+  private func removeCredentialFile(for credential: PulseCredentialSummary) throws {
+    let url = credential.isLegacy ? legacyTokenURL : credentialURL(for: credential.id)
+    do {
+      try removeItem(url)
+    } catch let error as CocoaError where error.code == .fileNoSuchFile {
+      return
+    }
   }
 
   private func makeCredential(id: String) throws -> String {
