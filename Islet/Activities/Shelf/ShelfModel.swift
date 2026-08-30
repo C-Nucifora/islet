@@ -43,8 +43,10 @@ final class ShelfModel: ObservableObject {
   }
 
   typealias CopyItem = @Sendable (URL, URL) async -> Result<Void, Error>
+  typealias MoveItem = @Sendable (URL, URL) async -> Result<Void, Error>
   typealias CreateDirectory = @Sendable (URL) -> Result<Void, Error>
   typealias ListDirectory = @Sendable (URL) -> Result<[URL], Error>
+  typealias RemoveItem = @Sendable (URL) -> Result<Void, Error>
 
   @Published private(set) var items: [ShelfItem] = []
   @Published private(set) var lastError: String?
@@ -55,8 +57,10 @@ final class ShelfModel: ObservableObject {
 
   private let dir: URL
   private let copyItem: CopyItem
+  private let moveItem: MoveItem
   private let createDirectory: CreateDirectory
   private let listDirectory: ListDirectory
+  private let removeItem: RemoveItem
   private var reservedDestinations: Set<URL> = []
   private var importQueue: [ImportBatch] = []
   private var importWorker: Task<Void, Never>?
@@ -66,8 +70,10 @@ final class ShelfModel: ObservableObject {
   init(
     directory: URL? = nil,
     copyItem: CopyItem? = nil,
+    moveItem: MoveItem? = nil,
     createDirectory: CreateDirectory? = nil,
-    listDirectory: ListDirectory? = nil
+    listDirectory: ListDirectory? = nil,
+    removeItem: RemoveItem? = nil
   ) {
     let base =
       directory
@@ -79,6 +85,14 @@ final class ShelfModel: ObservableObject {
       ?? { source, destination in
         await Task.detached(priority: .utility) {
           Result { try FileManager.default.copyItem(at: source, to: destination) }
+        }.value
+      }
+    self.moveItem =
+      moveItem
+      ?? { source, destination in
+        await Task.detached(priority: .utility) {
+          // Both URLs are direct children of `dir`, so this is a same-filesystem rename.
+          Result { try FileManager.default.moveItem(at: source, to: destination) }
         }.value
       }
     self.createDirectory =
@@ -96,6 +110,11 @@ final class ShelfModel: ObservableObject {
           try FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: [.contentModificationDateKey])
         }
+      }
+    self.removeItem =
+      removeItem
+      ?? { item in
+        Result { try FileManager.default.removeItem(at: item) }
       }
     dir = base
     refreshStorage()
@@ -143,6 +162,7 @@ final class ShelfModel: ObservableObject {
 
     switch listDirectory(dir) {
     case .success(let found):
+      cleanAbandonedStagingEntries(in: found)
       storageFailure = nil
       lastError = nil
       setItems(from: found)
@@ -152,9 +172,18 @@ final class ShelfModel: ObservableObject {
   }
 
   private func setItems(from found: [URL]) {
-    items = found.sorted { modDate($0) < modDate($1) }
+    items = found.filter { !isStagingURL($0) }
+      .sorted { modDate($0) < modDate($1) }
       .map { ShelfItem(id: UUID(), url: $0, name: $0.lastPathComponent, thumbnail: nil) }
     for item in items { generateThumbnail(id: item.id, url: item.url) }
+  }
+
+  private func cleanAbandonedStagingEntries(in found: [URL]) {
+    for item in found where isStagingURL(item) {
+      if case .failure(let error) = removeItem(item) {
+        Log.app.error("Shelf staging cleanup failed: \(error.localizedDescription)")
+      }
+    }
   }
 
   private func setStorageFailure(_ failure: ShelfStorageFailure, error: Error) {
@@ -214,31 +243,49 @@ final class ShelfModel: ObservableObject {
     }
 
     let dest = reserveDestination(named: source.lastPathComponent)
-    let result = await copyItem(source, dest)
-    reservedDestinations.remove(dest)
+    defer { reservedDestinations.remove(dest) }
+    let staging = stagingDestination()
+    let result = await copyItem(source, staging)
 
     if let expectedImportGeneration, expectedImportGeneration != importGeneration {
-      // A failed copy may still have created a partial file or directory before Clear invalidated
-      // the import. Remove the reserved destination regardless of the reported result.
-      await Task.detached(priority: .utility) {
-        try? FileManager.default.removeItem(at: dest)
-      }.value
+      // A cancelled copy may finish after Clear. It only ever wrote to staging, so it was never
+      // visible as a Shelf item.
+      removeStagingItem(staging)
       return (nil, nil)
     }
 
     switch result {
     case .success:
-      if updatesLastError { lastError = nil }
-      let item = ShelfItem(id: UUID(), url: dest, name: dest.lastPathComponent, thumbnail: nil)
-      items.append(item)
-      generateThumbnail(id: item.id, url: item.url)
-      return (item, nil)
+      let moveResult = await moveItem(staging, dest)
+      if let expectedImportGeneration, expectedImportGeneration != importGeneration {
+        switch moveResult {
+        case .success:
+          // Clear may run while the rename is in flight. If the rename won that race, remove the
+          // completed destination because it was never present in Clear's item snapshot.
+          removeImportedItem(dest)
+        case .failure:
+          removeStagingItem(staging)
+        }
+        return (nil, nil)
+      }
+      switch moveResult {
+      case .success:
+        if updatesLastError { lastError = nil }
+        let item = ShelfItem(id: UUID(), url: dest, name: dest.lastPathComponent, thumbnail: nil)
+        items.append(item)
+        generateThumbnail(id: item.id, url: item.url)
+        return (item, nil)
+      case .failure(let error):
+        removeStagingItem(staging)
+        let message = "Couldn’t add \(source.lastPathComponent)."
+        if updatesLastError { lastError = message }
+        Log.app.error("Shelf staged rename failed: \(error.localizedDescription)")
+        return (nil, message)
+      }
     case .failure(let error):
-      // FileManager can create part of a file or directory before reporting failure. Never leave
-      // an untracked destination for the next launch to load as a valid Shelf item.
-      await Task.detached(priority: .utility) {
-        try? FileManager.default.removeItem(at: dest)
-      }.value
+      // A failed copy can leave a partial file or directory. It is in staging, rather than the
+      // visible destination, and cleanup makes the next launch safe even after a process crash.
+      removeStagingItem(staging)
       // A file can disappear between Finder producing its drag payload and the async copy. Give a
       // useful, non-technical error while retaining the detailed failure in the log.
       let message = "Couldn’t add \(source.lastPathComponent)."
@@ -319,6 +366,27 @@ final class ShelfModel: ObservableObject {
     let destination = dir.appendingPathComponent(candidate)
     reservedDestinations.insert(destination)
     return destination
+  }
+
+  private func stagingDestination() -> URL {
+    dir.appendingPathComponent(".islet-shelf-staging-\(UUID().uuidString)")
+  }
+
+  private func isStagingURL(_ url: URL) -> Bool {
+    let prefix = ".islet-shelf-staging-"
+    let name = url.lastPathComponent
+    guard name.hasPrefix(prefix) else { return false }
+    return UUID(uuidString: String(name.dropFirst(prefix.count))) != nil
+  }
+
+  private func removeStagingItem(_ staging: URL) {
+    _ = removeItem(staging)
+  }
+
+  private func removeImportedItem(_ destination: URL) {
+    if case .failure(let error) = removeItem(destination) {
+      Log.app.error("Shelf cancelled import cleanup failed: \(error.localizedDescription)")
+    }
   }
 
   private func setThumbnail(_ data: Data, id: UUID) {
