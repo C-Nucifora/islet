@@ -118,6 +118,45 @@ final class AdapterParserTests: XCTestCase {
     XCTAssertEqual(AdapterParser.parseSnapshot(line: "{}"), .idle)
   }
 
+  func testLiveAndSeekingCapabilitiesParse() {
+    let line =
+      #"{"type":"data","payload":{"title":"Live radio","duration":3600,"isLive":true,"supportsSeeking":false}}"#
+    guard case .nowPlaying(_, let state) = AdapterParser.parse(line: line, current: nil)
+    else { return XCTFail("expected nowPlaying") }
+    XCTAssertTrue(state.isLive)
+    XCTAssertEqual(state.supportsSeeking, false)
+    XCTAssertEqual(state.seekability, .live)
+  }
+
+  func testCapabilityNullsClearAPreviousDiffValue() {
+    let full =
+      #"{"type":"data","payload":{"title":"Live radio","duration":3600,"isLive":true,"supportsSeeking":false}}"#
+    guard case .nowPlaying(_, let current) = AdapterParser.parse(line: full, current: nil)
+    else { return XCTFail("expected nowPlaying") }
+
+    let diff = #"{"type":"data","diff":true,"payload":{"isLive":null,"supportsSeeking":null}}"#
+    guard case .nowPlaying(_, let state) = AdapterParser.parse(line: diff, current: current)
+    else { return XCTFail("expected nowPlaying") }
+    XCTAssertFalse(state.isLive)
+    XCTAssertNil(state.supportsSeeking)
+    XCTAssertEqual(state.seekability, .seekable)
+  }
+
+  func testUnknownDurationAndCanonicalLiveValueOverrideDiffState() {
+    let full =
+      #"{"type":"data","payload":{"title":"Radio","duration":3600,"isLiveStream":true}}"#
+    guard case .nowPlaying(_, let current) = AdapterParser.parse(line: full, current: nil)
+    else { return XCTFail("expected nowPlaying") }
+
+    let diff =
+      #"{"type":"data","diff":true,"payload":{"duration":null,"isLive":false,"isLiveStream":true}}"#
+    guard case .nowPlaying(_, let state) = AdapterParser.parse(line: diff, current: current)
+    else { return XCTFail("expected nowPlaying") }
+    XCTAssertEqual(state.duration, 0)
+    XCTAssertFalse(state.isLive)
+    XCTAssertEqual(state.seekability, .unavailable)
+  }
+
   func testMalformedOneShotSnapshotIsIgnored() {
     XCTAssertEqual(AdapterParser.parseSnapshot(line: "not json"), .ignored)
   }
