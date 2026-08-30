@@ -77,6 +77,29 @@ final class NowPlayingActivityTests: XCTestCase {
       activity.mediaControlNotice, "Can't go to the previous track: the player rejected it")
   }
 
+  func testOnlyTheAcceptedLatestFailureIsAnnounced() async {
+    let source = SourceID(
+      bundleIdentifier: "com.example.Player", pid: 42, parentBundleIdentifier: "")
+    let gate = CommandGate()
+    let announcements = AnnouncementRecorder()
+    let activity = NowPlayingActivity(
+      commandPerformer: { command, source, _, _ in
+        if command == .next { await gate.wait() }
+        return .rejected(target: source)
+      },
+      announce: { announcements.messages.append($0) })
+
+    let first = Task { await activity.perform(.next, for: source) }
+    await gate.waitUntilWaiting()
+    await activity.perform(.previous, for: source)
+    await gate.release()
+    await first.value
+
+    XCTAssertEqual(
+      announcements.messages,
+      ["Media control error: Can't go to the previous track: the player rejected it"])
+  }
+
   func testControlAvailabilityFailsClosedForUnknownSourceAndUnseekableMedia() {
     let source = SourceID(
       bundleIdentifier: "com.example.Player", pid: 42, parentBundleIdentifier: "")
@@ -85,6 +108,11 @@ final class NowPlayingActivityTests: XCTestCase {
     XCTAssertFalse(activity.canPerform(.togglePlayPause, for: source))
     XCTAssertFalse(activity.canPerform(.seek(to: 20), for: source))
   }
+}
+
+@MainActor
+private final class AnnouncementRecorder {
+  var messages: [String] = []
 }
 
 private actor CommandResults {

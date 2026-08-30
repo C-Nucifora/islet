@@ -9,6 +9,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     @Sendable (
       MediaCommand, SourceID, Bool, @escaping MediaCommandRouter.ResolveCurrentTarget
     ) async -> MediaCommandResult
+  typealias AnnouncementHandler = (String) -> Void
 
   let id = "nowPlaying"
   let priority = ActivityPriority.media
@@ -53,6 +54,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   private var isMonitoring = false
   private var mediaControlRequest = 0
   private let commandPerformer: CommandPerformer
+  private let announce: AnnouncementHandler
 
   init(
     commandPerformer: @escaping CommandPerformer = {
@@ -62,9 +64,11 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
         shownSource: source,
         sourceIsAdapterBacked: isAdapterBacked,
         resolveCurrentTarget: resolveCurrentTarget)
-    }
+    },
+    announce: @escaping AnnouncementHandler = { A11y.announce($0) }
   ) {
     self.commandPerformer = commandPerformer
+    self.announce = announce
   }
 
   /// The source that owns the hero player.
@@ -206,6 +210,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
       return
     }
     mediaControlNotice = notice
+    announce("Media control error: \(notice)")
     mediaControlNoticeTask?.cancel()
     mediaControlNoticeTask = Task { [weak self] in
       try? await Task.sleep(nanoseconds: 4_000_000_000)
