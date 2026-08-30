@@ -106,7 +106,7 @@ final class HUDController: ObservableObject {
       .store(in: &cancellables)
     NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
       .sink { [weak self] _ in
-        Task { @MainActor in self?.externalBrightnessController.retryUnavailable() }
+        Task { @MainActor in self?.refreshExternalBrightnessDisplays() }
       }
       .store(in: &cancellables)
     start()

@@ -178,11 +178,16 @@ final class ExternalBrightnessController {
           entry.operationID = nil
           entry.cancelDeadline = nil
           entry.state = .disabled
-        } else if case .disabled = entry.state {
-          entry.state = .probing
-          entries[display.id] = entry
-          startProbe(display)
-          continue
+        } else {
+          switch entry.state {
+          case .disabled, .available, .unavailable:
+            entry.state = .probing
+            entries[display.id] = entry
+            startProbe(display)
+            continue
+          case .probing, .writing:
+            break
+          }
         }
         entries[display.id] = entry
       } else if disabled {

@@ -293,6 +293,27 @@ final class ExternalBrightnessTests: XCTestCase {
     XCTAssertEqual(controller.statuses.first?.capability, .available(level: second))
   }
 
+  func testRefreshReadsTheCurrentLevelBeforeTheNextAdjustment() async throws {
+    let fake = FakeExternalBrightnessBackend()
+    let controller = ExternalBrightnessController(
+      backend: fake.backend,
+      deadlineScheduler: ManualBrightnessDeadlineScheduler().scheduler)
+
+    controller.refresh(displays: [display], disabledDisplayIDs: [])
+    fake.completeRead(.success(0.5))
+    await settleMainActorTasks()
+
+    controller.refresh(displays: [display], disabledDisplayIDs: [])
+    XCTAssertEqual(fake.readCount, 2)
+    XCTAssertEqual(controller.statuses.first?.capability, .probing)
+    fake.completeRead(.success(0.8))
+    await settleMainActorTasks()
+
+    let target = try XCTUnwrap(
+      controller.adjust(displayID: display.displayID, up: false, divisor: 1))
+    XCTAssertEqual(target, 0.8 - 1.0 / 16.0, accuracy: 1e-6)
+  }
+
   func testPerDisplayDisablementSkipsProbeAndFallsBack() {
     let fake = FakeExternalBrightnessBackend()
     let controller = ExternalBrightnessController(
