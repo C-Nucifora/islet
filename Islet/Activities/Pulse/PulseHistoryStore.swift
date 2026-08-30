@@ -48,7 +48,7 @@ enum PulseHistoryStoreError: LocalizedError, Equatable {
 
 /// Stores only `PulseHistoryEntry`. The wire payload, bearer token, item identifier, title,
 /// subtitle, action text, URLs, progress, accent, symbol, and error text never enter this type.
-struct PulseHistoryStore {
+struct PulseHistoryStore: @unchecked Sendable {
   static let currentVersion = 2
   static let formatIdentifier = "dev.islet.pulse-history"
   static let maximumDocumentBytes = 512 * 1024
@@ -254,5 +254,138 @@ struct PulseHistoryStore {
   private struct LegacyDocument: Codable {
     let version: Int
     let history: [PulseHistoryEntry]
+  }
+}
+
+enum PulseHistoryPersistenceOperation: Sendable {
+  case save(entries: [PulseHistoryEntry], exportedAt: Date)
+  case remove
+}
+
+/// Coalesces full-document history writes and keeps all persistence I/O off the main actor.
+/// `flush()` preserves ordering by waiting for this writer's serial queue to drain.
+final class PulseHistoryPersistenceWriter: @unchecked Sendable {
+  typealias OperationHandler = @Sendable (PulseHistoryPersistenceOperation) throws -> Void
+  typealias ResultHandler = @Sendable (_ generation: UInt64, _ errorMessage: String?) -> Void
+
+  private struct PendingOperation {
+    let generation: UInt64
+    let operation: PulseHistoryPersistenceOperation
+  }
+
+  private final class FlushResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: (generation: UInt64, errorMessage: String?)?
+
+    func store(_ value: (generation: UInt64, errorMessage: String?)?) {
+      lock.withLock { self.value = value }
+    }
+
+    func load() -> (generation: UInt64, errorMessage: String?)? {
+      lock.withLock { value }
+    }
+  }
+
+  private let queue = DispatchQueue(
+    label: "dev.islet.pulse-history-persistence", qos: .utility)
+  private let lock = NSLock()
+  private let coalescingDelay: TimeInterval
+  private let operationHandler: OperationHandler
+  private let resultHandler: ResultHandler
+  private var pendingOperation: PendingOperation?
+  private var pendingWorkItem: DispatchWorkItem?
+
+  convenience init(
+    store: PulseHistoryStore, coalescingDelay: TimeInterval = 0.25,
+    resultHandler: @escaping ResultHandler
+  ) {
+    self.init(
+      coalescingDelay: coalescingDelay,
+      operationHandler: { operation in
+        switch operation {
+        case .save(let entries, let exportedAt):
+          try store.save(entries, exportedAt: exportedAt)
+        case .remove:
+          try store.remove()
+        }
+      },
+      resultHandler: resultHandler)
+  }
+
+  init(
+    coalescingDelay: TimeInterval = 0.25,
+    operationHandler: @escaping OperationHandler,
+    resultHandler: @escaping ResultHandler = { _, _ in }
+  ) {
+    self.coalescingDelay = coalescingDelay
+    self.operationHandler = operationHandler
+    self.resultHandler = resultHandler
+  }
+
+  func submit(_ operation: PulseHistoryPersistenceOperation, generation: UInt64) {
+    let workItem = DispatchWorkItem { [weak self] in
+      self?.drain(expectedGeneration: generation)
+    }
+    lock.withLock {
+      pendingWorkItem?.cancel()
+      pendingOperation = PendingOperation(generation: generation, operation: operation)
+      pendingWorkItem = workItem
+    }
+    queue.asyncAfter(deadline: .now() + coalescingDelay, execute: workItem)
+  }
+
+  @discardableResult
+  func flush() -> (generation: UInt64, errorMessage: String?)? {
+    let semaphore = DispatchSemaphore(value: 0)
+    let result = FlushResult()
+    queue.async { [self] in
+      result.store(drainLatest())
+      semaphore.signal()
+    }
+    semaphore.wait()
+    return result.load()
+  }
+
+  private func drain(expectedGeneration: UInt64) {
+    let pending = lock.withLock { () -> PendingOperation? in
+      guard pendingOperation?.generation == expectedGeneration else { return nil }
+      let pending = pendingOperation
+      pendingOperation = nil
+      pendingWorkItem = nil
+      return pending
+    }
+    guard let pending else { return }
+    complete(pending)
+  }
+
+  private func drainLatest() -> (generation: UInt64, errorMessage: String?)? {
+    let pending = lock.withLock { () -> PendingOperation? in
+      pendingWorkItem?.cancel()
+      pendingWorkItem = nil
+      defer { pendingOperation = nil }
+      return pendingOperation
+    }
+    guard let pending else { return nil }
+    return complete(pending)
+  }
+
+  @discardableResult
+  private func complete(
+    _ pending: PendingOperation
+  ) -> (generation: UInt64, errorMessage: String?) {
+    let errorMessage: String?
+    do {
+      try operationHandler(pending.operation)
+      errorMessage = nil
+    } catch {
+      switch pending.operation {
+      case .save:
+        errorMessage = "Pulse history could not be saved. \(error.localizedDescription)"
+      case .remove:
+        errorMessage = "Pulse history could not be removed. \(error.localizedDescription)"
+      }
+    }
+    resultHandler(pending.generation, errorMessage)
+    return (pending.generation, errorMessage)
   }
 }
