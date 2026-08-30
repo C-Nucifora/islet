@@ -8,12 +8,59 @@ public struct GitHubClient<Runner: CommandRunning> {
     self.runner = runner
   }
 
-  public func workflowRuns(repository: String) throws -> [WorkflowRun] {
+  public func workflowRuns(repository: String, workflows: [String] = []) throws -> [WorkflowRun] {
+    guard !workflows.isEmpty else { return try repositoryWorkflowRuns(repository: repository) }
+    let available = try workflowCatalog(repository: repository)
+    var selected: [WorkflowSummary] = []
+    var selectedIDs = Set<Int64>()
+    for workflow in workflows {
+      guard
+        let match = available.first(where: {
+          RunSelector.matches(
+            name: $0.name, path: $0.path, id: $0.id, workflow: workflow)
+        }), selectedIDs.insert(match.id).inserted
+      else { continue }
+      selected.append(match)
+    }
+
+    return try selected.compactMap { workflow in
+      let result = try ghAPI(
+        "repos/\(repository)/actions/workflows/\(workflow.id)/runs", fields: ["per_page=1"])
+      do {
+        return try decoder.decode(WorkflowRunsResponse.self, from: result).workflowRuns.first
+      } catch {
+        throw ProviderError.invalidResponse
+      }
+    }
+  }
+
+  private func repositoryWorkflowRuns(repository: String) throws -> [WorkflowRun] {
     let result = try ghAPI("repos/\(repository)/actions/runs", fields: ["per_page=100"])
     do {
       return try decoder.decode(WorkflowRunsResponse.self, from: result).workflowRuns
     } catch {
       throw ProviderError.invalidResponse
+    }
+  }
+
+  private func workflowCatalog(repository: String) throws -> [WorkflowSummary] {
+    var workflows: [WorkflowSummary] = []
+    var page = 1
+    while true {
+      let result = try ghAPI(
+        "repos/\(repository)/actions/workflows",
+        fields: ["per_page=100", "page=\(page)"])
+      let response: WorkflowsResponse
+      do {
+        response = try decoder.decode(WorkflowsResponse.self, from: result)
+      } catch {
+        throw ProviderError.invalidResponse
+      }
+      workflows.append(contentsOf: response.workflows)
+      guard !response.workflows.isEmpty, workflows.count < response.totalCount else {
+        return workflows
+      }
+      page += 1
     }
   }
 
@@ -66,15 +113,19 @@ public enum RunSelector {
     var selected: [WorkflowRun] = []
     var selectedIDs = Set<Int64>()
     for workflow in workflows {
-      let normalized = workflow.lowercased()
       guard
         let run = runs.first(where: {
-          $0.name.lowercased() == normalized || $0.path.lowercased() == normalized
-            || String($0.workflowID) == workflow
+          matches(name: $0.name, path: $0.path, id: $0.workflowID, workflow: workflow)
         }), selectedIDs.insert(run.id).inserted
       else { continue }
       selected.append(run)
     }
     return selected
+  }
+
+  static func matches(name: String, path: String, id: Int64, workflow: String) -> Bool {
+    let normalized = workflow.lowercased()
+    return name.lowercased() == normalized || path.lowercased() == normalized
+      || String(id) == workflow
   }
 }

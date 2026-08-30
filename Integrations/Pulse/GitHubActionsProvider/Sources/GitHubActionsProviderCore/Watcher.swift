@@ -39,7 +39,8 @@ public final class GitHubActionsWatcher<Runner: CommandRunning> {
 
   public func poll(now: Date) throws {
     for repository in configuration.repositories {
-      let runs = try client.workflowRuns(repository: repository)
+      let runs = try client.workflowRuns(
+        repository: repository, workflows: configuration.workflows)
       for run in RunSelector.latest(from: runs, workflows: configuration.workflows) {
         let runAttempt = "\(run.id)#\(run.runAttempt)"
         let itemScope =

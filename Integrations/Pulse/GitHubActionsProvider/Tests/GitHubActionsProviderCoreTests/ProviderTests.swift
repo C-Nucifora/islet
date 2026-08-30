@@ -49,6 +49,32 @@ final class ProviderTests: XCTestCase {
     XCTAssertEqual(RunSelector.latest(from: runs, workflows: []).map(\.id), [101])
   }
 
+  func testSelectedWorkflowQueriesItsOwnRunEndpoint() throws {
+    let runner = RecordingRunner(results: [
+      CommandResult(status: 0, stdout: try fixtureData("workflows"), stderr: Data()),
+      CommandResult(status: 0, stdout: try fixtureData("running"), stderr: Data()),
+      CommandResult(status: 0, stdout: Data(), stderr: Data()),
+    ])
+    let configuration = WatchConfiguration(
+      repositories: ["C-Nucifora/islet"], workflows: ["CI"], once: true)
+    let watcher = GitHubActionsWatcher(configuration: configuration, runner: runner)
+
+    try watcher.poll(now: Date(timeIntervalSince1970: 1_000))
+
+    XCTAssertEqual(runner.invocations.count, 3)
+    XCTAssertTrue(
+      runner.invocations[0].arguments.contains(
+        "repos/C-Nucifora/islet/actions/workflows"))
+    XCTAssertTrue(
+      runner.invocations[1].arguments.contains(
+        "repos/C-Nucifora/islet/actions/workflows/9001/runs"))
+    XCTAssertFalse(
+      runner.invocations.contains {
+        $0.arguments.contains("repos/C-Nucifora/islet/actions/runs")
+      })
+    XCTAssertTrue(runner.invocations[2].arguments.contains("github-actions"))
+  }
+
   func testRepositoryAndWorkflowUseOneStableItemAcrossRuns() throws {
     let queued = try XCTUnwrap(try recordedRuns("queued").first)
     let running = try XCTUnwrap(try recordedRuns("running").first)

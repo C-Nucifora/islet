@@ -8,6 +8,22 @@ public struct WorkflowRunsResponse: Decodable, Sendable {
   }
 }
 
+struct WorkflowsResponse: Decodable, Sendable {
+  let totalCount: Int
+  let workflows: [WorkflowSummary]
+
+  enum CodingKeys: String, CodingKey {
+    case totalCount = "total_count"
+    case workflows
+  }
+}
+
+struct WorkflowSummary: Decodable, Equatable, Sendable {
+  let id: Int64
+  let name: String
+  let path: String
+}
+
 public struct WorkflowRun: Decodable, Equatable, Sendable {
   public let id: Int64
   public let name: String
