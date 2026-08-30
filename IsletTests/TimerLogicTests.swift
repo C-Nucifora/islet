@@ -32,4 +32,9 @@ final class TimerLogicTests: XCTestCase {
     XCTAssertEqual(TimerFormat.accessible(3661), "1 hour, 1 minute, 1 second")
     XCTAssertEqual(TimerFormat.accessible(0), "0 seconds")
   }
+
+  func testActiveAndCompletedPresentationsKeepTheSelectedTimerTheme() {
+    XCTAssertEqual(TimerPresentation.tintRole(finished: false), .timer)
+    XCTAssertEqual(TimerPresentation.tintRole(finished: true), .timer)
+  }
 }
