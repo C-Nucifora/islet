@@ -37,6 +37,44 @@ final class ShelfLogicTests: XCTestCase {
     func hasStarted() -> Bool { started }
   }
 
+  private actor StagedCopyGate {
+    private var started = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func copy(source: URL, to staging: URL) async -> Result<Void, Error> {
+      let result = Result { try FileManager.default.copyItem(at: source, to: staging) }
+      started = true
+      await withCheckedContinuation { continuation = $0 }
+      return result
+    }
+
+    func hasStarted() -> Bool { started }
+
+    func release() {
+      continuation?.resume()
+      continuation = nil
+    }
+  }
+
+  private actor CompletedMoveGate {
+    private var started = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func move(source: URL, to destination: URL) async -> Result<Void, Error> {
+      let result = Result { try FileManager.default.moveItem(at: source, to: destination) }
+      started = true
+      await withCheckedContinuation { continuation = $0 }
+      return result
+    }
+
+    func hasStarted() -> Bool { started }
+
+    func release() {
+      continuation?.resume()
+      continuation = nil
+    }
+  }
+
   func testShelfHasBoundedCapacity() {
     XCTAssertEqual(ShelfModel.maximumItemCount, 100)
     XCTAssertTrue(ShelfLogic.hasCapacity(currentCount: 99, pendingCount: 0, maximum: 100))
@@ -166,6 +204,91 @@ final class ShelfLogicTests: XCTestCase {
   }
 
   @MainActor
+  func testSuccessfulImportPublishesOnlyAfterStagingRename() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("atomic.txt")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data("complete contents".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+    let gate = StagedCopyGate()
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      copyItem: { source, staging in await gate.copy(source: source, to: staging) })
+
+    let importTask = Task { await model.add(source) }
+    for _ in 0..<100 {
+      if await gate.hasStarted() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let copyStarted = await gate.hasStarted()
+    XCTAssertTrue(copyStarted)
+
+    let beforeRename = try FileManager.default.contentsOfDirectory(
+      at: shelfDirectory, includingPropertiesForKeys: nil)
+    XCTAssertTrue(model.items.isEmpty)
+    let finalURL = shelfDirectory.appendingPathComponent("atomic.txt")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: finalURL.path))
+    XCTAssertEqual(beforeRename.count, 1)
+    XCTAssertTrue(beforeRename[0].lastPathComponent.hasPrefix(".islet-shelf-staging-"))
+
+    await gate.release()
+    let added = await importTask.value
+    XCTAssertTrue(added)
+    XCTAssertEqual(model.items.map(\.name), ["atomic.txt"])
+    XCTAssertEqual(try String(contentsOf: model.items[0].url, encoding: .utf8), "complete contents")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: beforeRename[0].path))
+  }
+
+  @MainActor
+  func testLaunchCleansStagingFromAnInterruptedImportWithoutLoadingIt() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let interrupted = shelfDirectory.appendingPathComponent(
+      ".islet-shelf-staging-\(UUID().uuidString)")
+    let retained = shelfDirectory.appendingPathComponent("retained.txt")
+    try FileManager.default.createDirectory(at: shelfDirectory, withIntermediateDirectories: true)
+    try Data("partial".utf8).write(to: interrupted)
+    try Data("complete".utf8).write(to: retained)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(directory: shelfDirectory)
+
+    XCTAssertEqual(model.items.map(\.name), ["retained.txt"])
+    XCTAssertFalse(FileManager.default.fileExists(atPath: interrupted.path))
+  }
+
+  @MainActor
+  func testUnremovableStagingEntryNeverLoadsAsAShelfItem() throws {
+    let shelfDirectory = URL(fileURLWithPath: "/Shelf")
+    let staging = shelfDirectory.appendingPathComponent(
+      ".islet-shelf-staging-\(UUID().uuidString)")
+    let retained = shelfDirectory.appendingPathComponent("retained.txt")
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([staging, retained]) },
+      removeItem: { _ in .failure(CopyFailure.expected) })
+
+    XCTAssertTrue(model.isStorageAvailable)
+    XCTAssertEqual(model.items.map(\.name), ["retained.txt"])
+  }
+
+  @MainActor
+  func testOrdinaryFileWithStagingPrefixRemainsVisible() {
+    let shelfDirectory = URL(fileURLWithPath: "/Shelf")
+    let prefixed = shelfDirectory.appendingPathComponent(".islet-shelf-staging-not-internal.txt")
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([prefixed]) })
+
+    XCTAssertEqual(model.items.map(\.name), [".islet-shelf-staging-not-internal.txt"])
+  }
+
+  @MainActor
   func testBatchDropPreservesCapacityFailureAfterAnotherFileSucceeds() async throws {
     let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
       UUID().uuidString, isDirectory: true)
@@ -267,6 +390,44 @@ final class ShelfLogicTests: XCTestCase {
     let remaining =
       (try? FileManager.default.contentsOfDirectory(
         at: shelfDirectory, includingPropertiesForKeys: nil)) ?? []
+    XCTAssertTrue(remaining.isEmpty)
+  }
+
+  @MainActor
+  func testClearRemovesDestinationRenamedWhileClearWasRunning() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("renamed-during-clear.txt")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data("complete".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+    let gate = CompletedMoveGate()
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      moveItem: { source, destination in
+        await gate.move(source: source, to: destination)
+      })
+
+    XCTAssertTrue(model.importDroppedURLs([source]))
+    for _ in 0..<100 {
+      if await gate.hasStarted() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let moveStarted = await gate.hasStarted()
+    XCTAssertTrue(moveStarted)
+
+    let clearTask = Task { await model.clear() }
+    for _ in 0..<100 where !model.isClearing {
+      await Task.yield()
+    }
+    XCTAssertTrue(model.isClearing)
+    await gate.release()
+    await clearTask.value
+
+    XCTAssertTrue(model.items.isEmpty)
+    let remaining = try FileManager.default.contentsOfDirectory(
+      at: shelfDirectory, includingPropertiesForKeys: nil)
     XCTAssertTrue(remaining.isEmpty)
   }
 
@@ -376,6 +537,28 @@ final class ShelfLogicTests: XCTestCase {
     let remaining =
       (try? FileManager.default.contentsOfDirectory(
         at: shelfDirectory, includingPropertiesForKeys: nil)) ?? []
+    XCTAssertTrue(remaining.isEmpty)
+  }
+
+  @MainActor
+  func testStagedRenameFailureRemovesTheCompletedStagingCopy() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("rename-fails.txt")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data("source".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      moveItem: { _, _ in .failure(CopyFailure.expected) })
+
+    let added = await model.add(source)
+    XCTAssertFalse(added)
+    XCTAssertTrue(model.items.isEmpty)
+    let remaining = try FileManager.default.contentsOfDirectory(
+      at: shelfDirectory, includingPropertiesForKeys: nil)
     XCTAssertTrue(remaining.isEmpty)
   }
 
