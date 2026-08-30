@@ -54,6 +54,10 @@ enum EnergyMode: String, CaseIterable, Codable, Sendable {
   case live
 }
 
+enum DisplayPlacementDefaults {
+  static let showOnAllDisplays = false
+}
+
 /// Pure cadence policy shared by the battery, system and T3 monitors. Keeping these decisions in
 /// one value makes profile changes atomic and lets tests cover the energy contract without
 /// starting timers or touching hardware.
@@ -256,7 +260,8 @@ extension Defaults.Keys {
   static let calendarLeadMinutes = Key<Int>("calendarLeadMinutes", default: 10)
   static let hiddenCalendarIDs = Key<[String]>("hiddenCalendarIDs", default: [])
   static let remindersEnabled = Key<Bool>("remindersEnabled", default: true)
-  static let showOnAllDisplays = Key<Bool>("showOnAllDisplays", default: false)
+  static let showOnAllDisplays = Key<Bool>(
+    "showOnAllDisplays", default: DisplayPlacementDefaults.showOnAllDisplays)
   /// The display's Quartz UUID. This remains set while the display is disconnected so Islet can
   /// return to it on reconnect instead of turning a temporary fallback into a new preference.
   static let preferredDisplayID = Key<String>("preferredDisplayID", default: "")

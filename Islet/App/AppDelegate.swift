@@ -177,7 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       if OnboardingState.isComplete { SystemEventBus.shared.startEnabled() }
       ContextRuleCenter.shared.start()
       SneakQueue.shared.isSuspended = {
-        ScreenManager.shared.viewModel?.state.isExpanded ?? false
+        ScreenManager.shared.isAnyPanelExpanded
       }
       HUDController.shared.startObserving()
       LaunchAtLogin.sync()
