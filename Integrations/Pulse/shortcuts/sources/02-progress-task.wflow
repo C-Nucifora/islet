@@ -17,6 +17,7 @@
         <key>progress</key><real>0.15</real>
         <key>activityPriority</key><string>normal</string>
         <key>activityState</key><string>progress</string>
+        <key>expirySeconds</key><integer>300</integer>
         <key>ShowWhenRun</key><false/>
       </dict>
     </dict>
@@ -34,6 +35,7 @@
         <key>progress</key><real>0.75</real>
         <key>activityPriority</key><string>normal</string>
         <key>activityState</key><string>progress</string>
+        <key>expirySeconds</key><integer>300</integer>
         <key>ShowWhenRun</key><false/>
       </dict>
     </dict>
