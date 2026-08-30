@@ -233,6 +233,15 @@ enum T3ConnectionState: Equatable, Sendable {
   case needsPairing
   case credentialError(String)
 
+  /// The colour is deliberately a semantic category rather than a `Color`. This keeps the model
+  /// independent of SwiftUI and lets the view choose a high-contrast rendering for the category.
+  enum SemanticColor: String, Equatable, Sendable {
+    case neutral
+    case positive
+    case warning
+    case negative
+  }
+
   var label: String {
     switch self {
     case .connecting: "Connecting"
@@ -242,6 +251,32 @@ enum T3ConnectionState: Equatable, Sendable {
     case .needsPairing: "Pair again"
     case .credentialError: "Credential error"
     }
+  }
+
+  var icon: String {
+    switch self {
+    case .connecting: "arrow.triangle.2.circlepath"
+    case .connected: "checkmark.circle.fill"
+    case .offline: "wifi.slash"
+    case .reconnecting: "arrow.clockwise.circle.fill"
+    case .needsPairing: "link.badge.plus"
+    case .credentialError: "key.slash.fill"
+    }
+  }
+
+  var semanticColor: SemanticColor {
+    switch self {
+    case .connecting: .neutral
+    case .connected: .positive
+    case .offline, .credentialError: .negative
+    case .reconnecting, .needsPairing: .warning
+    }
+  }
+
+  /// A complete spoken description makes the indicator useful without relying on its colour.
+  var accessibilityLabel: String {
+    guard let detail = detail else { return label }
+    return "\(label): \(detail)"
   }
 
   var detail: String? {
@@ -268,4 +303,28 @@ struct T3EnvironmentSnapshot: Equatable, Identifiable, Sendable {
   let serverVersion: String?
   let state: T3ConnectionState
   let agents: [T3AgentSnapshot]
+  /// True when this row is showing the last successful payload while a refresh is failing.
+  let isStale: Bool
+
+  init(
+    id: String,
+    label: String,
+    baseURL: String,
+    isLocal: Bool,
+    platform: String?,
+    serverVersion: String?,
+    state: T3ConnectionState,
+    agents: [T3AgentSnapshot],
+    isStale: Bool = false
+  ) {
+    self.id = id
+    self.label = label
+    self.baseURL = baseURL
+    self.isLocal = isLocal
+    self.platform = platform
+    self.serverVersion = serverVersion
+    self.state = state
+    self.agents = agents
+    self.isStale = isStale
+  }
 }
