@@ -83,15 +83,8 @@ struct IdleDashboardView: View {
               }
               Text(event.title).font(.caption).lineLimit(1)
               Spacer(minLength: 0)
-              if let url = event.joinURL {
-                Button {
-                  NSWorkspace.shared.open(url)
-                } label: {
-                  Image(systemName: "video.fill").foregroundStyle(.green)
-                    .font(.caption2)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Join \(event.title)")
+              if let url = event.joinURL, let link = CalendarMeetingLinkPolicy.candidate(url) {
+                CalendarMeetingLinkButton(link: link, eventTitle: event.title)
               }
             }
           }

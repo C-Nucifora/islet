@@ -31,8 +31,8 @@ final class RemindersProvider: ObservableObject {
   private var cancellables: Set<AnyCancellable> = []
   private var observing = false
   private var isRunning = false
-  /// Invalidates EventKit callbacks that arrive after a stop, disable, or newer reload.
-  private var reloadGeneration = 0
+  private let storeChangeDebouncer = ReminderReloadDebouncer()
+  private var reloadState = ReminderReloadState()
 
   func start() {
     guard !isRunning else { return }
@@ -42,7 +42,8 @@ final class RemindersProvider: ObservableObject {
       .dropFirst()
       .sink { [weak self] change in
         guard change.newValue else {
-          self?.reloadGeneration += 1
+          self?.storeChangeDebouncer.cancel()
+          self?.reloadState.invalidate(clearOptimisticCompletions: true)
           self?.reminders = []
           self?.hasMoreReminders = false
           self?.loadState = .idle
@@ -62,7 +63,8 @@ final class RemindersProvider: ObservableObject {
     isRunning = false
     cancellables.removeAll()
     observing = false
-    reloadGeneration += 1
+    storeChangeDebouncer.cancel()
+    reloadState.invalidate(clearOptimisticCompletions: true)
     reminders = []
     hasMoreReminders = false
     loadState = .idle
@@ -74,8 +76,17 @@ final class RemindersProvider: ObservableObject {
     observing = true
     NotificationCenter.default
       .publisher(for: .EKEventStoreChanged)
-      .sink { [weak self] _ in Task { await self?.reload() } }
+      .sink { [weak self] _ in self?.scheduleStoreChangeReload() }
       .store(in: &cancellables)
+  }
+
+  private func scheduleStoreChangeReload() {
+    // Reject a fetch that was already in flight when EventKit announced a newer store revision.
+    // The debounced fetch starts after notifications have been quiet for a moment.
+    reloadState.invalidate(clearOptimisticCompletions: false)
+    storeChangeDebouncer.schedule { [weak self] in
+      Task { await self?.reload() }
+    }
   }
 
   func requestAccess() async {
@@ -122,7 +133,8 @@ final class RemindersProvider: ObservableObject {
       observeStoreChanges()
       await reload()
     } else if isRunning {
-      reloadGeneration += 1
+      storeChangeDebouncer.cancel()
+      reloadState.invalidate(clearOptimisticCompletions: true)
       reminders = []
       hasMoreReminders = false
       loadState = .idle
@@ -130,18 +142,18 @@ final class RemindersProvider: ObservableObject {
   }
 
   func reload() async {
+    storeChangeDebouncer.cancel()
     guard isRunning, Defaults[.remindersEnabled] else { return }
     // Re-check authorization so a mid-session revoke flips to "access off" (and re-grant recovers).
     authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
     guard authorization.canRead else {
-      reloadGeneration += 1
+      reloadState.invalidate(clearOptimisticCompletions: true)
       reminders = []
       hasMoreReminders = false
       loadState = .idle
       return
     }
-    reloadGeneration += 1
-    let generation = reloadGeneration
+    let generation = reloadState.beginReload()
     loadState = .loading
     // EventKit cannot combine a due-date horizon with undated reminders, and it provides no
     // result limit. Fetching all incomplete reminders is therefore required to retain important
@@ -174,8 +186,10 @@ final class RemindersProvider: ObservableObject {
       }
       store.fetchReminders(matching: predicate, completion: handler)
     }
-    guard generation == reloadGeneration, isRunning, Defaults[.remindersEnabled] else { return }
-    reminders = result.items
+    guard isRunning, Defaults[.remindersEnabled],
+      let visibleItems = reloadState.finish(result.items, generation: generation)
+    else { return }
+    reminders = visibleItems
     hasMoreReminders = result.hasMore
     loadState = .loaded
   }
@@ -198,6 +212,7 @@ final class RemindersProvider: ObservableObject {
     do {
       try store.save(reminder, commit: true)
       lastActionError = nil
+      reloadState.markCompleted(item.id)
       reminders.removeAll { $0.id == item.id }  // optimistic; store-change reload confirms
     } catch {
       lastActionError = "Couldn’t complete \(item.title)."
