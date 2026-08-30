@@ -338,10 +338,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
         title: event.title ?? "Untitled",
         start: event.startDate, end: event.endDate, isAllDay: event.isAllDay,
         calendarColorHex: ColorHex.string(from: event.calendar?.cgColor),
-        joinURL: joinURL(from: event), location: normalizedLocation(from: event),
-        // EventKit on macOS does not expose Calendar's route estimate or travel-time setting.
-        // Leave this absent rather than deriving a departure time from an arbitrary alarm.
-        travelTime: nil)
+        joinURL: joinURL(from: event), location: normalizedLocation(from: event))
     }
   }
 
@@ -458,7 +455,6 @@ struct CalendarCountdownView: View {
 
 struct CalendarAgendaView: View {
   @ObservedObject var activity: CalendarActivity
-  @Default(.calendarLeaveTimeWarningsEnabled) private var leaveTimeWarningsEnabled
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -502,8 +498,7 @@ struct CalendarAgendaView: View {
                   Text("No events").font(.caption).foregroundStyle(.tertiary)
                 } else {
                   ForEach(day.events.prefix(5)) { event in
-                    CalendarAgendaEventRow(
-                      event: event, leaveTimeWarningsEnabled: leaveTimeWarningsEnabled)
+                    CalendarAgendaEventRow(event: event)
                   }
                 }
               }
@@ -524,7 +519,6 @@ struct CalendarAgendaView: View {
 
 private struct CalendarAgendaEventRow: View {
   let event: AgendaEvent
-  let leaveTimeWarningsEnabled: Bool
 
   var body: some View {
     HStack(alignment: .top, spacing: 8) {
@@ -539,12 +533,6 @@ private struct CalendarAgendaEventRow: View {
         if let location = event.location {
           Label(location, systemImage: "mappin.and.ellipse")
             .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-        }
-        if let notice = CalendarLogic.leaveNotice(
-          for: event, now: Date(), enabled: leaveTimeWarningsEnabled)
-        {
-          Label(notice.text, systemImage: "figure.walk.departure")
-            .font(.caption2.weight(.semibold)).foregroundStyle(.orange)
         }
       }
       Spacer(minLength: 0)
