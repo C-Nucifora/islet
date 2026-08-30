@@ -186,6 +186,7 @@ final class ClipboardModel: ObservableObject {
   private var ownWriteChange = -1
   private var timer: AnyCancellable?
   private var isRunning = false
+  private var historyGeneration: UInt64 = 0
 
   init(
     pasteboard: NSPasteboard = .general,
@@ -216,6 +217,7 @@ final class ClipboardModel: ObservableObject {
   }
 
   func stop() {
+    invalidatePendingCopyBacks()
     guard isRunning else { return }
     isRunning = false
     contextMonitor.stop()
@@ -277,6 +279,8 @@ final class ClipboardModel: ObservableObject {
 
   @discardableResult
   func copyBack(_ item: ClipboardItem) async -> Bool {
+    invalidatePendingCopyBacks()
+    let generation = historyGeneration
     let pb = pasteboard
     let succeeded = await ClipboardPasteboardTransaction.replace(on: pb) {
       switch item.kind {
@@ -288,20 +292,27 @@ final class ClipboardModel: ObservableObject {
           forType: NSPasteboard.PasteboardType(rawValue: payload.pasteboardTypeRawValue))
       }
     }
+    if succeeded {
+      ownWriteChange = pb.changeCount
+      lastChange = pb.changeCount
+    }
+    guard generation == historyGeneration else { return succeeded }
     guard succeeded else {
       lastWriteError = "Couldn’t restore that clipboard item."
       return false
     }
     lastWriteError = nil
-    ownWriteChange = pb.changeCount
-    lastChange = pb.changeCount
     items.removeAll { $0.id == item.id }
     items.insert(item, at: 0)
     return true
   }
 
-  func remove(_ item: ClipboardItem) { items.removeAll { $0.id == item.id } }
+  func remove(_ item: ClipboardItem) {
+    invalidatePendingCopyBacks()
+    items.removeAll { $0.id == item.id }
+  }
   func clear() {
+    invalidatePendingCopyBacks()
     items = []
     lastWriteError = nil
   }
@@ -310,6 +321,7 @@ final class ClipboardModel: ObservableObject {
   /// Pausing immediately clears retained history. Copies made while paused are deliberately not
   /// backfilled when capture resumes.
   func setPaused(_ paused: Bool) {
+    invalidatePendingCopyBacks()
     var configuration = privacyStore.load()
     configuration.manuallyPaused = paused
     if !paused {
@@ -376,6 +388,8 @@ final class ClipboardModel: ObservableObject {
       lastChange = pasteboard.changeCount
     }
   }
+
+  private func invalidatePendingCopyBacks() { historyGeneration &+= 1 }
 
   private static func imagePayload(from pasteboard: NSPasteboard) -> ClipboardItem.ImagePayload? {
     for type in [NSPasteboard.PasteboardType.tiff, .png] {
