@@ -10,6 +10,7 @@ private let usage = """
          islet-pulse <show|update|event> <id> <title> [subtitle] [options]
 
   options:
+    --credential-file PATH  Explicit provider credential file (or set ISLET_PULSE_CREDENTIAL_FILE)
     --source NAME            Stable provider source (default: cli; use with end)
     --revision NUMBER        Monotonic integer from 0 through \(maximumRevision)
     --progress NUMBER        Progress from 0 through 1
@@ -132,7 +133,28 @@ private final class PulseClient: @unchecked Sendable {
   }
 }
 
-let arguments = Array(CommandLine.arguments.dropFirst())
+let rawArguments = Array(CommandLine.arguments.dropFirst())
+var arguments: [String] = []
+var credentialFileArgument: String?
+var rawIndex = 0
+while rawIndex < rawArguments.count {
+  if rawArguments[rawIndex] == "--credential-file" {
+    guard rawIndex + 1 < rawArguments.count, credentialFileArgument == nil else {
+      FileHandle.standardError.write(Data("--credential-file requires one path\n".utf8))
+      exit(64)
+    }
+    let value = rawArguments[rawIndex + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else {
+      FileHandle.standardError.write(Data("--credential-file requires one path\n".utf8))
+      exit(64)
+    }
+    credentialFileArgument = value
+    rawIndex += 2
+  } else {
+    arguments.append(rawArguments[rawIndex])
+    rawIndex += 1
+  }
+}
 if arguments == ["--help"] || arguments == ["-h"] {
   FileHandle.standardOutput.write(Data(usage.utf8))
   exit(0)
@@ -314,11 +336,6 @@ let storedPort = (try? String(contentsOf: activePortURL, encoding: .utf8)).flatM
 let port =
   storedPort.flatMap { NWEndpoint.Port(rawValue: $0) }
   ?? NWEndpoint.Port(rawValue: 47_717)!
-let requestedSource =
-  (command["source"] as? String)
-  ?? ((command["activity"] as? [String: Any])?["source"] as? String)
-let registryURL = support.appendingPathComponent("pulse-providers.json")
-let credentialDirectory = support.appendingPathComponent("pulse-credentials", isDirectory: true)
 
 func secureData(at url: URL, maximumBytes: Int) -> Data? {
   let descriptor = url.path.withCString {
@@ -352,35 +369,20 @@ func secureString(at url: URL) -> String? {
     in: .whitespacesAndNewlines)
 }
 
-func providerCredential() -> String? {
-  guard let data = secureData(at: registryURL, maximumBytes: 1_048_576),
-    let registry = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-    let providers = registry["credentials"] as? [[String: Any]]
-  else { return nil }
-  let active = providers.filter { $0["revokedAt"] == nil && ($0["isLegacy"] as? Bool) != true }
-  let matches: [[String: Any]]
-  if let requestedSource {
-    matches = active.filter {
-      ($0["source"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        .localizedCaseInsensitiveCompare(
-          requestedSource.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
-    }
-  } else {
-    matches = active.count == 1 ? active : []
-  }
-  guard matches.count == 1, let id = matches[0]["id"] as? String,
-    let uuid = UUID(uuidString: id), uuid.uuidString.lowercased() == id
-  else { return nil }
-  return secureString(at: credentialDirectory.appendingPathComponent("\(id).credential"))
-}
-
-let legacyToken = secureString(at: support.appendingPathComponent("pulse-token"))
-let token = providerCredential() ?? legacyToken
-guard let token else {
+let configuredCredentialPath =
+  credentialFileArgument ?? ProcessInfo.processInfo.environment["ISLET_PULSE_CREDENTIAL_FILE"]
+guard let configuredCredentialPath, !configuredCredentialPath.isEmpty else {
   FileHandle.standardError.write(
     Data(
-      "No active Pulse credential matches this source. Add one in Islet Settings.\n"
+      "Set --credential-file or ISLET_PULSE_CREDENTIAL_FILE to one revealed provider credential.\n"
         .utf8))
+  exit(69)
+}
+let credentialURL = URL(
+  fileURLWithPath: (configuredCredentialPath as NSString).expandingTildeInPath)
+guard let token = secureString(at: credentialURL) else {
+  FileHandle.standardError.write(
+    Data("Could not read the configured Pulse credential safely.\n".utf8))
   exit(69)
 }
 command["token"] = token
