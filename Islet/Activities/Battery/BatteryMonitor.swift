@@ -9,6 +9,38 @@ private struct BatteryReadSnapshot: Sendable {
   let peripherals: [PeripheralBattery]?
 }
 
+/// Owns one power-source notification on one run loop. Registering in common modes keeps IOPS
+/// callbacks flowing while AppKit switches the main loop into menu tracking or a modal mode.
+final class PowerSourceRunLoopRegistration {
+  private let runLoop: CFRunLoop
+  private var source: CFRunLoopSource?
+
+  init(runLoop: CFRunLoop) {
+    self.runLoop = runLoop
+  }
+
+  @discardableResult
+  func install(_ source: CFRunLoopSource) -> Bool {
+    guard self.source == nil else { return false }
+    self.source = source
+    CFRunLoopAddSource(runLoop, source, .commonModes)
+    return true
+  }
+
+  @discardableResult
+  func remove() -> Bool {
+    guard let source else { return false }
+    self.source = nil
+    CFRunLoopRemoveSource(runLoop, source, .commonModes)
+    return true
+  }
+
+  deinit {
+    guard let source else { return }
+    CFRunLoopRemoveSource(runLoop, source, .commonModes)
+  }
+}
+
 /// Publishes battery snapshots from IOKit power-source notifications, plus AlDente-style deep
 /// metrics (health, cycles, temperature, power, time remaining) refreshed on a short timer.
 @MainActor
@@ -34,7 +66,8 @@ final class BatteryMonitor: ObservableObject {
     self.peripherals = peripherals
   }
 
-  private var runLoopSource: CFRunLoopSource?
+  private let powerSourceRegistration = PowerSourceRunLoopRegistration(
+    runLoop: CFRunLoopGetMain())
   private var metricsTimer: AnyCancellable?
   private var cancellables: Set<AnyCancellable> = []
   private var fastMetrics = false
@@ -70,8 +103,7 @@ final class BatteryMonitor: ObservableObject {
       Task { @MainActor in monitor.scheduleRefresh(includeStable: true) }
     }
     if let source = IOPSNotificationCreateRunLoopSource(callback, opaque)?.takeRetainedValue() {
-      runLoopSource = source
-      CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
+      powerSourceRegistration.install(source)
     } else {
       Log.app.error("IOPSNotificationCreateRunLoopSource failed")
     }
@@ -98,10 +130,7 @@ final class BatteryMonitor: ObservableObject {
     pendingStableRefresh = false
     metricsTimer = nil
     cancellables.removeAll()
-    if let runLoopSource {
-      CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .defaultMode)
-      self.runLoopSource = nil
-    }
+    powerSourceRegistration.remove()
     // A stopped private monitor must not replay its last snapshot when BatteryActivity subscribes
     // again. The first fresh sample becomes a baseline, so charger/low-battery transitions that
     // occurred while the feature was disabled are not announced after restart.
