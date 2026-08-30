@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>WFWorkflowActions</key>
+  <array>
+    <dict>
+      <key>WFWorkflowActionIdentifier</key><string>dev.islet.UpdatePulseProgressIntent</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>AppIntentDescriptor</key>
+        <dict><key>AppIntentIdentifier</key><string>UpdatePulseProgressIntent</string><key>BundleIdentifier</key><string>dev.islet</string><key>Name</key><string>Islet</string><key>TeamIdentifier</key><string></string></dict>
+        <key>UUID</key><string>D49EB52C-BEA7-4A0B-8C37-840BCA13A84C</string>
+        <key>identifier</key><string>shortcuts.islet.report-export</string>
+        <key>activityTitle</key><string>Exporting report</string>
+        <key>details</key><string>Preparing the archive.</string>
+        <key>progress</key><real>0.15</real>
+        <key>activityPriority</key><string>normal</string>
+        <key>activityState</key><string>progress</string>
+        <key>ShowWhenRun</key><false/>
+      </dict>
+    </dict>
+    <dict><key>WFWorkflowActionIdentifier</key><string>is.workflow.actions.delay</string><key>WFWorkflowActionParameters</key><dict><key>WFDelayTime</key><real>2</real></dict></dict>
+    <dict>
+      <key>WFWorkflowActionIdentifier</key><string>dev.islet.UpdatePulseProgressIntent</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>AppIntentDescriptor</key>
+        <dict><key>AppIntentIdentifier</key><string>UpdatePulseProgressIntent</string><key>BundleIdentifier</key><string>dev.islet</string><key>Name</key><string>Islet</string><key>TeamIdentifier</key><string></string></dict>
+        <key>UUID</key><string>AC343FB1-33EC-4EA4-88B2-935D6D625CBE</string>
+        <key>identifier</key><string>shortcuts.islet.report-export</string>
+        <key>activityTitle</key><string>Exporting report</string>
+        <key>details</key><string>Writing the archive.</string>
+        <key>progress</key><real>0.75</real>
+        <key>activityPriority</key><string>normal</string>
+        <key>activityState</key><string>progress</string>
+        <key>ShowWhenRun</key><false/>
+      </dict>
+    </dict>
+    <dict><key>WFWorkflowActionIdentifier</key><string>is.workflow.actions.delay</string><key>WFWorkflowActionParameters</key><dict><key>WFDelayTime</key><real>2</real></dict></dict>
+    <dict>
+      <key>WFWorkflowActionIdentifier</key><string>dev.islet.EndPulseItemIntent</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>AppIntentDescriptor</key>
+        <dict><key>AppIntentIdentifier</key><string>EndPulseItemIntent</string><key>BundleIdentifier</key><string>dev.islet</string><key>Name</key><string>Islet</string><key>TeamIdentifier</key><string></string></dict>
+        <key>UUID</key><string>F65F328B-73B5-427C-9BF3-7AA8BF9BED97</string>
+        <key>identifier</key><string>shortcuts.islet.report-export</string>
+        <key>ShowWhenRun</key><false/>
+      </dict>
+    </dict>
+  </array>
+  <key>WFWorkflowClientVersion</key><string>4018.0.4</string>
+  <key>WFWorkflowHasOutputFallback</key><false/>
+  <key>WFWorkflowHasShortcutInputVariables</key><false/>
+  <key>WFWorkflowIcon</key><dict><key>WFWorkflowIconGlyphNumber</key><integer>61699</integer><key>WFWorkflowIconStartColor</key><integer>946986751</integer></dict>
+  <key>WFWorkflowImportQuestions</key><array/>
+  <key>WFWorkflowInputContentItemClasses</key><array/>
+  <key>WFWorkflowMinimumClientVersion</key><integer>900</integer>
+  <key>WFWorkflowMinimumClientVersionString</key><string>900</string>
+  <key>WFWorkflowOutputContentItemClasses</key><array/>
+  <key>WFWorkflowTypes</key><array/>
+</dict>
+</plist>
