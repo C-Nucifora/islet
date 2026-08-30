@@ -101,6 +101,7 @@ struct SystemExpandedView: View {
       diskRow
       networkRow
       thermalRow
+      ProcessAttributionView(monitor: monitor.attribution)
     }
     .foregroundStyle(.white)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -273,6 +274,149 @@ struct SystemExpandedView: View {
     if bits >= 1_000_000 { return String(format: "%.1f Mb/s", bits / 1_000_000) }
     if bits >= 1_000 { return String(format: "%.0f Kb/s", bits / 1_000) }
     return String(format: "%.0f b/s", bits)
+  }
+}
+
+private struct ProcessAttributionView: View {
+  @ObservedObject var monitor: ProcessAttributionMonitor
+  @State private var selectedMetric: ProcessMetricKind?
+
+  private var snapshot: ProcessAttributionSnapshot? {
+    if let selectedMetric, let selected = monitor.snapshots[selectedMetric] { return selected }
+    if let latestMetric = monitor.latestMetric { return monitor.snapshots[latestMetric] }
+    return nil
+  }
+
+  private var availableMetrics: [ProcessMetricKind] {
+    ProcessMetricKind.allCases.filter { monitor.snapshots[$0] != nil }
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      if !monitor.measuringMetrics.isEmpty {
+        Text("Measuring top processes for one second…")
+          .font(.system(size: 10))
+          .foregroundStyle(.secondary)
+      } else if let snapshot {
+        HStack(spacing: 5) {
+          Text("Top processes")
+            .font(.system(size: 10, weight: .semibold))
+          ForEach(availableMetrics, id: \.self) { metric in
+            Button(metric.displayName) { selectedMetric = metric }
+              .buttonStyle(.plain)
+              .font(.system(size: 9, weight: snapshot.metric == metric ? .semibold : .regular))
+              .foregroundStyle(snapshot.metric == metric ? .primary : .secondary)
+          }
+          Spacer(minLength: 0)
+          Text("1 s estimate")
+            .font(.system(size: 9))
+            .foregroundStyle(.secondary)
+          Text(snapshot.capturedAt, style: .relative)
+            .font(.system(size: 9))
+            .foregroundStyle(.secondary)
+          if case .partial = snapshot.availability {
+            Text("partial")
+              .font(.system(size: 9))
+              .foregroundStyle(.yellow)
+              .help(availabilityHelp(snapshot.availability))
+          }
+          Button("Activity Monitor") { ActivityMonitorOpener.open() }
+            .buttonStyle(.plain)
+            .font(.system(size: 9, weight: .medium))
+            .appThemeForeground(.system)
+        }
+        if snapshot.entries.isEmpty {
+          Text(emptyMessage(snapshot))
+            .font(.system(size: 9))
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+        } else {
+          HStack(spacing: 6) {
+            ForEach(snapshot.entries) { entry in
+              process(entry, metric: snapshot.metric)
+            }
+          }
+          .help(availabilityHelp(snapshot.availability))
+        }
+      } else {
+        Text("Process snapshots start after a threshold is crossed while this view is open.")
+          .font(.system(size: 9))
+          .foregroundStyle(.secondary)
+      }
+    }
+    .frame(maxWidth: .infinity, minHeight: 34, alignment: .topLeading)
+    .padding(.top, 2)
+    .accessibilityElement(children: .contain)
+  }
+
+  private func process(_ entry: ProcessAttributionEntry, metric: ProcessMetricKind) -> some View {
+    HStack(spacing: 4) {
+      Image(nsImage: icon(for: entry))
+        .resizable()
+        .frame(width: 16, height: 16)
+        .accessibilityHidden(true)
+      VStack(alignment: .leading, spacing: 0) {
+        Text(entry.name)
+          .font(.system(size: 9, weight: .medium))
+          .lineLimit(1)
+        Text(formatted(entry.value, metric: metric))
+          .font(.system(size: 8))
+          .monospacedDigit()
+          .foregroundStyle(.secondary)
+      }
+      Spacer(minLength: 0)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(entry.name)
+    .accessibilityValue(formatted(entry.value, metric: metric))
+  }
+
+  private func icon(for entry: ProcessAttributionEntry) -> NSImage {
+    if let path = entry.applicationPath {
+      return NSWorkspace.shared.icon(forFile: path)
+    }
+    return NSWorkspace.shared.icon(for: .applicationBundle)
+  }
+
+  private func formatted(_ value: Double, metric: ProcessMetricKind) -> String {
+    switch metric {
+    case .cpu:
+      return "\(Int((value * 100).rounded()))% CPU"
+    case .memory:
+      return Int64(value).formatted(
+        .byteCount(style: .memory, allowedUnits: [.mb, .gb], spellsOutZero: false))
+    case .disk:
+      let bytes = Int64(value).formatted(
+        .byteCount(style: .file, allowedUnits: [.kb, .mb, .gb], spellsOutZero: false))
+      return "\(bytes)/s"
+    case .network:
+      return "Unavailable"
+    }
+  }
+
+  private func emptyMessage(_ snapshot: ProcessAttributionSnapshot) -> String {
+    switch snapshot.availability {
+    case .unsupported(let message): return message
+    case .noReadableProcesses: return "No process data was readable during this snapshot."
+    case .partial:
+      return "No active process had a measurable value. Some process data was unavailable."
+    case .available: return "No active process had a measurable value in this one-second window."
+    }
+  }
+
+  private func availabilityHelp(_ availability: ProcessAttributionAvailability) -> String {
+    switch availability {
+    case .available:
+      return "Values are one-second estimates from macOS process counters."
+    case .partial(let unreadable, let exited):
+      return
+        "Values are one-second estimates. \(unreadable) processes could not be read and \(exited) exited during the snapshot."
+    case .noReadableProcesses:
+      return "macOS did not return readable process counters."
+    case .unsupported(let message):
+      return message
+    }
   }
 }
 
