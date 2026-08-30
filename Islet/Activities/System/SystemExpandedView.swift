@@ -81,6 +81,7 @@ struct SystemThermalPresentation: Equatable, Sendable {
 struct SystemExpandedView: View {
   @ObservedObject var monitor: SystemMetricsMonitor
   @Default(.metricStyles) private var metricStyles
+  @Default(.processAttributionEnabled) private var processAttributionEnabled
 
   private var sample: SystemMetricsSample { monitor.sample }
 
@@ -101,7 +102,9 @@ struct SystemExpandedView: View {
       diskRow
       networkRow
       thermalRow
-      ProcessAttributionView(monitor: monitor.attribution)
+      if processAttributionEnabled {
+        ProcessAttributionView(monitor: monitor.attribution)
+      }
     }
     .foregroundStyle(.white)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
