@@ -1,7 +1,33 @@
+import AppKit
 import XCTest
 
 @testable import Islet
 
+@MainActor
+private final class ClipboardPollingSchedulerProbe: ClipboardPollingScheduling {
+  @MainActor
+  final class ScheduledTask: ClipboardPollingTask {
+    private let action: @MainActor () -> Void
+    private(set) var isCancelled = false
+
+    init(action: @escaping @MainActor () -> Void) { self.action = action }
+
+    func cancel() { isCancelled = true }
+    func fire() { action() }
+  }
+
+  private(set) var tasks: [ScheduledTask] = []
+
+  func schedule(
+    after delay: TimeInterval, action: @escaping @MainActor () -> Void
+  ) -> any ClipboardPollingTask {
+    let task = ScheduledTask(action: action)
+    tasks.append(task)
+    return task
+  }
+}
+
+@MainActor
 final class ClipboardPollingPolicyTests: XCTestCase {
   private let start = Date(timeIntervalSinceReferenceDate: 1_000)
 
@@ -89,5 +115,75 @@ final class ClipboardPollingPolicyTests: XCTestCase {
     let restart = policy(at: start.addingTimeInterval(600))
     state = restart.stateRecordingActivity(from: state)
     XCTAssertEqual(restart.nextDelay(for: state), 0.25)
+  }
+
+  func testSupersededPollCallbackCannotReplaceTheCurrentSchedule() throws {
+    let pasteboard = NSPasteboard(
+      name: NSPasteboard.Name("islet-tests-poll-generation-\(UUID().uuidString)"))
+    let scheduler = ClipboardPollingSchedulerProbe()
+    let model = ClipboardModel(pasteboard: pasteboard, pollingScheduler: scheduler)
+    model.start()
+    XCTAssertEqual(scheduler.tasks.count, 1)
+
+    model.setPaused(true)
+    model.setPaused(false)
+    XCTAssertEqual(scheduler.tasks.count, 2)
+    XCTAssertTrue(scheduler.tasks[0].isCancelled)
+    XCTAssertFalse(scheduler.tasks[1].isCancelled)
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.setString("new copy", forType: .string))
+
+    scheduler.tasks[0].fire()
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertEqual(scheduler.tasks.count, 2)
+    XCTAssertFalse(scheduler.tasks[1].isCancelled)
+
+    scheduler.tasks[1].fire()
+    XCTAssertEqual(model.items.map(\.kind), [.text("new copy")])
+    XCTAssertEqual(scheduler.tasks.count, 3)
+    model.stop()
+  }
+
+  func testForegroundCheckCancelsTheExistingSchedule() {
+    let pasteboard = NSPasteboard(
+      name: NSPasteboard.Name("islet-tests-poll-foreground-\(UUID().uuidString)"))
+    let scheduler = ClipboardPollingSchedulerProbe()
+    let model = ClipboardModel(pasteboard: pasteboard, pollingScheduler: scheduler)
+    model.start()
+    XCTAssertEqual(scheduler.tasks.count, 1)
+
+    NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+
+    XCTAssertEqual(scheduler.tasks.count, 2)
+    XCTAssertTrue(scheduler.tasks[0].isCancelled)
+    XCTAssertFalse(scheduler.tasks[1].isCancelled)
+    model.stop()
+  }
+
+  func testClearDiscardsAPasteboardChangeThatPredatesIt() {
+    let pasteboard = NSPasteboard(
+      name: NSPasteboard.Name("islet-tests-poll-clear-\(UUID().uuidString)"))
+    let scheduler = ClipboardPollingSchedulerProbe()
+    let model = ClipboardModel(pasteboard: pasteboard, pollingScheduler: scheduler)
+    model.start()
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.setString("copied before clear", forType: .string))
+
+    model.clear()
+
+    guard scheduler.tasks.count == 2 else {
+      XCTFail("Clear must replace the pending poll")
+      model.stop()
+      return
+    }
+    XCTAssertTrue(scheduler.tasks[0].isCancelled)
+    scheduler.tasks[0].fire()
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertEqual(scheduler.tasks.count, 2)
+
+    scheduler.tasks[1].fire()
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertEqual(scheduler.tasks.count, 3)
+    model.stop()
   }
 }
