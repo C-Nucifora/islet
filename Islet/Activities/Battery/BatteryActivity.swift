@@ -14,7 +14,7 @@ final class BatteryActivity: NotchActivity, ObservableObject {
 
   // The tab is available whenever the feature is on. Gating it on AC power made the whole power
   // screen vanish the moment you unplugged — which is exactly when you want to read it.
-  var isActive: Bool { Defaults[.batteryEnabled] }
+  var isActive: Bool { true }
 
   func start() {
     guard !isMonitoring else { return }
@@ -44,7 +44,6 @@ final class BatteryActivity: NotchActivity, ObservableObject {
     if activationDate == nil { activationDate = Date() }
     objectWillChange.send()
 
-    guard Defaults[.batteryEnabled] else { return }
     for event in events {
       SystemEventBus.shared.emit(Self.event(for: event))
     }

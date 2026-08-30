@@ -138,7 +138,7 @@ private struct T3AgentRow: View {
 
 struct T3SettingsSection: View {
   @ObservedObject var activity: T3CodeActivity
-  @Default(.t3CodeEnabled) private var enabled
+  @Default(.disabledActivities) private var disabledActivities
   @Default(.t3RemoteEnvironments) private var profiles
   @State private var pairingLink = ""
   @State private var isPairing = false
@@ -146,9 +146,24 @@ struct T3SettingsSection: View {
   @State private var allowInsecureHTTP = false
   @State private var pendingRemoval: T3EnvironmentProfile?
 
+  private var activityEnabled: Binding<Bool> {
+    Binding(
+      get: {
+        ActivityEnablement.isEnabled("t3Code", disabledActivities: disabledActivities)
+      },
+      set: { enabled in
+        disabledActivities = ActivityEnablement.updating(
+          disabledActivities, activityID: "t3Code", enabled: enabled)
+      })
+  }
+
+  private var isActivityEnabled: Bool {
+    ActivityEnablement.isEnabled("t3Code", disabledActivities: disabledActivities)
+  }
+
   var body: some View {
     Section("T3 Code agents") {
-      Toggle("Monitor T3 Code", isOn: $enabled)
+      Toggle("Monitor T3 Code", isOn: activityEnabled)
       Text(
         "Shows active agents from each explicitly paired T3 Code machine. Islet cannot control agents, and pairing credentials stay in Keychain."
       )
@@ -174,7 +189,7 @@ struct T3SettingsSection: View {
             statusMessage.hasPrefix("Added") || statusMessage.hasPrefix("Removed")
               ? .green : .orange)
       }
-      Button("Reconnect now") { activity.reconnect() }.disabled(!enabled)
+      Button("Reconnect now") { activity.reconnect() }.disabled(!isActivityEnabled)
     }
     .confirmationDialog(
       "Remove this T3 Code machine?",
@@ -213,7 +228,7 @@ struct T3SettingsSection: View {
       machineRow(local)
     } else {
       LabeledContent("This Mac") {
-        Text(enabled ? "Discovering…" : "Off").foregroundStyle(.secondary)
+        Text(isActivityEnabled ? "Discovering…" : "Off").foregroundStyle(.secondary)
       }
     }
     ForEach(profiles) { profile in

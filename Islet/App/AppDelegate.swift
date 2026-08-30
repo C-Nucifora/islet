@@ -3,22 +3,67 @@ import Combine
 import Defaults
 
 enum ActivityLifecyclePolicy {
-  /// Activity lineup visibility is presentation state. Providers stop only when their actual
-  /// feature switch is disabled, so hiding Calendar cannot empty the Home agenda (and hiding any
-  /// other activity cannot silently shut down a shared monitor).
-  static func shouldRun(featureEnabled: Bool = true) -> Bool { featureEnabled }
+  static func shouldRun(
+    activityID: String, disabledActivities: [String], additionalRuntimeDemand: Bool = false
+  ) -> Bool {
+    ActivityEnablement.isEnabled(activityID, disabledActivities: disabledActivities)
+      || additionalRuntimeDemand
+  }
+}
 
-  /// Clipboard polling and the Pulse listener retain or accept user/provider data solely for their
-  /// corresponding activities. Their lineup toggles are therefore also their privacy switches.
-  /// Shared providers such as Calendar stay independent because Home still consumes their data.
-  static func stopsFeatureWhenHidden(_ activityID: String) -> Bool {
-    activityID == "clipboard" || activityID == "pulse"
+@MainActor
+struct ActivityLifecycleControl {
+  let activityID: String
+  var additionalRuntimeDemand: () -> Bool = { false }
+  let start: () -> Void
+  let stop: () -> Void
+}
+
+/// Applies the canonical activity switch to every observer and server while the app is running.
+/// Calendar can add provider demand because Home also reads it when the Calendar activity is off.
+@MainActor
+final class ActivityLifecycleController {
+  private let controls: [ActivityLifecycleControl]
+  private var cancellables: Set<AnyCancellable> = []
+
+  init(controls: [ActivityLifecycleControl]) {
+    self.controls = controls
+  }
+
+  func startObserving() {
+    guard cancellables.isEmpty else { return }
+    Defaults.publisher(.disabledActivities)
+      .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
+      .store(in: &cancellables)
+    Defaults.publisher(.calendarEnabled)
+      .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
+      .store(in: &cancellables)
+    reconcile()
+  }
+
+  func stopObserving() {
+    cancellables.removeAll()
+  }
+
+  func reconcile() {
+    let disabledActivities = Defaults[.disabledActivities]
+    for control in controls {
+      if ActivityLifecyclePolicy.shouldRun(
+        activityID: control.activityID, disabledActivities: disabledActivities,
+        additionalRuntimeDemand: control.additionalRuntimeDemand())
+      {
+        control.start()
+      } else {
+        control.stop()
+      }
+    }
   }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
   private var launchAtLoginObserver: Defaults.Observation?
-  private var activityLifecycleCancellables: Set<AnyCancellable> = []
+  private var activityLifecycleController: ActivityLifecycleController?
+  private var audioDeviceLifecycleCancellable: AnyCancellable?
 
   /// True when the app is running only as XCTest's host process. Every monitor below talks to real
   /// hardware — CoreWLAN, IOBluetooth, Spotlight, the Downloads folder — and several of them prompt
@@ -43,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       return
     }
     Task { @MainActor in
+      ActivityEnablement.migrateLegacyPreferencesIfNeeded()
       // Bring a persisted activity order forward before anything renders from it: entries added to
       // the catalogue after the order was first written would otherwise be missing from Settings.
       let merged = ActivityCatalog.mergedOrder(Defaults[.activityOrder])
@@ -54,7 +100,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       ActivityCenter.shared.register(AppState.battery)
       ActivityCenter.shared.register(AppState.calendar)
       ActivityCenter.shared.register(AppState.timer)
-      AppState.shelf.start()
       ActivityCenter.shared.register(AppState.shelf)
       ActivityCenter.shared.register(AppState.clipboard)
       ActivityCenter.shared.register(AppState.ports)
@@ -94,6 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       AppState.nowPlaying.stop()
       AppState.battery.stop()
       AppState.calendar.stop()
+      AppState.shelf.stop()
       AppState.clipboard.stop()
       AppState.ports.stop()
       AppState.system.stop()
@@ -106,101 +152,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       SystemEventBus.shared.stopAll()
       EventMonitors.shared.stop()
       ScreenManager.shared.stop()
-      activityLifecycleCancellables.removeAll()
+      activityLifecycleController?.stopObserving()
+      activityLifecycleController = nil
+      audioDeviceLifecycleCancellable = nil
     }
     launchAtLoginObserver = nil
   }
 
   @MainActor
   private func configureActivityLifecycles() {
-    // Builds that shipped the combined lineup toggle could persist "hidden" while leaving these
-    // privacy-sensitive providers enabled. Honour that existing user choice before starting them.
-    let hiddenActivities = Set(Defaults[.disabledActivities])
-    if hiddenActivities.contains("clipboard") { Defaults[.clipboardEnabled] = false }
-    if hiddenActivities.contains("pulse") { Defaults[.pulseEnabled] = false }
-
-    Defaults.publisher(.batteryEnabled)
-      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
-      .store(in: &activityLifecycleCancellables)
-    Defaults.publisher(.calendarEnabled)
-      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
-      .store(in: &activityLifecycleCancellables)
-    Defaults.publisher(.portsEnabled)
-      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
-      .store(in: &activityLifecycleCancellables)
-    Defaults.publisher(.clipboardEnabled)
-      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
-      .store(in: &activityLifecycleCancellables)
-    Defaults.publisher(.systemEnabled)
-      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
-      .store(in: &activityLifecycleCancellables)
-    Defaults.publisher(.t3CodeEnabled)
-      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
-      .store(in: &activityLifecycleCancellables)
-    Defaults.publisher(.pulseEnabled)
-      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
-      .store(in: &activityLifecycleCancellables)
-    Defaults.publisher(.continuityEnabled)
-      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
-      .store(in: &activityLifecycleCancellables)
-    Defaults.publisher(.disabledEventSources)
-      .sink { [weak self] _ in self?.reconcileActivityLifecycles() }
-      .store(in: &activityLifecycleCancellables)
-    reconcileActivityLifecycles()
+    let controller = ActivityLifecycleController(controls: [
+      ActivityLifecycleControl(
+        activityID: "nowPlaying", start: { AppState.nowPlaying.start() },
+        stop: { AppState.nowPlaying.stop() }),
+      ActivityLifecycleControl(
+        activityID: "battery", start: { AppState.battery.start() },
+        stop: { AppState.battery.stop() }),
+      ActivityLifecycleControl(
+        activityID: "calendar", additionalRuntimeDemand: { Defaults[.calendarEnabled] },
+        start: { AppState.calendar.start() }, stop: { AppState.calendar.stop() }),
+      ActivityLifecycleControl(
+        activityID: "shelf", start: { AppState.shelf.start() },
+        stop: { AppState.shelf.stop() }),
+      ActivityLifecycleControl(
+        activityID: "ports", start: { AppState.ports.start() },
+        stop: { AppState.ports.stop() }),
+      ActivityLifecycleControl(
+        activityID: "clipboard", start: { AppState.clipboard.start() },
+        stop: { AppState.clipboard.stop() }),
+      ActivityLifecycleControl(
+        activityID: "system", start: { AppState.system.start() },
+        stop: { AppState.system.stop() }),
+      ActivityLifecycleControl(
+        activityID: "t3Code", start: { AppState.t3Code.start() },
+        stop: { AppState.t3Code.stop() }),
+      ActivityLifecycleControl(
+        activityID: "pulse", start: { AppState.pulse.start() },
+        stop: { AppState.pulse.stop() }),
+      ActivityLifecycleControl(
+        activityID: "continuity", start: { AppState.continuity.start() },
+        stop: { AppState.continuity.stop() }),
+    ])
+    activityLifecycleController = controller
+    controller.startObserving()
+    audioDeviceLifecycleCancellable = Defaults.publisher(.disabledEventSources)
+      .sink { [weak self] _ in Task { @MainActor in self?.reconcileAudioDeviceLifecycle() } }
+    reconcileAudioDeviceLifecycle()
   }
 
   @MainActor
-  private func reconcileActivityLifecycles() {
-    if ActivityLifecyclePolicy.shouldRun() {
-      AppState.nowPlaying.start()
-    } else {
-      AppState.nowPlaying.stop()
-    }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.batteryEnabled]) {
-      AppState.battery.start()
-    } else {
-      AppState.battery.stop()
-    }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.calendarEnabled]) {
-      AppState.calendar.start()
-    } else {
-      AppState.calendar.stop()
-    }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.portsEnabled]) {
-      AppState.ports.start()
-    } else {
-      AppState.ports.stop()
-    }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.clipboardEnabled]) {
-      AppState.clipboard.start()
-    } else {
-      AppState.clipboard.stop()
-    }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.systemEnabled]) {
-      AppState.system.start()
-    } else {
-      AppState.system.stop()
-    }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.t3CodeEnabled]) {
-      AppState.t3Code.start()
-    } else {
-      AppState.t3Code.stop()
-    }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.pulseEnabled]) {
-      AppState.pulse.start()
-    } else {
-      AppState.pulse.stop()
-    }
-    if ActivityLifecyclePolicy.shouldRun(featureEnabled: Defaults[.continuityEnabled]) {
-      AppState.continuity.start()
-    } else {
-      AppState.continuity.stop()
-    }
-    let audioDeviceEventsEnabled = !Defaults[.disabledEventSources].contains("audiodevice")
-    if audioDeviceEventsEnabled {
-      AudioDeviceMonitor.shared.start()
-    } else {
+  private func reconcileAudioDeviceLifecycle() {
+    if Defaults[.disabledEventSources].contains("audiodevice") {
       AudioDeviceMonitor.shared.stop()
+    } else {
+      AudioDeviceMonitor.shared.start()
     }
   }
 }

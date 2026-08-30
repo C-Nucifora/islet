@@ -14,7 +14,6 @@ final class ContinuityActivity: NotchActivity, ObservableObject {
   private var cancellables: Set<AnyCancellable> = []
 
   var isActive: Bool {
-    guard Defaults[.continuityEnabled] else { return false }
     return !monitor.cards.isEmpty || Defaults[.continuityAlwaysVisible]
   }
 

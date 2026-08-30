@@ -29,7 +29,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     }
   }
 
-  var isActive: Bool { Defaults[.t3CodeEnabled] && !agents.isEmpty }
+  var isActive: Bool { !agents.isEmpty }
 
   func start() {
     guard !isMonitoring else { return }
@@ -211,7 +211,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       environments.removeAll()
       activationDate = nil
     }
-    guard isMonitoring, Defaults[.t3CodeEnabled], !isSystemSuspended else { return }
+    guard isMonitoring, !isSystemSuspended else { return }
 
     monitorTasks["local"] = Task { [weak self] in await self?.monitorLocal() }
     // Remote polling is optional work and can keep radios awake. Leave the last snapshot visible

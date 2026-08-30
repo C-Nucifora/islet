@@ -339,7 +339,6 @@ struct SettingsView: View {
   @Default(.hideFromScreenRecording) private var hideFromRecording
   @Default(.mediaSourceMode) private var sourceMode
   @Default(.mediaPriorityList) private var priorityList
-  @Default(.batteryEnabled) private var batteryEnabled
   @Default(.hudEnabled) private var hudEnabled
   @Default(.hudStyle) private var hudStyle
   @Default(.calendarEnabled) private var calendarEnabled
@@ -351,16 +350,10 @@ struct SettingsView: View {
   @Default(.launchAtLogin) private var launchAtLogin
   @Default(.activityOrder) private var activityOrder
   @Default(.disabledActivities) private var disabledActivities
-  @Default(.clipboardEnabled) private var clipboardEnabled
-  @Default(.portsEnabled) private var portsEnabled
-  @Default(.systemEnabled) private var systemEnabled
   @Default(.systemAlwaysVisible) private var systemAlwaysVisible
   @Default(.metricStyles) private var metricStyles
   @Default(.disabledEventSources) private var disabledEventSources
-  @Default(.pulseEnabled) private var pulseEnabled
-  @Default(.t3CodeEnabled) private var t3CodeEnabled
   @Default(.energyMode) private var energyMode
-  @Default(.continuityEnabled) private var continuityEnabled
   @Default(.continuityAlwaysVisible) private var continuityAlwaysVisible
   @Default(.continuitySneaks) private var continuitySneaks
 
@@ -404,47 +397,15 @@ struct SettingsView: View {
 
   private func activityEnabled(_ id: String) -> Binding<Bool> {
     Binding(
-      get: { !disabledActivities.contains(id) && featureEnabled(id) },
-      set: { on in
-        if on {
-          disabledActivities.removeAll { $0 == id }
-          // Recover preferences written by the previous combined visibility/lifecycle switch.
-          setFeatureEnabled(true, id: id)
-        } else if !disabledActivities.contains(id) {
-          disabledActivities.append(id)
-          if ActivityLifecyclePolicy.stopsFeatureWhenHidden(id) {
-            setFeatureEnabled(false, id: id)
-          }
-        }
+      get: { ActivityEnablement.isEnabled(id, disabledActivities: disabledActivities) },
+      set: { enabled in
+        disabledActivities = ActivityEnablement.updating(
+          disabledActivities, activityID: id, enabled: enabled)
       })
   }
 
-  private func featureEnabled(_ id: String) -> Bool {
-    switch id {
-    case "battery": batteryEnabled
-    case "calendar": calendarEnabled
-    case "clipboard": clipboardEnabled
-    case "ports": portsEnabled
-    case "system": systemEnabled
-    case "t3Code": t3CodeEnabled
-    case "pulse": pulseEnabled
-    case "continuity": continuityEnabled
-    default: true
-    }
-  }
-
-  private func setFeatureEnabled(_ enabled: Bool, id: String) {
-    switch id {
-    case "battery": batteryEnabled = enabled
-    case "calendar": calendarEnabled = enabled
-    case "clipboard": clipboardEnabled = enabled
-    case "ports": portsEnabled = enabled
-    case "system": systemEnabled = enabled
-    case "t3Code": t3CodeEnabled = enabled
-    case "pulse": pulseEnabled = enabled
-    case "continuity": continuityEnabled = enabled
-    default: break
-    }
+  private func isActivityEnabled(_ id: String) -> Bool {
+    ActivityEnablement.isEnabled(id, disabledActivities: disabledActivities)
   }
 
   private var hapticStrengthBinding: Binding<HapticStrength> {
@@ -802,7 +763,7 @@ struct SettingsView: View {
   private var activityOrderForm: some View {
     Form {
       Section("Activities") {
-        Text("Drag to reorder. Hiding Clipboard or Pulse also stops its data service.")
+        Text("Drag to reorder. Turning an activity off also stops its observer or server.")
           .font(.caption).foregroundStyle(.secondary)
         List {
           ForEach(ActivityCatalog.mergedOrder(activityOrder), id: \.self) { id in
@@ -980,9 +941,10 @@ struct SettingsView: View {
     Form {
       Section("Calendar") {
         LabeledContent("Activity") {
-          Text(calendarEnabled ? "On" : "Off").foregroundStyle(.secondary)
+          Text(isActivityEnabled("calendar") ? "On" : "Off").foregroundStyle(.secondary)
         }
-        Text("Calendar also supplies the Home agenda when its tab is hidden.")
+        Toggle("Read calendar events", isOn: $calendarEnabled)
+        Text("Calendar data also supplies the Home agenda when its activity is off.")
           .font(.caption).foregroundStyle(.secondary)
         if calendarEnabled {
           Picker("Upcoming-event countdown", selection: $calendarLeadMinutes) {
@@ -1021,15 +983,15 @@ struct SettingsView: View {
     Form {
       Section("Visibility") {
         LabeledContent("System activity") {
-          Text(systemEnabled ? "On" : "Off").foregroundStyle(.secondary)
+          Text(isActivityEnabled("system") ? "On" : "Off").foregroundStyle(.secondary)
         }
         Text("By default, System appears only during sustained load.")
           .font(.caption).foregroundStyle(.secondary)
-        if systemEnabled {
+        if isActivityEnabled("system") {
           Toggle("Always show System in the activity switcher", isOn: $systemAlwaysVisible)
         }
       }
-      if systemEnabled {
+      if isActivityEnabled("system") {
         Section("Metric presentation") {
           Picker("Presentation", selection: metricPresetBinding) {
             ForEach(SystemMetricPreset.allCases) { preset in
@@ -1063,10 +1025,10 @@ struct SettingsView: View {
   private var continuityForm: some View {
     Form {
       Section("iPhone Live Activities") {
-        Toggle("Show iPhone Live Activities", isOn: $continuityEnabled)
+        Toggle("Show iPhone Live Activities", isOn: activityEnabled("continuity"))
         Text("Islet reads app names from Control Centre. macOS does not share the activity text.")
           .font(.caption).foregroundStyle(.secondary)
-        if continuityEnabled {
+        if isActivityEnabled("continuity") {
           PermissionStatusRow(
             title: "Availability", icon: "iphone.gen3",
             status: continuityStatusText, color: continuityStatusColor)
@@ -1093,7 +1055,7 @@ struct SettingsView: View {
     Form {
       Section("Clipboard history") {
         LabeledContent("Activity") {
-          Text(clipboardEnabled ? "On" : "Off").foregroundStyle(.secondary)
+          Text(isActivityEnabled("clipboard") ? "On" : "Off").foregroundStyle(.secondary)
         }
         Text("Turning Clipboard off stops polling and clears its history.")
           .font(.caption).foregroundStyle(.secondary)

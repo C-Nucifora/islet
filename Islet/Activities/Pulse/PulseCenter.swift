@@ -28,9 +28,10 @@ final class PulseCenter: ObservableObject {
 
   @discardableResult
   func applyIfEnabled(
-    _ command: PulseCommand, now: Date = Date(), featureEnabled: Bool = Defaults[.pulseEnabled]
+    _ command: PulseCommand, now: Date = Date(),
+    activityEnabled: Bool = ActivityEnablement.isEnabled("pulse")
   ) -> PulseResponse {
-    guard featureEnabled else {
+    guard activityEnabled else {
       return .failure(
         "Pulse is disabled in Islet Settings", code: .featureDisabled,
         requestID: command.requestID)

@@ -330,7 +330,7 @@ final class PulseTests: XCTestCase {
       symbol: nil, accentHex: nil, progress: 0.5, state: .progress, priority: .normal,
       expiresAt: nil, actions: nil)
 
-    let response = center.applyIfEnabled(command(.update, payload), featureEnabled: false)
+    let response = center.applyIfEnabled(command(.update, payload), activityEnabled: false)
 
     XCTAssertFalse(response.ok)
     XCTAssertEqual(response.errorCode, .featureDisabled)
