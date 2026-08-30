@@ -1,0 +1,174 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Validate release source
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  release:
+    name: Sign, notarize, and publish
+    needs: ci
+    runs-on: macos-26
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      contents: write
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DERIVED_DATA: ${{ github.workspace }}/DerivedData
+      CERTIFICATE_P12_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_P12 }}
+      CERTIFICATE_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+      NOTARY_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      NOTARY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      NOTARY_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Validate release tag
+        id: version
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Release tags must use vMAJOR.MINOR.PATCH." >&2
+            exit 1
+          fi
+
+          git fetch origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "The release commit must be on origin/main." >&2
+            exit 1
+          fi
+
+          echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check release credentials
+        run: |
+          test -n "$CERTIFICATE_P12_BASE64" || { echo "Missing secret: DEVELOPER_ID_APPLICATION_P12" >&2; exit 1; }
+          test -n "$CERTIFICATE_P12_PASSWORD" || { echo "Missing secret: DEVELOPER_ID_APPLICATION_P12_PASSWORD" >&2; exit 1; }
+          test -n "$NOTARY_KEY_ID" || { echo "Missing secret: APP_STORE_CONNECT_KEY_ID" >&2; exit 1; }
+          test -n "$NOTARY_ISSUER_ID" || { echo "Missing secret: APP_STORE_CONNECT_ISSUER_ID" >&2; exit 1; }
+          test -n "$NOTARY_PRIVATE_KEY" || { echo "Missing secret: APP_STORE_CONNECT_PRIVATE_KEY" >&2; exit 1; }
+
+      - name: Install XcodeGen
+        run: |
+          Scripts/install-xcodegen.sh "$RUNNER_TEMP/xcodegen"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Import Developer ID certificate
+        run: |
+          keychain_path="$RUNNER_TEMP/islet-signing.keychain-db"
+          keychain_password=$(openssl rand -base64 32)
+          certificate_path="$RUNNER_TEMP/developer-id.p12"
+
+          printf '%s' "$CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$CERTIFICATE_P12_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+          signing_identity=$(
+            security find-identity -v -p codesigning "$keychain_path" |
+              sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' |
+              head -1
+          )
+          if [[ -z "$signing_identity" ]]; then
+            echo "The certificate is not a Developer ID Application identity." >&2
+            exit 1
+          fi
+          echo "SIGNING_IDENTITY=$signing_identity" >> "$GITHUB_ENV"
+
+      - name: Build signed universal app
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          xcodegen generate
+          xcodebuild \
+            -project Islet.xcodeproj \
+            -scheme Islet \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            ARCHS='arm64 x86_64' \
+            ONLY_ACTIVE_ARCH=NO \
+            MARKETING_VERSION="$RELEASE_VERSION" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
+            CODE_SIGN_STYLE=Manual \
+            ENABLE_HARDENED_RUNTIME=YES \
+            OTHER_CODE_SIGN_FLAGS=--timestamp \
+            build
+
+      - name: Verify signed app
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          app="$DERIVED_DATA/Build/Products/Release/Islet.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --display --verbose=4 "$app" 2>&1 | grep -F "Authority=Developer ID Application:"
+
+          architectures=$(lipo -archs "$app/Contents/MacOS/Islet")
+          [[ "$architectures" == *arm64* && "$architectures" == *x86_64* ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" == "dev.islet" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" == "$RELEASE_VERSION" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" == "$GITHUB_RUN_NUMBER" ]]
+
+      - name: Notarize and package app
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          app="$DERIVED_DATA/Build/Products/Release/Islet.app"
+          notary_key="$RUNNER_TEMP/AuthKey_${NOTARY_KEY_ID}.p8"
+          submission="$RUNNER_TEMP/Islet-notarization.zip"
+          output_dir="$RUNNER_TEMP/release"
+          artifact="$output_dir/Islet-${RELEASE_VERSION}.zip"
+
+          printf '%s' "$NOTARY_PRIVATE_KEY" > "$notary_key"
+          ditto -c -k --keepParent "$app" "$submission"
+          xcrun notarytool submit "$submission" \
+            --key "$notary_key" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID" \
+            --wait
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+
+          mkdir -p "$output_dir"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$artifact"
+          shasum -a 256 "$artifact" > "$artifact.sha256"
+          echo "RELEASE_ARTIFACT=$artifact" >> "$GITHUB_ENV"
+
+      - name: Publish GitHub release
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "$RELEASE_ARTIFACT" \
+            "$RELEASE_ARTIFACT.sha256" \
+            --verify-tag \
+            --generate-notes \
+            --title "Islet $RELEASE_VERSION"

@@ -13,6 +13,8 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
     # A stable signing identity, not ad-hoc. TCC keys every grant on the app's designated
     # requirement, and an ad-hoc signature's requirement is a bare cdhash that changes on every
     # build — so macOS treated each rebuild as a brand-new app and dropped Accessibility,
@@ -45,6 +47,8 @@ targets:
       path: Islet/Info.plist
       properties:
         CFBundleDisplayName: Islet
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSUIElement: true
         NSHumanReadableCopyright: ""
         NSCalendarsUsageDescription: "Islet shows your next event and today's agenda in the notch."
