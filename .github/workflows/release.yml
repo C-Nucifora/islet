@@ -102,8 +102,11 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.value }}
         run: |
           app="$DERIVED_DATA/Build/Products/Release/Islet.app"
-          architectures=$(lipo -archs "$app/Contents/MacOS/Islet")
-          [[ "$architectures" == *arm64* && "$architectures" == *x86_64* ]]
+          framework="$app/Contents/Frameworks/MediaRemoteAdapter.framework/MediaRemoteAdapter"
+          for architecture in arm64 x86_64; do
+            lipo "$app/Contents/MacOS/Islet" -verify_arch "$architecture"
+            lipo "$framework" -verify_arch "$architecture"
+          done
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" == "dev.islet" ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" == "$RELEASE_VERSION" ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" == "$GITHUB_RUN_NUMBER" ]]
