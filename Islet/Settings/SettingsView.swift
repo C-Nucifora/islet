@@ -349,6 +349,7 @@ struct SettingsView: View {
   @ObservedObject private var t3Code = AppState.t3Code
   @ObservedObject private var focus = AppState.focus
   @ObservedObject private var launchAtLoginStatus = LaunchAtLoginStatus.shared
+  @ObservedObject private var eventSourcePreferences = EventSourcePreferences.shared
 
   @Default(.appTheme) private var appTheme
   @Default(.batteryGraphStyle) private var batteryGraphStyle
@@ -373,7 +374,6 @@ struct SettingsView: View {
   @Default(.disabledActivities) private var disabledActivities
   @Default(.systemAlwaysVisible) private var systemAlwaysVisible
   @Default(.metricStyles) private var metricStyles
-  @Default(.disabledEventSources) private var disabledEventSources
   @Default(.energyMode) private var energyMode
   @Default(.continuityAlwaysVisible) private var continuityAlwaysVisible
   @Default(.continuitySneaks) private var continuitySneaks
@@ -501,7 +501,7 @@ struct SettingsView: View {
 
   private func eventSourceEnabled(_ id: String) -> Binding<Bool> {
     Binding(
-      get: { !disabledEventSources.contains(id) },
+      get: { eventSourcePreferences.isEnabled(id) },
       set: { on in SystemEventBus.shared.setEnabled(on, for: id) })
   }
 
