@@ -75,6 +75,26 @@ final class ProviderTests: XCTestCase {
     XCTAssertTrue(runner.invocations[2].arguments.contains("github-actions"))
   }
 
+  func testSelectedWorkflowPathPublishesRunWhoseAPIPathIncludesRef() throws {
+    let runner = RecordingRunner(results: [
+      CommandResult(status: 0, stdout: try fixtureData("workflows"), stderr: Data()),
+      CommandResult(status: 0, stdout: try fixtureData("running-ref-path"), stderr: Data()),
+      CommandResult(status: 0, stdout: Data(), stderr: Data()),
+    ])
+    let configuration = WatchConfiguration(
+      repositories: ["C-Nucifora/islet"], workflows: [".github/workflows/ci.yml"], once: true)
+    let watcher = GitHubActionsWatcher(configuration: configuration, runner: runner)
+
+    try watcher.poll(now: Date(timeIntervalSince1970: 1_000))
+
+    XCTAssertEqual(runner.invocations.count, 3)
+    XCTAssertTrue(
+      runner.invocations[1].arguments.contains(
+        "repos/C-Nucifora/islet/actions/workflows/9001/runs"))
+    let pulseInvocation = try XCTUnwrap(runner.invocations.dropFirst(2).first)
+    XCTAssertTrue(pulseInvocation.arguments.contains("github-actions"))
+  }
+
   func testRepositoryAndWorkflowUseOneStableItemAcrossRuns() throws {
     let queued = try XCTUnwrap(try recordedRuns("queued").first)
     let running = try XCTUnwrap(try recordedRuns("running").first)

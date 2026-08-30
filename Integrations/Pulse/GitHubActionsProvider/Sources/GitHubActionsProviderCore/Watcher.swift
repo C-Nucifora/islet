@@ -41,7 +41,9 @@ public final class GitHubActionsWatcher<Runner: CommandRunning> {
     for repository in configuration.repositories {
       let runs = try client.workflowRuns(
         repository: repository, workflows: configuration.workflows)
-      for run in RunSelector.latest(from: runs, workflows: configuration.workflows) {
+      let latestRuns =
+        configuration.workflows.isEmpty ? Array(runs.prefix(1)) : runs
+      for run in latestRuns {
         let runAttempt = "\(run.id)#\(run.runAttempt)"
         let itemScope =
           configuration.workflows.isEmpty
