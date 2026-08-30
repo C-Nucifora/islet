@@ -66,6 +66,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
   case interaction
   case energy
   case contextRules
+  case batteryWarnings
   case activityOrder
   case calendarReminders
   case nowPlaying
@@ -91,6 +92,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .interaction: "Interaction"
     case .energy: "Energy"
     case .contextRules: "Context rules"
+    case .batteryWarnings: "Battery warnings"
     case .activityOrder: "Activity order"
     case .calendarReminders: "Calendar and reminders"
     case .nowPlaying: "Now playing"
@@ -116,6 +118,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .interaction: "How the notch opens and closes"
     case .energy: "Refresh rates, sleep and battery protection"
     case .contextRules: "Adapt Islet to your current context"
+    case .batteryWarnings: "Drain, charger and peripheral alerts"
     case .activityOrder: "Show, hide and reorder activities"
     case .calendarReminders: "Agenda, countdown and reminder options"
     case .nowPlaying: "Choose which active player opens first"
@@ -141,6 +144,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .interaction: "cursorarrow.motionlines"
     case .energy: "leaf"
     case .contextRules: "switch.2"
+    case .batteryWarnings: "battery.100percent.bolt"
     case .activityOrder: "list.number"
     case .calendarReminders: "calendar.badge.clock"
     case .nowPlaying: "music.note"
@@ -161,8 +165,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
   var category: SettingsCategory {
     switch self {
     case .startupDisplays, .updates, .appearance, .interaction, .energy, .contextRules: .general
-    case .activityOrder, .calendarReminders, .nowPlaying, .continuity, .systemMetrics, .clipboard,
-      .systemHUD:
+    case .activityOrder, .batteryWarnings, .calendarReminders, .nowPlaying, .continuity,
+      .systemMetrics, .clipboard, .systemHUD:
       .activities
     case .eventSources: .notifications
     case .t3Code, .pulse: .integrations
@@ -213,6 +217,13 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "frontmost app", "fullscreen presentation", "time range", "active display",
         "Wi-Fi network", "Pulse delivery", "activity visibility", "manual override",
         "precedence active rule match reason expiry local deterministic",
+      ]
+    case .batteryWarnings:
+      pageContent + [
+        "Battery warnings", "Unusual battery drain", "Learned rolling baseline",
+        "Reset learned battery data", "Charger capacity", "Charger cannot meet demand",
+        "Slow charging", "Temporary workload spike", "Peripheral early warnings",
+        "Mouse Trackpad Keyboard Pencil Other devices", "threshold off critical 10 percent",
       ]
     case .activityOrder:
       pageContent + [
@@ -484,6 +495,7 @@ struct SettingsView: View {
   @ObservedObject private var t3Code = AppState.t3Code
   @ObservedObject private var focus = AppState.focus
   @ObservedObject private var clipboard = ClipboardModel.shared
+  @ObservedObject private var battery = AppState.battery
   @ObservedObject private var launchAtLoginStatus = LaunchAtLoginStatus.shared
   @ObservedObject private var screenManager = ScreenManager.shared
   @ObservedObject private var eventSourcePreferences = EventSourcePreferences.shared
@@ -503,6 +515,9 @@ struct SettingsView: View {
   @Default(.mediaSourceMode) private var sourceMode
   @Default(.mediaPriorityList) private var priorityList
   @Default(.excludedAudioOnlySourceBundleIdentifiers) private var excludedAudioOnlySourceBundleIDs
+  @Default(.unusualBatteryDrainWarnings) private var unusualBatteryDrainWarnings
+  @Default(.chargerCapacityWarnings) private var chargerCapacityWarnings
+  @Default(.peripheralBatteryWarningThresholds) private var peripheralBatteryWarningThresholds
   @Default(.hudEnabled) private var hudEnabled
   @Default(.hudStyle) private var hudStyle
   @Default(.calendarEnabled) private var calendarEnabled
@@ -550,6 +565,7 @@ struct SettingsView: View {
   @State private var confirmingRestore = false
   @State private var showingPulseCredentialEditor = false
   @State private var pulseCredentialResult: String?
+  @State private var confirmingBatteryDataReset = false
   @State private var showPulseHistory = false
   @State private var pulseHistoryFilter: PulseHistoryFilter = .all
   @State private var settingsImportPreview: SettingsTransferPreview?
@@ -848,6 +864,19 @@ struct SettingsView: View {
       searchText = ""
     }
     .confirmationDialog(
+      "Reset learned battery data?", isPresented: $confirmingBatteryDataReset,
+      titleVisibility: .visible
+    ) {
+      Button("Reset learned battery data", role: .destructive) {
+        battery.resetLearnedBatteryData()
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(
+        "Clears the local drain baseline, reported-capacity history and warning cooldowns. Islet will learn a new baseline from future battery use."
+      )
+    }
+    .confirmationDialog(
       "Restore appearance and interaction defaults?", isPresented: $confirmingRestore,
       titleVisibility: .visible
     ) {
@@ -910,7 +939,8 @@ struct SettingsView: View {
       ])
     case .activities:
       settingsLanding(pages: [
-        .activityOrder, .calendarReminders, .nowPlaying, .continuity, .systemMetrics,
+        .activityOrder, .batteryWarnings, .calendarReminders, .nowPlaying, .continuity,
+        .systemMetrics,
         .clipboard, .systemHUD,
       ])
     case .notifications:
@@ -932,6 +962,7 @@ struct SettingsView: View {
     case .interaction: interactionForm
     case .energy: energyForm
     case .contextRules: ContextRulesSettingsView()
+    case .batteryWarnings: batteryWarningsForm
     case .activityOrder: activityOrderForm
     case .calendarReminders: calendarRemindersForm
     case .nowPlaying: nowPlayingForm
@@ -1743,6 +1774,61 @@ struct SettingsView: View {
     }
     .formStyle(.grouped)
     .onAppear { keepAwake.refreshPowerProtectInstallation() }
+  }
+
+  private var batteryWarningsForm: some View {
+    Form {
+      Section("Mac battery") {
+        Toggle("Warn about unusual battery drain", isOn: $unusualBatteryDrainWarnings)
+        Text(
+          "Islet compares sustained battery use with a seven-day rolling baseline stored on this Mac. A single high or noisy reading does not trigger an alert."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Toggle("Warn when the charger cannot meet demand", isOn: $chargerCapacityWarnings)
+        Text(
+          "Brief workload spikes remain informational. Alerts require sustained battery discharge or slow charging while power is connected."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        LabeledContent("Learned baseline") {
+          Text(batteryBaselineDescription).foregroundStyle(.secondary)
+        }
+        Button("Reset learned battery data…", role: .destructive) {
+          confirmingBatteryDataReset = true
+        }
+      }
+      Section("Peripheral early warnings") {
+        ForEach(PeripheralDeviceType.allCases) { type in
+          Picker(type.title, selection: peripheralThresholdBinding(for: type)) {
+            Text("Off").tag(0)
+            ForEach([15, 20, 25, 30, 40, 50], id: \.self) { threshold in
+              Text("\(threshold)%").tag(threshold)
+            }
+          }
+        }
+        Text(
+          "Off disables the early warning for that device type. The existing critical alert at 10% remains enabled."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+    .formStyle(.grouped)
+  }
+
+  private var batteryBaselineDescription: String {
+    let summary = battery.batteryInsightSummary
+    guard let watts = summary.baselineWatts else {
+      return
+        "Learning, \(summary.baselineSampleCount)/\(BatteryInsightAnalyzer.minimumBaselinePoints) samples"
+    }
+    return String(format: "%.1f W from %d samples", watts, summary.baselineSampleCount)
+  }
+
+  private func peripheralThresholdBinding(for type: PeripheralDeviceType) -> Binding<Int> {
+    Binding(
+      get: { peripheralBatteryWarningThresholds[type.rawValue] ?? 20 },
+      set: { threshold in
+        peripheralBatteryWarningThresholds[type.rawValue] = threshold
+      })
   }
 
   private var permissionsForm: some View {
