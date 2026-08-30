@@ -94,7 +94,111 @@ final class MediaWatcher: @unchecked Sendable {
     }
   }
 
+  /// Keeps only redacted diagnostic text. Unlike stdout, where truncation makes the response
+  /// invalid, the tail of stderr is normally where a helper puts its actionable error.
+  final class StderrCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private let maximumBytes: Int
+    private var storage = Data()
+    private var exceededLimit = false
+    private var payloadNestingDepth = 0
+
+    init(maximumBytes: Int) {
+      precondition(maximumBytes > 0)
+      self.maximumBytes = maximumBytes
+    }
+
+    func append(_ data: Data) {
+      lock.lock()
+      defer { lock.unlock() }
+      appendRedacted(Self.redact(data, payloadNestingDepth: &payloadNestingDepth))
+    }
+
+    var snapshot: (data: Data, exceededLimit: Bool) {
+      lock.lock()
+      defer { lock.unlock() }
+      return (storage, exceededLimit)
+    }
+
+    private func appendRedacted(_ data: Data) {
+      guard !data.isEmpty else { return }
+      if data.count >= maximumBytes {
+        storage = Data(data.suffix(maximumBytes))
+        exceededLimit = true
+        return
+      }
+      let overflow = storage.count + data.count - maximumBytes
+      if overflow > 0 {
+        storage.removeFirst(overflow)
+        exceededLimit = true
+      }
+      storage.append(data)
+    }
+
+    /// Stderr is copied into support reports, so retain only plain diagnostic text. A corrupted
+    /// helper can write its JSON payload to stderr; once one begins, discard it across arbitrary
+    /// pipe chunk boundaries instead of keeping track metadata or artwork in memory.
+    private static func redact(_ data: Data, payloadNestingDepth: inout Int) -> Data {
+      let text = String(decoding: data, as: UTF8.self)
+      var result = ""
+      for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        let line = String(rawLine)
+        let nestingDelta = line.reduce(into: 0) { depth, character in
+          if character == "{" || character == "[" { depth += 1 }
+          if character == "}" || character == "]" { depth -= 1 }
+        }
+        if payloadNestingDepth > 0 {
+          payloadNestingDepth = max(0, payloadNestingDepth + nestingDelta)
+          result += "[media payload redacted]\n"
+          continue
+        }
+
+        let lowercased = line.lowercased()
+        if line.contains("{") || line.contains("[")
+          || ["title", "artist", "album", "artwork", "lyrics", "payload"].contains(where: {
+            lowercased.contains("\"\($0)\"") || lowercased.contains("\($0)=")
+              || lowercased.contains("\($0):")
+          })
+        {
+          payloadNestingDepth = max(0, nestingDelta)
+          result += "[media payload redacted]\n"
+          continue
+        }
+
+        let printable = line.unicodeScalars.filter { scalar in
+          scalar.value >= 0x20 && scalar.value != 0x7F
+        }
+        let cleaned = redactAbsolutePaths(in: String(String.UnicodeScalarView(printable)))
+        if !cleaned.isEmpty { result += cleaned + "\n" }
+      }
+      return Data(result.utf8)
+    }
+
+    private static func redactAbsolutePaths(in text: String) -> String {
+      var result = ""
+      var index = text.startIndex
+      while index < text.endIndex {
+        let previous = index == text.startIndex ? nil : text[text.index(before: index)]
+        let validPrefix = previous.map { $0.isWhitespace || "\"'(=".contains($0) } ?? true
+        if text[index] != "/" || !validPrefix {
+          result.append(text[index])
+          index = text.index(after: index)
+          continue
+        }
+        result += "<path>"
+        index = text.index(after: index)
+        // Spaces are valid path characters. Consume conservatively to punctuation or the end of
+        // the line rather than exposing a user or media filename after the first space.
+        while index < text.endIndex, !",;)]}".contains(text[index]) {
+          index = text.index(after: index)
+        }
+      }
+      return result
+    }
+  }
+
   static let maximumSnapshotOutputBytes = 1_048_576
+  static let maximumHelperStderrBytes = 16_384
 
   private let queue = DispatchQueue(label: "dev.islet.mediawatcher")
   private let queueKey = DispatchSpecificKey<Void>()
@@ -107,10 +211,14 @@ final class MediaWatcher: @unchecked Sendable {
   private var snapshotProcess: Process?
   private var snapshotPipe: Pipe?
   private var snapshotOutput: LockedData?
+  private var snapshotStderrPipe: Pipe?
+  private var snapshotStderr: StderrCapture?
   private var snapshotDeadlineTracker: SnapshotDeadlineTracker?
   private var snapshotDeadlineWorkItem: DispatchWorkItem?
   private var snapshotLaunchWorkItem: DispatchWorkItem?
   private var pipe: Pipe?
+  private var stderrPipe: Pipe?
+  private var stderr: StderrCapture?
   private var restartTask: Task<Void, Never>?
   private var failureCount = 0
   private var snapshotFailureCount = 0
@@ -124,6 +232,9 @@ final class MediaWatcher: @unchecked Sendable {
   private var isRunning = false
   /// Human-readable adapter status for the Settings window.
   var onStatus: (@Sendable (String) -> Void)?
+  /// The latest redacted helper failure for Copy Diagnostics. It persists across a successful
+  /// restart so support reports still contain the reason a private framework failed.
+  var onDiagnostic: (@Sendable (String?) -> Void)?
 
   // Created eagerly in init (not lazily by the consumer) so `continuation` is a `let` published
   // before any producer-queue work can read it. This avoids a cross-thread data race.
@@ -204,6 +315,7 @@ final class MediaWatcher: @unchecked Sendable {
       failureCount = 0
       snapshotFailureCount = 0
       onStatus?("Stopped")
+      onDiagnostic?(nil)
     }
   }
 
@@ -222,9 +334,12 @@ final class MediaWatcher: @unchecked Sendable {
     cleanupSnapshot(terminate: true)
 
     pipe?.fileHandleForReading.readabilityHandler = nil
+    stderrPipe?.fileHandleForReading.readabilityHandler = nil
     let oldProcess = process
     process = nil
     pipe = nil
+    stderrPipe = nil
+    stderr = nil
     oldProcess?.terminationHandler = nil
     if let oldProcess {
       if terminateStream {
@@ -240,11 +355,16 @@ final class MediaWatcher: @unchecked Sendable {
     snapshotDeadlineWorkItem = nil
     snapshotDeadlineTracker = nil
     snapshotPipe?.fileHandleForReading.readabilityHandler = nil
+    let oldStderrPipe = snapshotStderrPipe
+    let oldStderr = snapshotStderr
+    oldStderrPipe?.fileHandleForReading.readabilityHandler = nil
 
     let oldSnapshot = snapshotProcess
     snapshotProcess = nil
     snapshotPipe = nil
     snapshotOutput = nil
+    snapshotStderrPipe = nil
+    snapshotStderr = nil
     oldSnapshot?.terminationHandler = nil
     if let oldSnapshot {
       if terminate {
@@ -252,6 +372,9 @@ final class MediaWatcher: @unchecked Sendable {
       } else {
         oldSnapshot.waitUntilExit()
       }
+    }
+    if let oldStderrPipe, let oldStderr {
+      Self.drainAvailableData(from: oldStderrPipe.fileHandleForReading, into: oldStderr)
     }
   }
 
@@ -286,8 +409,10 @@ final class MediaWatcher: @unchecked Sendable {
     launchedProcess.executableURL = command.executableURL
     launchedProcess.arguments = command.arguments
     let launchedPipe = Pipe()
+    let launchedStderrPipe = Pipe()
+    let launchedStderr = StderrCapture(maximumBytes: Self.maximumHelperStderrBytes)
     launchedProcess.standardOutput = launchedPipe
-    launchedProcess.standardError = FileHandle.nullDevice
+    launchedProcess.standardError = launchedStderrPipe
 
     launchedPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
       let data = handle.availableData
@@ -298,19 +423,33 @@ final class MediaWatcher: @unchecked Sendable {
       }
       self.queue.async { self.consume(data, from: launchedProcess) }
     }
+    launchedStderrPipe.fileHandleForReading.readabilityHandler = { handle in
+      let data = handle.availableData
+      if data.isEmpty {
+        handle.readabilityHandler = nil
+      } else {
+        launchedStderr.append(data)
+      }
+    }
     launchedProcess.terminationHandler = { [weak self] terminatedProcess in
+      launchedPipe.fileHandleForReading.readabilityHandler = nil
+      launchedStderrPipe.fileHandleForReading.readabilityHandler = nil
+      Self.drainAvailableData(from: launchedStderrPipe.fileHandleForReading, into: launchedStderr)
       guard let self else { return }
-      self.queue.async { self.processDied(terminatedProcess) }
+      self.queue.async { self.processDied(terminatedProcess, stderr: launchedStderr) }
     }
     do {
       try launchedProcess.run()
       process = launchedProcess
       pipe = launchedPipe
+      stderrPipe = launchedStderrPipe
+      stderr = launchedStderr
       Log.media.info("Adapter started (pid \(launchedProcess.processIdentifier))")
       onStatus?("Streaming")
       scheduleInitialSnapshot()
     } catch {
       launchedPipe.fileHandleForReading.readabilityHandler = nil
+      launchedStderrPipe.fileHandleForReading.readabilityHandler = nil
       launchedProcess.terminationHandler = nil
       Log.media.error("Adapter launch failed: \(error)")
       scheduleStreamRestart(reason: "launch failed")
@@ -344,9 +483,11 @@ final class MediaWatcher: @unchecked Sendable {
     snapshot.executableURL = command.executableURL
     snapshot.arguments = command.arguments
     let output = Pipe()
+    let errorPipe = Pipe()
     let outputData = LockedData(maximumBytes: Self.maximumSnapshotOutputBytes)
+    let stderrData = StderrCapture(maximumBytes: Self.maximumHelperStderrBytes)
     snapshot.standardOutput = output
-    snapshot.standardError = FileHandle.nullDevice
+    snapshot.standardError = errorPipe
     output.fileHandleForReading.readabilityHandler = { [weak self] handle in
       let data = handle.availableData
       if data.isEmpty {
@@ -357,22 +498,35 @@ final class MediaWatcher: @unchecked Sendable {
       guard let self else { return }
       self.queue.async { self.snapshotReceived(from: snapshot) }
     }
+    errorPipe.fileHandleForReading.readabilityHandler = { handle in
+      let data = handle.availableData
+      if data.isEmpty {
+        handle.readabilityHandler = nil
+      } else {
+        stderrData.append(data)
+      }
+    }
     snapshot.terminationHandler = { [weak self] terminatedProcess in
       output.fileHandleForReading.readabilityHandler = nil
+      errorPipe.fileHandleForReading.readabilityHandler = nil
       Self.drainAvailableData(from: output.fileHandleForReading, into: outputData)
+      Self.drainAvailableData(from: errorPipe.fileHandleForReading, into: stderrData)
       guard let self else { return }
-      self.queue.async { self.snapshotFinished(terminatedProcess) }
+      self.queue.async { self.snapshotFinished(terminatedProcess, stderr: stderrData) }
     }
     do {
       try snapshot.run()
       snapshotProcess = snapshot
       snapshotPipe = output
       snapshotOutput = outputData
+      snapshotStderrPipe = errorPipe
+      snapshotStderr = stderrData
       snapshotDeadlineTracker = SnapshotDeadlineTracker(
         startedAt: monotonicNow(), timeouts: snapshotTimeouts)
       scheduleSnapshotDeadline(for: snapshot)
     } catch {
       output.fileHandleForReading.readabilityHandler = nil
+      errorPipe.fileHandleForReading.readabilityHandler = nil
       snapshot.terminationHandler = nil
       Log.media.error("Initial media snapshot launch failed: \(error)")
       initialSnapshotFailed(reason: "launch failed")
@@ -382,9 +536,10 @@ final class MediaWatcher: @unchecked Sendable {
   private func snapshotReceived(from sourceProcess: Process) {
     guard snapshotProcess === sourceProcess, var tracker = snapshotDeadlineTracker else { return }
     guard let snapshotOutput, !snapshotOutput.snapshot.exceededLimit else {
+      let capturedStderr = snapshotStderr
       Log.media.error("Initial media snapshot exceeded output limit")
       cleanupSnapshot(terminate: true)
-      initialSnapshotFailed(reason: "oversized output")
+      initialSnapshotFailed(reason: "oversized output", stderr: capturedStderr)
       return
     }
     tracker.receivedOutput(at: monotonicNow())
@@ -410,10 +565,12 @@ final class MediaWatcher: @unchecked Sendable {
       scheduleSnapshotDeadline(for: sourceProcess)
       return
     }
+    let capturedStderr = snapshotStderr
     cleanupSnapshot(terminate: true)
     snapshotFailureCount += 1
     let delay = snapshotBackoff(snapshotFailureCount)
     let reason = "snapshot \(timeout.rawValue) timeout"
+    recordHelperFailure(kind: .snapshot, reason: reason, stderr: capturedStderr)
     Log.media.warning(
       "MediaRemote \(reason); retrying in \(delay)s (failure #\(self.snapshotFailureCount))")
     onStatus?(
@@ -422,7 +579,7 @@ final class MediaWatcher: @unchecked Sendable {
     scheduleInitialSnapshot(after: delay)
   }
 
-  private func snapshotFinished(_ finishedProcess: Process) {
+  private func snapshotFinished(_ finishedProcess: Process, stderr: StderrCapture) {
     guard snapshotProcess === finishedProcess,
       let capture = snapshotOutput?.snapshot
     else { return }
@@ -433,15 +590,15 @@ final class MediaWatcher: @unchecked Sendable {
         streamHasEmittedRecord: streamHasEmittedRecord, currentSource: currentSource)
     else { return }
     guard !capture.exceededLimit else {
-      initialSnapshotFailed(reason: "oversized output")
+      initialSnapshotFailed(reason: "oversized output", stderr: stderr)
       return
     }
     guard status == 0 else {
-      initialSnapshotFailed(reason: "helper exited with status \(status)")
+      initialSnapshotFailed(reason: "helper exited with status \(status)", stderr: stderr)
       return
     }
     guard let parsed = Self.parseInitialSnapshot(data: capture.data) else {
-      initialSnapshotFailed(reason: "invalid output")
+      initialSnapshotFailed(reason: "invalid output", stderr: stderr)
       return
     }
     snapshotFailureCount = 0
@@ -480,13 +637,36 @@ final class MediaWatcher: @unchecked Sendable {
     }
   }
 
-  private func initialSnapshotFailed(reason: String) {
+  private static func drainAvailableData(from handle: FileHandle, into output: StderrCapture) {
+    let descriptor = handle.fileDescriptor
+    let originalFlags = fcntl(descriptor, F_GETFL)
+    guard originalFlags >= 0 else { return }
+    guard fcntl(descriptor, F_SETFL, originalFlags | O_NONBLOCK) == 0 else { return }
+    defer { _ = fcntl(descriptor, F_SETFL, originalFlags) }
+
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while true {
+      let count = buffer.withUnsafeMutableBytes { bytes in
+        Darwin.read(descriptor, bytes.baseAddress, bytes.count)
+      }
+      if count > 0 {
+        output.append(Data(buffer.prefix(count)))
+      } else if count == -1, errno == EINTR {
+        continue
+      } else {
+        return
+      }
+    }
+  }
+
+  private func initialSnapshotFailed(reason: String, stderr: StderrCapture? = nil) {
     guard isRunning,
       Self.shouldAcceptInitialSnapshot(
         streamHasEmittedRecord: streamHasEmittedRecord, currentSource: currentSource)
     else { return }
     snapshotFailureCount += 1
     let delay = snapshotBackoff(snapshotFailureCount)
+    recordHelperFailure(kind: .snapshot, reason: "snapshot \(reason)", stderr: stderr)
     Log.media.warning(
       "Initial media snapshot \(reason); retrying in \(delay)s (failure #\(self.snapshotFailureCount))"
     )
@@ -584,8 +764,12 @@ final class MediaWatcher: @unchecked Sendable {
     }
   }
 
-  private func processDied(_ deadProcess: Process) {
+  private func processDied(_ deadProcess: Process, stderr: StderrCapture) {
     guard process === deadProcess else { return }
+    recordHelperFailure(
+      kind: .stream,
+      reason: "stream helper exited with status \(deadProcess.terminationStatus)",
+      stderr: stderr)
     cleanup(terminateStream: false)
     buffer.removeAll(keepingCapacity: true)
     guard isRunning else { return }
@@ -608,5 +792,21 @@ final class MediaWatcher: @unchecked Sendable {
         self.launch()
       }
     }
+  }
+
+  private func recordHelperFailure(kind: HelperKind, reason: String, stderr: StderrCapture?) {
+    let suffix: String
+    if let stderr,
+      let text = String(data: stderr.snapshot.data, encoding: .utf8)?
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+      !text.isEmpty
+    {
+      suffix = "; stderr: \(text)"
+    } else {
+      suffix = ""
+    }
+    let diagnostic = "\(kind.rawValue) \(reason)\(suffix)"
+    Log.media.error("MediaRemote helper failure: \(diagnostic)")
+    onDiagnostic?(diagnostic)
   }
 }

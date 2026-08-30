@@ -11,6 +11,54 @@ final class MediaWatcherTests: XCTestCase {
     XCTAssertEqual(MediaWatcher.backoffDelay(failureCount: 10), 60)
   }
 
+  func testStderrCaptureRedactsPathsAndPayloads() {
+    let capture = MediaWatcher.StderrCapture(maximumBytes: 256)
+    capture.append(Data("Failed to load /Users/nedlane/Library/Private.framework\n".utf8))
+    capture.append(Data("{\"title\":\"Private Track\",\"artworkData\":\"secret\"}".utf8))
+
+    let diagnostic = String(decoding: capture.snapshot.data, as: UTF8.self)
+    XCTAssertTrue(diagnostic.contains("Failed to load <path>"))
+    XCTAssertTrue(diagnostic.contains("[media payload redacted]"))
+    XCTAssertFalse(diagnostic.contains("/Users/nedlane"))
+    XCTAssertFalse(diagnostic.contains("Private Track"))
+    XCTAssertFalse(diagnostic.contains("secret"))
+  }
+
+  func testStderrCaptureRedactsNestedPayloadsAndPathsContainingSpacesAcrossChunks() {
+    let capture = MediaWatcher.StderrCapture(maximumBytes: 512)
+    capture.append(Data("{\"payload\": {\n\"customField\": \"private ".utf8))
+    capture.append(Data("value\"\n}\n}\nFailed at /Users/Ned Lane/Private Track.mp3".utf8))
+
+    let diagnostic = String(decoding: capture.snapshot.data, as: UTF8.self)
+    XCTAssertFalse(diagnostic.contains("customField"))
+    XCTAssertFalse(diagnostic.contains("private value"))
+    XCTAssertFalse(diagnostic.contains("Ned Lane"))
+    XCTAssertFalse(diagnostic.contains("Private Track"))
+    XCTAssertTrue(diagnostic.contains("Failed at <path>"))
+  }
+
+  func testStderrCaptureRotatesNoisyOutputWithinItsByteLimit() {
+    let capture = MediaWatcher.StderrCapture(maximumBytes: 32)
+    capture.append(Data("first diagnostic\n".utf8))
+    capture.append(Data("012345678901234567890123456789\nlatest\n".utf8))
+
+    let snapshot = capture.snapshot
+    let diagnostic = String(decoding: snapshot.data, as: UTF8.self)
+    XCTAssertLessThanOrEqual(snapshot.data.count, 32)
+    XCTAssertTrue(snapshot.exceededLimit)
+    XCTAssertFalse(diagnostic.contains("first diagnostic"))
+    XCTAssertTrue(diagnostic.contains("latest"))
+  }
+
+  func testStderrCaptureCapsOversizedOutput() {
+    let capture = MediaWatcher.StderrCapture(maximumBytes: 64)
+    capture.append(Data(repeating: UInt8(ascii: "x"), count: 8_192))
+
+    let snapshot = capture.snapshot
+    XCTAssertEqual(snapshot.data.count, 64)
+    XCTAssertTrue(snapshot.exceededLimit)
+  }
+
   func testSnapshotStartupDeadlineBeforeOutput() {
     let tracker = MediaWatcher.SnapshotDeadlineTracker(
       startedAt: 10,
