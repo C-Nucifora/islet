@@ -4,6 +4,7 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/.." && pwd)
 manifest="$repo_root/Vendor/MediaRemoteAdapter.provenance.json"
+loader_patch="$repo_root/Vendor/MediaRemoteAdapter.loader.patch"
 framework=${1:-"$repo_root/Vendor/MediaRemoteAdapter.framework"}
 expected_plist="$repo_root/Vendor/MediaRemoteAdapter.expected-Info.plist"
 expected_exports="$repo_root/Vendor/MediaRemoteAdapter.expected-exports.txt"
@@ -41,6 +42,7 @@ verify_sha256 "$(read_manifest '.artifacts.infoPlistSHA256')" "$plist"
 verify_sha256 "$(read_manifest '.artifacts.codeResourcesSHA256')" "$code_resources"
 verify_sha256 "$(read_manifest '.artifacts.loaderSHA256')" \
   "$repo_root/Islet/Resources/mediaremote-adapter.pl"
+verify_sha256 "$(read_manifest '.artifacts.loaderPatchSHA256')" "$loader_patch"
 verify_sha256 "$(read_manifest '.artifacts.licenseSHA256')" \
   "$repo_root/Vendor/MediaRemoteAdapter-LICENSE"
 

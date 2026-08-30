@@ -1,0 +1,27 @@
+diff --git a/bin/mediaremote-adapter.pl b/bin/mediaremote-adapter.pl
+index f4c794b..2d9c9b4 100755
+--- a/bin/mediaremote-adapter.pl
++++ b/bin/mediaremote-adapter.pl
+@@ -11,0 +12 @@ use File::Basename;
++use Time::HiRes ();
+@@ -54,0 +56,2 @@ OPTIONS:
++    --timeout=N: Exits if the one-shot request has not completed after N seconds.
++      The caller should still enforce and reap against its own hard deadline.
+@@ -183,0 +187 @@ my $symbol_name = "adapter_$function_name";
++my $execution_timeout;
+@@ -231,0 +236,7 @@ elsif ($function_name eq "get") {
++    elsif ($key eq "timeout") {
++      my $value = $options->{$key};
++      fail "Missing value for option '$key'" unless defined $value;
++      fail "Invalid timeout '$value'" unless $value =~ /\A(?:\d+(?:\.\d*)?|\.\d+)\z/
++        && $value > 0 && $value <= 300;
++      $execution_timeout = $value;
++    }
+@@ -274,0 +286,3 @@ eval {
++  local $SIG{ALRM} = sub { die "Timed out after $execution_timeout seconds\n" }
++    if defined $execution_timeout;
++  Time::HiRes::alarm($execution_timeout) if defined $execution_timeout;
+@@ -276,0 +291 @@ eval {
++  Time::HiRes::alarm(0) if defined $execution_timeout;
+@@ -277,0 +293 @@ eval {
++Time::HiRes::alarm(0) if defined $execution_timeout;

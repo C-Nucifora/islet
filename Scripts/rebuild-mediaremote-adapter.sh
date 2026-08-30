@@ -4,6 +4,7 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/.." && pwd)
 manifest="$repo_root/Vendor/MediaRemoteAdapter.provenance.json"
+loader_patch="$repo_root/Vendor/MediaRemoteAdapter.loader.patch"
 cache_dir=${MEDIAREMOTE_ADAPTER_DOWNLOAD_CACHE:-"$repo_root/Vendor/mediaremote-adapter-src"}
 output_dir="$repo_root/Vendor/mediaremote-adapter-build"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/islet-mediaremote-adapter.XXXXXX")
@@ -33,6 +34,9 @@ clang_version=$(read_manifest '.toolchain.clangVersion')
 make_version=$(read_manifest '.toolchain.makeVersion')
 generator=$(read_manifest '.toolchain.generator')
 deployment_target=$(read_manifest '.toolchain.deploymentTarget')
+loader_patch_checksum=$(read_manifest '.artifacts.loaderPatchSHA256')
+
+verify_sha256 "$loader_patch_checksum" "$loader_patch"
 
 actual_xcode=$(xcodebuild -version)
 expected_xcode=$(printf 'Xcode %s\nBuild version %s' "$xcode_version" "$xcode_build")
@@ -77,6 +81,10 @@ tar -xzf "$source_archive" -C "$work_dir"
 tar -xzf "$cmake_archive" -C "$work_dir"
 source_dir="$work_dir/mediaremote-adapter-$source_commit"
 cmake_bin="$work_dir/cmake-$cmake_version-macos-universal/CMake.app/Contents/bin/cmake"
+
+/usr/bin/patch -s -f -F 0 -d "$source_dir" -p1 < "$loader_patch"
+verify_sha256 "$(read_manifest '.artifacts.loaderSHA256')" \
+  "$source_dir/bin/mediaremote-adapter.pl"
 
 if [[ "$("$cmake_bin" --version | sed -n '1p')" != "cmake version $cmake_version" ]]; then
   printf 'Downloaded CMake did not report version %s.\n' "$cmake_version" >&2
