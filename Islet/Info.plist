@@ -24,8 +24,10 @@
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsArbitraryLoads</key>
+		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<key>NSExceptionDomains</key>
+		<dict/>
 	</dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Islet shows a brief animation when a Bluetooth device connects or disconnects, and reads the battery level of connected Apple peripherals.</string>
@@ -43,5 +45,7 @@
 	<string>Islet shows your reminders in the notch and lets you complete them.</string>
 	<key>NSRemindersUsageDescription</key>
 	<string>Islet shows your reminders in the notch and lets you complete them.</string>
+	<key>T3ApprovedInsecureHTTPOrigins</key>
+	<array/>
 </dict>
 </plist>

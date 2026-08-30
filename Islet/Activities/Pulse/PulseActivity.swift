@@ -6,7 +6,7 @@ import SwiftUI
 final class PulseActivity: NotchActivity, ObservableObject {
   let id = "pulse"
   let priority = ActivityPriority.agent
-  let tabIcon = "waveform.path.ecg"
+  let tabIcon = PulseSymbolValidator.fallbackSymbol
   private let center = PulseCenter.shared
   private var cancellable: AnyCancellable?
 
@@ -63,7 +63,7 @@ struct PulseExpandedView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack {
-        Label("Now", systemImage: "waveform.path.ecg")
+        Label("Now", systemImage: PulseSymbolValidator.fallbackSymbol)
           .font(.headline)
         Spacer()
         if center.hiddenItemCount > 0 {

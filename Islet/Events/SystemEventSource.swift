@@ -30,7 +30,7 @@ enum SourceCatalog {
     ("power", "Low Power Mode", .core, "bolt.fill"),
     ("sleep", "Sleep and wake", .core, "moon.fill"),
     ("peripheral", "Peripheral batteries", .core, "magicmouse.fill"),
-    ("audiodevice", "Audio output device", .core, "airpodspro"),
+    ("audiodevice", "Audio input and output", .core, "airpodspro"),
     ("battery", "Battery", .core, "battery.100percent.bolt"),
     ("timer", "Timer", .core, "timer"),
     ("nowPlaying", "Track changes", .core, "music.note"),

@@ -15,7 +15,7 @@ final class PortsActivity: NotchActivity, ObservableObject {
   private var cancellables: Set<AnyCancellable> = []
   private var isMonitoring = false
 
-  var isActive: Bool { Defaults[.portsEnabled] && !monitor.devices.isEmpty }
+  var isActive: Bool { !monitor.devices.isEmpty }
 
   func start() {
     guard !isMonitoring else { return }

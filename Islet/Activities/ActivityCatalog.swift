@@ -22,13 +22,12 @@ enum ActivityCatalog {
   /// the same ids when reconciling feature switches; publishing the classification here gives
   /// tests a way to catch a newly catalogued activity that nobody starts or deliberately exempts.
   static let lifecycleManagedIDs: Set<String> = [
-    "pulse", "t3Code", "nowPlaying", "clipboard", "ports", "calendar", "battery", "system",
-    "continuity",
+    "pulse", "t3Code", "nowPlaying", "shelf", "clipboard", "ports", "calendar", "battery",
+    "system", "continuity",
   ]
 
-  /// These are intentionally resident when hidden. Timer owns no background polling and must keep
-  /// an already-running completion task; Shelf keeps user state and a cheap model subscription.
-  static let persistentLifecycleIDs: Set<String> = ["timer", "shelf"]
+  /// Timer owns no background polling and must keep an already-running completion task when hidden.
+  static let persistentLifecycleIDs: Set<String> = ["timer"]
 
   /// The user's stored order, with any catalogue entries it predates appended at the end.
   ///

@@ -2,6 +2,9 @@ import SwiftUI
 
 /// Owns sneak timing: presents queued sneaks one at a time in the compact island,
 /// never while the island is expanded (holds and drains after close).
+///
+/// Queue scheduling only chooses the next sneak. A newly queued alert does not interrupt `current`;
+/// it presents after the current sneak's normal dwell and transition complete.
 @MainActor
 final class SneakQueue: ObservableObject {
   static let shared = SneakQueue()

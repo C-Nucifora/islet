@@ -43,9 +43,10 @@ func cpuUtilisation(from old: [CPUTicks], to new: [CPUTicks], indices: Range<Int
   return Double(busy) / Double(total)
 }
 
-/// Longest gap between two counter reads that still produces a rate. Anything longer — sleep/wake,
-/// a stalled run loop, the app being suspended — is discarded rather than rendered as a spike.
-let metricsMaxSampleGap: TimeInterval = 10
+/// Longest gap between two counter reads that still produces a rate. The slowest normal System
+/// cadence is 45 seconds, so this admits every energy-policy interval but still drops a sleep/wake
+/// or stalled run loop instead of rendering it as a spike.
+let metricsMaxSampleGap: TimeInterval = 60
 
 /// The native width of a cumulative counter, which is the width its wraparound happens at.
 enum CounterWidth: Sendable {

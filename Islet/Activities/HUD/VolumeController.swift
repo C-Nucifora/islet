@@ -52,9 +52,8 @@ enum VolumeController {
   /// not confused with a genuine zero volume.
   static func currentVolume() -> Float { readVolume() ?? 0 }
 
-  /// Applies volume and verifies it by reading every control that accepted the write. On devices
-  /// with per-channel controls but no master scalar, every channel moves by the same delta so a
-  /// pre-existing balance is preserved.
+  /// Applies volume and verifies every selected control. On devices with per-channel controls but
+  /// no master scalar, every channel moves by the same delta so a pre-existing balance is kept.
   /// Returning false is a hard instruction to the event tap to pass the media key through.
   @discardableResult
   static func setVolume(_ value: Float) -> Bool {
@@ -66,50 +65,20 @@ enum VolumeController {
     let originalMute = readMuted()
     if clamped > 0, originalMute == true, !setMuted(false) { return false }
 
-    let originals = Dictionary(
-      uniqueKeysWithValues: elements.compactMap { element in
-        readVolume(on: device, element: element).map { (element, $0) }
+    let applied = VolumeControlLayout.apply(
+      target: clamped,
+      reportedElements: elements,
+      read: { readVolume(on: device, element: $0) },
+      write: { element, value in
+        var address = volumeAddress(element: element)
+        var value = value
+        return AudioObjectSetPropertyData(
+          device, &address, 0, nil, UInt32(MemoryLayout<Float>.size), &value) == noErr
       })
-    guard originals.count == elements.count else {
-      if originalMute == true { _ = setMuted(true) }
-      return false
-    }
-    guard let referenceElement = elements.first, let reference = originals[referenceElement] else {
-      if originalMute == true { _ = setMuted(true) }
-      return false
-    }
-    let targets = VolumeControlLayout.shiftedValues(
-      originals, reference: reference, target: clamped)
-
-    var written: [UInt32] = []
-    for element in elements {
-      var addr = volumeAddress(element: element)
-      guard var target = targets[element] else { continue }
-      if AudioObjectSetPropertyData(
-        device, &addr, 0, nil, UInt32(MemoryLayout<Float>.size), &target) == noErr
-      {
-        written.append(element)
-      }
-    }
-    guard written.count == elements.count else {
-      restoreVolumes(originals, on: device)
-      if originalMute == true { _ = setMuted(true) }
-      return false
-    }
-
-    // CoreAudio scalar controls are synchronous, though some devices quantise to coarse steps.
-    // Two percent tolerates that quantisation without treating a silently ignored write as success.
-    let verified = written.allSatisfy { element in
-      guard let readback = readVolume(on: device, element: element),
-        let target = targets[element]
-      else { return false }
-      return abs(readback - target) <= 0.02
-    }
-    if !verified {
-      restoreVolumes(originals, on: device)
+    if !applied {
       if originalMute == true { _ = setMuted(true) }
     }
-    return verified
+    return applied
   }
 
   private static func muteAddress() -> AudioObjectPropertyAddress {
@@ -157,7 +126,14 @@ enum VolumeController {
   }
 
   private static func writableVolumeElements(on device: AudioObjectID) -> [UInt32] {
-    let available = [kAudioObjectPropertyElementMain, UInt32(1), 2, 3, 4].filter { element in
+    let reportedElements = outputControlElements(on: device)
+    // The control list is authoritative when available. Retain the previous small probe only as a
+    // compatibility fallback for devices that expose scalar properties but no readable list.
+    let candidates =
+      reportedElements.isEmpty
+      ? [kAudioObjectPropertyElementMain, UInt32(1), 2, 3, 4]
+      : reportedElements
+    let available = candidates.filter { element in
       var address = volumeAddress(element: element)
       return isReadableAndSettable(device, address: &address)
         && readVolume(on: device, element: element) != nil
@@ -166,13 +142,54 @@ enum VolumeController {
       from: available, master: kAudioObjectPropertyElementMain)
   }
 
-  private static func restoreVolumes(_ originals: [UInt32: Float], on device: AudioObjectID) {
-    for (element, original) in originals {
-      var address = volumeAddress(element: element)
-      var value = original
-      _ = AudioObjectSetPropertyData(
-        device, &address, 0, nil, UInt32(MemoryLayout<Float>.size), &value)
+  /// The control list is the device's source of truth for control scope and element. Channel
+  /// element IDs do not have to be contiguous, so probing 1...N misses real output controls on
+  /// some multichannel interfaces.
+  private static func outputControlElements(on device: AudioObjectID) -> [UInt32] {
+    var listAddress = AudioObjectPropertyAddress(
+      mSelector: kAudioObjectPropertyControlList,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain)
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(device, &listAddress, 0, nil, &size) == noErr,
+      size.isMultiple(of: UInt32(MemoryLayout<AudioObjectID>.size)), size > 0
+    else { return [] }
+
+    var controls = [AudioObjectID](
+      repeating: kAudioObjectUnknown,
+      count: Int(size) / MemoryLayout<AudioObjectID>.size)
+    guard
+      AudioObjectGetPropertyData(
+        device, &listAddress, 0, nil, &size, &controls) == noErr
+    else { return [] }
+
+    return controls.compactMap { control in
+      guard controlScope(control) == kAudioObjectPropertyScopeOutput else { return nil }
+      return controlElement(control)
     }
+  }
+
+  private static func controlScope(_ control: AudioObjectID) -> AudioObjectPropertyScope? {
+    readControlProperty(control, selector: kAudioControlPropertyScope)
+  }
+
+  private static func controlElement(_ control: AudioObjectID) -> UInt32? {
+    readControlProperty(control, selector: kAudioControlPropertyElement)
+  }
+
+  private static func readControlProperty(
+    _ control: AudioObjectID, selector: AudioObjectPropertySelector
+  ) -> UInt32? {
+    var address = AudioObjectPropertyAddress(
+      mSelector: selector,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain)
+    var value: UInt32 = 0
+    var size = UInt32(MemoryLayout<UInt32>.size)
+    guard AudioObjectGetPropertyData(control, &address, 0, nil, &size, &value) == noErr else {
+      return nil
+    }
+    return value
   }
 
   private static func readVolume(on device: AudioObjectID, element: UInt32) -> Float? {
