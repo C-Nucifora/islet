@@ -51,14 +51,4 @@ extension NSScreen {
       auxRightWidth: auxiliaryTopRightArea?.width ?? 0)
   }
 
-  /// Geometry for this screen from an explicit reading, so the caller decides whether that reading
-  /// is the live one or a remembered one.
-  func notchGeometry(reading: NotchStickiness.Reading) -> NotchGeometry {
-    NotchGeometry(
-      screenFrame: frame,
-      safeAreaTop: reading.safeAreaTop,
-      auxLeftWidth: reading.auxLeftWidth,
-      auxRightWidth: reading.auxRightWidth,
-      menuBarHeight: frame.maxY - visibleFrame.maxY)
-  }
 }

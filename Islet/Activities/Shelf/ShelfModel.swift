@@ -183,7 +183,6 @@ final class ShelfModel: ObservableObject {
   /// `nil` means the Shelf storage is available. It must not be inferred from an empty item list.
   @Published private(set) var storageFailure: ShelfStorageFailure?
   @Published private var dropState = ShelfDropState()
-  @Published private(set) var presentationRequest: UUID?
   @Published private(set) var currentUsageBytes: Int64?
   @Published private(set) var lastRejectedImportBytes: Int64?
   @Published private(set) var stacks: [ShelfStack]
