@@ -52,6 +52,23 @@ final class SettingsTransferTests: XCTestCase {
       try SettingsTransfer.preview(data: invalidList, current: defaultSnapshot))
   }
 
+  func testAudioOnlyExclusionsNormalizeAndEnforceTheirSmallerBound() throws {
+    let normalized = try document(
+      settings: [
+        "excludedAudioOnlySourceBundleIdentifiers": [
+          "com.google.Chrome.helper.Renderer", "com.google.Chrome", "com.apple.PowerChime",
+        ]
+      ])
+    let preview = try SettingsTransfer.preview(data: normalized, current: defaultSnapshot)
+    XCTAssertEqual(
+      preview.result.excludedAudioOnlySourceBundleIdentifiers, ["com.google.Chrome"])
+
+    let tooMany = (0...SourceFilter.maximumAudioOnlyExclusions).map { "com.example.app\($0)" }
+    let invalid = try document(
+      settings: ["excludedAudioOnlySourceBundleIdentifiers": tooMany])
+    XCTAssertThrowsError(try SettingsTransfer.preview(data: invalid, current: defaultSnapshot))
+  }
+
   func testVersionOneAliasesMigrate() throws {
     let object: [String: Any] = [
       "version": 1,
@@ -140,7 +157,8 @@ final class SettingsTransferTests: XCTestCase {
   private var defaultSnapshot: SettingsTransferSnapshot {
     SettingsTransferSnapshot(
       appTheme: .classic, batteryGraphStyle: .coloured, mediaSourceMode: .auto,
-      mediaPriorityList: ["com.spotify.client", "com.apple.Music"], interactionMode: .hover,
+      mediaPriorityList: ["com.spotify.client", "com.apple.Music"],
+      excludedAudioOnlySourceBundleIdentifiers: [], interactionMode: .hover,
       hoverCollapseTimeout: 0.5, hapticsEnabled: true, hapticStrength: .medium,
       barrierPushDistance: 120, energyMode: .automatic, hideFromScreenRecording: false,
       hudEnabled: false, hudStyle: .bar, calendarEnabled: true, calendarLeadMinutes: 10,
@@ -154,6 +172,7 @@ final class SettingsTransferTests: XCTestCase {
     SettingsTransferSnapshot(
       appTheme: .catppuccin, batteryGraphStyle: .monochrome, mediaSourceMode: .prioritized,
       mediaPriorityList: ["com.apple.Music", "com.spotify.client"],
+      excludedAudioOnlySourceBundleIdentifiers: ["com.example.CallApp"],
       interactionMode: .clickToPin, hoverCollapseTimeout: 2.4, hapticsEnabled: false,
       hapticStrength: .strong, barrierPushDistance: 640, energyMode: .lowEnergy,
       hideFromScreenRecording: true, hudEnabled: true, hudStyle: .gauge,
