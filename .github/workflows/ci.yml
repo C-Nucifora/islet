@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
-    name: Build, test, and analyze
+  validate-arm64:
+    name: Build, test, and analyze (arm64)
     runs-on: macos-26
     timeout-minutes: 45
     env:
@@ -65,7 +65,7 @@ jobs:
             -onlyUsePackageVersionsFromResolvedFile | xcbeautify
           cmp Package.resolved Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
-      - name: Run tests
+      - name: Run arm64 tests
         run: |
           set -o pipefail
           xcodebuild \
@@ -74,9 +74,18 @@ jobs:
             -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath "$DERIVED_DATA" \
             -disableAutomaticPackageResolution \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
             CODE_SIGN_IDENTITY=- \
             CODE_SIGN_STYLE=Manual \
             test | xcbeautify
+
+      - name: Verify arm64 build products
+        run: |
+          app="$DERIVED_DATA/Build/Products/Debug/Islet.app"
+          framework="$app/Contents/Frameworks/MediaRemoteAdapter.framework/MediaRemoteAdapter"
+          lipo "$app/Contents/MacOS/Islet" -verify_arch arm64
+          lipo "$framework" -verify_arch arm64
 
       - name: Run static analysis
         run: |
@@ -89,3 +98,70 @@ jobs:
             -disableAutomaticPackageResolution \
             CODE_SIGNING_ALLOWED=NO \
             analyze | xcbeautify
+
+  test-x86_64:
+    name: Build and test (x86_64)
+    runs-on: macos-26-intel
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DERIVED_DATA: ${{ github.workspace }}/DerivedData
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install XcodeGen
+        run: |
+          Scripts/install-xcodegen.sh "$RUNNER_TEMP/xcodegen"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Check Intel toolchain
+        run: |
+          [[ "$(uname -m)" == x86_64 ]]
+          xcodebuild -version
+          swift --version
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate
+          resolved_dir=Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+          mkdir -p "$resolved_dir"
+          install -m 0644 Package.resolved "$resolved_dir/Package.resolved"
+          git diff --exit-code -- Islet/Info.plist
+
+      - name: Resolve pinned packages
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project Islet.xcodeproj \
+            -scheme Islet \
+            -derivedDataPath "$DERIVED_DATA" \
+            -onlyUsePackageVersionsFromResolvedFile | xcbeautify
+          cmp Package.resolved Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+      - name: Run x86_64 tests
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Islet.xcodeproj \
+            -scheme Islet \
+            -destination 'platform=macOS,arch=x86_64' \
+            -derivedDataPath "$DERIVED_DATA" \
+            -disableAutomaticPackageResolution \
+            ARCHS=x86_64 \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGN_STYLE=Manual \
+            test | xcbeautify
+
+      - name: Verify x86_64 build products
+        run: |
+          app="$DERIVED_DATA/Build/Products/Debug/Islet.app"
+          framework="$app/Contents/Frameworks/MediaRemoteAdapter.framework/MediaRemoteAdapter"
+          lipo "$app/Contents/MacOS/Islet" -verify_arch x86_64
+          lipo "$framework" -verify_arch x86_64
