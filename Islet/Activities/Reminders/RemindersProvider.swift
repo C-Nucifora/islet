@@ -18,6 +18,7 @@ final class RemindersProvider: ObservableObject {
   static let shared = RemindersProvider()
 
   @Published private(set) var reminders: [ReminderItem] = []
+  @Published private(set) var hasMoreReminders = false
   @Published private(set) var authorization = EventKitPermissionState(
     EKEventStore.authorizationStatus(for: .reminder))
   @Published private(set) var hasRequestedAccess = false
@@ -43,6 +44,7 @@ final class RemindersProvider: ObservableObject {
         guard change.newValue else {
           self?.reloadGeneration += 1
           self?.reminders = []
+          self?.hasMoreReminders = false
           self?.loadState = .idle
           return
         }
@@ -62,6 +64,7 @@ final class RemindersProvider: ObservableObject {
     observing = false
     reloadGeneration += 1
     reminders = []
+    hasMoreReminders = false
     loadState = .idle
     lastActionError = nil
   }
@@ -86,6 +89,7 @@ final class RemindersProvider: ObservableObject {
       return
     }
     reminders = []
+    hasMoreReminders = false
     guard authorization == .notDetermined else { return }
     do {
       let granted = try await store.requestFullAccessToReminders()
@@ -120,6 +124,7 @@ final class RemindersProvider: ObservableObject {
     } else if isRunning {
       reloadGeneration += 1
       reminders = []
+      hasMoreReminders = false
       loadState = .idle
     }
   }
@@ -131,38 +136,55 @@ final class RemindersProvider: ObservableObject {
     guard authorization.canRead else {
       reloadGeneration += 1
       reminders = []
+      hasMoreReminders = false
       loadState = .idle
       return
     }
     reloadGeneration += 1
     let generation = reloadGeneration
     loadState = .loading
+    // EventKit cannot combine a due-date horizon with undated reminders, and it provides no
+    // result limit. Fetching all incomplete reminders is therefore required to retain important
+    // undated work. The selection below applies the documented 30-day horizon and eight-item
+    // budget before titles, colours, and other display fields are materialized.
     let predicate = store.predicateForIncompleteReminders(
       withDueDateStarting: nil, ending: nil, calendars: nil)
-    let items: [ReminderItem] = await withCheckedContinuation { continuation in
+    let result: (items: [ReminderItem], hasMore: Bool) = await withCheckedContinuation {
+      continuation in
       // Explicitly @Sendable so the closure is NOT @MainActor-isolated: EventKit invokes it on
       // its own queue, and a MainActor-isolated closure would trap on a dispatch-queue assertion.
       let handler: @Sendable ([EKReminder]?) -> Void = { fetched in
-        let mapped = (fetched ?? []).map { r in
-          let dueComponents = r.dueDateComponents
+        let selection = RemindersLogic.dashboardSelection(
+          fetched ?? [], dueDate: { RemindersLogic.dueDate(from: $0.dueDateComponents) },
+          priority: \.priority, stableID: \.calendarItemIdentifier)
+        let items = selection.items.map { reminder in
+          let dueComponents = reminder.dueDateComponents
           let hasDueTime =
             dueComponents?.hour != nil || dueComponents?.minute != nil
             || dueComponents?.second != nil
           return ReminderItem(
-            id: r.calendarItemIdentifier,
-            title: r.title ?? "Untitled",
+            id: reminder.calendarItemIdentifier,
+            title: reminder.title ?? "Untitled",
             dueDate: RemindersLogic.dueDate(from: dueComponents),
             hasDueTime: hasDueTime,
-            priority: r.priority,
-            listColorHex: ColorHex.string(from: r.calendar?.cgColor))
+            priority: reminder.priority,
+            listColorHex: ColorHex.string(from: reminder.calendar?.cgColor))
         }
-        continuation.resume(returning: mapped)
+        continuation.resume(returning: (items, selection.hasMore))
       }
       store.fetchReminders(matching: predicate, completion: handler)
     }
     guard generation == reloadGeneration, isRunning, Defaults[.remindersEnabled] else { return }
-    reminders = RemindersLogic.display(items)
+    reminders = result.items
+    hasMoreReminders = result.hasMore
     loadState = .loaded
+  }
+
+  func openRemindersApp() {
+    guard
+      let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.reminders")
+    else { return }
+    NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
   }
 
   /// Marks a reminder complete and refreshes.
