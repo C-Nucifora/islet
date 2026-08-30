@@ -20,6 +20,8 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>IsletUpdateChannel</key>
+	<string>stable</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
@@ -45,6 +47,20 @@
 	<string>Islet shows and manages your reminders in the notch.</string>
 	<key>NSRemindersUsageDescription</key>
 	<string>Islet shows and manages your reminders in the notch.</string>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/C-Nucifora/islet/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>$(ISLET_UPDATE_PUBLIC_ED_KEY)</string>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUSignedFeedFailureExpirationInterval</key>
+	<integer>0</integer>
+	<key>SUShowReleaseNotes</key>
+	<true/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 	<key>T3ApprovedInsecureHTTPOrigins</key>
 	<array/>
 </dict>
