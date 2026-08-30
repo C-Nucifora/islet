@@ -253,6 +253,30 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testDuplicateRevisionAfterExpiryRemainsAnIdempotentOrderingRejection() throws {
+    let clock = TestPulseClock(now: Date(timeIntervalSince1970: 1_000))
+    let scheduler = TestPulseDeadlineScheduler(clock: clock)
+    let center = PulseCenter(clock: clock, scheduler: scheduler)
+    let payload = PulsePayload(
+      id: "expiring-retry", source: "build", title: "Running", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: 0.5, state: .progress, priority: .normal,
+      expiresAt: Date(timeIntervalSince1970: 1_005), actions: nil)
+    let command = command(.update, payload, revision: 7)
+    XCTAssertTrue(center.apply(command).ok)
+
+    scheduler.advance(to: Date(timeIntervalSince1970: 1_005))
+    XCTAssertTrue(center.items.isEmpty)
+    let history = center.history
+    scheduler.advance(to: Date(timeIntervalSince1970: 1_006))
+
+    let retry = center.apply(command)
+
+    XCTAssertFalse(retry.ok)
+    XCTAssertEqual(retry.errorCode, .staleRevision)
+    XCTAssertEqual(center.history, history)
+  }
+
+  @MainActor
   func testConcurrentRevisionArrivalConvergesOnTheHighestRevision() async throws {
     let center = PulseCenter()
     let now = Date(timeIntervalSince1970: 2_000)
@@ -368,13 +392,15 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
-  func testRevisionHighWaterMarkIsSessionScopedAcrossRestart() {
+  func testEndedGenerationCannotReviveAcrossRestart() {
     let now = Date(timeIntervalSince1970: 6_000)
+    let persistence = PulseRevisionPersistenceBox()
     let payload = PulsePayload(
       id: "restart", source: "build", title: "Current", subtitle: nil, symbol: nil,
       accentHex: nil, progress: nil, state: .active, priority: .normal,
       expiresAt: nil, actions: nil)
-    let firstProcess = PulseCenter()
+    let firstProcess = PulseCenter(
+      clock: TestPulseClock(now: now), revisionStore: persistence.store)
     XCTAssertTrue(firstProcess.apply(command(.show, payload, revision: 100), now: now).ok)
     XCTAssertTrue(
       firstProcess.apply(
@@ -383,14 +409,68 @@ final class PulseTests: XCTestCase {
           source: payload.source, revision: 101), now: now
       ).ok)
 
-    let restartedProcess = PulseCenter()
-    XCTAssertTrue(
-      restartedProcess.apply(command(.update, payload, revision: 1), now: now).ok)
-    XCTAssertEqual(restartedProcess.items.first?.title, "Current")
+    let restartedProcess = PulseCenter(
+      clock: TestPulseClock(now: now), revisionStore: persistence.store)
+    let delayed = restartedProcess.apply(command(.update, payload, revision: 102), now: now)
+    XCTAssertFalse(delayed.ok)
+    XCTAssertEqual(delayed.errorCode, .generationEnded)
+    XCTAssertTrue(restartedProcess.items.isEmpty)
   }
 
   @MainActor
-  func testClearingItemsKeepsRevisionOrderingUntilProcessRestart() {
+  func testPersistedRevisionStateExpiresAfterThirtyDays() {
+    let persistence = PulseRevisionPersistenceBox()
+    let initialDate = Date(timeIntervalSince1970: 7_000)
+    let end = PulseCommand(
+      token: "test", operation: .end, activity: nil, id: "old-generation", source: "build",
+      revision: 50)
+    let firstProcess = PulseCenter(
+      clock: TestPulseClock(now: initialDate), revisionStore: persistence.store)
+    XCTAssertTrue(firstProcess.apply(end, now: initialDate).ok)
+
+    let afterRetention = initialDate.addingTimeInterval(31 * 24 * 60 * 60)
+    let restartedProcess = PulseCenter(
+      clock: TestPulseClock(now: afterRetention), revisionStore: persistence.store)
+    let payload = PulsePayload(
+      id: "old-generation", source: "build", title: "Fresh baseline", subtitle: nil,
+      symbol: nil, accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+
+    let response = restartedProcess.apply(
+      command(.update, payload, revision: 1), now: afterRetention)
+
+    XCTAssertTrue(response.ok)
+    XCTAssertEqual(restartedProcess.items.first?.title, "Fresh baseline")
+  }
+
+  @MainActor
+  func testPersistedRevisionStateExcludesProviderPayloadAndToken() throws {
+    let persistence = PulseRevisionPersistenceBox()
+    let center = PulseCenter(revisionStore: persistence.store)
+    let payload = PulsePayload(
+      id: "private-job", source: "build", title: "private title",
+      subtitle: "private details", symbol: nil, accentHex: nil, progress: 0.4,
+      state: .progress, priority: .normal, expiresAt: nil,
+      actions: [
+        PulseAction(
+          title: "private action", url: URL(string: "https://example.com/private-path")!)
+      ])
+    let command = PulseCommand(
+      token: "private-token", operation: .show, activity: payload, id: nil, revision: 4)
+
+    XCTAssertTrue(center.apply(command, now: Date(timeIntervalSince1970: 8_000)).ok)
+
+    let data = try XCTUnwrap(persistence.data)
+    let storedText = String(decoding: data, as: UTF8.self)
+    XCTAssertFalse(storedText.contains("private title"))
+    XCTAssertFalse(storedText.contains("private details"))
+    XCTAssertFalse(storedText.contains("private action"))
+    XCTAssertFalse(storedText.contains("private-path"))
+    XCTAssertFalse(storedText.contains("private-token"))
+  }
+
+  @MainActor
+  func testClearingItemsKeepsRevisionOrdering() {
     let center = PulseCenter()
     let now = Date(timeIntervalSince1970: 6_500)
     var payload = PulsePayload(
@@ -1488,5 +1568,16 @@ private final class TestPulseDeadlineScheduler: PulseDeadlineScheduling {
       let entry = entries.remove(at: index)
       entry.action()
     }
+  }
+}
+
+@MainActor
+private final class PulseRevisionPersistenceBox {
+  var data: Data?
+
+  var store: PulseRevisionPersistenceStore {
+    PulseRevisionPersistenceStore(
+      readData: { [weak self] in self?.data },
+      writeData: { [weak self] in self?.data = $0 })
   }
 }
