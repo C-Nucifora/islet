@@ -12,6 +12,10 @@ final class BatteryActivity: NotchActivity, ObservableObject {
   private var cancellables: Set<AnyCancellable> = []
   private var isMonitoring = false
 
+  /// Live state consumed by Home. The monitor stays owned here so Home cannot start a second IOKit
+  /// observer or mutate battery data.
+  var currentState: BatteryState? { monitor.state }
+
   // The tab is available whenever the feature is on. Gating it on AC power made the whole power
   // screen vanish the moment you unplugged — which is exactly when you want to read it.
   var isActive: Bool { true }

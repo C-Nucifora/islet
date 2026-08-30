@@ -132,6 +132,9 @@ final class CalendarActivity: NotchActivity, ObservableObject {
       event: next, now: Date(), leadMinutes: Defaults[.calendarLeadMinutes])
   }
 
+  /// Today's agenda remains reachable from Home even before the compact countdown window begins.
+  var isAvailableWhenInactive: Bool { Defaults[.calendarEnabled] }
+
   var nextEvent: AgendaEvent? { CalendarLogic.nextRelevant(events: events, now: Date()) }
 
   func start() {
