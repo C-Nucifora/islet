@@ -91,7 +91,21 @@ struct ShelfView: View {
         }
       }
 
-      if let error = model.lastError {
+      if let storageFailure = model.storageFailure {
+        HStack(spacing: 5) {
+          Image(systemName: "externaldrive.badge.exclamationmark")
+          Text(storageFailure.message).lineLimit(2)
+          Spacer(minLength: 0)
+          Button("Retry") { model.retryStorage() }.buttonStyle(.link)
+          if model.canRevealStorageLocation {
+            Button("Reveal") { model.revealStorageLocation() }.buttonStyle(.link)
+          }
+        }
+        .font(.caption2)
+        .foregroundStyle(.orange)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Shelf storage unavailable. \(storageFailure.message)")
+      } else if let error = model.lastError {
         HStack(spacing: 5) {
           Image(systemName: "exclamationmark.triangle.fill")
           Text(error).lineLimit(1)
@@ -103,7 +117,7 @@ struct ShelfView: View {
         .accessibilityElement(children: .combine)
       }
 
-      if model.items.isEmpty {
+      if model.isStorageAvailable, model.items.isEmpty {
         RoundedRectangle(cornerRadius: 10)
           .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [5]))
           .foregroundStyle(.secondary)
