@@ -56,6 +56,7 @@ final class SettingsSearchTests: XCTestCase {
   func testDisplayPreferenceTermsFindStartupAndDisplays() {
     XCTAssertTrue(SettingsDetailPage.startupDisplays.matchesSearch("preferred display"))
     XCTAssertTrue(SettingsDetailPage.startupDisplays.matchesSearch("clamshell reconnect"))
+    XCTAssertTrue(SettingsDetailPage.startupDisplays.matchesSearch("pointer quick actions"))
   }
 
   func testT3ConnectAccountActionsAreSearchable() {
