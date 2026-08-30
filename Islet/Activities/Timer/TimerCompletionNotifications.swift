@@ -10,10 +10,42 @@ enum TimerNotificationAuthorization: Equatable, Sendable {
   case denied
 }
 
+struct TimerCompletionSnapshot: Equatable, Sendable {
+  private static let durationKey = "islet.timer.duration"
+  private static let labelKey = "islet.timer.label"
+
+  let duration: TimeInterval
+  let label: String?
+
+  var notificationUserInfo: [AnyHashable: Any] {
+    var userInfo: [AnyHashable: Any] = [Self.durationKey: duration]
+    if let label { userInfo[Self.labelKey] = label }
+    return userInfo
+  }
+
+  init(duration: TimeInterval, label: String?) {
+    self.duration = duration
+    self.label = label
+  }
+
+  init?(notificationUserInfo: [AnyHashable: Any]) {
+    guard
+      let duration = notificationUserInfo[Self.durationKey] as? Double,
+      TimerLogic.validatedDuration(duration) == duration
+    else {
+      return nil
+    }
+    if let rawLabel = notificationUserInfo[Self.labelKey], !(rawLabel is String) { return nil }
+    self.duration = duration
+    self.label = notificationUserInfo[Self.labelKey] as? String
+  }
+}
+
 struct TimerCompletionAlert: Equatable, Sendable {
   let identifier: String
   let title: String
   let body: String
+  let snapshot: TimerCompletionSnapshot
 }
 
 @MainActor
@@ -31,15 +63,27 @@ protocol TimerCompletionNotificationClient: AnyObject {
 protocol TimerCompletionNotifying: AnyObject {
   func prepareForTimerStart(onUnavailable: @escaping @MainActor () -> Void)
   func notifyTimerFinished(
-    completionID: UUID, title: String, body: String,
+    completionID: UUID, snapshot: TimerCompletionSnapshot, title: String, body: String,
     onUnavailable: @escaping @MainActor () -> Void)
 }
 
 @MainActor
 final class TimerCompletionNotificationCoordinator: TimerCompletionNotifying {
+  private struct PendingCompletion {
+    let completionID: UUID
+    let snapshot: TimerCompletionSnapshot
+    let title: String
+    let body: String
+    let onUnavailable: @MainActor () -> Void
+  }
+
   private let client: any TimerCompletionNotificationClient
   private let isCompletionVisible: () -> Bool
   private var requestedPermission = false
+  private var pendingPreparationStatusChecks = 0
+  private var knownAuthorization: TimerNotificationAuthorization?
+  private var permissionFallbacks: [@MainActor () -> Void] = []
+  private var pendingCompletions: [PendingCompletion] = []
   private var handledCompletionIDs: Set<UUID> = []
   private var handledCompletionOrder: [UUID] = []
   private static let maximumHandledCompletionCount = 256
@@ -53,26 +97,27 @@ final class TimerCompletionNotificationCoordinator: TimerCompletionNotifying {
   }
 
   func prepareForTimerStart(onUnavailable: @escaping @MainActor () -> Void) {
+    pendingPreparationStatusChecks += 1
     client.authorizationStatus { [weak self] status in
       guard let self else { return }
+      pendingPreparationStatusChecks -= 1
       switch status {
       case .allowed:
-        break
+        knownAuthorization = .allowed
+        resolvePendingCompletions(authorized: true)
       case .denied:
+        knownAuthorization = .denied
         onUnavailable()
+        resolvePendingCompletions(authorized: false)
       case .notDetermined:
-        guard !requestedPermission else { return }
-        requestedPermission = true
-        client.requestAuthorization { [weak self] granted in
-          self?.requestedPermission = false
-          if !granted { onUnavailable() }
-        }
+        permissionFallbacks.append(onUnavailable)
+        requestPermissionIfNeeded()
       }
     }
   }
 
   func notifyTimerFinished(
-    completionID: UUID, title: String, body: String,
+    completionID: UUID, snapshot: TimerCompletionSnapshot, title: String, body: String,
     onUnavailable: @escaping @MainActor () -> Void
   ) {
     // A completion can be observed both by a deadline task and a control action at its deadline.
@@ -86,18 +131,73 @@ final class TimerCompletionNotificationCoordinator: TimerCompletionNotifying {
 
     client.authorizationStatus { [weak self] status in
       guard let self else { return }
-      guard status == .allowed else {
+      switch status {
+      case .allowed:
+        knownAuthorization = .allowed
+        deliver(
+          PendingCompletion(
+            completionID: completionID, snapshot: snapshot, title: title, body: body,
+            onUnavailable: onUnavailable))
+      case .denied:
+        knownAuthorization = .denied
         onUnavailable()
-        return
+      case .notDetermined:
+        let completion = PendingCompletion(
+          completionID: completionID, snapshot: snapshot, title: title, body: body,
+          onUnavailable: onUnavailable)
+        switch knownAuthorization {
+        case .allowed:
+          deliver(completion)
+        case .denied:
+          onUnavailable()
+        case nil, .notDetermined:
+          if requestedPermission || pendingPreparationStatusChecks > 0 {
+            pendingCompletions.append(completion)
+          } else {
+            onUnavailable()
+          }
+        }
       }
-      // Authorization is asynchronous. The user may have opened Islet while it was being read, so
-      // recheck immediately before delivery to avoid a redundant banner beside the visible result.
-      guard !isCompletionVisible() else { return }
-      let alert = TimerCompletionAlert(
-        identifier: Self.identifier(for: completionID), title: title, body: body)
-      client.deliver(alert) { error in
-        if error != nil { onUnavailable() }
+    }
+  }
+
+  private func requestPermissionIfNeeded() {
+    guard !requestedPermission else { return }
+    requestedPermission = true
+    client.requestAuthorization { [weak self] granted in
+      guard let self else { return }
+      requestedPermission = false
+      knownAuthorization = granted ? .allowed : .denied
+      let fallbacks = permissionFallbacks
+      permissionFallbacks.removeAll()
+      if granted {
+        resolvePendingCompletions(authorized: true)
+      } else {
+        for fallback in fallbacks { fallback() }
+        resolvePendingCompletions(authorized: false)
       }
+    }
+  }
+
+  private func resolvePendingCompletions(authorized: Bool) {
+    let completions = pendingCompletions
+    pendingCompletions.removeAll()
+    if authorized {
+      for completion in completions { deliver(completion) }
+    } else {
+      for completion in completions { completion.onUnavailable() }
+    }
+  }
+
+  private func deliver(_ completion: PendingCompletion) {
+    // Authorization is asynchronous. The user may have opened Islet while it was being read, so
+    // recheck immediately before delivery to avoid a redundant banner beside the visible result.
+    guard !isCompletionVisible() else { return }
+    let alert = TimerCompletionAlert(
+      identifier: Self.identifier(for: completion.completionID), title: completion.title,
+      body: completion.body, snapshot: completion.snapshot)
+    client.deliver(alert) { error in
+      if error != nil { completion.onUnavailable() }
     }
   }
 
@@ -135,11 +235,12 @@ final class TimerCompletionNotifications: NSObject, TimerCompletionNotifying,
   }
 
   func notifyTimerFinished(
-    completionID: UUID, title: String, body: String,
+    completionID: UUID, snapshot: TimerCompletionSnapshot, title: String, body: String,
     onUnavailable: @escaping @MainActor () -> Void
   ) {
     coordinator.notifyTimerFinished(
-      completionID: completionID, title: title, body: body, onUnavailable: onUnavailable)
+      completionID: completionID, snapshot: snapshot, title: title, body: body,
+      onUnavailable: onUnavailable)
   }
 
   nonisolated func userNotificationCenter(
@@ -148,11 +249,13 @@ final class TimerCompletionNotifications: NSObject, TimerCompletionNotifying,
   ) {
     let identifier = response.notification.request.identifier
     if identifier.hasPrefix("timer-completion-") {
-      let title = response.notification.request.content.title
-      Task { @MainActor in
-        AppState.timer.presentCompletionFromNotification(title: title)
-        NSApp.activate(ignoringOtherApps: true)
-        ScreenManager.shared.openCompletedTimer()
+      let userInfo = response.notification.request.content.userInfo
+      if let snapshot = TimerCompletionSnapshot(notificationUserInfo: userInfo) {
+        Task { @MainActor in
+          AppState.timer.presentCompletionFromNotification(snapshot)
+          NSApp.activate(ignoringOtherApps: true)
+          ScreenManager.shared.openCompletedTimer()
+        }
       }
     }
     completionHandler()
@@ -210,6 +313,7 @@ private final class UserNotificationClient: TimerCompletionNotificationClient {
     content.title = alert.title
     content.body = alert.body
     content.sound = .default
+    content.userInfo = alert.snapshot.notificationUserInfo
     center.add(UNNotificationRequest(identifier: alert.identifier, content: content, trigger: nil))
     {
       error in

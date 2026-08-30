@@ -192,7 +192,7 @@ private final class TimerNotifierStub: TimerCompletionNotifying {
   func prepareForTimerStart(onUnavailable: @escaping @MainActor () -> Void) {}
 
   func notifyTimerFinished(
-    completionID: UUID, title: String, body: String,
+    completionID: UUID, snapshot: TimerCompletionSnapshot, title: String, body: String,
     onUnavailable: @escaping @MainActor () -> Void
   ) {}
 }

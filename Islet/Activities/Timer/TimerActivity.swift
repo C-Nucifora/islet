@@ -131,15 +131,18 @@ final class TimerActivity: NotchActivity, ObservableObject {
     start(lastDuration, label: lastLabel)
   }
 
-  func presentCompletionFromNotification(title: String) {
-    guard !isActive else { return }
+  func presentCompletionFromNotification(_ snapshot: TimerCompletionSnapshot) {
+    guard !isRunning, !isPaused else { return }
     completionTask?.cancel()
     endDate = nil
     isPaused = false
     pausedRemaining = nil
     finished = true
-    total = lastDuration ?? 1
-    label = Self.label(fromCompletionTitle: title)
+    total = snapshot.duration
+    label = snapshot.label
+    lastDuration = snapshot.duration
+    lastLabel = snapshot.label
+    persistLastPreset()
     activationDate = Date()
     notificationFallbackMessage = nil
     persistenceStore.writeSessionData(nil)
@@ -240,7 +243,9 @@ final class TimerActivity: NotchActivity, ObservableObject {
           accentHex: EventAccent.warning, motion: .chargeComplete, urgency: .alert, duration: 4,
           announcement: title))
       completionNotifier.notifyTimerFinished(
-        completionID: completionID, title: title, body: "Your timer finished."
+        completionID: completionID,
+        snapshot: TimerCompletionSnapshot(duration: total, label: label), title: title,
+        body: "Your timer finished."
       ) { [weak self] in
         self?.notificationFallbackMessage = TimerActivity.notificationFallbackMessage
       }
@@ -258,12 +263,6 @@ final class TimerActivity: NotchActivity, ObservableObject {
   private static let notificationFallbackMessage =
     "Timer notifications are off. Islet will still play its completion sound and show Done in the island."
 
-  private static func label(fromCompletionTitle title: String) -> String? {
-    let suffix = " done"
-    guard title.hasSuffix(suffix) else { return nil }
-    let value = title.dropLast(suffix.count).trimmingCharacters(in: .whitespacesAndNewlines)
-    return value.isEmpty || value == "Timer" ? nil : value
-  }
 }
 
 /// A thin progress ring driven live off the activity, ticking only while running.
@@ -362,12 +361,12 @@ struct TimerExpandedView: View {
           }
           Text(activity.isPaused ? "Paused" : "Running")
             .font(.caption2).foregroundStyle(.secondary)
-          if let message = activity.notificationFallbackMessage {
-            Text(message)
-              .font(.caption2)
-              .foregroundStyle(.orange)
-              .multilineTextAlignment(.center)
-          }
+        }
+        if let message = activity.notificationFallbackMessage {
+          Text(message)
+            .font(.caption2)
+            .foregroundStyle(.orange)
+            .multilineTextAlignment(.center)
         }
       }
     }
