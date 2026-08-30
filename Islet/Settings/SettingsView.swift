@@ -202,7 +202,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "Calendar", "Activity", "Upcoming-event countdown", "Calendars shown in Islet",
         "Manage Calendar permission", "Reminders", "Show incomplete reminders on Home",
         "Manage Reminders permission", "three day agenda add event title time location conference",
-        "meetings due snooze complete meeting links travel leave time",
+        "meetings due snooze complete meeting links",
       ]
     case .nowPlaying:
       pageContent + [
@@ -386,7 +386,6 @@ struct SettingsView: View {
   @Default(.hudStyle) private var hudStyle
   @Default(.calendarEnabled) private var calendarEnabled
   @Default(.calendarLeadMinutes) private var calendarLeadMinutes
-  @Default(.calendarLeaveTimeWarningsEnabled) private var calendarLeaveTimeWarningsEnabled
   @Default(.hiddenCalendarIDs) private var hiddenCalendarIDs
   @Default(.remindersEnabled) private var remindersEnabled
   @Default(.showOnAllDisplays) private var showOnAllDisplays
@@ -1103,11 +1102,6 @@ struct SettingsView: View {
             Text("30 minutes before").tag(30)
             Text("1 hour before").tag(60)
           }
-          Toggle("Show leave-time warnings", isOn: $calendarLeaveTimeWarningsEnabled)
-          Text(
-            "Warnings use only travel times already supplied with an event. Islet never tracks your location."
-          )
-          .font(.caption).foregroundStyle(.secondary)
           if calendar.authorization.canRead, !calendar.availableCalendars.isEmpty {
             DisclosureGroup("Calendars shown in Islet") {
               ForEach(calendar.availableCalendars) { choice in
@@ -1121,10 +1115,6 @@ struct SettingsView: View {
           }
           Text(
             "The agenda covers three local calendar days. Add events from the Calendar activity."
-          )
-          .font(.caption).foregroundStyle(.secondary)
-          Text(
-            "macOS does not share Calendar travel-time estimates, so Islet does not guess leave times."
           )
           .font(.caption).foregroundStyle(.secondary)
         }
