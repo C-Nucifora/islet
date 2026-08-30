@@ -98,7 +98,7 @@ final class PortDeviceTests: XCTestCase {
       .stale(error: .matchingServices(-1), lastSuccessfulRead: Date(timeIntervalSince1970: 1_000)))
   }
 
-  func testGraceExpiryClearsTheDisplayedSnapshotButNotTheEventSnapshot() {
+  func testFirstFailureHoursAfterLastSuccessStartsAFullGracePeriod() {
     var now = Date(timeIntervalSince1970: 1_000)
     var results: [PortEnumerationResult] = [
       .devices([USBDeviceFixtures.monitorDevice]),
@@ -108,9 +108,32 @@ final class PortDeviceTests: XCTestCase {
       reader: { results.removeFirst() }, now: { now }, gracePeriod: 10)
 
     monitor.refresh()
-    now.addTimeInterval(1)
+    now.addTimeInterval(3_600)
     monitor.refresh()
-    now.addTimeInterval(9)
+
+    XCTAssertEqual(monitor.devices, [USBDeviceFixtures.monitorDevice])
+    XCTAssertEqual(
+      monitor.readerHealth,
+      .stale(error: .matchingServices(-1), lastSuccessfulRead: Date(timeIntervalSince1970: 1_000)))
+  }
+
+  func testGraceExpiryClearsTheDisplayedSnapshotButNotTheEventSnapshot() {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var monotonicNow: TimeInterval = 100
+    var results: [PortEnumerationResult] = [
+      .devices([USBDeviceFixtures.monitorDevice]),
+      .error(.matchingServices(-1)),
+    ]
+    let monitor = PortMonitor(
+      reader: { results.removeFirst() }, now: { now }, monotonicNow: { monotonicNow },
+      gracePeriod: 10)
+
+    monitor.refresh()
+    now.addTimeInterval(1)
+    monotonicNow += 1
+    monitor.refresh()
+    now.addTimeInterval(10)
+    monotonicNow += 10
     monitor.expireGraceIfNeeded()
 
     XCTAssertEqual(monitor.devices, [])
@@ -123,28 +146,32 @@ final class PortDeviceTests: XCTestCase {
 
   func testRetryRecoversReaderWithoutInventingDisconnectOrReconnectEvents() {
     var now = Date(timeIntervalSince1970: 1_000)
+    var monotonicNow: TimeInterval = 100
     var results: [PortEnumerationResult] = [
       .devices([USBDeviceFixtures.monitorDevice]),
       .error(.matchingServices(-1)),
       .devices([USBDeviceFixtures.monitorDevice]),
     ]
     let monitor = PortMonitor(
-      reader: { results.removeFirst() }, now: { now }, gracePeriod: 10)
+      reader: { results.removeFirst() }, now: { now }, monotonicNow: { monotonicNow },
+      gracePeriod: 10)
     var eventSnapshots: [[PortDevice]] = []
     let cancellable = monitor.$eventDevices.dropFirst().sink { eventSnapshots.append($0) }
     defer { cancellable.cancel() }
 
     monitor.refresh()
     now.addTimeInterval(1)
+    monotonicNow += 1
     monitor.refresh()
-    now.addTimeInterval(9)
+    now.addTimeInterval(10)
+    monotonicNow += 10
     monitor.expireGraceIfNeeded()
     monitor.retry()
 
     XCTAssertEqual(monitor.devices, [USBDeviceFixtures.monitorDevice])
     XCTAssertEqual(
       monitor.readerHealth,
-      .current(lastSuccessfulRead: Date(timeIntervalSince1970: 1_010)))
+      .current(lastSuccessfulRead: Date(timeIntervalSince1970: 1_011)))
     XCTAssertEqual(eventSnapshots, [[USBDeviceFixtures.monitorDevice]])
   }
 
@@ -167,17 +194,21 @@ final class PortDeviceTests: XCTestCase {
     XCTAssertTrue(changes.removed.isEmpty)
   }
 
-  func testClockMovingBackwardExpiresRatherThanExtendingAStaleSnapshot() {
+  func testWallClockRollbackWhileStaleCannotPreventScheduledExpiry() async {
     var now = Date(timeIntervalSince1970: 1_000)
     var results: [PortEnumerationResult] = [
       .devices([USBDeviceFixtures.monitorDevice]),
       .error(.matchingServices(-1)),
     ]
-    let monitor = PortMonitor(reader: { results.removeFirst() }, now: { now }, gracePeriod: 10)
+    let monitor = PortMonitor(reader: { results.removeFirst() }, now: { now }, gracePeriod: 0.05)
 
     monitor.refresh()
-    now.addTimeInterval(-1)
+    now.addTimeInterval(1)
     monitor.refresh()
+    XCTAssertEqual(monitor.devices, [USBDeviceFixtures.monitorDevice])
+
+    now.addTimeInterval(-3_600)
+    try? await Task.sleep(for: .milliseconds(150))
 
     XCTAssertTrue(monitor.devices.isEmpty)
     XCTAssertEqual(
