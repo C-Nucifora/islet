@@ -36,6 +36,11 @@ struct SettingsTransferSnapshot: Equatable {
   var systemAutoPresentDiskThroughput: Bool
   var systemAutoPresentNetworkThroughput: Bool
   var metricStyles: [String: String]
+  var processAttributionEnabled: Bool
+  var processCPUThreshold: Double
+  var processMemoryThreshold: Double
+  var processDiskThresholdMBPerSecond: Double
+  var processNetworkThresholdMBPerSecond: Double
   var continuityAlwaysVisible: Bool
   var continuitySneaks: Bool
   var pulseStaleTimeout: Double
@@ -76,6 +81,11 @@ struct SettingsTransferPatch: Equatable {
   var systemAutoPresentDiskThroughput: Bool?
   var systemAutoPresentNetworkThroughput: Bool?
   var metricStyles: [String: String]?
+  var processAttributionEnabled: Bool?
+  var processCPUThreshold: Double?
+  var processMemoryThreshold: Double?
+  var processDiskThresholdMBPerSecond: Double?
+  var processNetworkThresholdMBPerSecond: Double?
   var continuityAlwaysVisible: Bool?
   var continuitySneaks: Bool?
   var pulseStaleTimeout: Double?
@@ -130,6 +140,17 @@ struct SettingsTransferPatch: Equatable {
       result.systemAutoPresentNetworkThroughput = systemAutoPresentNetworkThroughput
     }
     if let metricStyles { result.metricStyles = metricStyles }
+    if let processAttributionEnabled {
+      result.processAttributionEnabled = processAttributionEnabled
+    }
+    if let processCPUThreshold { result.processCPUThreshold = processCPUThreshold }
+    if let processMemoryThreshold { result.processMemoryThreshold = processMemoryThreshold }
+    if let processDiskThresholdMBPerSecond {
+      result.processDiskThresholdMBPerSecond = processDiskThresholdMBPerSecond
+    }
+    if let processNetworkThresholdMBPerSecond {
+      result.processNetworkThresholdMBPerSecond = processNetworkThresholdMBPerSecond
+    }
     if let continuityAlwaysVisible { result.continuityAlwaysVisible = continuityAlwaysVisible }
     if let continuitySneaks { result.continuitySneaks = continuitySneaks }
     if let pulseStaleTimeout { result.pulseStaleTimeout = pulseStaleTimeout }
@@ -208,7 +229,9 @@ enum SettingsTransfer {
     "showOnAllDisplays", "systemAlwaysVisible", "systemAutoPresentCPU",
     "systemAutoPresentDiskThroughput", "systemAutoPresentLowDiskSpace",
     "systemAutoPresentMemoryPressure", "systemAutoPresentNetworkThroughput",
-    "systemAutoPresentThermal",
+    "systemAutoPresentThermal", "processAttributionEnabled", "processCPUThreshold",
+    "processDiskThresholdMBPerSecond", "processMemoryThreshold",
+    "processNetworkThresholdMBPerSecond",
   ]
 
   static let excludedPreferenceKeys: Set<String> = [
@@ -325,6 +348,11 @@ enum SettingsTransfer {
     case "systemAutoPresentDiskThroughput": patch.systemAutoPresentDiskThroughput != nil
     case "systemAutoPresentNetworkThroughput": patch.systemAutoPresentNetworkThroughput != nil
     case "metricStyles": patch.metricStyles != nil
+    case "processAttributionEnabled": patch.processAttributionEnabled != nil
+    case "processCPUThreshold": patch.processCPUThreshold != nil
+    case "processMemoryThreshold": patch.processMemoryThreshold != nil
+    case "processDiskThresholdMBPerSecond": patch.processDiskThresholdMBPerSecond != nil
+    case "processNetworkThresholdMBPerSecond": patch.processNetworkThresholdMBPerSecond != nil
     case "continuityAlwaysVisible": patch.continuityAlwaysVisible != nil
     case "continuitySneaks": patch.continuitySneaks != nil
     case "pulseStaleTimeout": patch.pulseStaleTimeout != nil
@@ -369,6 +397,11 @@ enum SettingsTransfer {
       "systemAutoPresentDiskThroughput": value.systemAutoPresentDiskThroughput,
       "systemAutoPresentNetworkThroughput": value.systemAutoPresentNetworkThroughput,
       "metricStyles": value.metricStyles,
+      "processAttributionEnabled": value.processAttributionEnabled,
+      "processCPUThreshold": value.processCPUThreshold,
+      "processMemoryThreshold": value.processMemoryThreshold,
+      "processDiskThresholdMBPerSecond": value.processDiskThresholdMBPerSecond,
+      "processNetworkThresholdMBPerSecond": value.processNetworkThresholdMBPerSecond,
       "continuityAlwaysVisible": value.continuityAlwaysVisible,
       "continuitySneaks": value.continuitySneaks,
       "pulseStaleTimeout": value.pulseStaleTimeout,
@@ -442,6 +475,13 @@ enum SettingsTransfer {
     patch.systemAutoPresentNetworkThroughput = try boolean(
       "systemAutoPresentNetworkThroughput", in: values)
     patch.metricStyles = try stringDictionary("metricStyles", in: values)
+    patch.processAttributionEnabled = try boolean("processAttributionEnabled", in: values)
+    patch.processCPUThreshold = try number("processCPUThreshold", in: values, range: 0.5...1)
+    patch.processMemoryThreshold = try number("processMemoryThreshold", in: values, range: 0.5...1)
+    patch.processDiskThresholdMBPerSecond = try number(
+      "processDiskThresholdMBPerSecond", in: values, range: 5...500)
+    patch.processNetworkThresholdMBPerSecond = try number(
+      "processNetworkThresholdMBPerSecond", in: values, range: 1...500)
     patch.continuityAlwaysVisible = try boolean("continuityAlwaysVisible", in: values)
     patch.continuitySneaks = try boolean("continuitySneaks", in: values)
     patch.pulseStaleTimeout = try allowedInteger(
@@ -604,6 +644,21 @@ enum SettingsTransfer {
       "mediaSourceMode", "Primary player", old.mediaSourceMode.rawValue,
       new.mediaSourceMode.rawValue)
     add("metricStyles", "System metrics", old.metricStyles, new.metricStyles)
+    add(
+      "processAttributionEnabled", "Process attribution", old.processAttributionEnabled,
+      new.processAttributionEnabled)
+    add(
+      "processCPUThreshold", "CPU process threshold", old.processCPUThreshold,
+      new.processCPUThreshold)
+    add(
+      "processMemoryThreshold", "Memory process threshold", old.processMemoryThreshold,
+      new.processMemoryThreshold)
+    add(
+      "processDiskThresholdMBPerSecond", "Disk process threshold",
+      old.processDiskThresholdMBPerSecond, new.processDiskThresholdMBPerSecond)
+    add(
+      "processNetworkThresholdMBPerSecond", "Network process threshold",
+      old.processNetworkThresholdMBPerSecond, new.processNetworkThresholdMBPerSecond)
     add("pulseStaleTimeout", "Pulse stale timeout", old.pulseStaleTimeout, new.pulseStaleTimeout)
     add("remindersEnabled", "Reminders", old.remindersEnabled, new.remindersEnabled)
     add("showOnAllDisplays", "Display placement", old.showOnAllDisplays, new.showOnAllDisplays)
@@ -679,6 +734,11 @@ enum SettingsTransferDefaults {
       systemAutoPresentDiskThroughput: Defaults[.systemAutoPresentDiskThroughput],
       systemAutoPresentNetworkThroughput: Defaults[.systemAutoPresentNetworkThroughput],
       metricStyles: Defaults[.metricStyles],
+      processAttributionEnabled: Defaults[.processAttributionEnabled],
+      processCPUThreshold: Defaults[.processCPUThreshold],
+      processMemoryThreshold: Defaults[.processMemoryThreshold],
+      processDiskThresholdMBPerSecond: Defaults[.processDiskThresholdMBPerSecond],
+      processNetworkThresholdMBPerSecond: Defaults[.processNetworkThresholdMBPerSecond],
       continuityAlwaysVisible: Defaults[.continuityAlwaysVisible],
       continuitySneaks: Defaults[.continuitySneaks],
       pulseStaleTimeout: Defaults[.pulseStaleTimeout])
@@ -735,6 +795,15 @@ enum SettingsTransferDefaults {
       Defaults[.systemAutoPresentNetworkThroughput] = value
     }
     if let value = patch.metricStyles { Defaults[.metricStyles] = value }
+    if let value = patch.processAttributionEnabled { Defaults[.processAttributionEnabled] = value }
+    if let value = patch.processCPUThreshold { Defaults[.processCPUThreshold] = value }
+    if let value = patch.processMemoryThreshold { Defaults[.processMemoryThreshold] = value }
+    if let value = patch.processDiskThresholdMBPerSecond {
+      Defaults[.processDiskThresholdMBPerSecond] = value
+    }
+    if let value = patch.processNetworkThresholdMBPerSecond {
+      Defaults[.processNetworkThresholdMBPerSecond] = value
+    }
     if let value = patch.continuityAlwaysVisible { Defaults[.continuityAlwaysVisible] = value }
     if let value = patch.continuitySneaks { Defaults[.continuitySneaks] = value }
     if let value = patch.pulseStaleTimeout { Defaults[.pulseStaleTimeout] = value }

@@ -39,7 +39,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     case .general:
       "launch login displays fullscreen recording hover click haptics energy keep awake sleep battery updates version channel"
     case .activities:
-      "tabs order battery calendar reminders clipboard ports audio hud timer shelf system media iphone continuity live activities"
+      "tabs order battery calendar reminders clipboard ports audio hud timer shelf system media iphone continuity live activities process spike attribution threshold CPU memory disk network Activity Monitor"
     case .notifications:
       "events usb wifi bluetooth airdrop vpn focus screenshot sleep power volume display"
     case .integrations:
@@ -256,7 +256,9 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "Automatic presence", "High CPU", "Thermal pressure", "Memory pressure",
         "Low disk space", "Heavy disk activity", "High network traffic",
         "Metric presentation", "Presentation", "Compact", "Balanced", "Detailed", "Custom",
-        "Customize individual metrics", "current value recent graph state labels",
+        "Customize individual metrics", "Process attribution", "Identify processes after a spike",
+        "CPU Memory Disk Network threshold Activity Monitor one second estimates unavailable",
+        "current value recent graph state labels",
       ] + SystemMetricKind.allCases.map(\.displayName)
         + MetricDisplayStyle.allCases.map(\.displayName)
     case .clipboard:
@@ -543,6 +545,11 @@ struct SettingsView: View {
   @Default(.systemAutoPresentNetworkThroughput) private var systemAutoPresentNetworkThroughput
   @Default(.metricStyles) private var metricStyles
   @Default(.pulseStaleTimeout) private var pulseStaleTimeout
+  @Default(.processAttributionEnabled) private var processAttributionEnabled
+  @Default(.processCPUThreshold) private var processCPUThreshold
+  @Default(.processMemoryThreshold) private var processMemoryThreshold
+  @Default(.processDiskThresholdMBPerSecond) private var processDiskThreshold
+  @Default(.processNetworkThresholdMBPerSecond) private var processNetworkThreshold
   @Default(.energyMode) private var energyMode
   @Default(.allowDisplaySleep) private var allowDisplaySleep
   @Default(.keepAwakeWithLidClosed) private var keepAwakeWithLidClosed
@@ -1490,9 +1497,46 @@ struct SettingsView: View {
           )
           .font(.caption).foregroundStyle(.secondary)
         }
+        Section("Process attribution") {
+          Toggle("Identify processes after a spike", isOn: $processAttributionEnabled)
+          if processAttributionEnabled {
+            thresholdSlider(
+              "CPU", value: $processCPUThreshold, range: 0.5...1, step: 0.05,
+              valueText: "\(Int((processCPUThreshold * 100).rounded()))%")
+            thresholdSlider(
+              "Memory", value: $processMemoryThreshold, range: 0.5...1, step: 0.05,
+              valueText: "\(Int((processMemoryThreshold * 100).rounded()))%")
+            thresholdSlider(
+              "Disk", value: $processDiskThreshold, range: 5...500, step: 5,
+              valueText: "\(Int(processDiskThreshold)) MB/s")
+            thresholdSlider(
+              "Network", value: $processNetworkThreshold, range: 1...500, step: 5,
+              valueText: "\(Int(processNetworkThreshold)) MB/s")
+          }
+          Text(
+            "Islet reads process counters for one second after a threshold crossing, only while the System view is open. CPU, memory and disk values are estimates. macOS does not provide reliable per-process network totals to Islet."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
       }
     }
     .formStyle(.grouped)
+  }
+
+  private func thresholdSlider(
+    _ label: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double,
+    valueText: String
+  ) -> some View {
+    LabeledContent(label) {
+      HStack {
+        Slider(value: value, in: range, step: step)
+          .frame(width: 180)
+        Text(valueText)
+          .monospacedDigit()
+          .foregroundStyle(.secondary)
+          .frame(width: 62, alignment: .trailing)
+      }
+    }
   }
 
   private var continuityForm: some View {
@@ -2605,6 +2649,11 @@ struct SettingsView: View {
     systemAutoPresentDiskThroughput = true
     systemAutoPresentNetworkThroughput = true
     metricStyles = [:]
+    processAttributionEnabled = true
+    processCPUThreshold = 0.8
+    processMemoryThreshold = 0.9
+    processDiskThreshold = 50
+    processNetworkThreshold = 25
     hudStyle = .bar
     Defaults[.disabledExternalBrightnessDisplays] = []
   }
