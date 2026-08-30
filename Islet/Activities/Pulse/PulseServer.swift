@@ -80,6 +80,7 @@ final class PulseServer: ObservableObject {
   @Published private(set) var portRecoveryMessage: String?
   @Published private(set) var nextRetryAt: Date?
   let credentialStore: PulseCredentialStore
+  let actionTrustStore: PulseActionTrustStore
   private var rateLimiters = PulseProviderRateLimiters()
   private var candidateIndex = 0
   private var retryTask: (any PulseRetryCancellable)?
@@ -95,6 +96,7 @@ final class PulseServer: ObservableObject {
 
   init(
     credentialStore: PulseCredentialStore = PulseCredentialStore(),
+    actionTrustStore: PulseActionTrustStore = PulseActionTrustStore(),
     listenerFactory: @escaping ListenerFactory = { parameters, port in
       try NWListener(using: parameters, on: port)
     },
@@ -109,6 +111,7 @@ final class PulseServer: ObservableObject {
     }
   ) {
     self.credentialStore = credentialStore
+    self.actionTrustStore = actionTrustStore
     self.listenerFactory = listenerFactory
     self.activePortWriter = activePortWriter ?? Self.writeActivePort
     self.activePortRemover = activePortRemover ?? Self.removeActivePort
@@ -401,13 +404,31 @@ final class PulseServer: ObservableObject {
 
   func setPermissions(_ permissions: Set<PulseCredentialPermission>, for id: String) throws {
     let previous = credentialStore.credentials.first { $0.id == id }
+    let previouslyAllowedWebActions = previous?.permissions.contains(.webActions) == true
+    let allowsWebActions = permissions.contains(.webActions)
+    if !previouslyAllowedWebActions, allowsWebActions {
+      // A failed cleanup must block re-enabling web actions. Otherwise an old allowlist left by a
+      // previous removal failure could silently become active again for this credential.
+      try actionTrustStore.revokeAll(forCredentialID: id)
+    }
     try credentialStore.setPermissions(permissions, for: id)
+    var trustRemovalError: Error?
+    if previouslyAllowedWebActions, !allowsWebActions {
+      do {
+        try actionTrustStore.revokeAll(forCredentialID: id)
+      } catch {
+        // Permission removal has already made every stored trust inert. Finish disconnecting the
+        // provider before surfacing the cleanup error so revocation cannot be blocked by storage.
+        trustRemovalError = error
+      }
+    }
     if previous?.permissions.contains(.persistentActivities) == true,
       !permissions.contains(.persistentActivities), let source = previous?.source
     {
       removeItemsForSource(source)
     }
     disconnectProvider(id)
+    if let trustRemovalError { throw trustRemovalError }
   }
 
   func rotateCredential(_ id: String) throws {
@@ -428,6 +449,14 @@ final class PulseServer: ObservableObject {
       }
     }
     try credentialStore.revoke(id)
+    var trustRemovalError: Error?
+    do {
+      try actionTrustStore.revokeAll(forCredentialID: id)
+    } catch {
+      // The revoked credential cannot authorize an action even if cleanup needs a later retry.
+      trustRemovalError = error
+    }
+    if let trustRemovalError { throw trustRemovalError }
   }
 
   private func disconnectProvider(_ credentialID: String) {
@@ -599,8 +628,12 @@ final class PulseServer: ObservableObject {
           on: connection)
         return false
       }
-      let (command, _) = try credentialStore.authorize(incoming, as: provider)
-      send(PulseCenter.shared.applyIfEnabled(command), on: connection)
+      let (command, authorizedProvider) = try credentialStore.authorize(incoming, as: provider)
+      let providerIdentity = try PulseProviderIdentity(
+        credentialID: authorizedProvider.credentialID, source: authorizedProvider.source)
+      send(
+        PulseCenter.shared.applyIfEnabled(command, providerIdentity: providerIdentity),
+        on: connection)
       return true
     } catch let error as PulseCredentialError {
       send(

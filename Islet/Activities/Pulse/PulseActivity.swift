@@ -119,6 +119,8 @@ struct PulseExpandedView: View {
 private struct PulseItemRow: View {
   let item: PulseItem
   let center: PulseCenter
+  @State private var pendingAction: PulseActionConfirmation?
+  @State private var actionError: String?
 
   var body: some View {
     HStack(spacing: 8) {
@@ -151,7 +153,17 @@ private struct PulseItemRow: View {
       if !item.actions.isEmpty {
         Menu {
           ForEach(item.actions) { action in
-            Button(action.title) { NSWorkspace.shared.open(action.url) }
+            Button {
+              handle(PulseActionGate.shared.requestOpen(itemID: item.id, actionID: action.id))
+            } label: {
+              HStack {
+                Text(action.title)
+                Spacer()
+                Text(action.destination?.displayHost ?? "Invalid destination")
+                  .font(.caption.monospaced())
+              }
+            }
+            .disabled(action.destination == nil)
           }
         } label: {
           Image(systemName: "ellipsis.circle")
@@ -185,6 +197,53 @@ private struct PulseItemRow: View {
     .padding(.horizontal, 8)
     .padding(.vertical, 6)
     .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+    .confirmationDialog(
+      "Open Pulse web destination?",
+      isPresented: Binding(
+        get: { pendingAction != nil },
+        set: { if !$0 { pendingAction = nil } }),
+      titleVisibility: .visible,
+      presenting: pendingAction
+    ) { confirmation in
+      Button("Trust \(confirmation.destination.displayHost) and Open") {
+        pendingAction = nil
+        handle(PulseActionGate.shared.confirm(confirmation))
+      }
+      Button("Cancel", role: .cancel) { pendingAction = nil }
+    } message: { confirmation in
+      Text(confirmationMessage(for: confirmation))
+    }
+    .alert(
+      "Pulse action blocked",
+      isPresented: Binding(
+        get: { actionError != nil },
+        set: { if !$0 { actionError = nil } })
+    ) {
+      Button("OK") { actionError = nil }
+    } message: {
+      Text(actionError ?? "")
+    }
+  }
+
+  private func handle(_ decision: PulseActionOpenDecision) {
+    switch decision {
+    case .opened: break
+    case .confirmationRequired(let confirmation): pendingAction = confirmation
+    case .rejected(let message): actionError = message
+    }
+  }
+
+  private func confirmationMessage(for confirmation: PulseActionConfirmation) -> String {
+    let locality =
+      confirmation.destination.kind == .loopback
+      ? "This is a local loopback destination and may control software running on this Mac."
+      : "This is an external destination."
+    let transport =
+      confirmation.destination.scheme == "http"
+      ? "The connection is unencrypted."
+      : "The connection uses HTTPS."
+    return
+      "Provider \(confirmation.provider.sourceKey) wants to open \(confirmation.destination.canonicalOrigin). \(locality) \(transport) Confirming trusts only this origin for this provider."
   }
 
   private var accent: Color {
