@@ -8,11 +8,13 @@ loads code into Islet. Islet owns layout, priority, expiry, accessibility, and a
 After Islet has started its Pulse server:
 
 ```sh
-swift Tools/islet-pulse.swift show build-1842 "Build running" "UQR-AV" --source build
+swift Tools/islet-pulse.swift show build-1842 "Build running" "UQR-AV" \
+  --source build --revision 1
 swift Tools/islet-pulse.swift update build-1842 "Building" "UQR-AV" \
-  --source build --progress 0.65 --priority high
-swift Tools/islet-pulse.swift event build-1842 "Build succeeded" "All checks passed" --source build
-swift Tools/islet-pulse.swift end build-1842 --source build
+  --source build --revision 2 --progress 0.65 --priority high
+swift Tools/islet-pulse.swift event build-1842 "Build succeeded" "All checks passed" \
+  --source build --revision 3
+swift Tools/islet-pulse.swift end build-1842 --source build --revision 4
 ```
 
 ## Xcode builds and tests
@@ -93,6 +95,35 @@ also means names such as `Build`, `build`, and ` build ` share one namespace. Pr
 remain case-sensitive. Providers should update only when data changes and always end work that is
 no longer relevant.
 
+Providers that can persist a counter should include `revision` on every command for an activity.
+The value is an integer from 0 through 9,007,199,254,740,991 and must increase within the normalized
+source and provider-local ID. Islet applies only values greater than the last accepted revision.
+A duplicate or lower value returns `staleRevision` and leaves the item, deadlines, and history
+metadata unchanged. This makes the final state independent of the order in which connections reach
+Islet.
+
+Once an identity sends a revision, later commands for that identity must include one. Omitting it
+returns `revisionRequired`. An ordered `end` records a session tombstone even when no item is active,
+so it must include `source`. After `end`, a higher `update` returns `generationEnded`; use a higher
+`show` or `event` to start the next lifecycle. Delayed commands from the old lifecycle remain below
+the tombstone and cannot reopen it. Revision tracking is capped at 2,048 identities per Islet
+process. A new ordered identity returns `capacityExceeded` after that limit, while identities already
+being tracked continue to work.
+
+Revision state is memory-only. Restarting Islet clears active items, tombstones, and high-water
+marks. The first command after a restart establishes a new baseline, even if its number is lower
+than a revision accepted by the previous process. Providers that need ordering across an Islet
+restart must keep their counter and resend current state after reconnecting.
+
+Disabling and re-enabling Pulse, or using Dismiss all, clears items but keeps revision records for
+the current process. Stale requests still fail after Pulse starts again. A higher update may restore
+locally dismissed work, but an activity closed by ordered `end` still requires a higher `show` or
+`event`.
+
+Legacy providers may omit `revision`. They retain arrival-order upserts and idempotent unscoped
+ends until that identity first uses an ordered command. This compatibility mode cannot protect
+against reordered requests, so new providers should use revisions.
+
 Include `source` on `end` to select the provider namespace. For compatibility, Islet accepts an
 unscoped end while exactly one active source owns that ID. If multiple sources own it, Islet leaves
 every item untouched and returns `ambiguousIdentifier`. A scoped end for the wrong source returns
@@ -159,6 +190,7 @@ The CLI keeps the positional quick start and adds optional provider fields:
 
 ```text
 --source NAME
+--revision 0...9007199254740991
 --progress 0.0...1.0
 --state active|progress|needsAction|succeeded|failed|cancelled
 --priority low|normal|high|critical
