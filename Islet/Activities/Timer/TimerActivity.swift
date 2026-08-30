@@ -131,6 +131,20 @@ final class TimerActivity: NotchActivity, ObservableObject {
     start(lastDuration, label: lastLabel)
   }
 
+  func presentCompletionFromNotification(title: String) {
+    guard !isActive else { return }
+    completionTask?.cancel()
+    endDate = nil
+    isPaused = false
+    pausedRemaining = nil
+    finished = true
+    total = lastDuration ?? 1
+    label = Self.label(fromCompletionTitle: title)
+    activationDate = Date()
+    notificationFallbackMessage = nil
+    persistenceStore.writeSessionData(nil)
+  }
+
   func cancel() {
     completionTask?.cancel()
     endDate = nil
@@ -231,9 +245,8 @@ final class TimerActivity: NotchActivity, ObservableObject {
         self?.notificationFallbackMessage = TimerActivity.notificationFallbackMessage
       }
     }
-    // A completion is a user-visible state, not a transient effect. Keep it until the user
-    // dismisses it or starts another timer. The TimerActivity outlives rebuilt panel views, so
-    // the completion card remains available while the island is rebuilt or reopened.
+    // A completion stays visible until the user dismisses it or starts another timer.
+    // TimerActivity outlives rebuilt panel views, so the card survives panel reconstruction.
   }
 
   // MARK: - Views
@@ -244,6 +257,13 @@ final class TimerActivity: NotchActivity, ObservableObject {
 
   private static let notificationFallbackMessage =
     "Timer notifications are off. Islet will still play its completion sound and show Done in the island."
+
+  private static func label(fromCompletionTitle title: String) -> String? {
+    let suffix = " done"
+    guard title.hasSuffix(suffix) else { return nil }
+    let value = title.dropLast(suffix.count).trimmingCharacters(in: .whitespacesAndNewlines)
+    return value.isEmpty || value == "Timer" ? nil : value
+  }
 }
 
 /// A thin progress ring driven live off the activity, ticking only while running.
