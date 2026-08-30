@@ -176,6 +176,69 @@ final class T3ConnectCredentialTests: XCTestCase {
       [T3ConnectCredentialStore.oauthAccount, T3ConnectCredentialStore.dpopKeyAccount])
   }
 
+  func testCanceledProofKeyReplacementAdmittedDuringSignOutCannotResurrectKey() async throws {
+    let replacement = Data("replacement-proof-key".utf8)
+    let store = T3FakeSecureRecordStore(
+      records: [T3ConnectCredentialStore.dpopKeyAccount: Data("old-proof-key".utf8)],
+      suspendOAuthDeletion: true)
+    let replacementQueued = T3CredentialTestSignal()
+    let credentials = T3ConnectCredentialStore(
+      store: store,
+      onSignOutWaiterQueued: { replacementQueued.signal() })
+    let signOut = Task { try await credentials.signOut() }
+    await store.waitForOAuthDeletion()
+
+    let replace = Task { try await credentials.replaceProofKey(replacement) }
+    await replacementQueued.wait()
+    replace.cancel()
+    await store.resumeOAuthDeletion()
+
+    try await signOut.value
+    do {
+      try await replace.value
+      XCTFail("Expected the canceled replacement to stop")
+    } catch is CancellationError {
+    }
+    let replacements = await store.replacedAccounts()
+    let storedProofKey = await store.storedData(account: T3ConnectCredentialStore.dpopKeyAccount)
+    let cachedProofKey = try await credentials.loadProofKey()
+    XCTAssertEqual(replacements, [])
+    XCTAssertNil(storedProofKey)
+    XCTAssertNil(cachedProofKey)
+
+    try await credentials.replaceProofKey(replacement)
+    let retriedProofKey = await store.storedData(account: T3ConnectCredentialStore.dpopKeyAccount)
+    XCTAssertEqual(retriedProofKey, replacement)
+  }
+
+  func testProofKeyReplacementAdmittedDuringSignOutIsRejected() async throws {
+    let replacement = Data("replacement-proof-key".utf8)
+    let store = T3FakeSecureRecordStore(suspendOAuthDeletion: true)
+    let replacementQueued = T3CredentialTestSignal()
+    let credentials = T3ConnectCredentialStore(
+      store: store,
+      onSignOutWaiterQueued: { replacementQueued.signal() })
+    let signOut = Task { try await credentials.signOut() }
+    await store.waitForOAuthDeletion()
+
+    let replace = Task { try await credentials.replaceProofKey(replacement) }
+    await replacementQueued.wait()
+    await store.resumeOAuthDeletion()
+
+    try await signOut.value
+    do {
+      try await replace.value
+      XCTFail("Expected the replacement admitted during sign-out to fail")
+    } catch T3ConnectCredentialStoreError.staleOperation {
+    }
+    let replacements = await store.replacedAccounts()
+    let storedProofKey = await store.storedData(account: T3ConnectCredentialStore.dpopKeyAccount)
+    let cachedProofKey = try await credentials.loadProofKey()
+    XCTAssertEqual(replacements, [])
+    XCTAssertNil(storedProofKey)
+    XCTAssertNil(cachedProofKey)
+  }
+
   func testMalformedIDTokenClaimsProduceNoDisplayIdentity() {
     XCTAssertNil(T3ConnectAccount.displayIdentity(fromIDToken: "not-a-jwt"))
     XCTAssertNil(T3ConnectAccount.displayIdentity(fromIDToken: "header.bm90LWpzb24.signature"))
@@ -209,11 +272,17 @@ private actor T3FakeSecureRecordStore: T3SecureRecordStore {
   }
 
   private var records: [String: Data]
+  private let suspendOAuthDeletion: Bool
   private var failReplacement = false
   private var deletions: [String] = []
+  private var replacements: [String] = []
+  private var oauthDeletionStarted = false
+  private var oauthDeletionWaiter: CheckedContinuation<Void, Never>?
+  private var oauthDeletionContinuation: CheckedContinuation<Void, Never>?
 
-  init(records: [String: Data] = [:]) {
+  init(records: [String: Data] = [:], suspendOAuthDeletion: Bool = false) {
     self.records = records
+    self.suspendOAuthDeletion = suspendOAuthDeletion
   }
 
   func data(service: String, account: String) async throws -> Data? {
@@ -225,12 +294,33 @@ private actor T3FakeSecureRecordStore: T3SecureRecordStore {
       failReplacement = false
       throw Failure.replace
     }
+    replacements.append(account)
     records[account] = data
   }
 
   func delete(service: String, account: String) async throws {
     deletions.append(account)
+    if account == T3ConnectCredentialStore.oauthAccount, suspendOAuthDeletion {
+      oauthDeletionStarted = true
+      oauthDeletionWaiter?.resume()
+      oauthDeletionWaiter = nil
+      await withCheckedContinuation { continuation in
+        oauthDeletionContinuation = continuation
+      }
+    }
     records.removeValue(forKey: account)
+  }
+
+  func waitForOAuthDeletion() async {
+    if oauthDeletionStarted { return }
+    await withCheckedContinuation { continuation in
+      oauthDeletionWaiter = continuation
+    }
+  }
+
+  func resumeOAuthDeletion() {
+    oauthDeletionContinuation?.resume()
+    oauthDeletionContinuation = nil
   }
 
   func failNextReplacement() {
@@ -243,6 +333,40 @@ private actor T3FakeSecureRecordStore: T3SecureRecordStore {
 
   func deletedAccounts() -> [String] {
     deletions
+  }
+
+  func replacedAccounts() -> [String] {
+    replacements
+  }
+}
+
+private final class T3CredentialTestSignal: @unchecked Sendable {
+  private let lock = NSLock()
+  private var isSignaled = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  func signal() {
+    lock.lock()
+    isSignaled = true
+    let pendingWaiters = waiters
+    waiters.removeAll()
+    lock.unlock()
+    for waiter in pendingWaiters {
+      waiter.resume()
+    }
+  }
+
+  func wait() async {
+    await withCheckedContinuation { continuation in
+      lock.lock()
+      if isSignaled {
+        lock.unlock()
+        continuation.resume()
+      } else {
+        waiters.append(continuation)
+        lock.unlock()
+      }
+    }
   }
 }
 

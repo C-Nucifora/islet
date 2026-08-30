@@ -90,6 +90,7 @@ actor T3ConnectCredentialStore {
   static let dpopKeyAccount = "t3-connect-dpop-p256-v1"
 
   private let store: any T3SecureRecordStore
+  private let onSignOutWaiterQueued: @Sendable () -> Void
   private var oauthCache: Cache<T3OAuthRecord> = .unloaded
   private var proofKeyCache: Cache<Data> = .unloaded
   private var generation: UInt64 = 0
@@ -100,14 +101,17 @@ actor T3ConnectCredentialStore {
   private var proofKeyOperationInProgress = false
   private var proofKeyOperationWaiters: [CheckedContinuation<Void, Never>] = []
 
-  init(store: any T3SecureRecordStore = T3KeychainSecureRecordStore()) {
+  init(
+    store: any T3SecureRecordStore = T3KeychainSecureRecordStore(),
+    onSignOutWaiterQueued: @escaping @Sendable () -> Void = {}
+  ) {
     self.store = store
+    self.onSignOutWaiterQueued = onSignOutWaiterQueued
   }
 
   func loadOAuthRecord() async throws -> T3OAuthRecord? {
-    if signOutInProgress { await waitForSignOutCompletion() }
+    let capturedGeneration = try await admitOperation()
     if case .loaded(let record) = oauthCache { return record }
-    let capturedGeneration = generation
     let store = store
     let storedData = try await withStoreLock(.oauth) {
       try await store.data(service: Self.service, account: Self.oauthAccount)
@@ -130,8 +134,7 @@ actor T3ConnectCredentialStore {
   }
 
   func replaceOAuthRecord(_ record: T3OAuthRecord) async throws {
-    if signOutInProgress { await waitForSignOutCompletion() }
-    let capturedGeneration = generation
+    let capturedGeneration = try await admitOperation()
     let data = try JSONEncoder().encode(record)
     let store = store
     try await withStoreLock(.oauth) {
@@ -146,9 +149,8 @@ actor T3ConnectCredentialStore {
   }
 
   func loadProofKey() async throws -> Data? {
-    if signOutInProgress { await waitForSignOutCompletion() }
+    let capturedGeneration = try await admitOperation()
     if case .loaded(let key) = proofKeyCache { return key }
-    let capturedGeneration = generation
     let store = store
     let key = try await withStoreLock(.proofKey) {
       try await store.data(service: Self.service, account: Self.dpopKeyAccount)
@@ -161,8 +163,7 @@ actor T3ConnectCredentialStore {
   }
 
   func replaceProofKey(_ key: Data) async throws {
-    if signOutInProgress { await waitForSignOutCompletion() }
-    let capturedGeneration = generation
+    let capturedGeneration = try await admitOperation()
     let store = store
     try await withStoreLock(.proofKey) {
       try await store.replace(
@@ -200,7 +201,19 @@ actor T3ConnectCredentialStore {
   private func waitForSignOutCompletion() async {
     await withCheckedContinuation { continuation in
       signOutWaiters.append(continuation)
+      onSignOutWaiterQueued()
     }
+  }
+
+  private func admitOperation() async throws -> UInt64 {
+    let capturedGeneration = generation
+    let signOutWasInProgress = signOutInProgress
+    if signOutWasInProgress { await waitForSignOutCompletion() }
+    try Task.checkCancellation()
+    guard !signOutWasInProgress, capturedGeneration == generation else {
+      throw T3ConnectCredentialStoreError.staleOperation
+    }
+    return capturedGeneration
   }
 
   private func finishSignOut() {
@@ -218,6 +231,7 @@ actor T3ConnectCredentialStore {
   ) async throws -> Value {
     await acquireStoreOperation(operationKind)
     defer { releaseStoreOperation(operationKind) }
+    try Task.checkCancellation()
     return try await operation()
   }
 
