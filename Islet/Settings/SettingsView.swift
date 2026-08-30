@@ -1954,6 +1954,7 @@ private struct PulseProviderRow: View {
   private var healthColor: Color {
     switch status.health {
     case .active: .green
+    case .needsAttention: .orange
     case .seen: .blue
     case .neverSeen: .secondary
     }
