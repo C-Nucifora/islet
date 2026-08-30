@@ -32,8 +32,9 @@ Pass `--reveal-root /absolute/local/root` if transfer names are paths below one 
 The provider then offers **Reveal in Finder** only when the resolved file exists below that root.
 Omit this option for remote-to-remote jobs or when rclone's names do not map to local paths.
 
-Each ID hashes rclone's process `executeId`, job ID, and complete transfer name. Two files named
-`report.pdf` in different directories remain independent, while Islet displays only `report.pdf`.
+Each ID hashes rclone's process `executeId`, the RC job ID when one is available, and the complete
+transfer name. Two files named `report.pdf` in different directories remain independent, while
+Islet displays only `report.pdf`.
 The state files contain only opaque Pulse IDs, completion fingerprints, a millisecond watermark,
 and the enabled marker. They do not contain file names, paths, remote names, URLs, or credentials.
 
@@ -53,8 +54,9 @@ reports. Successful and failed completions that happened while the provider was 
 from `core/transferred` when they are newer than the stored watermark.
 
 Use `--once` for a single observation cycle. The default interval is two seconds and cannot be
-less than one second. Unchanged progress is not republished, and Pulse rate-limit responses use
-bounded exponential backoff.
+less than one second. Changed progress publishes immediately; unchanged active work receives a
+30-second heartbeat and expires after 90 seconds if the provider stops. Pulse rate-limit responses
+use bounded exponential backoff.
 
 ## Test
 

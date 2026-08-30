@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import struct
 import sys
@@ -18,6 +19,12 @@ from pulse_client import PulseClient, PulseError, RevealServer  # noqa: E402
 SOURCE = "chrome-downloads"
 MAX_NATIVE_MESSAGE = 1024 * 1024
 CANCEL_ERRORS = {"USER_CANCELED", "USER_SHUTDOWN"}
+ACTIVE_EXPIRY_SECONDS = 90
+
+
+def active_expiry() -> str:
+    expiry = datetime.now(timezone.utc) + timedelta(seconds=ACTIVE_EXPIRY_SECONDS)
+    return expiry.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def activity_id(profile_id: str, download_id: int) -> str:
@@ -87,6 +94,8 @@ class ChromeDownloadProvider:
             activity["subtitle"] = "Paused"
 
         terminal = state in {"complete", "interrupted"}
+        if not terminal:
+            activity["expiresAt"] = active_expiry()
         if state == "complete":
             activity.update(
                 title=f"Downloaded {name}",

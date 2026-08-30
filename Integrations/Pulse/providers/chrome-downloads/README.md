@@ -33,9 +33,10 @@ base name in Islet. Chrome's cancellation states send `end`; other interruptions
 event. Completed and failed events use Pulse's default eight-second expiry.
 
 The native host reads the Pulse token for each command through the shared client. It never returns
-the token to Chrome or writes it anywhere. Progress searches happen every two seconds, but the
-provider only publishes changed values. Pulse rate-limit responses use bounded exponential
-backoff.
+the token to Chrome or writes it anywhere. Progress searches happen every two seconds. The provider
+publishes changed values immediately and refreshes unchanged active items every 30 seconds. Active
+items expire after 90 seconds if Chrome or the provider stops unexpectedly. Pulse rate-limit
+responses use bounded exponential backoff.
 
 ## Test
 

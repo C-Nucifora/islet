@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from datetime import datetime, timedelta, timezone
 import hashlib
 import ipaddress
 import json
@@ -14,7 +15,7 @@ import signal
 import sys
 import tempfile
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -25,6 +26,13 @@ from pulse_client import PulseClient, PulseError, RevealServer, safe_child  # no
 
 SOURCE = "rclone"
 MAX_RC_RESPONSE = 1024 * 1024
+ACTIVE_EXPIRY_SECONDS = 90
+ACTIVE_HEARTBEAT_SECONDS = 30
+
+
+def active_expiry() -> str:
+    expiry = datetime.now(timezone.utc) + timedelta(seconds=ACTIVE_EXPIRY_SECONDS)
+    return expiry.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def opaque_id(execute_id: str, job_id: int, name: str) -> str:
@@ -198,6 +206,7 @@ class RcloneProvider:
         reveal: RevealServer | None = None,
         reveal_root: Path | None = None,
         state: dict[str, Any] | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self.rc = rc
         self.pulse = pulse or PulseClient()
@@ -207,6 +216,8 @@ class RcloneProvider:
         self.seen = set((state or {}).get("seen", []))
         self.completed_after = int((state or {}).get("completedAfter", 0))
         self.fingerprints: dict[str, str] = {}
+        self.last_published_at: dict[str, float] = {}
+        self.clock = clock or time.monotonic
         self.active_command_budget = 12
         self.rotation = 0
 
@@ -216,16 +227,40 @@ class RcloneProvider:
         execute_id = jobs.get("executeId")
         if not isinstance(execute_id, str) or not execute_id:
             raise RuntimeError("rclone job/list omitted executeId")
-        job_ids = jobs.get("jobids", jobs.get("jobIds", []))
-        if not isinstance(job_ids, list):
-            raise RuntimeError("rclone job/list returned invalid job IDs")
+        running_job_ids = jobs.get("running_ids", jobs.get("runningIds", []))
+        if not isinstance(running_job_ids, list):
+            raise RuntimeError("rclone job/list returned invalid running job IDs")
 
         active: set[str] = set()
         active_candidates: list[tuple[str, int, dict[str, Any]]] = []
+        grouped_active_names: set[str] = set()
         terminal: set[str] = set()
         max_timestamp = self.completed_after
-        for raw_job_id in job_ids:
-            if not isinstance(raw_job_id, int):
+
+        def consume_completed(records: object, fallback_job_id: int) -> None:
+            nonlocal max_timestamp
+            if not isinstance(records, list):
+                return
+            for record in records:
+                if not isinstance(record, dict) or record.get("checked") is True:
+                    continue
+                timestamp = record.get("timestamp")
+                if not isinstance(timestamp, int) or isinstance(timestamp, bool):
+                    continue
+                record_job_id = record.get("jobid", fallback_job_id)
+                if not isinstance(record_job_id, int) or isinstance(record_job_id, bool):
+                    record_job_id = fallback_job_id
+                max_timestamp = max(max_timestamp, timestamp)
+                key = event_id(execute_id, record_job_id, record)
+                if timestamp <= self.completed_after or key in self.seen:
+                    continue
+                identifier = self._publish_terminal(execute_id, record_job_id, record)
+                self.seen.add(key)
+                if identifier:
+                    terminal.add(identifier)
+
+        for raw_job_id in running_job_ids:
+            if not isinstance(raw_job_id, int) or isinstance(raw_job_id, bool):
                 continue
             group = {"group": f"job/{raw_job_id}"}
             stats = self.rc.call("core/stats", group)
@@ -239,23 +274,37 @@ class RcloneProvider:
                     ):
                         active.add(opaque_id(execute_id, raw_job_id, transfer["name"]))
                         active_candidates.append((execute_id, raw_job_id, transfer))
+                        grouped_active_names.add(transfer["name"])
 
             completed = self.rc.call("core/transferred", group).get("transferred", [])
-            if isinstance(completed, list):
-                for record in completed:
-                    if not isinstance(record, dict) or record.get("checked") is True:
-                        continue
-                    timestamp = record.get("timestamp")
-                    if not isinstance(timestamp, int):
-                        continue
-                    max_timestamp = max(max_timestamp, timestamp)
-                    key = event_id(execute_id, raw_job_id, record)
-                    if timestamp <= self.completed_after or key in self.seen:
-                        continue
-                    identifier = self._publish_terminal(execute_id, raw_job_id, record)
-                    self.seen.add(key)
-                    if identifier:
-                        terminal.add(identifier)
+            consume_completed(completed, raw_job_id)
+
+        # A normal `rclone copy ... --rc` process reports through the global stats group and does
+        # not have to be launched as an asynchronous RC job. Poll the aggregate endpoints as well
+        # as explicit job groups, while suppressing active rows already observed in a job group.
+        global_stats = self.rc.call("core/stats")
+        global_transfers = global_stats.get("transferring", [])
+        if isinstance(global_transfers, list):
+            for transfer in global_transfers:
+                if (
+                    not isinstance(transfer, dict)
+                    or not isinstance(transfer.get("name"), str)
+                    or not transfer["name"]
+                    or transfer["name"] in grouped_active_names
+                ):
+                    continue
+                raw_transfer_job_id = transfer.get("jobid", 0)
+                transfer_job_id = (
+                    raw_transfer_job_id
+                    if isinstance(raw_transfer_job_id, int)
+                    and not isinstance(raw_transfer_job_id, bool)
+                    else 0
+                )
+                active.add(opaque_id(execute_id, transfer_job_id, transfer["name"]))
+                active_candidates.append((execute_id, transfer_job_id, transfer))
+
+        global_completed = self.rc.call("core/transferred").get("transferred", [])
+        consume_completed(global_completed, 0)
 
         active_candidates.sort(
             key=lambda candidate: opaque_id(
@@ -294,7 +343,12 @@ class RcloneProvider:
                 separators=(",", ":"),
             ).encode()
         ).hexdigest()
-        if self.fingerprints.get(identifier) == fingerprint:
+        now = self.clock()
+        if (
+            self.fingerprints.get(identifier) == fingerprint
+            and now - self.last_published_at.get(identifier, float("-inf"))
+            < ACTIVE_HEARTBEAT_SECONDS
+        ):
             return identifier
         if self.active_command_budget == 0:
             return identifier
@@ -305,6 +359,7 @@ class RcloneProvider:
             "symbol": "arrow.up.arrow.down.circle.fill",
             "state": "progress",
             "priority": "normal",
+            "expiresAt": active_expiry(),
         }
         if progress is not None:
             activity["progress"] = progress
@@ -313,6 +368,7 @@ class RcloneProvider:
         self.pulse.send({"operation": "update", "activity": activity})
         self.active_command_budget -= 1
         self.fingerprints[identifier] = fingerprint
+        self.last_published_at[identifier] = now
         self.published.add(identifier)
         return identifier
 
@@ -340,6 +396,7 @@ class RcloneProvider:
         self._add_reveal(activity, name, identifier)
         self.pulse.send({"operation": "event", "activity": activity})
         self.fingerprints.pop(identifier, None)
+        self.last_published_at.pop(identifier, None)
         self.published.discard(identifier)
         return identifier
 
@@ -380,6 +437,7 @@ class RcloneProvider:
         except PulseError:
             pass
         self.fingerprints.pop(identifier, None)
+        self.last_published_at.pop(identifier, None)
 
     def persisted(self, enabled: bool) -> dict[str, Any]:
         return {

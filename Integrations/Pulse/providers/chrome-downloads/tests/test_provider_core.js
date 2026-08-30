@@ -45,6 +45,14 @@ test("unchanged progress does not consume another Pulse command", () => {
   assert.equal(tracker.reconcile([active]).length, 1);
 });
 
+test("unchanged active downloads refresh before their Pulse expiry", () => {
+  const tracker = new Tracker(profileID, [], 30_000);
+  const active = item(13, "/tmp/current");
+  assert.equal(tracker.reconcile([active], 1_000).length, 1);
+  assert.equal(tracker.reconcile([active], 30_999).length, 0);
+  assert.equal(tracker.reconcile([active], 31_000).length, 1);
+});
+
 test("cancellation and removal end the matching item", () => {
   const tracker = new Tracker(profileID, [7, 8]);
   assert.equal(tracker.ingest(item(7, "/tmp/a", "interrupted", "USER_CANCELED"))[0].kind, "end");

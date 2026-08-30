@@ -119,13 +119,14 @@ read repository contents or credentials.
 The [Chrome downloads provider](providers/chrome-downloads/README.md) uses Chrome's `downloads`
 extension API. It does not read Chrome's private History database. The extension sends no source
 URL or referrer to its native host. It keeps only Chrome's numeric download IDs in extension
-storage so it can remove stale items after a service-worker restart.
+storage so it can remove stale items after a service-worker restart. Active transfer items carry a
+bounded expiry that a low-rate heartbeat refreshes.
 
 The [rclone provider](providers/rclone/README.md) polls `job/list`, `core/stats`, and
 `core/transferred` on rclone's loopback remote-control endpoint. It stores hashed activity and
 completion IDs, never transfer names, paths, remote names, RC credentials, or Pulse credentials.
-Both providers send updates only when state changes and clean up active Pulse items when disabled
-or stopped.
+Both providers publish state changes immediately, refresh unchanged active work at a low rate, and
+clean up active Pulse items when disabled or stopped.
 
 Reveal actions use an ephemeral loopback URL because Pulse deliberately rejects `file:` actions.
 The provider maps the random URL to an existing path in memory. The HTTP handler binds to

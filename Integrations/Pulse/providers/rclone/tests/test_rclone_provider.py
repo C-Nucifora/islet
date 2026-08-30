@@ -58,7 +58,12 @@ class FakeReveal:
 def fixture(transferring: list[dict], transferred: list[dict] | None = None) -> FakeRC:
     return FakeRC(
         {
-            ("job/list", None): {"executeId": "instance-a", "jobids": [7]},
+            ("job/list", None): {
+                "executeId": "instance-a",
+                "jobids": [7, 99],
+                "running_ids": [7],
+                "finished_ids": [99],
+            },
             ("core/stats", "job/7"): {"transferring": transferring},
             ("core/transferred", "job/7"): {"transferred": transferred or []},
         }
@@ -67,12 +72,21 @@ def fixture(transferring: list[dict], transferred: list[dict] | None = None) -> 
 
 class RcloneProviderTests(unittest.TestCase):
     def provider(
-        self, rc: FakeRC, state: dict | None = None, reveal_root: Path | None = None
+        self,
+        rc: FakeRC,
+        state: dict | None = None,
+        reveal_root: Path | None = None,
+        clock=None,
     ) -> tuple[rclone.RcloneProvider, FakePulse]:
         pulse = FakePulse()
         return (
             rclone.RcloneProvider(
-                rc, pulse, FakeReveal(), reveal_root, state or {"completedAfter": 0}
+                rc,
+                pulse,
+                FakeReveal(),
+                reveal_root,
+                state or {"completedAfter": 0},
+                clock=clock,
             ),
             pulse,
         )
@@ -95,6 +109,41 @@ class RcloneProviderTests(unittest.TestCase):
             )
         )
 
+    def test_top_level_cli_transfer_uses_global_stats_without_an_async_job(self) -> None:
+        rc = FakeRC(
+            {
+                ("job/list", None): {"executeId": "instance-a", "jobids": []},
+                ("core/stats", None): {
+                    "transferring": [
+                        {
+                            "name": "archive/top-level.bin",
+                            "bytes": 25,
+                            "size": 100,
+                            "percentage": 25,
+                        }
+                    ]
+                },
+                ("core/transferred", None): {"transferred": []},
+            }
+        )
+        provider, pulse = self.provider(rc)
+
+        provider.observe()
+
+        self.assertEqual(len(pulse.commands), 1)
+        self.assertEqual(pulse.commands[0]["activity"]["progress"], 0.25)
+        self.assertIn(("core/stats", None), rc.calls)
+
+    def test_finished_rc_housekeeping_jobs_are_not_polled_as_transfers(self) -> None:
+        provider, _ = self.provider(
+            fixture([{"name": "live.bin", "bytes": 1, "size": 2}])
+        )
+
+        provider.observe()
+
+        self.assertNotIn(("core/stats", "job/99"), provider.rc.calls)
+        self.assertNotIn(("core/transferred", "job/99"), provider.rc.calls)
+
     def test_progress_budget_rotates_across_large_transfer_sets(self) -> None:
         transfers = [
             {"name": f"batch/file-{index}.bin", "bytes": 1, "size": 2}
@@ -105,6 +154,22 @@ class RcloneProviderTests(unittest.TestCase):
         self.assertEqual(len(pulse.commands), 12)
         provider.observe()
         self.assertEqual(len(pulse.commands), 20)
+
+    def test_unchanged_active_transfer_refreshes_before_expiry(self) -> None:
+        now = [1_000.0]
+        provider, pulse = self.provider(
+            fixture([{"name": "live.bin", "bytes": 1, "size": 2}]),
+            clock=lambda: now[0],
+        )
+
+        provider.observe()
+        now[0] += 29
+        provider.observe()
+        now[0] += 1
+        provider.observe()
+
+        self.assertEqual(len(pulse.commands), 2)
+        self.assertIn("expiresAt", pulse.commands[-1]["activity"])
 
     def test_restart_recovery_republishes_active_and_ends_missing_cached_id(
         self,

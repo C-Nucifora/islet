@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -105,6 +106,17 @@ class ChromeNativeHostTests(unittest.TestCase):
         provider.command_for(self.message(5))
         self.assertNotIn("actions", pulse.commands[0]["activity"])
         self.assertEqual(reveal.paths, [Path("/not/accessible/report.pdf")])
+
+    def test_active_download_has_a_bounded_expiry_for_crash_cleanup(self) -> None:
+        provider, pulse, _ = self.provider()
+
+        provider.command_for(self.message(7))
+
+        expires_at = pulse.commands[0]["activity"]["expiresAt"]
+        expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        remaining = (expiry - datetime.now(timezone.utc)).total_seconds()
+        self.assertGreater(remaining, 80)
+        self.assertLessEqual(remaining, 90)
 
     def test_existing_file_gets_loopback_reveal_action(self) -> None:
         provider, pulse, _ = self.provider()

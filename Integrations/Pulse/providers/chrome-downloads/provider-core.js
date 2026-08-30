@@ -39,14 +39,16 @@
   }
 
   class Tracker {
-    constructor(profileID, knownIDs = []) {
+    constructor(profileID, knownIDs = [], heartbeatMilliseconds = 30_000) {
       this.profileID = cleanProfileID(profileID);
       if (!this.profileID) throw new Error("invalid profile ID");
       this.known = new Set(knownIDs.filter((id) => Number.isSafeInteger(id) && id >= 0));
       this.fingerprints = new Map();
+      this.publishedAt = new Map();
+      this.heartbeatMilliseconds = heartbeatMilliseconds;
     }
 
-    reconcile(items) {
+    reconcile(items, now = Date.now()) {
       const current = new Map();
       for (const raw of items || []) {
         const item = sanitize(raw);
@@ -58,35 +60,53 @@
       }
       for (const item of current.values()) {
         const next = fingerprint(item);
-        if (this.fingerprints.get(item.id) !== next) {
+        const lastPublished = this.publishedAt.get(item.id);
+        if (
+          this.fingerprints.get(item.id) !== next ||
+          lastPublished === undefined ||
+          now - lastPublished >= this.heartbeatMilliseconds
+        ) {
           commands.push({ kind: "upsert", profileID: this.profileID, item });
           this.fingerprints.set(item.id, next);
+          this.publishedAt.set(item.id, now);
         }
       }
       for (const id of this.fingerprints.keys()) {
-        if (!current.has(id)) this.fingerprints.delete(id);
+        if (!current.has(id)) {
+          this.fingerprints.delete(id);
+          this.publishedAt.delete(id);
+        }
       }
       this.known = new Set(current.keys());
       return commands;
     }
 
-    ingest(raw) {
+    ingest(raw, now = Date.now()) {
       const item = sanitize(raw);
       if (!item) return [];
       if (item.state === "interrupted" && CANCEL_ERRORS.has(item.error)) {
         this.known.delete(item.id);
         this.fingerprints.delete(item.id);
+        this.publishedAt.delete(item.id);
         return [{ kind: "end", profileID: this.profileID, id: item.id }];
       }
       if (item.state === "complete" || item.state === "interrupted") {
         this.known.delete(item.id);
         this.fingerprints.delete(item.id);
+        this.publishedAt.delete(item.id);
         return [{ kind: "upsert", profileID: this.profileID, item }];
       }
       this.known.add(item.id);
       const next = fingerprint(item);
-      if (this.fingerprints.get(item.id) === next) return [];
+      const lastPublished = this.publishedAt.get(item.id);
+      if (
+        this.fingerprints.get(item.id) === next &&
+        lastPublished !== undefined &&
+        now - lastPublished < this.heartbeatMilliseconds
+      )
+        return [];
       this.fingerprints.set(item.id, next);
+      this.publishedAt.set(item.id, now);
       return [{ kind: "upsert", profileID: this.profileID, item }];
     }
 
@@ -94,6 +114,7 @@
       if (!Number.isSafeInteger(id) || id < 0) return [];
       this.known.delete(id);
       this.fingerprints.delete(id);
+      this.publishedAt.delete(id);
       return [{ kind: "end", profileID: this.profileID, id }];
     }
 
@@ -105,6 +126,7 @@
       }));
       this.known.clear();
       this.fingerprints.clear();
+      this.publishedAt.clear();
       return commands;
     }
 
