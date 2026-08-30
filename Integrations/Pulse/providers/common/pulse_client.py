@@ -196,6 +196,12 @@ class RevealServer:
             self._server.paths.clear()
             self._server.action_tokens.clear()
 
+    def remove(self, action_id: str) -> None:
+        with self._server.paths_lock:
+            token = self._server.action_tokens.pop(action_id, None)
+            if token:
+                self._server.paths.pop(token, None)
+
     def close(self) -> None:
         self._server.shutdown()
         self._server.server_close()

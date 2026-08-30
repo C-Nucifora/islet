@@ -6,23 +6,34 @@ directories.
 
 ## Run
 
-Enable an authenticated loopback RC endpoint on the rclone command being observed:
+Start a persistent authenticated loopback RC daemon:
 
 ```sh
 export ISLET_RCLONE_RC_USER=islet
 export ISLET_RCLONE_RC_PASS='choose-a-long-local-secret'
-rclone copy ./large-files remote:archive \
-  --rc --rc-addr 127.0.0.1:5572 \
+rclone rcd --rc-addr 127.0.0.1:5572 \
   --rc-user "$ISLET_RCLONE_RC_USER" --rc-pass "$ISLET_RCLONE_RC_PASS"
 ```
 
-In another terminal, run the provider with the same credentials:
+Run the provider with the same credentials in another terminal:
 
 ```sh
 export ISLET_RCLONE_RC_USER=islet
 export ISLET_RCLONE_RC_PASS='choose-a-long-local-secret'
 python3 Integrations/Pulse/providers/rclone/rclone_provider.py
 ```
+
+Launch transfers as asynchronous jobs against that daemon:
+
+```sh
+rclone rc --url http://127.0.0.1:5572 \
+  --user "$ISLET_RCLONE_RC_USER" --pass "$ISLET_RCLONE_RC_PASS" \
+  sync/copy srcFs=./large-files dstFs=remote:archive _async=true
+```
+
+Keeping `rclone rcd` alive lets the provider read the finished job from `core/transferred`, even if
+the provider restarts after the copy ends. A top-level `rclone copy --rc` process closes its RC
+endpoint as it exits, so it cannot reliably expose its terminal result to a separate poller.
 
 The RC URL defaults to `http://127.0.0.1:5572`. Set `ISLET_RCLONE_RC_URL` or pass `--url` for a
 different loopback port. The provider rejects non-loopback hosts and URLs containing credentials.
@@ -32,9 +43,9 @@ Pass `--reveal-root /absolute/local/root` if transfer names are paths below one 
 The provider then offers **Reveal in Finder** only when the resolved file exists below that root.
 Omit this option for remote-to-remote jobs or when rclone's names do not map to local paths.
 
-Each ID hashes rclone's process `executeId`, the RC job ID when one is available, and the complete
-transfer name. Two files named `report.pdf` in different directories remain independent, while
-Islet displays only `report.pdf`.
+Each ID hashes rclone's process `executeId`, its stats group or RC job ID, and the complete transfer
+name. Two files named `report.pdf` in different directories or groups remain independent, while Islet
+displays only `report.pdf`.
 The state files contain only opaque Pulse IDs, completion fingerprints, a millisecond watermark,
 and the enabled marker. They do not contain file names, paths, remote names, URLs, or credentials.
 
@@ -53,9 +64,9 @@ provider republishes active rclone transfers and ends opaque cached IDs that rcl
 reports. Successful and failed completions that happened while the provider was down are recovered
 from `core/transferred` when they are newer than the stored watermark.
 
-Use `--once` for a single observation cycle. The default interval is two seconds and cannot be
-less than one second. Changed progress publishes immediately; unchanged active work receives a
-30-second heartbeat and expires after 90 seconds if the provider stops. Pulse rate-limit responses
+Use `--once` for a single observation cycle. The default interval is two seconds and must stay
+between one and 30 seconds. Changed progress publishes immediately; unchanged active work receives
+a 30-second heartbeat and expires after 90 seconds if the provider stops. Pulse rate-limit responses
 use bounded exponential backoff.
 
 ## Test

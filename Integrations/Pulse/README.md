@@ -123,7 +123,8 @@ storage so it can remove stale items after a service-worker restart. Active tran
 bounded expiry that a low-rate heartbeat refreshes.
 
 The [rclone provider](providers/rclone/README.md) polls `job/list`, `core/stats`, and
-`core/transferred` on rclone's loopback remote-control endpoint. It stores hashed activity and
+`core/transferred` on a persistent `rclone rcd` loopback endpoint. Transfers run as asynchronous RC
+jobs so terminal results remain available after a provider restart. It stores hashed activity and
 completion IDs, never transfer names, paths, remote names, RC credentials, or Pulse credentials.
 Both providers publish state changes immediately, refresh unchanged active work at a low rate, and
 clean up active Pulse items when disabled or stopped.

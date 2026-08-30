@@ -9,8 +9,10 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
+import re
 import signal
 import sys
 import tempfile
@@ -28,6 +30,11 @@ SOURCE = "rclone"
 MAX_RC_RESPONSE = 1024 * 1024
 ACTIVE_EXPIRY_SECONDS = 90
 ACTIVE_HEARTBEAT_SECONDS = 30
+MAX_INTERVAL_SECONDS = ACTIVE_HEARTBEAT_SECONDS
+TERMINAL_REVEAL_SECONDS = 8
+_RFC3339 = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$"
+)
 
 
 def active_expiry() -> str:
@@ -35,14 +42,61 @@ def active_expiry() -> str:
     return expiry.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def opaque_id(execute_id: str, job_id: int, name: str) -> str:
-    digest = hashlib.sha256(f"{execute_id}\0{job_id}\0{name}".encode()).hexdigest()[:32]
+def opaque_id(execute_id: str, scope: int | str, name: str) -> str:
+    digest = hashlib.sha256(f"{execute_id}\0{scope}\0{name}".encode()).hexdigest()[:32]
     return f"rclone:{digest}"
 
 
-def event_id(execute_id: str, job_id: int, record: dict[str, Any]) -> str:
-    basis = f"{execute_id}\0{job_id}\0{record.get('name')}\0{record.get('timestamp')}\0{record.get('error')}"
+def event_id(
+    execute_id: str,
+    scope: int | str,
+    timestamp: int,
+    record: dict[str, Any],
+) -> str:
+    basis = (
+        f"{execute_id}\0{scope}\0{record.get('name')}\0{timestamp}\0{record.get('error')}"
+    )
     return hashlib.sha256(basis.encode()).hexdigest()
+
+
+def completion_milliseconds(record: dict[str, Any]) -> int | None:
+    legacy = record.get("timestamp")
+    if isinstance(legacy, int) and not isinstance(legacy, bool):
+        return legacy
+    current = record.get("completed_at")
+    if not isinstance(current, str):
+        return None
+    match = _RFC3339.fullmatch(current)
+    if match is None:
+        return None
+    base, fraction, zone = match.groups()
+    microseconds = ((fraction or "") + "000000")[:6]
+    normalized = f"{base}.{microseconds}{'+00:00' if zone == 'Z' else zone}"
+    try:
+        completed = datetime.fromisoformat(normalized).astimezone(timezone.utc)
+    except ValueError:
+        return None
+    elapsed = completed - datetime(1970, 1, 1, tzinfo=timezone.utc)
+    return (
+        elapsed.days * 86_400_000
+        + elapsed.seconds * 1_000
+        + elapsed.microseconds // 1_000
+    )
+
+
+def transfer_scope(record: dict[str, Any], fallback: int | str) -> int | str:
+    legacy = record.get("jobid")
+    if isinstance(legacy, int) and not isinstance(legacy, bool):
+        return legacy
+    group = record.get("group")
+    if not isinstance(group, str) or not group:
+        return fallback
+    if group == "global_stats":
+        return 0
+    match = re.fullmatch(r"job/(\d+)", group)
+    if match:
+        return int(match.group(1))
+    return group
 
 
 def display_name(value: object) -> str:
@@ -118,6 +172,10 @@ class _RejectRedirects(HTTPRedirectHandler):
         new_url: str,
     ) -> None:
         return None
+
+
+class ObservationDisabled(RuntimeError):
+    pass
 
 
 class StateStore:
@@ -207,6 +265,7 @@ class RcloneProvider:
         reveal_root: Path | None = None,
         state: dict[str, Any] | None = None,
         clock: Callable[[], float] | None = None,
+        is_enabled: Callable[[], bool] | None = None,
     ) -> None:
         self.rc = rc
         self.pulse = pulse or PulseClient()
@@ -217,13 +276,16 @@ class RcloneProvider:
         self.completed_after = int((state or {}).get("completedAfter", 0))
         self.fingerprints: dict[str, str] = {}
         self.last_published_at: dict[str, float] = {}
+        self.reveal_deadlines: dict[str, float] = {}
         self.clock = clock or time.monotonic
+        self.is_enabled = is_enabled or (lambda: True)
         self.active_command_budget = 12
         self.rotation = 0
 
     def observe(self) -> None:
+        self._expire_reveals()
         self.active_command_budget = 12
-        jobs = self.rc.call("job/list")
+        jobs = self._call("job/list")
         execute_id = jobs.get("executeId")
         if not isinstance(execute_id, str) or not execute_id:
             raise RuntimeError("rclone job/list omitted executeId")
@@ -232,29 +294,26 @@ class RcloneProvider:
             raise RuntimeError("rclone job/list returned invalid running job IDs")
 
         active: set[str] = set()
-        active_candidates: list[tuple[str, int, dict[str, Any]]] = []
-        grouped_active_names: set[str] = set()
+        active_candidates: list[tuple[str, int | str, dict[str, Any]]] = []
         terminal: set[str] = set()
         max_timestamp = self.completed_after
 
-        def consume_completed(records: object, fallback_job_id: int) -> None:
+        def consume_completed(records: object, fallback_scope: int | str) -> None:
             nonlocal max_timestamp
             if not isinstance(records, list):
                 return
             for record in records:
                 if not isinstance(record, dict) or record.get("checked") is True:
                     continue
-                timestamp = record.get("timestamp")
-                if not isinstance(timestamp, int) or isinstance(timestamp, bool):
+                timestamp = completion_milliseconds(record)
+                if timestamp is None:
                     continue
-                record_job_id = record.get("jobid", fallback_job_id)
-                if not isinstance(record_job_id, int) or isinstance(record_job_id, bool):
-                    record_job_id = fallback_job_id
+                scope = transfer_scope(record, fallback_scope)
                 max_timestamp = max(max_timestamp, timestamp)
-                key = event_id(execute_id, record_job_id, record)
+                key = event_id(execute_id, scope, timestamp, record)
                 if timestamp <= self.completed_after or key in self.seen:
                     continue
-                identifier = self._publish_terminal(execute_id, record_job_id, record)
+                identifier = self._publish_terminal(execute_id, scope, record)
                 self.seen.add(key)
                 if identifier:
                     terminal.add(identifier)
@@ -263,7 +322,7 @@ class RcloneProvider:
             if not isinstance(raw_job_id, int) or isinstance(raw_job_id, bool):
                 continue
             group = {"group": f"job/{raw_job_id}"}
-            stats = self.rc.call("core/stats", group)
+            stats = self._call("core/stats", group)
             transfers = stats.get("transferring", [])
             if isinstance(transfers, list):
                 for transfer in transfers:
@@ -274,15 +333,13 @@ class RcloneProvider:
                     ):
                         active.add(opaque_id(execute_id, raw_job_id, transfer["name"]))
                         active_candidates.append((execute_id, raw_job_id, transfer))
-                        grouped_active_names.add(transfer["name"])
 
-            completed = self.rc.call("core/transferred", group).get("transferred", [])
+            completed = self._call("core/transferred", group).get("transferred", [])
             consume_completed(completed, raw_job_id)
 
-        # A normal `rclone copy ... --rc` process reports through the global stats group and does
-        # not have to be launched as an asynchronous RC job. Poll the aggregate endpoints as well
-        # as explicit job groups, while suppressing active rows already observed in a job group.
-        global_stats = self.rc.call("core/stats")
+        # The aggregate transfer map is keyed by name and can collapse same-name rows from
+        # different groups. Query the persistent process's top-level group directly instead.
+        global_stats = self._call("core/stats", {"group": "global_stats"})
         global_transfers = global_stats.get("transferring", [])
         if isinstance(global_transfers, list):
             for transfer in global_transfers:
@@ -290,20 +347,12 @@ class RcloneProvider:
                     not isinstance(transfer, dict)
                     or not isinstance(transfer.get("name"), str)
                     or not transfer["name"]
-                    or transfer["name"] in grouped_active_names
                 ):
                     continue
-                raw_transfer_job_id = transfer.get("jobid", 0)
-                transfer_job_id = (
-                    raw_transfer_job_id
-                    if isinstance(raw_transfer_job_id, int)
-                    and not isinstance(raw_transfer_job_id, bool)
-                    else 0
-                )
-                active.add(opaque_id(execute_id, transfer_job_id, transfer["name"]))
-                active_candidates.append((execute_id, transfer_job_id, transfer))
+                active.add(opaque_id(execute_id, 0, transfer["name"]))
+                active_candidates.append((execute_id, 0, transfer))
 
-        global_completed = self.rc.call("core/transferred").get("transferred", [])
+        global_completed = self._call("core/transferred").get("transferred", [])
         consume_completed(global_completed, 0)
 
         active_candidates.sort(
@@ -326,12 +375,13 @@ class RcloneProvider:
             self.seen = set(sorted(self.seen)[-512:])
 
     def _publish_active(
-        self, execute_id: str, job_id: int, transfer: dict[str, Any]
+        self, execute_id: str, scope: int | str, transfer: dict[str, Any]
     ) -> str | None:
+        self._ensure_enabled()
         name = transfer.get("name")
         if not isinstance(name, str) or not name:
             return None
-        identifier = opaque_id(execute_id, job_id, name)
+        identifier = opaque_id(execute_id, scope, name)
         progress = self._progress(transfer)
         fingerprint = hashlib.sha256(
             json.dumps(
@@ -364,7 +414,9 @@ class RcloneProvider:
         if progress is not None:
             activity["progress"] = progress
             activity["subtitle"] = f"{round(progress * 100)}%"
-        self._add_reveal(activity, name, identifier)
+        reveal_action_id = self._add_reveal(activity, name, identifier)
+        if reveal_action_id:
+            self.reveal_deadlines.pop(reveal_action_id, None)
         self.pulse.send({"operation": "update", "activity": activity})
         self.active_command_budget -= 1
         self.fingerprints[identifier] = fingerprint
@@ -373,12 +425,13 @@ class RcloneProvider:
         return identifier
 
     def _publish_terminal(
-        self, execute_id: str, job_id: int, record: dict[str, Any]
+        self, execute_id: str, scope: int | str, record: dict[str, Any]
     ) -> str | None:
+        self._ensure_enabled()
         name = record.get("name")
         if not isinstance(name, str) or not name:
             return None
-        identifier = opaque_id(execute_id, job_id, name)
+        identifier = opaque_id(execute_id, scope, name)
         failed = bool(record.get("error"))
         activity: dict[str, Any] = {
             "id": identifier,
@@ -393,22 +446,56 @@ class RcloneProvider:
         }
         if not failed:
             activity["progress"] = 1.0
-        self._add_reveal(activity, name, identifier)
+        reveal_action_id = self._add_reveal(activity, name, identifier)
+        if reveal_action_id:
+            self.reveal_deadlines[reveal_action_id] = (
+                self.clock() + TERMINAL_REVEAL_SECONDS
+            )
         self.pulse.send({"operation": "event", "activity": activity})
+        if reveal_action_id:
+            self.reveal_deadlines[reveal_action_id] = (
+                self.clock() + TERMINAL_REVEAL_SECONDS
+            )
         self.fingerprints.pop(identifier, None)
         self.last_published_at.pop(identifier, None)
         self.published.discard(identifier)
         return identifier
 
-    def _add_reveal(self, activity: dict[str, Any], name: str, identifier: str) -> None:
+    def _call(
+        self, method: str, parameters: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        self._ensure_enabled()
+        return self.rc.call(method, parameters)
+
+    def _ensure_enabled(self) -> None:
+        if not self.is_enabled():
+            raise ObservationDisabled("rclone observation disabled")
+
+    def _add_reveal(
+        self, activity: dict[str, Any], name: str, identifier: str
+    ) -> str | None:
         if self.reveal_root is None:
-            return
+            return None
         path = safe_child(self.reveal_root, name)
         if path is None:
-            return
-        action = self.reveal.action(path, f"reveal-{identifier[-16:]}")
+            return None
+        action_id = self._reveal_action_id(identifier)
+        action = self.reveal.action(path, action_id)
         if action:
             activity["actions"] = [action]
+            return action_id
+        return None
+
+    @staticmethod
+    def _reveal_action_id(identifier: str) -> str:
+        return f"reveal-{identifier[-16:]}"
+
+    def _expire_reveals(self) -> None:
+        now = self.clock()
+        for action_id, deadline in list(self.reveal_deadlines.items()):
+            if deadline <= now:
+                self.reveal.remove(action_id)
+                self.reveal_deadlines.pop(action_id, None)
 
     @staticmethod
     def _progress(transfer: dict[str, Any]) -> float | None:
@@ -429,6 +516,7 @@ class RcloneProvider:
         for identifier in list(self.published):
             self._end(identifier)
         self.published.clear()
+        self.reveal_deadlines.clear()
         self.reveal.clear()
 
     def _end(self, identifier: str) -> None:
@@ -438,6 +526,9 @@ class RcloneProvider:
             pass
         self.fingerprints.pop(identifier, None)
         self.last_published_at.pop(identifier, None)
+        action_id = self._reveal_action_id(identifier)
+        self.reveal_deadlines.pop(action_id, None)
+        self.reveal.remove(action_id)
 
     def persisted(self, enabled: bool) -> dict[str, Any]:
         return {
@@ -477,9 +568,14 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(arguments: list[str] | None = None) -> int:
-    options = parser().parse_args(arguments)
-    if options.interval < 1:
-        parser().error("--interval must be at least one second")
+    argument_parser = parser()
+    options = argument_parser.parse_args(arguments)
+    if not math.isfinite(options.interval) or not (
+        1 <= options.interval <= MAX_INTERVAL_SECONDS
+    ):
+        argument_parser.error(
+            f"--interval must be between 1 and {MAX_INTERVAL_SECONDS} seconds"
+        )
     store = StateStore(options.state_file)
     pulse = PulseClient()
     if options.enable:
@@ -500,7 +596,11 @@ def main(arguments: list[str] | None = None) -> int:
         os.environ.get("ISLET_RCLONE_RC_PASS"),
     )
     provider = RcloneProvider(
-        rc, pulse=pulse, reveal_root=options.reveal_root, state=state
+        rc,
+        pulse=pulse,
+        reveal_root=options.reveal_root,
+        state=state,
+        is_enabled=lambda: store.load()["enabled"],
     )
     stopping = False
 
@@ -516,6 +616,8 @@ def main(arguments: list[str] | None = None) -> int:
             if enabled:
                 try:
                     provider.observe()
+                except ObservationDisabled:
+                    provider.disable()
                 except (RuntimeError, PulseError) as error:
                     print(str(error), file=sys.stderr)
                 enabled = store.save_runtime(provider.persisted(True))

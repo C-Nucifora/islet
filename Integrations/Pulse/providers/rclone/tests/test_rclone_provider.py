@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr
 import importlib.util
+import io
 from pathlib import Path
 import tempfile
 import unittest
@@ -39,9 +41,14 @@ class FakePulse:
 
 
 class FakeReveal:
+    def __init__(self) -> None:
+        self.active: set[str] = set()
+        self.removed: list[str] = []
+
     def action(self, path: Path, action_id: str = "reveal") -> dict | None:
         if not path.exists():
             return None
+        self.active.add(action_id)
         return {
             "id": action_id,
             "title": "Reveal in Finder",
@@ -49,7 +56,11 @@ class FakeReveal:
         }
 
     def clear(self) -> None:
-        pass
+        self.active.clear()
+
+    def remove(self, action_id: str) -> None:
+        self.active.discard(action_id)
+        self.removed.append(action_id)
 
     def close(self) -> None:
         pass
@@ -113,7 +124,7 @@ class RcloneProviderTests(unittest.TestCase):
         rc = FakeRC(
             {
                 ("job/list", None): {"executeId": "instance-a", "jobids": []},
-                ("core/stats", None): {
+                ("core/stats", "global_stats"): {
                     "transferring": [
                         {
                             "name": "archive/top-level.bin",
@@ -132,7 +143,51 @@ class RcloneProviderTests(unittest.TestCase):
 
         self.assertEqual(len(pulse.commands), 1)
         self.assertEqual(pulse.commands[0]["activity"]["progress"], 0.25)
-        self.assertIn(("core/stats", None), rc.calls)
+        self.assertIn(("core/stats", "global_stats"), rc.calls)
+
+    def test_same_name_global_and_async_job_transfers_have_independent_ids(self) -> None:
+        rc = FakeRC(
+            {
+                ("job/list", None): {
+                    "executeId": "instance-a",
+                    "runningIds": [7],
+                },
+                ("core/stats", "job/7"): {
+                    "transferring": [
+                        {"name": "same.bin", "bytes": 10, "size": 100}
+                    ]
+                },
+                ("core/transferred", "job/7"): {"transferred": []},
+                ("core/stats", "global_stats"): {
+                    "transferring": [
+                        {"name": "same.bin", "bytes": 70, "size": 100}
+                    ]
+                },
+                # rclone's aggregate transfer map is keyed by name, so one of the two
+                # same-name rows is absent here. Group-specific queries retain both.
+                ("core/stats", None): {
+                    "transferring": [
+                        {
+                            "name": "same.bin",
+                            "bytes": 10,
+                            "size": 100,
+                            "group": "job/7",
+                        }
+                    ]
+                },
+                ("core/transferred", None): {"transferred": []},
+            }
+        )
+        provider, pulse = self.provider(rc)
+
+        provider.observe()
+
+        identifiers = [command["activity"]["id"] for command in pulse.commands]
+        self.assertEqual(len(set(identifiers)), 2)
+        self.assertEqual(
+            {command["activity"]["progress"] for command in pulse.commands},
+            {0.1, 0.7},
+        )
 
     def test_finished_rc_housekeeping_jobs_are_not_polled_as_transfers(self) -> None:
         provider, _ = self.provider(
@@ -201,6 +256,76 @@ class RcloneProviderTests(unittest.TestCase):
         self.assertEqual(command["activity"]["state"], "failed")
         self.assertNotIn("/Users/private", str(command))
 
+    def test_current_rclone_completion_uses_completed_at_and_group(self) -> None:
+        record = {
+            "bytes": 8_388_608,
+            "checked": False,
+            "completed_at": "2026-08-31T07:57:17.8845+10:00",
+            "error": "",
+            "group": "job/7",
+            "name": "review.bin",
+            "size": 8_388_608,
+            "started_at": "2026-08-31T07:57:17.868719+10:00",
+            "what": "transferring",
+        }
+        rc = FakeRC(
+            {
+                ("job/list", None): {
+                    "executeId": "instance-a",
+                    "finishedIds": [7],
+                    "runningIds": [],
+                },
+                ("core/stats", "global_stats"): {},
+                ("core/transferred", None): {"transferred": [record]},
+            }
+        )
+        provider, pulse = self.provider(rc)
+
+        provider.observe()
+
+        self.assertEqual(len(pulse.commands), 1)
+        self.assertEqual(pulse.commands[0]["operation"], "event")
+        self.assertEqual(pulse.commands[0]["activity"]["state"], "succeeded")
+        self.assertEqual(
+            pulse.commands[0]["activity"]["id"],
+            rclone.opaque_id("instance-a", 7, "review.bin"),
+        )
+        self.assertEqual(provider.completed_after, 1_788_127_037_884)
+
+    def test_restart_recovery_deduplicates_current_rclone_completion(self) -> None:
+        record = {
+            "bytes": 3,
+            "checked": False,
+            "completed_at": "2026-08-31T07:57:17.884500+10:00",
+            "error": "permission denied",
+            "group": "job/7",
+            "name": "failure.bin",
+            "size": 9,
+            "started_at": "2026-08-31T07:57:16+10:00",
+            "what": "transferring",
+        }
+        responses = {
+            ("job/list", None): {
+                "executeId": "instance-a",
+                "finishedIds": [7],
+                "runningIds": [],
+            },
+            ("core/stats", "global_stats"): {},
+            ("core/transferred", None): {"transferred": [record]},
+        }
+        provider, pulse = self.provider(
+            FakeRC(responses), {"completedAfter": 1_788_127_037_883}
+        )
+
+        provider.observe()
+        recovered_state = provider.persisted(True)
+        restarted, restarted_pulse = self.provider(FakeRC(responses), recovered_state)
+        restarted.observe()
+
+        self.assertEqual(len(pulse.commands), 1)
+        self.assertEqual(pulse.commands[0]["activity"]["state"], "failed")
+        self.assertEqual(restarted_pulse.commands, [])
+
     def test_cancelled_or_removed_active_transfer_is_ended(self) -> None:
         identifier = rclone.opaque_id("instance-a", 7, "cancelled.bin")
         provider, pulse = self.provider(
@@ -224,6 +349,48 @@ class RcloneProviderTests(unittest.TestCase):
             all("actions" not in command["activity"] for command in pulse.commands)
         )
 
+    def test_terminal_reveal_mapping_expires_with_the_pulse_event(self) -> None:
+        now = [1_000.0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "finished.bin").touch()
+            record = {
+                "name": "finished.bin",
+                "timestamp": 1_000,
+                "error": "",
+                "jobid": 7,
+            }
+            provider, _ = self.provider(
+                fixture([], [record]), reveal_root=root, clock=lambda: now[0]
+            )
+
+            provider.observe()
+            reveal = provider.reveal
+            self.assertEqual(len(reveal.active), 1)
+            action_id = next(iter(reveal.active))
+            now[0] += 8
+            provider.observe()
+
+        self.assertEqual(reveal.active, set())
+        self.assertEqual(reveal.removed, [action_id])
+
+    def test_removed_active_transfer_revokes_only_its_reveal_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "active.bin").touch()
+            rc = fixture([{"name": "active.bin", "bytes": 1, "size": 2}])
+            provider, _ = self.provider(rc, reveal_root=root)
+
+            provider.observe()
+            reveal = provider.reveal
+            self.assertEqual(len(reveal.active), 1)
+            action_id = next(iter(reveal.active))
+            rc.responses[("core/stats", "job/7")] = {"transferring": []}
+            provider.observe()
+
+        self.assertEqual(reveal.active, set())
+        self.assertEqual(reveal.removed, [action_id])
+
     def test_disable_ends_items_without_observing_rclone(self) -> None:
         identifier = rclone.opaque_id("instance-a", 7, "active.bin")
         rc = fixture([])
@@ -234,6 +401,65 @@ class RcloneProviderTests(unittest.TestCase):
         self.assertEqual(rc.calls, [])
         self.assertEqual(pulse.ended, [(identifier, rclone.SOURCE)])
 
+    def test_concurrent_disable_stops_before_the_next_rc_request(self) -> None:
+        enabled = [True]
+
+        class DisablingRC(FakeRC):
+            def call(self, method: str, parameters: dict | None = None) -> dict:
+                response = super().call(method, parameters)
+                if method == "job/list":
+                    enabled[0] = False
+                return response
+
+        rc = DisablingRC(
+            {
+                ("job/list", None): {
+                    "executeId": "instance-a",
+                    "runningIds": [7],
+                }
+            }
+        )
+        provider, pulse = self.provider(rc)
+        provider.is_enabled = lambda: enabled[0]
+
+        with self.assertRaisesRegex(RuntimeError, "observation disabled"):
+            provider.observe()
+
+        self.assertEqual(rc.calls, [("job/list", None)])
+        self.assertEqual(pulse.commands, [])
+
+    def test_concurrent_disable_stops_before_publishing_a_completed_poll(self) -> None:
+        enabled = [True]
+
+        class DisablingRC(FakeRC):
+            def call(self, method: str, parameters: dict | None = None) -> dict:
+                response = super().call(method, parameters)
+                if method == "core/transferred" and parameters is None:
+                    enabled[0] = False
+                return response
+
+        rc = DisablingRC(
+            {
+                ("job/list", None): {
+                    "executeId": "instance-a",
+                    "runningIds": [],
+                },
+                ("core/stats", "global_stats"): {
+                    "transferring": [
+                        {"name": "live.bin", "bytes": 1, "size": 2}
+                    ]
+                },
+                ("core/transferred", None): {"transferred": []},
+            }
+        )
+        provider, pulse = self.provider(rc)
+        provider.is_enabled = lambda: enabled[0]
+
+        with self.assertRaisesRegex(RuntimeError, "observation disabled"):
+            provider.observe()
+
+        self.assertEqual(pulse.commands, [])
+
 
 class RcloneClientTests(unittest.TestCase):
     def test_rejects_remote_and_credential_bearing_urls(self) -> None:
@@ -243,6 +469,33 @@ class RcloneClientTests(unittest.TestCase):
             rclone.RcloneClient("http://localhost:5572")
         with self.assertRaises(ValueError):
             rclone.RcloneClient("http://user:secret@127.0.0.1:5572")
+
+    def test_interval_cannot_exceed_the_active_heartbeat_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "state.json"
+            accepted = rclone.main(
+                [
+                    "--disable",
+                    "--interval",
+                    "30",
+                    "--state-file",
+                    str(state_file),
+                ]
+            )
+            self.assertEqual(accepted, 0)
+
+            for invalid in ("30.001", "nan", "inf"):
+                with self.subTest(invalid=invalid), redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        rclone.main(
+                            [
+                                "--disable",
+                                "--interval",
+                                invalid,
+                                "--state-file",
+                                str(state_file),
+                            ]
+                        )
 
 
 if __name__ == "__main__":

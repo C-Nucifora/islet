@@ -72,6 +72,23 @@ class RevealServerTests(unittest.TestCase):
             finally:
                 reveal.close()
 
+    def test_remove_revokes_one_reveal_action(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.pdf"
+            path.touch()
+            server = pulse_client.RevealServer()
+            try:
+                action = server.action(path, "finished-transfer")
+                self.assertIsNotNone(action)
+
+                server.remove("finished-transfer")
+
+                with self.assertRaises(error.HTTPError) as failure:
+                    request.urlopen(action["url"], timeout=1)
+                self.assertEqual(failure.exception.code, 404)
+            finally:
+                server.close()
+
 
 if __name__ == "__main__":
     unittest.main()
