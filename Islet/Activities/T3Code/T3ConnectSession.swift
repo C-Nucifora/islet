@@ -1,5 +1,13 @@
 import Foundation
 
+protocol T3OAuthCredentialStoring: Sendable {
+  func loadOAuthRecord() async throws -> T3OAuthRecord?
+  func replaceOAuthRecord(_ record: T3OAuthRecord) async throws
+  func signOut() async throws
+}
+
+extension T3ConnectCredentialStore: T3OAuthCredentialStoring {}
+
 enum T3ConnectSessionError: Error, Equatable, LocalizedError {
   case notLinked
   case invalidTokenResponse
@@ -28,7 +36,7 @@ actor T3ConnectSession {
   private nonisolated static let refreshLeadTime: TimeInterval = 5 * 60
   private nonisolated static let requestDeadline: TimeInterval = 30
 
-  private let credentialStore: T3ConnectCredentialStore
+  private let credentialStore: any T3OAuthCredentialStoring
   private let transport: T3HTTPTransport
   private let configuration: T3ConnectConfiguration
   private let tokenOrigin: T3HTTPOrigin?
@@ -38,9 +46,10 @@ actor T3ConnectSession {
   private let onSignOutBegan: @Sendable () -> Void
   private var refreshTask: (id: UUID, task: Task<T3OAuthRecord, any Error>)?
   private var generation: UInt64 = 0
+  private var accountTransitionInProgress = false
 
   init(
-    credentialStore: T3ConnectCredentialStore = T3ConnectCredentialStore(),
+    credentialStore: any T3OAuthCredentialStoring = T3ConnectCredentialStore(),
     transport: T3HTTPTransport = .shared,
     configuration: T3ConnectConfiguration = .production,
     now: @escaping @Sendable () -> Date = Date.init,
@@ -75,18 +84,28 @@ actor T3ConnectSession {
   }
 
   func validOAuthRecord() async throws -> T3OAuthRecord {
-    guard let record = try await credentialStore.loadOAuthRecord() else {
-      throw T3ConnectSessionError.notLinked
+    let capturedGeneration = generation
+    try Task.checkCancellation()
+    guard !accountTransitionInProgress else { throw T3ConnectSessionError.staleOperation }
+    let loadedRecord = try await credentialStore.loadOAuthRecord()
+    try Task.checkCancellation()
+    guard capturedGeneration == generation, !accountTransitionInProgress else {
+      throw T3ConnectSessionError.staleOperation
     }
+    guard let record = loadedRecord else { throw T3ConnectSessionError.notLinked }
     if record.expiresAt.timeIntervalSince(now()) > Self.refreshLeadTime { return record }
 
     if let refreshTask {
       onRefreshTaskReused()
-      return try await refreshTask.task.value
+      let refreshed = try await refreshTask.task.value
+      try Task.checkCancellation()
+      guard capturedGeneration == generation, !accountTransitionInProgress else {
+        throw T3ConnectSessionError.staleOperation
+      }
+      return refreshed
     }
 
     let taskID = UUID()
-    let capturedGeneration = generation
     let task = Task { [self] in
       try await refresh(record, capturedGeneration: capturedGeneration)
     }
@@ -102,9 +121,15 @@ actor T3ConnectSession {
   }
 
   func commit(_ candidate: T3OAuthRecord) async throws {
-    let capturedGeneration = generation
     try Task.checkCancellation()
-    guard capturedGeneration == generation else { throw T3ConnectSessionError.staleOperation }
+    generation &+= 1
+    let capturedGeneration = generation
+    accountTransitionInProgress = true
+    refreshTask?.task.cancel()
+    refreshTask = nil
+    defer {
+      if capturedGeneration == generation { accountTransitionInProgress = false }
+    }
     try await credentialStore.replaceOAuthRecord(candidate)
     try Task.checkCancellation()
     guard capturedGeneration == generation else { throw T3ConnectSessionError.staleOperation }
@@ -112,9 +137,14 @@ actor T3ConnectSession {
 
   func signOut() async throws {
     generation &+= 1
+    let capturedGeneration = generation
+    accountTransitionInProgress = true
     refreshTask?.task.cancel()
     refreshTask = nil
     onSignOutBegan()
+    defer {
+      if capturedGeneration == generation { accountTransitionInProgress = false }
+    }
     try await credentialStore.signOut()
   }
 

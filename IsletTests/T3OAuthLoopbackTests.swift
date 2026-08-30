@@ -4,7 +4,7 @@ import XCTest
 
 @testable import Islet
 
-final class T3OAuthLoopbackTests: XCTestCase {
+final class T3OAuthLoopbackTests: XCTestCase, @unchecked Sendable {
   func testProductionFactoryUsesTheRegisteredIPv4Port() async {
     let listener = T3OAuthLoopbackListener.production()
 
@@ -178,6 +178,69 @@ final class T3OAuthLoopbackTests: XCTestCase {
     XCTAssertEqual(result, .authorizationCode("early-code"))
   }
 
+  func testCancellationWhileSuccessSendCompletionIsSuspendedCannotRetainCode() async throws {
+    let completionGate = T3LoopbackGate()
+    let completionHandled = T3LoopbackSignal()
+    let fixture = try await LoopbackFixture(
+      responseCompletionGate: { await completionGate.suspend() },
+      onResponseCompletionHandled: { completionHandled.signal() })
+    let resultTask = Task { try await fixture.listener.waitForCallback() }
+    let responseTask = Task {
+      try await send(
+        "GET /callback?state=expected-state&code=canceled-code HTTP/1.1\r\n"
+          + "Host: 127.0.0.1\r\n\r\n",
+        port: fixture.port)
+    }
+    await completionGate.waitUntilSuspended()
+
+    await fixture.listener.cancel()
+    do {
+      _ = try await resultTask.value
+      XCTFail("Expected cancellation")
+    } catch is CancellationError {
+    }
+    await completionGate.resume()
+    _ = try? await responseTask.value
+    await completionHandled.wait()
+
+    do {
+      _ = try await fixture.listener.waitForCallback()
+      XCTFail("Expected cancellation to remain terminal")
+    } catch is CancellationError {
+    }
+  }
+
+  func testReceiveCapacityNeverExceedsRemainingHeaderBudget() {
+    XCTAssertEqual(
+      T3OAuthLoopbackListener.maximumReceiveLength(bufferedHeaderBytes: 0), 2_048)
+    XCTAssertEqual(
+      T3OAuthLoopbackListener.maximumReceiveLength(bufferedHeaderBytes: 8_191), 1)
+    XCTAssertNil(T3OAuthLoopbackListener.maximumReceiveLength(bufferedHeaderBytes: 8_192))
+    XCTAssertNil(T3OAuthLoopbackListener.maximumReceiveLength(bufferedHeaderBytes: 8_193))
+  }
+
+  func testUnterminatedHeaderAtEightKiBIsRejectedBeforeAnotherRead() async throws {
+    let fixture = try await LoopbackFixture()
+    defer { Task { await fixture.listener.cancel() } }
+    let resultTask = Task { try await fixture.listener.waitForCallback() }
+    let prefix = "GET /callback HTTP/1.1\r\nX-Fill: "
+    let request =
+      prefix
+      + String(
+        repeating: "a", count: T3OAuthLoopbackListener.maximumHeaderBytes - prefix.utf8.count)
+    XCTAssertEqual(request.utf8.count, T3OAuthLoopbackListener.maximumHeaderBytes)
+
+    let cappedResponse = try await send(request, port: fixture.port)
+    _ = try await send(
+      "GET /callback?state=expected-state&code=right HTTP/1.1\r\n"
+        + "Host: 127.0.0.1\r\n\r\n",
+      port: fixture.port)
+
+    XCTAssertTrue(cappedResponse.hasPrefix("HTTP/1.1 431"))
+    let result = try await resultTask.value
+    XCTAssertEqual(result, .authorizationCode("right"))
+  }
+
   private func send(_ request: String, port: UInt16) async throws -> String {
     try await Task.detached {
       let descriptor = socket(AF_INET, SOCK_STREAM, 0)
@@ -232,12 +295,73 @@ private struct LoopbackFixture {
   let listener: T3OAuthLoopbackListener
   let port: UInt16
 
-  init() async throws {
+  init(
+    responseCompletionGate: @escaping @Sendable () async -> Void = {},
+    onResponseCompletionHandled: @escaping @Sendable () -> Void = {}
+  ) async throws {
     let reservation = try LoopbackPortReservation()
     port = reservation.port
     reservation.release()
-    listener = T3OAuthLoopbackListener(port: port, timeout: .seconds(2))
+    listener = T3OAuthLoopbackListener(
+      port: port, timeout: .seconds(2),
+      responseCompletionGate: responseCompletionGate,
+      onResponseCompletionHandled: onResponseCompletionHandled)
     try await listener.start(state: "expected-state")
+  }
+}
+
+private actor T3LoopbackGate {
+  private var suspended = false
+  private var suspendedWaiter: CheckedContinuation<Void, Never>?
+  private var resumeContinuation: CheckedContinuation<Void, Never>?
+
+  func suspend() async {
+    suspended = true
+    suspendedWaiter?.resume()
+    suspendedWaiter = nil
+    await withCheckedContinuation { continuation in
+      resumeContinuation = continuation
+    }
+  }
+
+  func waitUntilSuspended() async {
+    if suspended { return }
+    await withCheckedContinuation { continuation in
+      suspendedWaiter = continuation
+    }
+  }
+
+  func resume() {
+    resumeContinuation?.resume()
+    resumeContinuation = nil
+  }
+}
+
+private final class T3LoopbackSignal: @unchecked Sendable {
+  private let lock = NSLock()
+  private var signaled = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  func signal() {
+    lock.lock()
+    signaled = true
+    let waiting = waiters
+    waiters.removeAll()
+    lock.unlock()
+    for waiter in waiting { waiter.resume() }
+  }
+
+  func wait() async {
+    await withCheckedContinuation { continuation in
+      lock.lock()
+      if signaled {
+        lock.unlock()
+        continuation.resume()
+      } else {
+        waiters.append(continuation)
+        lock.unlock()
+      }
+    }
   }
 }
 

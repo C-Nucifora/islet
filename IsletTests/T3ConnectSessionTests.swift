@@ -247,6 +247,54 @@ final class T3ConnectSessionTests: XCTestCase {
       [T3ConnectCredentialStore.oauthAccount, T3ConnectCredentialStore.dpopKeyAccount])
   }
 
+  func testSignOutInvalidatesAStoredRecordLoadSuspendedBeforeSessionResume() async throws {
+    let stored = try record(expiresIn: 3_600)
+    let credentialStore = T3SuspendedOAuthCredentialStore(record: stored)
+    let recorder = T3OAuthHTTPRecorder(responses: [])
+    let session = makeSession(credentialStore: credentialStore, recorder: recorder)
+    let validTask = Task { try await session.validOAuthRecord() }
+    await credentialStore.waitForLoad()
+
+    try await session.signOut()
+    await credentialStore.resumeLoad()
+
+    do {
+      _ = try await validTask.value
+      XCTFail("Expected the pre-sign-out load to become stale")
+    } catch T3ConnectSessionError.staleOperation {
+    }
+    let persistedRecord = await credentialStore.record()
+    XCTAssertNil(persistedRecord)
+    XCTAssertTrue(recorder.requests().isEmpty)
+  }
+
+  func testCommittingNewGrantPreventsOldSuspendedRefreshFromOverwritingIt() async throws {
+    let oldRecord = try record(expiresIn: 1)
+    let secureStore = try secureStore(oauthRecord: oldRecord)
+    let recorder = T3OAuthHTTPRecorder(
+      responses: [
+        .json(
+          status: 200,
+          #"{"access_token":"stale-access","token_type":"Bearer","expires_in":3600}"#)
+      ],
+      suspended: true)
+    let session = makeSession(store: secureStore, recorder: recorder)
+    let refreshTask = Task { try await session.validOAuthRecord() }
+    await recorder.waitForRequestCount(1)
+    let candidate = try T3OAuthRecord(
+      grantID: newGrantID, accessToken: "linked-access", refreshToken: "linked-refresh",
+      expiresAt: now.addingTimeInterval(3_600), displayIdentity: "linked@example.com")
+
+    try await session.commit(candidate)
+    let recordAfterCommit = try await secureStore.oauthRecord()
+    recorder.resumeAll()
+    _ = try? await refreshTask.value
+
+    let finalRecord = try await secureStore.oauthRecord()
+    XCTAssertEqual(recordAfterCommit, candidate)
+    XCTAssertEqual(finalRecord, candidate)
+  }
+
   func testLoadStoredAccountReturnsPersistedDisplayIdentity() async throws {
     let stored = try record(expiresIn: 1, displayIdentity: "person@example.com")
     let secureStore = try secureStore(oauthRecord: stored)
@@ -277,6 +325,21 @@ final class T3ConnectSessionTests: XCTestCase {
       grantID: { grantID ?? UUID() },
       onRefreshTaskReused: onRefreshTaskReused,
       onSignOutBegan: onSignOutBegan)
+  }
+
+  private func makeSession(
+    credentialStore: any T3OAuthCredentialStoring,
+    recorder: T3OAuthHTTPRecorder
+  ) -> T3ConnectSession {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [T3OAuthURLProtocol.self]
+    T3OAuthURLProtocol.recorder = recorder
+    let fixedNow = now
+    return T3ConnectSession(
+      credentialStore: credentialStore,
+      transport: T3HTTPTransport(session: URLSession(configuration: configuration)),
+      configuration: .test,
+      now: { fixedNow })
   }
 
   private func record(
@@ -510,6 +573,50 @@ private actor T3SessionSecureRecordStore: T3SecureRecordStore {
     oauthReplacementContinuation?.resume()
     oauthReplacementContinuation = nil
   }
+}
+
+private actor T3SuspendedOAuthCredentialStore: T3OAuthCredentialStoring {
+  private var storedRecord: T3OAuthRecord?
+  private var loadStarted = false
+  private var loadWaiter: CheckedContinuation<Void, Never>?
+  private var loadContinuation: CheckedContinuation<Void, Never>?
+
+  init(record: T3OAuthRecord) {
+    storedRecord = record
+  }
+
+  func loadOAuthRecord() async throws -> T3OAuthRecord? {
+    let capturedRecord = storedRecord
+    loadStarted = true
+    loadWaiter?.resume()
+    loadWaiter = nil
+    await withCheckedContinuation { continuation in
+      loadContinuation = continuation
+    }
+    return capturedRecord
+  }
+
+  func replaceOAuthRecord(_ record: T3OAuthRecord) async throws {
+    storedRecord = record
+  }
+
+  func signOut() async throws {
+    storedRecord = nil
+  }
+
+  func waitForLoad() async {
+    if loadStarted { return }
+    await withCheckedContinuation { continuation in
+      loadWaiter = continuation
+    }
+  }
+
+  func resumeLoad() {
+    loadContinuation?.resume()
+    loadContinuation = nil
+  }
+
+  func record() -> T3OAuthRecord? { storedRecord }
 }
 
 private final class T3SessionSignal: @unchecked Sendable {

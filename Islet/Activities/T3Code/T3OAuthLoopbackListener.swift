@@ -46,6 +46,8 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
   let configuredPort: UInt16
 
   private let timeout: Duration
+  private let responseCompletionGate: @Sendable () async -> Void
+  private let onResponseCompletionHandled: @Sendable () -> Void
   private let queue = DispatchQueue(label: "dev.islet.t3-oauth-callback", qos: .userInitiated)
   private var listener: NWListener?
   private var connections: [ObjectIdentifier: NWConnection] = [:]
@@ -56,14 +58,21 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
   private var completing = false
   private var terminalError: (any Error)?
   private var terminalResult: T3OAuthCallbackResult?
+  private var generation: UInt64 = 0
 
   static func production() -> T3OAuthLoopbackListener {
     T3OAuthLoopbackListener(port: productionPort, timeout: .seconds(10 * 60))
   }
 
-  init(port: UInt16, timeout: Duration) {
+  init(
+    port: UInt16, timeout: Duration,
+    responseCompletionGate: @escaping @Sendable () async -> Void = {},
+    onResponseCompletionHandled: @escaping @Sendable () -> Void = {}
+  ) {
     configuredPort = port
     self.timeout = timeout
+    self.responseCompletionGate = responseCompletionGate
+    self.onResponseCompletionHandled = onResponseCompletionHandled
   }
 
   func start(state: String) async throws {
@@ -215,7 +224,11 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
   private nonisolated func receive(
     on connection: NWConnection, id: ObjectIdentifier, buffer: Data
   ) {
-    connection.receive(minimumIncompleteLength: 1, maximumLength: 2_048) {
+    guard let maximumLength = Self.maximumReceiveLength(bufferedHeaderBytes: buffer.count) else {
+      Task { await self.send(.headersTooLarge, on: connection, id: id, result: nil) }
+      return
+    }
+    connection.receive(minimumIncompleteLength: 1, maximumLength: maximumLength) {
       [weak self, weak connection] data, _, complete, error in
       guard let self, let connection else { return }
       Task {
@@ -232,6 +245,11 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
   ) {
     guard connections[id] === connection, !completing else {
       connection.cancel()
+      return
+    }
+    let remainingCapacity = Self.maximumHeaderBytes - buffer.count
+    guard remainingCapacity >= 0, data?.count ?? 0 <= remainingCapacity else {
+      send(.headersTooLarge, on: connection, id: id, result: nil)
       return
     }
     var accumulated = buffer
@@ -265,7 +283,7 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
       return
     }
 
-    guard accumulated.count <= Self.maximumHeaderBytes else {
+    guard accumulated.count < Self.maximumHeaderBytes else {
       send(.headersTooLarge, on: connection, id: id, result: nil)
       return
     }
@@ -284,18 +302,31 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
     _ response: ResponseKind, on connection: NWConnection, id: ObjectIdentifier,
     result: T3OAuthCallbackResult?
   ) {
+    let capturedGeneration = generation
     connection.send(
       content: response.data, contentContext: .finalMessage, isComplete: true,
       completion: .contentProcessed { [weak self, weak connection] _ in
-        connection?.cancel()
         guard let self else { return }
-        Task { await self.didSendResponse(id: id, result: result) }
+        Task {
+          await self.responseCompletionGate()
+          await self.didSendResponse(
+            id: id, result: result, capturedGeneration: capturedGeneration)
+          self.onResponseCompletionHandled()
+          connection?.cancel()
+        }
       })
   }
 
-  private func didSendResponse(id: ObjectIdentifier, result: T3OAuthCallbackResult?) {
+  nonisolated static func maximumReceiveLength(bufferedHeaderBytes: Int) -> Int? {
+    guard bufferedHeaderBytes >= 0, bufferedHeaderBytes < maximumHeaderBytes else { return nil }
+    return min(2_048, maximumHeaderBytes - bufferedHeaderBytes)
+  }
+
+  private func didSendResponse(
+    id: ObjectIdentifier, result: T3OAuthCallbackResult?, capturedGeneration: UInt64
+  ) {
     connections[id] = nil
-    guard let result else { return }
+    guard capturedGeneration == generation, terminalError == nil, let result else { return }
     finish(returning: result)
   }
 
@@ -312,6 +343,7 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
   }
 
   private func finish(returning result: T3OAuthCallbackResult) {
+    generation &+= 1
     terminalError = nil
     cleanup()
     let continuation = callbackContinuation
@@ -324,6 +356,7 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
   }
 
   private func finish(throwing error: any Error) {
+    generation &+= 1
     terminalError = error
     terminalResult = nil
     cleanup()
