@@ -249,7 +249,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         publishResolvedCandidates()
       }
     }
-    guard isMonitoring, Defaults[.t3CodeEnabled], !isSystemSuspended else {
+    guard isMonitoring, ActivityEnablement.isEnabled("t3Code"), !isSystemSuspended else {
       connectCoordinator.stopInventory(preserveInventory: true)
       return
     }
@@ -351,8 +351,10 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         failures += 1
         upsert(
           T3EnvironmentSnapshot(
-            id: "local", label: "This Mac", baseURL: endpoint.baseURL.absoluteString,
-            isLocal: true, platform: nil, serverVersion: nil,
+            id: Self.provisionalLocalSnapshotID,
+            logicalEnvironmentID: Self.provisionalLocalSnapshotID, source: .local,
+            label: "This Mac", baseURL: endpoint.baseURL.absoluteString, platform: nil,
+            serverVersion: nil,
             state: .credentialError(error.localizedDescription), agents: []))
       } catch {
         guard !Task.isCancelled else { return }
@@ -619,18 +621,24 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   nonisolated static func visibleEnvironments(
     snapshots: [T3EnvironmentSnapshot], profiles: [T3EnvironmentProfile]
   ) -> [T3EnvironmentSnapshot] {
-    let local = snapshots.filter(\.isLocal)
-    let remotes = enabledRemoteProfiles(profiles).map { profile in
+    let enabledProfiles = enabledRemoteProfiles(profiles)
+    let enabledManualIDs = Set(
+      enabledProfiles.map {
+        remoteSnapshotID(environmentID: $0.id, baseURL: $0.baseURL)
+      })
+    let retained = snapshots.filter {
+      $0.source != .manual || enabledManualIDs.contains($0.id)
+    }
+    let retainedIDs = Set(retained.map(\.id))
+    let pendingManual: [T3EnvironmentSnapshot] = enabledProfiles.compactMap { profile in
       let id = remoteSnapshotID(environmentID: profile.id, baseURL: profile.baseURL)
-      return snapshots.first(where: { $0.id == id })
-        ?? T3EnvironmentSnapshot(
-          id: id, label: profile.label, baseURL: profile.baseURL, isLocal: false,
-          platform: nil, serverVersion: nil, state: .connecting, agents: [])
+      guard !retainedIDs.contains(id) else { return nil }
+      return T3EnvironmentSnapshot(
+        id: id, logicalEnvironmentID: profile.id, source: .manual,
+        label: profile.label, baseURL: profile.baseURL, platform: nil, serverVersion: nil,
+        state: .connecting, agents: [])
     }
-    return (local + remotes).sorted {
-      if $0.isLocal != $1.isLocal { return $0.isLocal }
-      return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
-    }
+    return T3EnvironmentResolver.resolve(retained + pendingManual)
   }
 
   nonisolated static func environmentActions(

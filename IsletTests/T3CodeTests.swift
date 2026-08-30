@@ -453,27 +453,32 @@ final class T3CodeTests: XCTestCase {
       T3EnvironmentSnapshot(
         id: T3CodeActivity.remoteSnapshotID(
           environmentID: "healthy", baseURL: "https://healthy.example"),
-        label: "Healthy", baseURL: "https://healthy.example", isLocal: false,
+        logicalEnvironmentID: "healthy", source: .manual,
+        label: "Healthy", baseURL: "https://healthy.example",
         platform: nil, serverVersion: nil, state: .connected, agents: []),
       T3EnvironmentSnapshot(
         id: T3CodeActivity.remoteSnapshotID(
           environmentID: "offline", baseURL: "https://offline.example"),
-        label: "Offline", baseURL: "https://offline.example", isLocal: false,
+        logicalEnvironmentID: "offline", source: .manual,
+        label: "Offline", baseURL: "https://offline.example",
         platform: nil, serverVersion: nil, state: .offline("No route"), agents: []),
       T3EnvironmentSnapshot(
         id: T3CodeActivity.remoteSnapshotID(
           environmentID: "reconnecting", baseURL: "https://reconnecting.example"),
-        label: "Reconnecting", baseURL: "https://reconnecting.example", isLocal: false,
+        logicalEnvironmentID: "reconnecting", source: .manual,
+        label: "Reconnecting", baseURL: "https://reconnecting.example",
         platform: nil, serverVersion: nil, state: .reconnecting("No route"), agents: []),
       T3EnvironmentSnapshot(
         id: T3CodeActivity.remoteSnapshotID(
           environmentID: "unpaired", baseURL: "https://unpaired.example"),
-        label: "Unpaired", baseURL: "https://unpaired.example", isLocal: false,
+        logicalEnvironmentID: "unpaired", source: .manual,
+        label: "Unpaired", baseURL: "https://unpaired.example",
         platform: nil, serverVersion: nil, state: .needsPairing, agents: []),
       T3EnvironmentSnapshot(
         id: T3CodeActivity.remoteSnapshotID(
           environmentID: "credentials", baseURL: "https://credentials.example"),
-        label: "Credential", baseURL: "https://credentials.example", isLocal: false,
+        logicalEnvironmentID: "credentials", source: .manual,
+        label: "Credential", baseURL: "https://credentials.example",
         platform: nil, serverVersion: nil,
         state: .credentialError("Keychain unavailable"), agents: []),
     ]
@@ -491,6 +496,42 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(states["Reconnecting"], .reconnecting("No route"))
     XCTAssertEqual(states["Unpaired"], .needsPairing)
     XCTAssertEqual(states["Credential"], .credentialError("Keychain unavailable"))
+  }
+
+  func testVisibleEnvironmentsIncludesConnectSourcesWithoutDuplicatingManualFailover() {
+    let connect = Self.environmentSnapshot(
+      id: "connect|shared", logicalEnvironmentID: "shared", source: .connect)
+    let connectOnly = Self.environmentSnapshot(
+      id: "connect|cloud-only", logicalEnvironmentID: "cloud-only", source: .connect)
+    let profiles = [
+      T3EnvironmentProfile(
+        id: "shared", label: "Manual fallback", baseURL: "https://manual.example")
+    ]
+
+    let visible = T3CodeActivity.visibleEnvironments(
+      snapshots: [connect, connectOnly], profiles: profiles)
+
+    XCTAssertEqual(Set(visible.map(\.id)), [connect.id, connectOnly.id])
+    XCTAssertEqual(visible.count, 2)
+  }
+
+  func testVisibleEnvironmentsKeepsManualLocalIDBesideProvisionalLocalDiscovery() {
+    let provisionalLocal = Self.environmentSnapshot(
+      id: "local", logicalEnvironmentID: "local", source: .local,
+      state: .offline("Not discovered"))
+    let profile = T3EnvironmentProfile(
+      id: "local", label: "Remote named local", baseURL: "https://manual.example")
+
+    let visible = T3CodeActivity.visibleEnvironments(
+      snapshots: [provisionalLocal], profiles: [profile])
+
+    XCTAssertEqual(
+      Set(visible.map(\.id)),
+      [
+        provisionalLocal.id,
+        T3CodeActivity.remoteSnapshotID(
+          environmentID: profile.id, baseURL: profile.baseURL),
+      ])
   }
 
   func testEnvironmentActionsMatchConnectionStateAndMachineType() {
@@ -563,12 +604,12 @@ final class T3CodeTests: XCTestCase {
   }
 
   func testStopDropsLocalDiscoveryThatCompletesAfterCancellation() async {
-    let previousEnabled = Defaults[.t3CodeEnabled]
+    let previousDisabledActivities = Defaults[.disabledActivities]
     let previousProfiles = Defaults[.t3RemoteEnvironments]
-    Defaults[.t3CodeEnabled] = true
+    Defaults[.disabledActivities] = previousDisabledActivities.filter { $0 != "t3Code" }
     Defaults[.t3RemoteEnvironments] = []
     defer {
-      Defaults[.t3CodeEnabled] = previousEnabled
+      Defaults[.disabledActivities] = previousDisabledActivities
       Defaults[.t3RemoteEnvironments] = previousProfiles
     }
     let discovery = T3LocalDiscoveryGate()
@@ -587,12 +628,12 @@ final class T3CodeTests: XCTestCase {
   }
 
   func testPreservedRestartDropsOlderSuspendedLocalDiscoveryResult() async {
-    let previousEnabled = Defaults[.t3CodeEnabled]
+    let previousDisabledActivities = Defaults[.disabledActivities]
     let previousProfiles = Defaults[.t3RemoteEnvironments]
-    Defaults[.t3CodeEnabled] = true
+    Defaults[.disabledActivities] = previousDisabledActivities.filter { $0 != "t3Code" }
     Defaults[.t3RemoteEnvironments] = []
     defer {
-      Defaults[.t3CodeEnabled] = previousEnabled
+      Defaults[.disabledActivities] = previousDisabledActivities
       Defaults[.t3RemoteEnvironments] = previousProfiles
     }
     let staleDiscovery = T3LocalDiscoveryGate()

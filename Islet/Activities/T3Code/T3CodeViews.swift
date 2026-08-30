@@ -428,7 +428,7 @@ struct T3SettingsSection: View {
       state: coordinator.state,
       lastLinkError: coordinator.lastLinkError,
       lastCleanupError: coordinator.lastCleanupError,
-      monitoringEnabled: enabled)
+      monitoringEnabled: isActivityEnabled)
   }
 
   private var agentsSection: some View {
@@ -624,7 +624,7 @@ struct T3SettingsSection: View {
         environmentID: profile.id, baseURL: profile.baseURL)
       let row = T3EnvironmentRowPresentation(
         manualLabel: profile.label, profileEnabled: profile.enabled,
-        monitoringEnabled: enabled, state: state)
+        monitoringEnabled: isActivityEnabled, state: state)
       HStack {
         Toggle(
           isOn: Binding(
@@ -639,7 +639,7 @@ struct T3SettingsSection: View {
         Spacer()
         Text(row.stateText)
           .font(.caption)
-          .foregroundStyle(connectionColor(enabled && profile.enabled ? state : nil))
+          .foregroundStyle(connectionColor(isActivityEnabled && profile.enabled ? state : nil))
         Button(role: .destructive) {
           pendingRemoval = profile
         } label: {

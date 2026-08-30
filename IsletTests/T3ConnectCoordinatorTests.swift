@@ -961,14 +961,14 @@ final class T3ConnectCoordinatorTests: XCTestCase {
   }
 
   func testActivitySuspensionEnergyResumeReconnectAndSignOutStaySourceSelective() async throws {
-    let previousEnabled = Defaults[.t3CodeEnabled]
+    let previousDisabledActivities = Defaults[.disabledActivities]
     let previousEnergy = Defaults[.energyMode]
     let previousProfiles = Defaults[.t3RemoteEnvironments]
-    Defaults[.t3CodeEnabled] = true
+    Defaults[.disabledActivities] = previousDisabledActivities.filter { $0 != "t3Code" }
     Defaults[.energyMode] = .live
     Defaults[.t3RemoteEnvironments] = []
     defer {
-      Defaults[.t3CodeEnabled] = previousEnabled
+      Defaults[.disabledActivities] = previousDisabledActivities
       Defaults[.energyMode] = previousEnergy
       Defaults[.t3RemoteEnvironments] = previousProfiles
     }
