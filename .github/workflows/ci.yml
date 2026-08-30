@@ -33,6 +33,11 @@ jobs:
           Scripts/install-xcodegen.sh "$RUNNER_TEMP/xcodegen"
           echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
 
+      - name: Install actionlint
+        run: |
+          Scripts/install-actionlint.sh "$RUNNER_TEMP/actionlint"
+          echo "$RUNNER_TEMP/actionlint/bin" >> "$GITHUB_PATH"
+
       - name: Restore verified xcbeautify archive
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -50,6 +55,7 @@ jobs:
           swift --version
           xcodegen --version
           test "$(xcbeautify --version)" = "3.2.1"
+          test "$(actionlint -version)" = "1.7.12"
 
       - name: Verify MediaRemoteAdapter provenance
         run: |
@@ -90,6 +96,8 @@ jobs:
             Integrations/Pulse/examples/github-actions.sh \
             Integrations/Pulse/providers/chrome-downloads/install-native-host.sh \
             Scripts/*.sh
+          actionlint
+          Scripts/test-update-tooling.sh
 
       - name: Test out-of-process Pulse providers
         run: |
@@ -117,7 +125,8 @@ jobs:
             -project Islet.xcodeproj \
             -scheme Islet \
             -derivedDataPath "$DERIVED_DATA" \
-            -onlyUsePackageVersionsFromResolvedFile | xcbeautify
+            -onlyUsePackageVersionsFromResolvedFile \
+            -packageAuthorizationProvider netrc | xcbeautify
           cmp Package.resolved Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
       - name: Run arm64 tests
@@ -208,7 +217,8 @@ jobs:
             -project Islet.xcodeproj \
             -scheme Islet \
             -derivedDataPath "$DERIVED_DATA" \
-            -onlyUsePackageVersionsFromResolvedFile | xcbeautify
+            -onlyUsePackageVersionsFromResolvedFile \
+            -packageAuthorizationProvider netrc | xcbeautify
           cmp Package.resolved Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
       - name: Run x86_64 tests
