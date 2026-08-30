@@ -242,6 +242,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .pulse:
       pageContent + [
         "Pulse providers", "Local activity API", "Pulse items", "Authentication",
+        "Mark silent work stale after provider timeout",
         "Shared bearer token", "Quick Actions", "Reveal token folder", "Dismiss visible",
         "Rotate provider token", "Provider examples", "Allow Mute Revoke Policy",
         "Other sources seen this session", "Pulse history", "Show session history",
@@ -324,7 +325,7 @@ private enum PulseHistoryFilter: String, CaseIterable, Identifiable {
     switch self {
     case .all: true
     case .accepted:
-      [.shown, .updated, .ended, .dismissed, .expired].contains(entry.result)
+      [.shown, .updated, .ended, .dismissed, .expired, .stale, .kept].contains(entry.result)
     case .filtered: [.suppressed, .evicted].contains(entry.result)
     case .rejected: entry.result == .rejected
     }
@@ -374,6 +375,7 @@ struct SettingsView: View {
   @Default(.systemAlwaysVisible) private var systemAlwaysVisible
   @Default(.metricStyles) private var metricStyles
   @Default(.disabledEventSources) private var disabledEventSources
+  @Default(.pulseStaleTimeout) private var pulseStaleTimeout
   @Default(.energyMode) private var energyMode
   @Default(.continuityAlwaysVisible) private var continuityAlwaysVisible
   @Default(.continuitySneaks) private var continuitySneaks
@@ -1300,6 +1302,24 @@ struct SettingsView: View {
         LabeledContent("Authentication") {
           Text("Shared bearer token").foregroundStyle(.secondary)
         }
+        LabeledContent("Mark silent work stale after") {
+          Picker("Stale timeout", selection: $pulseStaleTimeout) {
+            Text("1 minute").tag(60.0)
+            Text("5 minutes").tag(300.0)
+            Text("15 minutes").tag(900.0)
+            Text("30 minutes").tag(1_800.0)
+            Text("1 hour").tag(3_600.0)
+          }
+          .labelsHidden()
+          .frame(width: 130)
+          .onChange(of: pulseStaleTimeout) { _, timeout in
+            pulse.setStaleTimeout(timeout)
+          }
+        }
+        Text(
+          "A valid provider update restarts this timer. Silent work is marked stale for one hour so you can keep or dismiss it."
+        )
+        .font(.caption).foregroundStyle(.secondary)
         Text(
           "Local scripts publish status and web actions over \(pulseServer.listeningAddress ?? "127.0.0.1:47717"). A private token authenticates each connection."
         )
@@ -1998,6 +2018,8 @@ private struct PulseHistoryRow: View {
     switch entry.result {
     case .shown, .updated: "waveform.path.ecg"
     case .ended, .dismissed, .expired: "checkmark.circle"
+    case .stale: "clock.badge.exclamationmark"
+    case .kept: "pin.circle"
     case .suppressed: "line.3.horizontal.decrease.circle"
     case .rejected: "exclamationmark.triangle"
     case .evicted: "arrow.down.circle"
@@ -2007,8 +2029,8 @@ private struct PulseHistoryRow: View {
   private var color: Color {
     switch entry.result {
     case .rejected: .red
-    case .suppressed, .evicted: .orange
-    case .shown, .updated: .blue
+    case .suppressed, .evicted, .stale: .orange
+    case .shown, .updated, .kept: .blue
     case .ended, .dismissed, .expired: .secondary
     }
   }

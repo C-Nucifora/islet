@@ -25,6 +25,35 @@ enum PulseState: String, Codable, Sendable {
   case needsAction
   case succeeded
   case failed
+  /// Set by Islet after provider silence. Providers cannot set this state directly.
+  case stale
+
+  var receivesStaleDeadline: Bool {
+    switch self {
+    case .active, .progress, .needsAction: true
+    case .succeeded, .failed, .stale: false
+    }
+  }
+}
+
+struct PulseStalenessPolicy: Equatable, Sendable {
+  static let defaultTimeout: TimeInterval = 5 * 60
+  static let defaultRetention: TimeInterval = 60 * 60
+
+  let timeout: TimeInterval
+  let retention: TimeInterval
+
+  init(
+    timeout: TimeInterval = Self.defaultTimeout,
+    retention: TimeInterval = Self.defaultRetention
+  ) {
+    self.timeout = Self.validInterval(timeout, fallback: Self.defaultTimeout)
+    self.retention = Self.validInterval(retention, fallback: Self.defaultRetention)
+  }
+
+  private static func validInterval(_ value: TimeInterval, fallback: TimeInterval) -> TimeInterval {
+    value.isFinite && value > 0 ? value : fallback
+  }
 }
 
 struct PulseAction: Codable, Equatable, Identifiable, Sendable {
@@ -72,12 +101,14 @@ struct PulseItem: Equatable, Identifiable, Sendable {
   var createdAt: Date
   var updatedAt: Date
   var expiresAt: Date?
+  var staleAt: Date?
+  var staleRemovalAt: Date?
+  var isStaleKept: Bool
   var actions: [PulseAction]
 
   init(
-    payload: PulsePayload,
-    now: Date,
-    previous: PulseItem? = nil,
+    payload: PulsePayload, now: Date, previous: PulseItem? = nil,
+    staleTimeout: TimeInterval = PulseStalenessPolicy.defaultTimeout,
     symbolAvailability: (String) -> Bool? = PulseSymbolValidator.platformAvailability
   ) throws {
     id = try Self.clean(payload.id, field: "id", limit: Self.maximumIdentifierLength)
@@ -109,11 +140,16 @@ struct PulseItem: Equatable, Identifiable, Sendable {
       progress = nil
     }
     state = payload.state ?? (progress == nil ? .active : .progress)
+    guard state != .stale else { throw PulseValidationError.providerSetStale }
     priority = payload.priority ?? .normal
     createdAt = previous?.createdAt ?? now
     updatedAt = now
     expiresAt = payload.expiresAt
     guard (expiresAt ?? now) >= now else { throw PulseValidationError.expired }
+    let timeout = PulseStalenessPolicy(timeout: staleTimeout).timeout
+    staleAt = state.receivesStaleDeadline ? now.addingTimeInterval(timeout) : nil
+    staleRemovalAt = nil
+    isStaleKept = false
     let incomingActions = payload.actions ?? []
     guard incomingActions.count <= 3 else { throw PulseValidationError.tooManyActions }
     actions = try incomingActions.map { action in
@@ -220,6 +256,7 @@ enum PulseValidationError: LocalizedError, Equatable {
   case invalidProgress
   case invalidAccentHex
   case expired
+  case providerSetStale
   case tooManyActions
   case duplicateActionID
   case unsafeActionURL
@@ -231,6 +268,7 @@ enum PulseValidationError: LocalizedError, Equatable {
     case .invalidProgress: "progress must be a finite number from 0 through 1"
     case .invalidAccentHex: "accentHex must use #RRGGBB format"
     case .expired: "expiresAt is already in the past"
+    case .providerSetStale: "stale is an Islet-managed state"
     case .tooManyActions: "an activity may expose at most three actions"
     case .duplicateActionID: "action ids must be unique within an activity"
     case .unsafeActionURL: "action URLs must be http or https URLs without credentials"
@@ -268,7 +306,7 @@ enum PulseDeliveryProfile: String, CaseIterable, Identifiable, Sendable {
   var detail: String {
     switch self {
     case .everything: "Show every provider update"
-    case .focused: "Show high-priority, failed, and needs-action updates"
+    case .focused: "Show high-priority, failed, stale, and needs-action updates"
     case .criticalOnly: "Show only critical and failed updates"
     case .paused: "Keep the API available without showing new items"
     }
@@ -279,6 +317,7 @@ enum PulseDeliveryProfile: String, CaseIterable, Identifiable, Sendable {
     case .everything: true
     case .focused:
       item.priority >= .high || item.state == .failed || item.state == .needsAction
+        || item.state == .stale
     case .criticalOnly:
       item.priority == .critical || item.state == .failed
     case .paused: false
@@ -315,6 +354,8 @@ enum PulseHistoryResult: String, Sendable {
   case ended
   case dismissed
   case expired
+  case stale
+  case kept
   case suppressed
   case rejected
   case evicted
@@ -326,6 +367,8 @@ enum PulseHistoryResult: String, Sendable {
     case .ended: "Ended"
     case .dismissed: "Dismissed"
     case .expired: "Expired"
+    case .stale: "Stale"
+    case .kept: "Kept"
     case .suppressed: "Filtered"
     case .rejected: "Rejected"
     case .evicted: "Evicted"

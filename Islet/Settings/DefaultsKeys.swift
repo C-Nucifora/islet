@@ -253,6 +253,8 @@ extension Defaults.Keys {
   /// Retained only as input to the one-time activity enablement migration.
   static let legacyT3CodeEnabled = Key<Bool>("t3CodeEnabled", default: true)
   static let legacyPulseEnabled = Key<Bool>("pulseEnabled", default: true)
+  static let pulseStaleTimeout = Key<Double>(
+    "pulseStaleTimeout", default: PulseStalenessPolicy.defaultTimeout)
   static let t3RemoteEnvironments = Key<[T3EnvironmentProfile]>(
     "t3RemoteEnvironments", default: [])
   static let timerSessionData = Key<Data?>("timerSessionData")
