@@ -83,8 +83,6 @@ struct ExpandedContainerView: View {
         .padding(.horizontal, Self.rowPadding)
     }
     .onChange(of: effectiveSelection, initial: true) { _, id in
-      // Only the drawn island resizes; the panel already holds the tallest tier while expanded.
-      // Making the panel follow this crashed the app — see NotchViewModel.targetPanelFrame.
       vm.setExpandedHeight(selectedHeight)
     }
     .onChange(of: shelf.isDropPresentationActive, initial: true) { _, active in

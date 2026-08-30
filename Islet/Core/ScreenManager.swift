@@ -97,13 +97,13 @@ enum DisplayStateReconciler {
   }
 }
 
-/// One notch panel plus the frame plumbing that keeps its reserved host window in place.
+/// One notch panel plus the frame plumbing that keeps its host window on the model's current frame.
 ///
 /// A class rather than a struct because re-asserting a frame needs per-panel mutable state: the
 /// re-entrancy guard has to outlive any single call, or a `didMove` fired by our own `setFrame`
 /// would call straight back into it.
 @MainActor
-private final class PanelInstance {
+final class PanelInstance {
   let display: ManagedDisplay
   let panel: NotchPanel
   let viewModel: NotchViewModel
@@ -117,23 +117,20 @@ private final class PanelInstance {
     self.display = display
     self.panel = panel
     self.viewModel = viewModel
+    viewModel.$panelFrame
+      .removeDuplicates()
+      .sink { [weak self] frame in self?.apply(frame) }
+      .store(in: &cancellables)
   }
 
-  /// Reasserts the panel's one reserved frame.
-  ///
-  /// The window's real frame is read straight back and pushed into the model. `NotchPanel` returns
-  /// `constrainFrameRect` unchanged so the two should always agree, but the island is positioned
-  /// inside the real frame, so any system adjustment still has to be measured.
-  ///
-  /// The visible island changes size inside this frame. Resizing the NSWindow in response to a
-  /// SwiftUI geometry callback races NSHostingView constraint maintenance and AppKit terminates
-  /// the process in `_postWindowNeedsUpdateConstraints`.
-  private func applyReservedFrame() {
+  /// Applies one frame transaction, aligns the fixed renderer inside the clipped window, then
+  /// publishes the actual result.
+  private func apply(_ frame: CGRect) {
     guard !isApplying else { return }
     isApplying = true
-    let frame = viewModel.reservedPanelFrame
-    panel.setFrame(frame, display: false)
+    if panel.frame != frame { panel.setFrame(frame, display: false) }
     let actual = panel.frame
+    (panel.contentView as? NotchHostingContainer)?.alignRenderer(toWindowFrame: actual)
     if actual != frame {
       Log.app.error(
         "Panel frame diverged on \(self.screenUUID, privacy: .public): requested \(NSStringFromRect(frame), privacy: .public) actual \(NSStringFromRect(actual), privacy: .public)"
@@ -144,18 +141,23 @@ private final class PanelInstance {
   }
 
   /// Feeds the window's real frame into the model without touching the window.
-  func syncActualFrame() { viewModel.setActualPanelFrame(panel.frame) }
+  func syncActualFrame() {
+    (panel.contentView as? NotchHostingContainer)?.alignRenderer(toWindowFrame: panel.frame)
+    viewModel.setActualPanelFrame(panel.frame)
+  }
 
-  /// Unconditional re-push of the reserved frame. A display or Space transition can move a panel
+  /// Unconditional re-push of the current frame. A display or Space transition can move a panel
   /// behind our back without changing any model value that could trigger a Combine publisher.
-  func reassert() { applyReservedFrame() }
+  func reassert() {
+    apply(viewModel.panelFrame)
+  }
 
   /// The panel is `isMovable = false` and Islet never drags it, so a move we did not cause is the
   /// system relocating the window — put it back. Gated on an actual mismatch, which makes this a
   /// fixed point: a `setFrame` that lands exactly where asked posts no move, so it cannot loop.
   func reassertIfMoved() {
     guard !isApplying else { return }
-    guard panel.frame != viewModel.reservedPanelFrame else {
+    guard panel.frame != viewModel.panelFrame else {
       syncActualFrame()
       return
     }
@@ -484,7 +486,7 @@ final class ScreenManager: ObservableObject {
       let geometry = screen.notchGeometry(reading: reading)
       let vm = NotchViewModel(
         geometry: geometry, initialPresentation: presentations[uuid] ?? .initial)
-      let panel = NotchPanel(frame: vm.reservedPanelFrame)
+      let panel = NotchPanel(frame: vm.panelFrame)
       let dropZoneID = UUID()
       panel.contentView = NotchHosting.view(for: vm)
       let inst = PanelInstance(display: display, panel: panel, viewModel: vm)
@@ -503,7 +505,7 @@ final class ScreenManager: ObservableObject {
       }
       panel.alphaValue = 0
       panel.orderFrontRegardless()
-      panel.setFrame(vm.reservedPanelFrame, display: true)
+      panel.setFrame(vm.panelFrame, display: true)
       panel.sharingType = ScreenCaptureExclusionPolicy.current.sharingType(
         exclusionRequested: Defaults[.hideFromScreenRecording])
 
@@ -543,7 +545,7 @@ final class ScreenManager: ObservableObject {
     }
   }
 
-  /// Re-pushes every panel's reserved frame after a display, Space or app activation change.
+  /// Re-pushes every panel's current frame after a display, Space or app activation change.
   private func reassertAll() {
     for inst in instances.values { inst.reassert() }
   }

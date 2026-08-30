@@ -3,13 +3,40 @@ import SwiftUI
 
 @MainActor
 enum NotchHosting {
-  static func view(for viewModel: NotchViewModel) -> NSHostingView<NotchRootView> {
-    let hostingView = NSHostingView(rootView: NotchRootView(vm: viewModel))
-    // The panel frame is owned by NotchViewModel. NSHostingView's defaults also derive window
-    // min/max constraints from the animated SwiftUI tree; resizing that same window while AppKit
-    // is updating those constraints throws an uncaught NSException. Disable that second owner.
+  static func view(for viewModel: NotchViewModel) -> NotchHostingContainer {
+    NotchHostingContainer(viewModel: viewModel)
+  }
+}
+
+/// Clips one fixed-size SwiftUI renderer to the adaptive NSPanel frame. AppKit may resize this
+/// container, but it never changes the hosting view's proposed size. This separation avoids the
+/// `_postWindowNeedsUpdateConstraints` exception caused by resizing NSHostingView itself.
+@MainActor
+final class NotchHostingContainer: NSView {
+  let hostingView: NSHostingView<NotchRootView>
+  private let renderingFrame: CGRect
+
+  init(viewModel: NotchViewModel) {
+    hostingView = NSHostingView(rootView: NotchRootView(vm: viewModel))
+    renderingFrame = viewModel.renderingFrame
+    super.init(frame: CGRect(origin: .zero, size: viewModel.panelFrame.size))
+    wantsLayer = true
+    layer?.masksToBounds = true
     hostingView.sizingOptions = []
-    return hostingView
+    hostingView.autoresizingMask = []
+    addSubview(hostingView)
+    alignRenderer(toWindowFrame: viewModel.panelFrame)
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { nil }
+
+  func alignRenderer(toWindowFrame windowFrame: CGRect) {
+    hostingView.frame = CGRect(
+      x: renderingFrame.minX - windowFrame.minX,
+      y: renderingFrame.minY - windowFrame.minY,
+      width: renderingFrame.width,
+      height: renderingFrame.height)
   }
 }
 
@@ -129,11 +156,11 @@ struct NotchRootView: View {
 
   /// Horizontal offset that lines the island's notch cut-out up with the hardware notch.
   ///
-  /// The AppKit host is wider than the compact island and stays fixed. This offset positions the
-  /// animated shape inside that real host frame while accounting for asymmetric compact slots.
+  /// This positions the shape inside the real host frame while accounting for asymmetric compact
+  /// slots and any temporary oversized frame held during a closing animation.
   private var islandOffset: CGFloat {
     vm.geometry.islandOffset(
-      inPanel: vm.actualPanelFrame,
+      inPanel: vm.renderingFrame,
       compactLeading: effectiveCompact.leading,
       compactTrailing: effectiveCompact.trailing)
   }
@@ -192,7 +219,7 @@ struct NotchRootView: View {
     .animation(Motion.gated(compactChangeAnimation), value: compactVisible)
     .animation(Motion.gated(compactChangeAnimation), value: compactLeadingWidth)
     .animation(Motion.gated(compactChangeAnimation), value: compactTrailingWidth)
-    // The visible island still follows the slots even though its AppKit host stays fixed.
+    // The panel follows these widths, while the shape also animates the same change.
     .onChange(of: compactLeadingWidth, initial: true) { _, _ in syncPanelWidths() }
     .onChange(of: compactTrailingWidth) { _, _ in syncPanelWidths() }
     .onChange(of: compactVisible) { _, _ in syncPanelWidths() }

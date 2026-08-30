@@ -79,4 +79,18 @@ final class NotchPanelDropTests: XCTestCase {
     XCTAssertFalse(handedOff)
     panel.close()
   }
+
+  func testAdaptiveResizePreservesCaptureAndFullscreenPolicy() {
+    let panel = NotchPanel(frame: CGRect(x: 200, y: 900, width: 300, height: 50))
+    panel.sharingType = .none
+    let collectionBehavior = panel.collectionBehavior
+
+    panel.setFrame(CGRect(x: 50, y: 600, width: 900, height: 280), display: false)
+
+    XCTAssertEqual(panel.sharingType, .none)
+    XCTAssertEqual(panel.collectionBehavior, collectionBehavior)
+    XCTAssertTrue(panel.collectionBehavior.contains(.fullScreenAuxiliary))
+    XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllSpaces))
+    panel.close()
+  }
 }

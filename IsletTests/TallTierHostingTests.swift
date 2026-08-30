@@ -33,6 +33,34 @@ final class TallTierHostingTests: XCTestCase {
       safeAreaTop: 32, auxLeftWidth: 716, auxRightWidth: 716, menuBarHeight: 37)
   }
 
+  private func host(_ vm: NotchViewModel) -> (NotchPanel, PanelInstance) {
+    let panel = NotchPanel(frame: vm.panelFrame)
+    panel.contentView = NotchHosting.view(for: vm)
+    let instance = PanelInstance(screenUUID: "hosting-test", panel: panel, viewModel: vm)
+    panel.orderFrontRegardless()
+    instance.syncActualFrame()
+    return (panel, instance)
+  }
+
+  private func assertRendererAligned(
+    panel: NotchPanel, viewModel: NotchViewModel, file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    guard let container = panel.contentView as? NotchHostingContainer else {
+      XCTFail("Missing notch hosting container", file: file, line: line)
+      return
+    }
+    XCTAssertEqual(container.frame.size, panel.frame.size, file: file, line: line)
+    XCTAssertEqual(
+      container.hostingView.frame.size, viewModel.renderingFrame.size, file: file, line: line)
+    XCTAssertEqual(
+      container.hostingView.frame.origin.x + panel.frame.minX,
+      viewModel.renderingFrame.minX, accuracy: 0.01, file: file, line: line)
+    XCTAssertEqual(
+      container.hostingView.frame.origin.y + panel.frame.minY,
+      viewModel.renderingFrame.minY, accuracy: 0.01, file: file, line: line)
+  }
+
   func testCompactHUDSlotKeepsUnderlyingActivityAsAWidthFloor() {
     let narrowerHUD = CompactHUDSlot(
       alignment: .leading,
@@ -50,10 +78,8 @@ final class TallTierHostingTests: XCTestCase {
   func testClosingMorphSurvivesRealHostingWithCompactContent() {
     ActivityCenter.shared.register(MorphActivity())
     let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
-    let panel = NotchPanel(frame: vm.reservedPanelFrame)
-    panel.contentView = NotchHosting.view(for: vm)
-    panel.orderFrontRegardless()
-    vm.setActualPanelFrame(panel.frame)
+    let (panel, instance) = host(vm)
+    defer { instance.stop() }
     pump(0.3)
 
     vm.apply(.clickedNotch)
@@ -63,9 +89,8 @@ final class TallTierHostingTests: XCTestCase {
     for delay in [0.06, 0.08, 0.08, 0.08] { pump(delay) }
     pump(0.3)
 
-    XCTAssertEqual(panel.frame, vm.reservedPanelFrame)
+    XCTAssertEqual(panel.frame, vm.panelFrame)
     XCTAssertEqual(vm.state, .closed)
-    panel.close()
   }
 
   /// The power screen's content alone, at tall-tier size, with a real one-shot hardware read.
@@ -85,24 +110,32 @@ final class TallTierHostingTests: XCTestCase {
     panel.close()
   }
 
-  /// The whole island: expand, then switch to the tall tier inside the production reserved panel.
+  /// The whole island follows the production frame coordinator through base, tall and closed tiers.
   func testTallTierSelectionSurvivesRealHosting() {
     let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
-    let panel = NotchPanel(frame: vm.reservedPanelFrame)
-    panel.contentView = NotchHosting.view(for: vm)
-    panel.orderFrontRegardless()
-    vm.setActualPanelFrame(panel.frame)
+    let (panel, instance) = host(vm)
+    defer { instance.stop() }
 
     vm.apply(.clickedNotch)  // expand at the base tier
     pump(0.5)
+    assertRendererAligned(panel: panel, viewModel: vm)
+    XCTAssertEqual(
+      panel.frame,
+      geometry.panelFrame(width: vm.expandedWidth, height: Metrics.expandedSize.height))
+
     vm.setExpandedHeight(Metrics.tallExpandedHeight)  // the crashing step
     pump(1.2)
+    assertRendererAligned(panel: panel, viewModel: vm)
+    XCTAssertEqual(
+      panel.frame,
+      geometry.panelFrame(width: vm.expandedWidth, height: Metrics.tallExpandedHeight))
+
     vm.apply(.clickedOutside)  // collapse cleanly
     pump(0.6)
+    assertRendererAligned(panel: panel, viewModel: vm)
 
-    XCTAssertEqual(panel.frame, vm.reservedPanelFrame)
+    XCTAssertEqual(panel.frame, vm.panelFrame)
     XCTAssertEqual(vm.expandedHeight, Metrics.expandedSize.height)
-    panel.close()
   }
 
   /// T5 — the tall transition with NO window resize at all: the panel is created big enough for
@@ -114,7 +147,9 @@ final class TallTierHostingTests: XCTestCase {
       frame: geometry.panelFrame(
         width: vm.maximumExpandedWidth, height: Metrics.tallExpandedHeight
       ).insetBy(dx: -20, dy: -20))
-    panel.contentView = NotchHosting.view(for: vm)
+    let container = NotchHosting.view(for: vm)
+    panel.contentView = container
+    container.alignRenderer(toWindowFrame: panel.frame)
     panel.orderFrontRegardless()
 
     vm.apply(.clickedNotch)
@@ -133,22 +168,26 @@ final class TallTierHostingTests: XCTestCase {
     let panel = NotchPanel(
       frame: geometry.panelFrame(
         width: vm.maximumExpandedWidth, height: Metrics.tallExpandedHeight))
-    panel.contentView = NotchHosting.view(for: vm)
+    let container = NotchHosting.view(for: vm)
+    panel.contentView = container
+    container.alignRenderer(toWindowFrame: panel.frame)
     panel.orderFrontRegardless()
     pump(1.0)
     panel.close()
   }
 
-  /// Compact activities resize the drawn island, never its AppKit host. This is the production
-  /// arrangement that prevents a geometry callback from racing NSHostingView's constraint pass.
-  func testCompactWidthChangesSurviveRealHostingInAFixedPanel() {
+  /// Compact width measurements originate in the hosted SwiftUI tree. This exercises the exact
+  /// adaptive frame coordinator while those geometry callbacks are arriving.
+  func testCompactWidthChangesSurviveRealHostingInAnAdaptivePanel() {
     let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
-    let panel = NotchPanel(frame: vm.reservedPanelFrame)
-    let hostingView = NotchHosting.view(for: vm)
+    let (panel, instance) = host(vm)
+    defer { instance.stop() }
+    guard let container = panel.contentView as? NotchHostingContainer else {
+      XCTFail("NotchHosting did not install the expected view")
+      return
+    }
+    let hostingView = container.hostingView
     XCTAssertEqual(hostingView.sizingOptions.rawValue, 0)
-    panel.contentView = hostingView
-    panel.orderFrontRegardless()
-    vm.setActualPanelFrame(panel.frame)
 
     for width in stride(from: CGFloat(20), through: 260, by: 12) {
       vm.updateCompactWidths(leading: width, trailing: width / 2)
@@ -156,8 +195,54 @@ final class TallTierHostingTests: XCTestCase {
     }
     pump(0.5)
 
-    XCTAssertEqual(panel.frame, vm.reservedPanelFrame)
+    XCTAssertEqual(panel.frame, vm.panelFrame)
     XCTAssertEqual(vm.actualPanelFrame, panel.frame)
-    panel.close()
+    XCTAssertLessThan(
+      panel.frame.width,
+      geometry.panelFrame(
+        width: vm.maximumExpandedWidth, height: Metrics.tallExpandedHeight
+      ).width)
+  }
+
+  /// Repeated tier changes used to hit `_postWindowNeedsUpdateConstraints`. Keep the window-server
+  /// test noisy enough to catch frame ownership slipping back to NSHostingView.
+  func testRapidAdaptiveTierChangesSurviveRealHosting() {
+    let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
+    let (panel, instance) = host(vm)
+    defer { instance.stop() }
+
+    vm.apply(.clickedNotch)
+    pump(0.3)
+    for index in 0..<12 {
+      vm.setExpandedWidth(index.isMultiple(of: 2) ? 700 : Metrics.expandedSize.width)
+      vm.setExpandedHeight(
+        index.isMultiple(of: 2) ? Metrics.tallExpandedHeight : Metrics.expandedSize.height)
+      pump(0.08)
+    }
+    pump(0.7)
+
+    XCTAssertEqual(panel.frame, vm.panelFrame)
+    XCTAssertEqual(
+      panel.frame,
+      geometry.panelFrame(
+        width: Metrics.expandedSize.width, height: Metrics.expandedSize.height))
+  }
+
+  func testAdaptiveRendererAlignmentOnAnOffsetDisplay() {
+    let offsetGeometry = NotchGeometry(
+      screenFrame: CGRect(x: -1440, y: 200, width: 1440, height: 900),
+      safeAreaTop: 0, auxLeftWidth: 0, auxRightWidth: 0, menuBarHeight: 24)
+    let vm = NotchViewModel(geometry: offsetGeometry, modeOverride: .clickToPin)
+    let (panel, instance) = host(vm)
+    defer { instance.stop() }
+
+    assertRendererAligned(panel: panel, viewModel: vm)
+    vm.apply(.clickedNotch)
+    vm.setExpandedHeight(Metrics.tallExpandedHeight)
+    pump(0.5)
+
+    assertRendererAligned(panel: panel, viewModel: vm)
+    XCTAssertEqual(panel.frame.maxY, offsetGeometry.screenFrame.maxY, accuracy: 0.01)
+    XCTAssertEqual(panel.frame.midX, offsetGeometry.notchRect.midX, accuracy: 0.01)
   }
 }
