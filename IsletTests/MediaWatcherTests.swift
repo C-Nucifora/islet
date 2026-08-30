@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 
 @testable import Islet
@@ -8,6 +9,137 @@ final class MediaWatcherTests: XCTestCase {
     XCTAssertEqual(MediaWatcher.backoffDelay(failureCount: 2), 2)
     XCTAssertEqual(MediaWatcher.backoffDelay(failureCount: 4), 8)
     XCTAssertEqual(MediaWatcher.backoffDelay(failureCount: 10), 60)
+  }
+
+  func testStderrCaptureRedactsPathsAndPayloads() {
+    let capture = MediaWatcher.StderrCapture(maximumBytes: 256)
+    capture.append(Data("Failed to load /Users/nedlane/Library/Private.framework\n".utf8))
+    capture.append(Data("{\"title\":\"Private Track\",\"artworkData\":\"secret\"}".utf8))
+
+    let diagnostic = String(decoding: capture.snapshot.data, as: UTF8.self)
+    XCTAssertTrue(diagnostic.contains("Failed to load <path>"))
+    XCTAssertTrue(diagnostic.contains("[media payload redacted]"))
+    XCTAssertFalse(diagnostic.contains("/Users/nedlane"))
+    XCTAssertFalse(diagnostic.contains("Private Track"))
+    XCTAssertFalse(diagnostic.contains("secret"))
+  }
+
+  func testStderrCaptureRedactsNestedPayloadsAndPathsContainingSpacesAcrossChunks() {
+    let capture = MediaWatcher.StderrCapture(maximumBytes: 512)
+    capture.append(Data("{\"payload\": {\n\"customField\": \"private ".utf8))
+    capture.append(Data("value\"\n}\n}\nFailed at /Users/Ned Lane/Private Track.mp3".utf8))
+
+    let diagnostic = String(decoding: capture.snapshot.data, as: UTF8.self)
+    XCTAssertFalse(diagnostic.contains("customField"))
+    XCTAssertFalse(diagnostic.contains("private value"))
+    XCTAssertFalse(diagnostic.contains("Ned Lane"))
+    XCTAssertFalse(diagnostic.contains("Private Track"))
+    XCTAssertTrue(diagnostic.contains("Failed at <path>"))
+  }
+
+  func testStderrCaptureRotatesNoisyOutputWithinItsByteLimit() {
+    let capture = MediaWatcher.StderrCapture(maximumBytes: 32)
+    capture.append(Data("first diagnostic\n".utf8))
+    capture.append(Data("012345678901234567890123456789\nlatest\n".utf8))
+
+    let snapshot = capture.snapshot
+    let diagnostic = String(decoding: snapshot.data, as: UTF8.self)
+    XCTAssertLessThanOrEqual(snapshot.data.count, 32)
+    XCTAssertTrue(snapshot.exceededLimit)
+    XCTAssertFalse(diagnostic.contains("first diagnostic"))
+    XCTAssertTrue(diagnostic.contains("latest"))
+  }
+
+  func testStderrCaptureCapsOversizedOutput() {
+    let capture = MediaWatcher.StderrCapture(maximumBytes: 64)
+    capture.append(Data(repeating: UInt8(ascii: "x"), count: 8_192))
+
+    let snapshot = capture.snapshot
+    XCTAssertEqual(snapshot.data.count, 64)
+    XCTAssertTrue(snapshot.exceededLimit)
+  }
+
+  func testSnapshotStartupDeadlineBeforeOutput() {
+    let tracker = MediaWatcher.SnapshotDeadlineTracker(
+      startedAt: 10,
+      timeouts: .init(startup: 2, idle: 3, total: 8))
+
+    XCTAssertNil(tracker.expired(at: 11.999))
+    XCTAssertEqual(tracker.expired(at: 12), .startup)
+    XCTAssertEqual(tracker.nextDeadline(after: 10), 12)
+  }
+
+  func testSnapshotIdleDeadlineMovesWithOutput() {
+    var tracker = MediaWatcher.SnapshotDeadlineTracker(
+      startedAt: 10,
+      timeouts: .init(startup: 2, idle: 3, total: 8))
+    tracker.receivedOutput(at: 11)
+
+    XCTAssertNil(tracker.expired(at: 13.999))
+    XCTAssertEqual(tracker.expired(at: 14), .idle)
+    XCTAssertEqual(tracker.nextDeadline(after: 11), 14)
+  }
+
+  func testSnapshotTotalDeadlineCannotBeExtendedByOutput() {
+    var tracker = MediaWatcher.SnapshotDeadlineTracker(
+      startedAt: 10,
+      timeouts: .init(startup: 2, idle: 3, total: 8))
+    tracker.receivedOutput(at: 17.5)
+
+    XCTAssertNil(tracker.expired(at: 17.999))
+    XCTAssertEqual(tracker.expired(at: 18), .total)
+    XCTAssertEqual(tracker.nextDeadline(after: 17.5), 18)
+  }
+
+  func testInitialSnapshotRejectsMalformedOutput() {
+    XCTAssertNil(MediaWatcher.parseInitialSnapshot(data: Data("not json".utf8)))
+  }
+
+  func testInitialSnapshotAcceptsIdlePayload() {
+    XCTAssertEqual(MediaWatcher.parseInitialSnapshot(data: Data("{}".utf8)), .idle)
+  }
+
+  func testHangingSnapshotTimesOutReapsAndRetriesWithoutOverlap() throws {
+    let helper = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .appendingPathComponent("Fixtures/hanging-media-helper.pl")
+    XCTAssertTrue(FileManager.default.fileExists(atPath: helper.path))
+    let log = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "media-watcher-\(UUID().uuidString).log")
+    defer {
+      try? FileManager.default.removeItem(at: log)
+      try? FileManager.default.removeItem(atPath: log.path + ".stream.lock")
+      try? FileManager.default.removeItem(atPath: log.path + ".get.lock")
+    }
+
+    let secondTimeout = expectation(description: "two snapshot attempts time out")
+    secondTimeout.expectedFulfillmentCount = 2
+    let watcher = MediaWatcher(
+      snapshotTimeouts: .init(startup: 0.15, idle: 0.15, total: 0.4),
+      initialSnapshotDelay: 0,
+      commandProvider: { kind in
+        MediaWatcher.HelperCommand(
+          executableURL: URL(fileURLWithPath: "/usr/bin/perl"),
+          arguments: [helper.path, kind.rawValue, log.path])
+      },
+      snapshotBackoff: { _ in 0.05 })
+    watcher.onStatus = { status in
+      if status.contains("snapshot startup timeout") { secondTimeout.fulfill() }
+    }
+    watcher.start()
+    wait(for: [secondTimeout], timeout: 3)
+    watcher.stop()
+
+    let records = try String(contentsOf: log, encoding: .utf8)
+      .split(separator: "\n").map(String.init)
+    let snapshotStarts = records.filter { $0.hasPrefix("started get ") }
+    XCTAssertGreaterThanOrEqual(snapshotStarts.count, 2)
+    XCTAssertFalse(records.contains { $0.hasPrefix("overlap ") })
+
+    for record in records where record.hasPrefix("started ") {
+      let pid = try XCTUnwrap(Int32(record.split(separator: " ").last ?? ""))
+      XCTAssertEqual(Darwin.kill(pid, 0), -1, "helper pid \(pid) is still present")
+      XCTAssertEqual(errno, ESRCH, "helper pid \(pid) was not reaped")
+    }
   }
 
   func testInitialSnapshotIsRejectedAfterIdleStreamRecord() {

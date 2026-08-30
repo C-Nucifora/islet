@@ -6,6 +6,49 @@ struct BatteryState: Equatable, Sendable {
   var onAC = false
 }
 
+/// Holds a known percentage across a brief IOPS interruption. The raw missing reading remains
+/// unavailable; this only keeps the UI from jumping to a made-up value before the next sample.
+struct BatteryStateGracePeriod {
+  static let duration: TimeInterval = 2 * BatteryMonitor.backgroundInterval
+
+  private var lastValid: (state: BatteryState, date: Date)?
+
+  mutating func resolve(_ sample: BatteryState?, at date: Date) -> BatteryState? {
+    if let sample {
+      lastValid = (sample, date)
+      return sample
+    }
+    guard let lastValid else { return nil }
+    let elapsed = date.timeIntervalSince(lastValid.date)
+    guard elapsed >= 0, elapsed < Self.duration else { return nil }
+    return lastValid.state
+  }
+
+  mutating func reset() {
+    lastValid = nil
+  }
+}
+
+/// Keeps threshold history only for freshly observed capacity readings. A retained display value
+/// must not connect two real samples across an unavailable interval.
+struct BatteryEventHistory {
+  private var lastState: BatteryState?
+
+  mutating func events(for sample: BatteryState?, isFresh: Bool) -> [BatteryEvent] {
+    guard isFresh, let sample else {
+      lastState = nil
+      return []
+    }
+    let events = BatteryEventDetector.events(from: lastState, to: sample)
+    lastState = sample
+    return events
+  }
+
+  mutating func reset() {
+    lastState = nil
+  }
+}
+
 enum BatteryEvent: Equatable {
   case acConnected(percent: Int)
   case acDisconnected(percent: Int)
