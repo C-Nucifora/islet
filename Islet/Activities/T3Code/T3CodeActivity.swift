@@ -12,6 +12,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
 
   @Published private(set) var environments: [T3EnvironmentSnapshot] = []
   @Published private(set) var lastCredentialError: String?
+  @Published private var manualConnectionStates: [String: T3ConnectionState] = [:]
   private(set) var activationDate: Date?
   let connectCoordinator: T3ConnectCoordinator
 
@@ -104,6 +105,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     // there would be no new didBecomeActive notification to wake the restarted monitor.
     isSystemSuspended = false
     environmentCandidates = []
+    publishManualConnectionStates()
     environments = []
     activationDate = nil
   }
@@ -243,6 +245,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       let next = environmentCandidates.filter { $0.source == .connect }
       if next != environmentCandidates {
         environmentCandidates = next
+        publishManualConnectionStates()
         publishResolvedCandidates()
       }
     }
@@ -520,6 +523,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     let next = Self.upserting(snapshot, into: environmentCandidates)
     guard next != environmentCandidates else { return }
     environmentCandidates = next
+    publishManualConnectionStates()
     publishResolvedCandidates()
   }
 
@@ -535,7 +539,22 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       from: environmentCandidates, source: source, with: replacements)
     guard next != environmentCandidates else { return }
     environmentCandidates = next
+    publishManualConnectionStates()
     publishResolvedCandidates()
+  }
+
+  func manualConnectionState(environmentID: String, baseURL: String) -> T3ConnectionState? {
+    manualConnectionStates[
+      Self.remoteSnapshotID(environmentID: environmentID, baseURL: baseURL)]
+  }
+
+  private func publishManualConnectionStates() {
+    var next: [String: T3ConnectionState] = [:]
+    for candidate in environmentCandidates where candidate.source == .manual {
+      next[candidate.id] = candidate.state
+    }
+    guard next != manualConnectionStates else { return }
+    manualConnectionStates = next
   }
 
   private func publishResolvedCandidates() {

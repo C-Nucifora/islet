@@ -1,3 +1,4 @@
+import Combine
 import Defaults
 import XCTest
 
@@ -649,6 +650,51 @@ final class T3CodeTests: XCTestCase {
       from: [local, oldConnect, manual], source: .connect, with: [replacement])
 
     XCTAssertEqual(updated, [local, manual, replacement])
+  }
+
+  func testHiddenManualCandidateStateRemainsAvailableToSettings() {
+    let activity = T3CodeActivity()
+    let local = Self.environmentSnapshot(
+      id: "local|same", logicalEnvironmentID: "same", source: .local)
+    let manual = Self.environmentSnapshot(
+      id: "remote|same|https://mini.example.com/", logicalEnvironmentID: "same",
+      source: .manual, state: .connecting)
+
+    activity.upsert(local)
+    activity.upsert(manual)
+
+    XCTAssertEqual(activity.environments, [local])
+    XCTAssertEqual(
+      activity.manualConnectionState(
+        environmentID: "same", baseURL: "https://mini.example.com/"),
+      .connecting)
+  }
+
+  func testHiddenManualCandidateStateChangePublishesForSettings() {
+    let activity = T3CodeActivity()
+    let local = Self.environmentSnapshot(
+      id: "local|same", logicalEnvironmentID: "same", source: .local)
+    let connecting = Self.environmentSnapshot(
+      id: "remote|same|https://mini.example.com/", logicalEnvironmentID: "same",
+      source: .manual, state: .connecting)
+    let offline = Self.environmentSnapshot(
+      id: connecting.id, logicalEnvironmentID: "same", source: .manual,
+      state: .offline("Timed out"))
+    activity.upsert(local)
+    activity.upsert(connecting)
+    XCTAssertEqual(activity.environments, [local])
+
+    let changed = expectation(description: "activity published hidden manual state")
+    let cancellable = activity.objectWillChange.sink { changed.fulfill() }
+    activity.upsert(offline)
+
+    wait(for: [changed], timeout: 1)
+    XCTAssertEqual(activity.environments, [local])
+    XCTAssertEqual(
+      activity.manualConnectionState(
+        environmentID: "same", baseURL: "https://mini.example.com/"),
+      .offline("Timed out"))
+    withExtendedLifetime(cancellable) {}
   }
 
   func testConnectedSnapshotDerivesAgentIDsFromLogicalEnvironmentID() throws {

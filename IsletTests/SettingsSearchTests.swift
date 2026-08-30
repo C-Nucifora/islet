@@ -46,4 +46,10 @@ final class SettingsSearchTests: XCTestCase {
   func testBlankQueryMatches() {
     XCTAssertTrue(SettingsSearch.matches("  ", in: ["Anything"]))
   }
+
+  func testT3ConnectAccountActionsAreSearchable() {
+    XCTAssertTrue(SettingsDetailPage.t3Code.matchesSearch("link account"))
+    XCTAssertTrue(SettingsDetailPage.t3Code.matchesSearch("sign out"))
+    XCTAssertTrue(SettingsDetailPage.t3Code.matchesSearch("reconnect now"))
+  }
 }
