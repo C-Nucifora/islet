@@ -33,7 +33,7 @@ final class NowPlayingActivityTests: XCTestCase {
   func testCommandFailurePublishesActionSpecificFeedback() async {
     let source = SourceID(
       bundleIdentifier: "com.example.Player", pid: 42, parentBundleIdentifier: "")
-    let activity = NowPlayingActivity { _, source, _, _ in .rejected(target: source) }
+    let activity = NowPlayingActivity { _, source, _ in .rejected(target: source) }
 
     await activity.perform(.next, for: source)
 
@@ -48,7 +48,7 @@ final class NowPlayingActivityTests: XCTestCase {
     let results = CommandResults([
       .rejected(target: source), .sent(target: source, sourceScoped: false),
     ])
-    let activity = NowPlayingActivity { _, source, _, _ in await results.next(for: source) }
+    let activity = NowPlayingActivity { _, source, _ in await results.next(for: source) }
 
     await activity.perform(.next, for: source)
     await activity.perform(.next, for: source)
@@ -61,7 +61,7 @@ final class NowPlayingActivityTests: XCTestCase {
     let source = SourceID(
       bundleIdentifier: "com.example.Player", pid: 42, parentBundleIdentifier: "")
     let gate = CommandGate()
-    let activity = NowPlayingActivity { command, source, _, _ in
+    let activity = NowPlayingActivity { command, source, _ in
       if command == .next { await gate.wait() }
       return .rejected(target: source)
     }
@@ -83,7 +83,7 @@ final class NowPlayingActivityTests: XCTestCase {
     let gate = CommandGate()
     let announcements = AnnouncementRecorder()
     let activity = NowPlayingActivity(
-      commandPerformer: { command, source, _, _ in
+      commandPerformer: { command, source, _ in
         if command == .next { await gate.wait() }
         return .rejected(target: source)
       },

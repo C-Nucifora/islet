@@ -160,26 +160,6 @@ final class MediaWatcherTests: XCTestCase {
         streamHasEmittedRecord: false, currentSource: key("com.spotify.client", 1)))
   }
 
-  func testCommandTargetProbeParsesAFreshOneShotSnapshot() async {
-    let payload =
-      #"{"title":"Track","bundleIdentifier":"com.spotify.client","processIdentifier":42}"#
-    let command = MediaWatcher.HelperCommand(
-      executableURL: URL(fileURLWithPath: "/usr/bin/printf"), arguments: ["%s", payload])
-
-    let target = await MediaWatcher.resolveCommandTarget(command: command, timeout: 1)
-
-    XCTAssertEqual(target, key("com.spotify.client", 42))
-  }
-
-  func testCommandTargetProbeTimesOutInsteadOfUsingStaleState() async {
-    let command = MediaWatcher.HelperCommand(
-      executableURL: URL(fileURLWithPath: "/bin/sleep"), arguments: ["5"])
-
-    let target = await MediaWatcher.resolveCommandTarget(command: command, timeout: 0.05)
-
-    XCTAssertNil(target)
-  }
-
   func key(_ bundle: String, _ pid: Int32) -> SourceID {
     SourceID(bundleIdentifier: bundle, pid: pid, parentBundleIdentifier: "")
   }

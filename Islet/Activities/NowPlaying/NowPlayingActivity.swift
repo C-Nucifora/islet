@@ -6,9 +6,7 @@ import SwiftUI
 @MainActor
 final class NowPlayingActivity: NotchActivity, ObservableObject {
   typealias CommandPerformer =
-    @Sendable (
-      MediaCommand, SourceID, Bool, @escaping MediaCommandRouter.ResolveCurrentTarget
-    ) async -> MediaCommandResult
+    @Sendable (MediaCommand, SourceID, Bool) async -> MediaCommandResult
   typealias AnnouncementHandler = (String) -> Void
 
   let id = "nowPlaying"
@@ -58,12 +56,11 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
 
   init(
     commandPerformer: @escaping CommandPerformer = {
-      command, source, isAdapterBacked, resolveCurrentTarget in
+      command, source, isAdapterBacked in
       await MediaRemoteCommands.shared.perform(
         command,
         shownSource: source,
-        sourceIsAdapterBacked: isAdapterBacked,
-        resolveCurrentTarget: resolveCurrentTarget)
+        sourceIsAdapterBacked: isAdapterBacked)
     },
     announce: @escaping AnnouncementHandler = { A11y.announce($0) }
   ) {
@@ -183,15 +180,11 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   func perform(_ command: MediaCommand, for source: SourceID) async {
     mediaControlRequest &+= 1
     let request = mediaControlRequest
-    // Do not leave an old failure beside a newer action while its target probe is still running.
+    // Do not leave an old failure beside a newer action while its command is still running.
     mediaControlNoticeTask?.cancel()
     mediaControlNoticeTask = nil
     mediaControlNotice = nil
-    let result = await commandPerformer(
-      command,
-      source,
-      sources[source] != nil,
-      { [watcher] in await watcher.resolveCurrentCommandTarget() })
+    let result = await commandPerformer(command, source, sources[source] != nil)
 
     if let reason = MediaControlFeedback.logReason(for: result) {
       Log.media.notice(
@@ -220,8 +213,8 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     }
   }
 
-  /// A control stays disabled unless the player capability and either a verified-global or
-  /// source-scoped transport are available.
+  /// A control stays disabled unless the player capability and a source-scoped transport are
+  /// available.
   func canPerform(_ command: MediaCommand, for source: SourceID) -> Bool {
     guard mediaControlsAvailable(for: source), let state = sources[source], !state.isAdvertisement
     else { return false }

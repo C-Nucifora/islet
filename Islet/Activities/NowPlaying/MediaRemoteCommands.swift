@@ -75,25 +75,22 @@ enum MediaControlFeedback {
 
 enum MediaCommandTargeting: Equatable, Sendable {
   case sourceScoped
-  case verifiedGlobal
   case unavailable
 
-  var controlsAvailable: Bool { self != .unavailable }
+  var controlsAvailable: Bool { self == .sourceScoped }
 }
 
-/// Resolves the live MediaRemote source immediately before a global command and fails closed unless
-/// its full bundle, parent, and process identity still matches the card the user acted on. The
-/// enclosing command queue keeps that check adjacent to the send and prevents local command races.
+/// Routes a media command only through a transport that targets the source atomically. A separate
+/// global target check cannot authorize a later global send because another app may become current
+/// between the two operations.
 enum MediaCommandRouter {
   typealias Send = @Sendable (MediaCommand, SourceID?) async -> Bool
-  typealias ResolveCurrentTarget = @Sendable () async -> SourceID?
 
   static func perform(
     _ command: MediaCommand,
     shownSource: SourceID,
     sourceIsAdapterBacked: Bool,
     targeting: MediaCommandTargeting,
-    resolveCurrentTarget: ResolveCurrentTarget,
     send: Send
   ) async -> MediaCommandResult {
     guard sourceIsAdapterBacked else { return .sourceNotControllable(shownSource) }
@@ -103,12 +100,6 @@ enum MediaCommandRouter {
     case .sourceScoped:
       target = shownSource
       sourceScoped = true
-    case .verifiedGlobal:
-      guard await resolveCurrentTarget() == shownSource else {
-        return .sourceTargetingUnavailable(shownSource)
-      }
-      target = nil
-      sourceScoped = false
     case .unavailable:
       return .sourceTargetingUnavailable(shownSource)
     }
@@ -146,7 +137,6 @@ enum MediaControlPresentation {
   static func scopeLabel(appName: String, targeting: MediaCommandTargeting) -> String {
     switch targeting {
     case .sourceScoped: "Controls \(appName)"
-    case .verifiedGlobal: "Global controls for \(appName)"
     case .unavailable: "Controls unavailable for \(appName)"
     }
   }
@@ -154,7 +144,6 @@ enum MediaControlPresentation {
   static func help(action: String, appName: String, targeting: MediaCommandTargeting) -> String {
     switch targeting {
     case .sourceScoped: "\(action) in \(appName)"
-    case .verifiedGlobal: "\(action) in \(appName) after verifying the global media target"
     case .unavailable: "\(action) unavailable because Islet cannot target \(appName) safely"
     }
   }
@@ -162,7 +151,6 @@ enum MediaControlPresentation {
   static func accessibilityLabel(action: String, targeting: MediaCommandTargeting) -> String {
     switch targeting {
     case .sourceScoped: action
-    case .verifiedGlobal: "\(action), verified global media control"
     case .unavailable: "\(action) unavailable"
     }
   }
@@ -181,9 +169,10 @@ final class MediaRemoteCommands: @unchecked Sendable {
   private let setPlayerIfPossible: SetPlayerIfPossible?
   private let queue = MediaCommandQueue()
 
-  /// MediaRemoteAdapter 0.1.0 exports global send and seek functions. Islet checks the live adapter
-  /// target inside the serialized command operation before using those global functions.
-  let targeting = MediaCommandTargeting.verifiedGlobal
+  /// MediaRemoteAdapter 0.1.0 exports only global send and seek functions. A target can change
+  /// between a separate identity check and one of those calls, so the current transport fails
+  /// closed until a future adapter can address the selected source atomically.
+  let targeting = MediaCommandTargeting.unavailable
 
   private init() {
     guard
@@ -244,10 +233,7 @@ final class MediaRemoteCommands: @unchecked Sendable {
   }
 
   func perform(
-    _ command: MediaCommand,
-    shownSource: SourceID,
-    sourceIsAdapterBacked: Bool,
-    resolveCurrentTarget: @escaping MediaCommandRouter.ResolveCurrentTarget
+    _ command: MediaCommand, shownSource: SourceID, sourceIsAdapterBacked: Bool
   ) async -> MediaCommandResult {
     await queue.enqueue { [self] in
       await MediaCommandRouter.perform(
@@ -255,7 +241,6 @@ final class MediaRemoteCommands: @unchecked Sendable {
         shownSource: shownSource,
         sourceIsAdapterBacked: sourceIsAdapterBacked,
         targeting: targeting,
-        resolveCurrentTarget: resolveCurrentTarget,
         send: { [self] command, source in await send(command, to: source) })
     }
   }
