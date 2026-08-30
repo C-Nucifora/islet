@@ -228,7 +228,7 @@ private struct OnboardingActivity: Identifiable {
     .init(id: "timer", detail: "Countdowns"),
     .init(id: "nowPlaying", detail: "Media controls and active players"),
     .init(id: "battery", detail: "Charge, power flow and peripherals"),
-    .init(id: "calendar", detail: "Next event and today's agenda"),
+    .init(id: "calendar", detail: "Next event and three-day agenda"),
     .init(id: "shelf", detail: "Files for quick access or AirDrop"),
     .init(id: "ports", detail: "Connected USB devices"),
     .init(id: "system", detail: "CPU, GPU, memory and temperature"),
@@ -457,7 +457,7 @@ private struct OnboardingView: View {
 
         if selectedActivities.contains("calendar") {
           permissionRow(
-            title: "Calendar", detail: "Shows your agenda, meeting links and event countdowns.",
+            title: "Calendar", detail: "Shows three days, meeting links and event countdowns.",
             status: calendar.authorization.summary,
             actionTitle: calendar.authorization.canRead ? nil : "Allow"
           ) {
