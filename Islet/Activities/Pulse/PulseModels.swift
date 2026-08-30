@@ -396,6 +396,18 @@ struct PulseProviderDescriptor: Identifiable, Equatable, Sendable {
       capabilities: [.events, .progress, .webActions],
       setupHint: "Use the example locally or on a self-hosted Mac runner."),
     .init(
+      id: "chrome-downloads", name: "Chrome downloads",
+      summary: "Shows browser download progress without retaining URLs or paths.",
+      symbol: "arrow.down.circle.fill", sourceIDs: ["chrome-downloads"],
+      capabilities: [.events, .progress, .webActions],
+      setupHint: "Install the example Chrome extension and its local native host."),
+    .init(
+      id: "rclone", name: "rclone transfers",
+      summary: "Shows file copies and uploads from rclone's loopback control API.",
+      symbol: "arrow.up.arrow.down.circle.fill", sourceIDs: ["rclone"],
+      capabilities: [.events, .progress, .webActions],
+      setupHint: "Run the example provider beside an rclone process with RC enabled."),
+    .init(
       id: "developer-tools", name: "Developer tools", summary: "Build, test, and agent status.",
       symbol: "hammer.fill", sourceIDs: ["xcode", "build", "tests", "agent"],
       capabilities: [.events, .progress, .webActions],

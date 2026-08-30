@@ -23,6 +23,20 @@
       "setup": "Use examples/github-actions.sh locally or on a self-hosted Mac runner."
     },
     {
+      "id": "chrome-downloads",
+      "name": "Chrome downloads",
+      "sources": ["chrome-downloads"],
+      "capabilities": ["events", "progress", "webActions"],
+      "setup": "Install providers/chrome-downloads as an unpacked extension and install its native host."
+    },
+    {
+      "id": "rclone",
+      "name": "rclone transfers",
+      "sources": ["rclone"],
+      "capabilities": ["events", "progress", "webActions"],
+      "setup": "Run providers/rclone/rclone_provider.py beside an rclone process with loopback RC enabled."
+    },
+    {
       "id": "developer-tools",
       "name": "Developer tools",
       "sources": ["xcode", "build", "tests", "agent"],

@@ -69,8 +69,31 @@ jobs:
         run: |
           xcrun swift-format lint --strict --recursive Islet IsletTests Tools
           xcrun swiftc -typecheck Tools/islet-pulse.swift
-          jq empty Integrations/Pulse/providers.json Integrations/Pulse/pulse-command.schema.json
-          sh -n Integrations/Pulse/examples/github-actions.sh Scripts/*.sh
+          /usr/bin/python3 -m py_compile \
+            Integrations/Pulse/providers/common/pulse_client.py \
+            Integrations/Pulse/providers/chrome-downloads/native_host.py \
+            Integrations/Pulse/providers/rclone/rclone_provider.py
+          node --check Integrations/Pulse/providers/chrome-downloads/service-worker.js
+          node --check Integrations/Pulse/providers/chrome-downloads/options.js
+          jq empty \
+            Integrations/Pulse/providers.json \
+            Integrations/Pulse/pulse-command.schema.json \
+            Integrations/Pulse/providers/chrome-downloads/manifest.json \
+            Integrations/Pulse/providers/chrome-downloads/native-host-manifest.json
+          sh -n \
+            Integrations/Pulse/examples/github-actions.sh \
+            Integrations/Pulse/providers/chrome-downloads/install-native-host.sh \
+            Scripts/*.sh
+
+      - name: Test out-of-process Pulse providers
+        run: |
+          node --test Integrations/Pulse/providers/chrome-downloads/tests/test_provider_core.js
+          /usr/bin/python3 -m unittest discover \
+            -s Integrations/Pulse/providers/common/tests -p 'test_*.py'
+          /usr/bin/python3 -m unittest discover \
+            -s Integrations/Pulse/providers/chrome-downloads/tests -p 'test_*.py'
+          /usr/bin/python3 -m unittest discover \
+            -s Integrations/Pulse/providers/rclone/tests -p 'test_*.py'
 
       - name: Generate Xcode project
         run: |

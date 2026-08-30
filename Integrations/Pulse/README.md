@@ -81,10 +81,11 @@ disk and can be cleared from Settings at any time.
 
 ## Provider gallery
 
-Settings includes health and capability metadata for Shortcuts, the reference CLI, a local GitHub
-workflow watcher, and common developer tools. Health is inferred locally from active items and payload-free session
-history; Islet does not phone home. Unknown source names remain visible as unlisted local sources.
-The machine-readable gallery is in [providers.json](providers.json).
+Settings includes health and capability metadata for Shortcuts, the reference CLI, Chrome
+downloads, rclone transfers, a local GitHub workflow watcher, and common developer tools. Health is
+inferred locally from active items and payload-free session history; Islet does not phone home.
+Unknown source names remain visible as unlisted local sources. The machine-readable gallery is in
+[providers.json](providers.json).
 
 The gallery's capabilities are explanatory protocol boundaries, not access to Islet data:
 
@@ -112,5 +113,42 @@ See [examples/github-actions.sh](examples/github-actions.sh) for a provider wrap
 local GitHub CLI watcher or a self-hosted Mac runner where Islet is running in the same login
 session. It cannot reach Islet from a GitHub-hosted runner. Its arguments are explicit; it does not
 read repository contents or credentials.
+
+## Transfer providers
+
+The [Chrome downloads provider](providers/chrome-downloads/README.md) uses Chrome's `downloads`
+extension API. It does not read Chrome's private History database. The extension sends no source
+URL or referrer to its native host. It keeps only Chrome's numeric download IDs in extension
+storage so it can remove stale items after a service-worker restart.
+
+The [rclone provider](providers/rclone/README.md) polls `job/list`, `core/stats`, and
+`core/transferred` on rclone's loopback remote-control endpoint. It stores hashed activity and
+completion IDs, never transfer names, paths, remote names, RC credentials, or Pulse credentials.
+Both providers send updates only when state changes and clean up active Pulse items when disabled
+or stopped.
+
+Reveal actions use an ephemeral loopback URL because Pulse deliberately rejects `file:` actions.
+The provider maps the random URL to an existing path in memory. The HTTP handler binds to
+`127.0.0.1`, returns no file content, and asks Finder to reveal the mapped file. rclone reveal
+actions are optional and require an explicit local root. Paths outside that root and inaccessible
+files get no action.
+
+## Adding another transfer provider
+
+Keep the observer out of the Islet process and follow these rules:
+
+1. Use a documented event or control API. Do not scan the home directory or parse another app's
+   private database.
+2. Build the Pulse ID from the provider's stable instance, transfer, and job identifiers. Hash
+   local paths, remote names, and URLs rather than placing them in the ID. Display only the base
+   file name.
+3. Recover active transfers on startup. Persist only opaque IDs needed to end work that vanished
+   while the provider was stopped.
+4. Coalesce progress updates, respect `rateLimited` responses with backoff, and always send `end`
+   for cancellation, removal, and provider shutdown.
+5. Stop event listeners and polling before reporting the provider as disabled. Clear every active
+   item and in-memory reveal mapping at the same time.
+6. Add fixtures for duplicate base names, restart recovery, success, failure, cancellation, and
+   inaccessible paths. Test the reducer without requiring Islet, Chrome, or the transfer tool.
 
 The schema in [pulse-command.schema.json](pulse-command.schema.json) describes the wire payload.

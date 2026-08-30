@@ -4,6 +4,17 @@ import XCTest
 @testable import Islet
 
 final class PulseTests: XCTestCase {
+  func testTransferProvidersRemainOutOfProcessGalleryEntries() throws {
+    let chrome = try XCTUnwrap(
+      PulseProviderDescriptor.gallery.first { $0.id == "chrome-downloads" })
+    XCTAssertEqual(chrome.sourceIDs, ["chrome-downloads"])
+    XCTAssertEqual(chrome.capabilities, [.events, .progress, .webActions])
+
+    let rclone = try XCTUnwrap(PulseProviderDescriptor.gallery.first { $0.id == "rclone" })
+    XCTAssertEqual(rclone.sourceIDs, ["rclone"])
+    XCTAssertEqual(rclone.capabilities, [.events, .progress, .webActions])
+  }
+
   @MainActor
   func testOrdersUrgentItemsAndUpdatesWithoutDuplicating() throws {
     let center = PulseCenter()
