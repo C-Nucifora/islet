@@ -35,6 +35,13 @@
   },
   "allOf": [
     {
+      "if": {
+        "properties": { "token": { "pattern": "^islet-pulse-v1\\." } },
+        "required": ["token"]
+      },
+      "then": { "required": ["requestID"] }
+    },
+    {
       "if": { "properties": { "operation": { "const": "end" } }, "required": ["operation"] },
       "then": { "properties": { "id": true }, "required": ["id"] },
       "else": { "properties": { "activity": true }, "required": ["activity"] }
