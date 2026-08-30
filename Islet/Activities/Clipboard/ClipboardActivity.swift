@@ -187,6 +187,7 @@ final class ClipboardModel: ObservableObject {
   private var timer: AnyCancellable?
   private var isRunning = false
   private var historyGeneration: UInt64 = 0
+  private let pasteboardTransactions = ClipboardPasteboardTransaction.Pipeline()
 
   init(
     pasteboard: NSPasteboard = .general,
@@ -282,7 +283,7 @@ final class ClipboardModel: ObservableObject {
     invalidatePendingCopyBacks()
     let generation = historyGeneration
     let pb = pasteboard
-    let succeeded = await ClipboardPasteboardTransaction.replace(
+    let succeeded = await pasteboardTransactions.replace(
       on: pb,
       shouldWrite: { generation == self.historyGeneration },
       write: {
@@ -392,7 +393,10 @@ final class ClipboardModel: ObservableObject {
     }
   }
 
-  private func invalidatePendingCopyBacks() { historyGeneration &+= 1 }
+  private func invalidatePendingCopyBacks() {
+    historyGeneration &+= 1
+    pasteboardTransactions.cancel()
+  }
 
   private static func imagePayload(from pasteboard: NSPasteboard) -> ClipboardItem.ImagePayload? {
     for type in [NSPasteboard.PasteboardType.tiff, .png] {
@@ -439,6 +443,64 @@ enum ClipboardPasteboardTransaction {
     let items: [[Representation]]
   }
 
+  @MainActor
+  final class Pipeline {
+    private struct ActiveMaterialization {
+      let generation: UInt64
+      let task: Task<PreparedRollback?, Never>
+    }
+
+    private var generation: UInt64 = 0
+    private var activeMaterialization: ActiveMaterialization?
+
+    func cancel() {
+      generation &+= 1
+      activeMaterialization?.task.cancel()
+    }
+
+    func replace(
+      on pasteboard: NSPasteboard,
+      shouldWrite: @MainActor () -> Bool = { true },
+      write: @MainActor () -> Bool
+    ) async -> Bool {
+      cancel()
+      let requestGeneration = generation
+
+      if let previousMaterialization = activeMaterialization {
+        _ = await previousMaterialization.task.value
+        if activeMaterialization?.generation == previousMaterialization.generation {
+          activeMaterialization = nil
+        }
+      }
+      guard requestGeneration == generation, !Task.isCancelled else { return false }
+
+      let expectedChangeCount = pasteboard.changeCount
+      let pasteboardName = pasteboard.name
+      let task = Task.detached(priority: .userInitiated) {
+        prepareRollback(
+          from: NSPasteboard(name: pasteboardName), expectedChangeCount: expectedChangeCount)
+      }
+      activeMaterialization = ActiveMaterialization(
+        generation: requestGeneration, task: task)
+      let previous = await task.value
+      if activeMaterialization?.generation == requestGeneration { activeMaterialization = nil }
+
+      guard requestGeneration == generation, !Task.isCancelled, let previous,
+        pasteboard.changeCount == previous.changeCount
+      else { return false }
+      guard let rollbackItems = makePasteboardItems(from: previous) else { return false }
+      guard shouldWrite() else { return false }
+
+      pasteboard.clearContents()
+      guard write() else {
+        pasteboard.clearContents()
+        if !rollbackItems.isEmpty { _ = pasteboard.writeObjects(rollbackItems) }
+        return false
+      }
+      return true
+    }
+  }
+
   /// NSPasteboard requires clearing before a write. Prepare a complete, bounded rollback first.
   /// AppKit marks pasteboard access as sendable, so reading promised data and building the copies
   /// happens away from the main actor. Type and item checks run before asking lazy providers for
@@ -449,36 +511,19 @@ enum ClipboardPasteboardTransaction {
     shouldWrite: @MainActor () -> Bool = { true },
     write: @MainActor () -> Bool
   ) async -> Bool {
-    let expectedChangeCount = pasteboard.changeCount
-    let pasteboardName = pasteboard.name
-    let previous = await Task.detached(priority: .userInitiated) {
-      prepareRollback(
-        from: NSPasteboard(name: pasteboardName), expectedChangeCount: expectedChangeCount)
-    }.value
-    guard !Task.isCancelled, let previous, pasteboard.changeCount == previous.changeCount else {
-      return false
-    }
-    guard let rollbackItems = makePasteboardItems(from: previous) else { return false }
-    guard shouldWrite() else { return false }
-
-    pasteboard.clearContents()
-    guard write() else {
-      pasteboard.clearContents()
-      if !rollbackItems.isEmpty { _ = pasteboard.writeObjects(rollbackItems) }
-      return false
-    }
-    return true
+    await Pipeline().replace(on: pasteboard, shouldWrite: shouldWrite, write: write)
   }
 
   private nonisolated static func prepareRollback(
     from pasteboard: NSPasteboard, expectedChangeCount: Int
   ) -> PreparedRollback? {
-    guard pasteboard.changeCount == expectedChangeCount else { return nil }
+    guard !Task.isCancelled, pasteboard.changeCount == expectedChangeCount else { return nil }
     guard let sourceItems = pasteboard.pasteboardItems else { return nil }
-    guard sourceItems.count <= maximumItemCount else { return nil }
+    guard !Task.isCancelled, sourceItems.count <= maximumItemCount else { return nil }
 
     var typeCount = 0
     for source in sourceItems {
+      guard !Task.isCancelled else { return nil }
       guard !source.types.isEmpty, source.types.count <= maximumTypesPerItem else { return nil }
       guard typeCount <= maximumTypeCount - source.types.count else { return nil }
       typeCount += source.types.count
@@ -493,18 +538,20 @@ enum ClipboardPasteboardTransaction {
     var rollbackItems: [[Representation]] = []
     rollbackItems.reserveCapacity(sourceItems.count)
     for source in sourceItems {
+      guard !Task.isCancelled else { return nil }
       var representations: [Representation] = []
       representations.reserveCapacity(source.types.count)
       for type in source.types {
+        guard !Task.isCancelled else { return nil }
         guard let data = source.data(forType: type),
-          data.count <= maximumSnapshotBytes - byteCount
+          !Task.isCancelled, data.count <= maximumSnapshotBytes - byteCount
         else { return nil }
         byteCount += data.count
         representations.append(Representation(typeRawValue: type.rawValue, data: data))
       }
       rollbackItems.append(representations)
     }
-    guard pasteboard.changeCount == expectedChangeCount else { return nil }
+    guard !Task.isCancelled, pasteboard.changeCount == expectedChangeCount else { return nil }
     return PreparedRollback(changeCount: expectedChangeCount, items: rollbackItems)
   }
 
