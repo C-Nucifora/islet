@@ -1,8 +1,103 @@
 import AppKit
 import Foundation
 
-/// Send-side MediaRemote still works in-process on macOS 15.4+ (only reads were locked down).
-/// Command codes match MRMediaRemoteCommand: play=0, pause=1, toggle=2, next=4, previous=5.
+enum MediaCommand: Equatable, Sendable {
+  case toggleShuffle
+  case skipBackward15
+  case previous
+  case togglePlayPause
+  case skipForward15
+  case next
+  case cycleRepeat
+  case seek(to: Double)
+
+  fileprivate var commandCode: Int? {
+    switch self {
+    case .togglePlayPause: 2
+    case .next: 4
+    case .previous: 5
+    case .toggleShuffle: 6
+    case .cycleRepeat: 7
+    case .skipBackward15: 12
+    case .skipForward15: 13
+    case .seek: nil
+    }
+  }
+}
+
+enum MediaCommandResult: Equatable, Sendable {
+  case sent(target: SourceID, sourceScoped: Bool)
+  case sourceNotControllable(SourceID)
+  case sourceTargetingUnavailable(SourceID)
+  case rejected(target: SourceID)
+}
+
+/// Routes a media command only through a transport that targets the source atomically.
+///
+/// Checking a global now-playing snapshot before an unscoped command is not sufficient: another
+/// app can become current between those operations. The vendored transport therefore fails closed.
+/// A future scoped transport receives the selected source in the same send operation.
+enum MediaCommandRouter {
+  typealias Send = @Sendable (MediaCommand, SourceID?) async -> Bool
+
+  static func perform(
+    _ command: MediaCommand,
+    shownSource: SourceID,
+    sourceIsAdapterBacked: Bool,
+    supportsSourceScopedCommands: Bool,
+    send: Send
+  ) async -> MediaCommandResult {
+    guard sourceIsAdapterBacked else { return .sourceNotControllable(shownSource) }
+    guard supportsSourceScopedCommands else {
+      return .sourceTargetingUnavailable(shownSource)
+    }
+    return await send(command, shownSource)
+      ? .sent(target: shownSource, sourceScoped: true)
+      : .rejected(target: shownSource)
+  }
+}
+
+private actor MediaCommandQueue {
+  private var isRunning = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  func enqueue(
+    _ operation: @escaping @Sendable () async -> MediaCommandResult
+  ) async -> MediaCommandResult {
+    if isRunning {
+      await withCheckedContinuation { continuation in
+        waiters.append(continuation)
+      }
+    } else {
+      isRunning = true
+    }
+    let result = await operation()
+    if waiters.isEmpty {
+      isRunning = false
+    } else {
+      waiters.removeFirst().resume()
+    }
+    return result
+  }
+}
+
+enum MediaControlPresentation {
+  static func scopeLabel(appName: String, sourceScoped: Bool) -> String {
+    sourceScoped ? "Controls \(appName)" : "Controls unavailable for \(appName)"
+  }
+
+  static func help(action: String, appName: String, sourceScoped: Bool) -> String {
+    if sourceScoped { return "\(action) in \(appName)" }
+    return "\(action) unavailable because Islet cannot target \(appName) safely"
+  }
+
+  static func accessibilityLabel(action: String, sourceScoped: Bool) -> String {
+    sourceScoped ? action : "\(action) unavailable"
+  }
+}
+
+/// Send-side MediaRemote still works in-process on macOS 15.4+; reads require the entitled helper.
+/// Command codes match MRMediaRemoteCommand: toggle=2, next=4, previous=5.
 final class MediaRemoteCommands: @unchecked Sendable {
   static let shared = MediaRemoteCommands()
 
@@ -12,6 +107,11 @@ final class MediaRemoteCommands: @unchecked Sendable {
   private let sendCommand: SendCommand?
   private let setElapsed: SetElapsed?
   private let setPlayerIfPossible: SetPlayerIfPossible?
+  private let queue = MediaCommandQueue()
+
+  /// MediaRemoteAdapter 0.1.0 exports global send and seek functions. It does not accept a client,
+  /// player path, PID, or bundle identifier for any command.
+  let supportsSourceScopedCommands = false
 
   private init() {
     guard
@@ -39,18 +139,16 @@ final class MediaRemoteCommands: @unchecked Sendable {
   }
 
   /// Whether `MRMediaRemoteSetNowPlayingPlayerIfPossible` resolved in this process. Diagnostic
-  /// only — see `promote(_:)` for why it is not called.
+  /// only. See `promote(_:)` for why it is not called.
   var canPromoteDirectly: Bool { setPlayerIfPossible != nil }
 
-  /// Makes `source` the player the user is looking at.
+  /// Brings the source's application forward. This does not make a CoreAudio observation into a
+  /// controllable MediaRemote player.
   ///
   /// `MRMediaRemoteSetNowPlayingPlayerIfPossible` takes an `MRPlayerPath` object, and the only
-  /// calls that produce one are the entitled reads macOS 15.4 locked down — the reason
-  /// `MediaWatcher` shells out to /usr/bin/perl at all. Islet cannot hand it a player from
-  /// in-process, and passing nil into a private framework is undefined behaviour, so the symbol is
-  /// resolved (the fork described in the design spec's "Upgrade path — fork the MediaRemote adapter
-  /// for true per-source media" section will use it) but never invoked. Activating the owning app
-  /// is the fallback that works today, and is what tapping a chip means anyway.
+  /// calls that produce one are the entitled reads macOS 15.4 locked down. Islet cannot hand it a
+  /// player from this process. Passing nil into a private framework is undefined behaviour, so the
+  /// symbol is resolved for diagnostics but never invoked.
   @MainActor @discardableResult
   func promote(_ source: SourceID) -> Bool {
     if !canPromoteDirectly {
@@ -73,14 +171,30 @@ final class MediaRemoteCommands: @unchecked Sendable {
     return false
   }
 
-  func play() { _ = sendCommand?(0, nil) }
-  func pause() { _ = sendCommand?(1, nil) }
-  func togglePlayPause() { _ = sendCommand?(2, nil) }
-  func next() { _ = sendCommand?(4, nil) }
-  func previous() { _ = sendCommand?(5, nil) }
-  func toggleShuffle() { _ = sendCommand?(6, nil) }
-  func cycleRepeat() { _ = sendCommand?(7, nil) }
-  func skipBackward15() { _ = sendCommand?(12, nil) }
-  func skipForward15() { _ = sendCommand?(13, nil) }
-  func seek(to seconds: Double) { setElapsed?(seconds) }
+  func perform(
+    _ command: MediaCommand, shownSource: SourceID, sourceIsAdapterBacked: Bool
+  ) async -> MediaCommandResult {
+    await queue.enqueue { [self] in
+      await MediaCommandRouter.perform(
+        command,
+        shownSource: shownSource,
+        sourceIsAdapterBacked: sourceIsAdapterBacked,
+        supportsSourceScopedCommands: supportsSourceScopedCommands,
+        send: { [self] command, source in await send(command, to: source) })
+    }
+  }
+
+  private func send(_ command: MediaCommand, to source: SourceID?) async -> Bool {
+    // The current transport cannot address a source. Refuse rather than silently treating a
+    // scoped request as global if the capability declaration and implementation diverge.
+    guard source == nil else { return false }
+    if case .seek(let seconds) = command {
+      guard seconds.isFinite, seconds >= 0, let setElapsed else { return false }
+      setElapsed(seconds)
+      return true
+    }
+    guard let code = command.commandCode, let sendCommand else { return false }
+    return sendCommand(code, nil)
+  }
+
 }
