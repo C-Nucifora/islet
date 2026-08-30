@@ -45,6 +45,10 @@ final class SystemActivity: NotchActivity, ObservableObject {
     guard gate.update(sample: sample, controls: presenceControls) else {
       return
     }
+    publishGateChange()
+  }
+
+  private func publishGateChange() {
     activationDate = gate.isActive ? Date() : nil
     objectWillChange.send()
   }
@@ -137,7 +141,8 @@ final class SystemActivity: NotchActivity, ObservableObject {
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
         guard let self else { return }
-        self.handle(self.monitor.sample)
+        guard self.gate.update(controls: self.presenceControls) else { return }
+        self.publishGateChange()
       }
       .store(in: &cancellables)
   }

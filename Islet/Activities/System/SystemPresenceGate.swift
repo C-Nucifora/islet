@@ -86,6 +86,8 @@ struct SystemPresenceGate: Equatable {
   /// Matches the rate window. A larger gap means the app was suspended or the timer stalled, so it
   /// cannot prove continuous load or recovery.
   static let maximumSampleGap = metricsMaxSampleGap
+  /// Brief missing reads are tolerated. A source missing for a full sample-gap window is stale.
+  static let missingSampleTimeout = maximumSampleGap
 
   private(set) var isActive = false
   private(set) var reason: Reason?
@@ -147,6 +149,26 @@ struct SystemPresenceGate: Equatable {
       activationDuration: Self.networkActivationDuration,
       recoveryDuration: Self.networkRecoveryDuration, uptime: uptime)
 
+    return refreshPresence(controls: controls, wasActive: wasActive, wasReason: wasReason)
+  }
+
+  /// Applies preference changes without treating the monitor's cached value as a fresh sample.
+  /// Disabling a trigger takes effect immediately; enabled triggers keep their existing timers.
+  mutating func update(controls: Controls) -> Bool {
+    let wasActive = isActive
+    let wasReason = reason
+    if !controls.cpu { cpuState.reset() }
+    if !controls.thermal { thermalState.reset() }
+    if !controls.memoryPressure { memoryState.reset() }
+    if !controls.lowDiskSpace { lowDiskState.reset() }
+    if !controls.diskThroughput { diskState.reset() }
+    if !controls.networkThroughput { networkState.reset() }
+    return refreshPresence(controls: controls, wasActive: wasActive, wasReason: wasReason)
+  }
+
+  private mutating func refreshPresence(
+    controls: Controls, wasActive: Bool, wasReason: Reason?
+  ) -> Bool {
     reason = Reason.allCases
       .filter { controls.includes($0) && state(for: $0).isActive }
       .max { $0.priority < $1.priority }
@@ -198,7 +220,8 @@ struct SystemPresenceGate: Equatable {
       return
     }
     guard let value else {
-      state.interruptPendingDuration()
+      state.interruptPendingDuration(
+        uptime: uptime, missingSampleTimeout: Self.missingSampleTimeout)
       return
     }
     state.update(
@@ -212,11 +235,13 @@ private struct SustainedState: Equatable {
   private(set) var isActive = false
   private var triggeredSince: TimeInterval?
   private var recoveredSince: TimeInterval?
+  private var missingSince: TimeInterval?
 
   mutating func update(
     isTriggered: Bool, isRecovered: Bool, activationDuration: TimeInterval,
     recoveryDuration: TimeInterval, uptime: TimeInterval
   ) {
+    missingSince = nil
     if isActive {
       triggeredSince = nil
       guard isRecovered else {
@@ -242,14 +267,24 @@ private struct SustainedState: Equatable {
     triggeredSince = nil
   }
 
-  mutating func interruptPendingDuration() {
+  mutating func interruptPendingDuration(
+    uptime: TimeInterval, missingSampleTimeout: TimeInterval
+  ) {
     triggeredSince = nil
     recoveredSince = nil
+    guard isActive else {
+      missingSince = nil
+      return
+    }
+    let since = missingSince ?? uptime
+    missingSince = since
+    if uptime - since >= missingSampleTimeout { reset() }
   }
 
   mutating func reset() {
     isActive = false
     triggeredSince = nil
     recoveredSince = nil
+    missingSince = nil
   }
 }

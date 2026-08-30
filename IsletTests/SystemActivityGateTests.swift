@@ -314,12 +314,38 @@ final class SystemActivityGateTests: XCTestCase {
     XCTAssertFalse(update(&gate, highCPU, uptime: 0))
     XCTAssertTrue(update(&gate, highCPU, uptime: SystemPresenceGate.cpuActivationDuration))
 
-    XCTAssertTrue(
-      update(
-        &gate, highCPU, controls: .init(cpu: false),
-        uptime: SystemPresenceGate.cpuActivationDuration + 1))
+    XCTAssertTrue(gate.update(controls: .init(cpu: false)))
     XCTAssertFalse(gate.isActive)
     XCTAssertNil(gate.reason)
+  }
+
+  func testControlOnlyUpdateDoesNotAdvancePendingActivation() {
+    var gate = SystemPresenceGate()
+    let highCPU = sample(cpu: 1)
+    let controls = SystemPresenceGate.Controls(networkThroughput: false)
+
+    XCTAssertFalse(update(&gate, highCPU, controls: controls, uptime: 0))
+    XCTAssertFalse(gate.update(controls: controls))
+    XCTAssertFalse(gate.isActive)
+    XCTAssertTrue(
+      update(
+        &gate, highCPU, controls: controls,
+        uptime: SystemPresenceGate.cpuActivationDuration))
+  }
+
+  func testControlOnlyUpdateDoesNotAdvancePendingRecovery() {
+    var gate = SystemPresenceGate()
+    activate(&gate)
+    let lowCPU = sample(cpu: SystemPresenceGate.deactivateCPU)
+    let controls = SystemPresenceGate.Controls(networkThroughput: false)
+
+    XCTAssertFalse(update(&gate, lowCPU, controls: controls, uptime: 6))
+    XCTAssertFalse(gate.update(controls: controls))
+    XCTAssertTrue(gate.isActive)
+    XCTAssertTrue(
+      update(
+        &gate, lowCPU, controls: controls,
+        uptime: 6 + SystemPresenceGate.cpuRecoveryDuration))
   }
 
   func testSimultaneousConditionsChoosePriorityAndRecoverToTheNextReason() {
@@ -383,6 +409,26 @@ final class SystemActivityGateTests: XCTestCase {
     XCTAssertTrue(gate.isActive)
     XCTAssertTrue(gate.update(cpuTotal: 0.5, thermalState: 0, uptime: 16))
     XCTAssertFalse(gate.isActive)
+  }
+
+  func testActivePressureExpiresAfterABoundedRunOfMissingSamples() {
+    var gate = SystemPresenceGate()
+    activate(&gate)
+    let firstMissing = SystemPresenceGate.activationDuration + 1
+
+    XCTAssertFalse(gate.update(cpuTotal: nil, thermalState: 0, uptime: firstMissing))
+    XCTAssertTrue(gate.isActive)
+    XCTAssertFalse(
+      gate.update(
+        cpuTotal: nil, thermalState: 0,
+        uptime: firstMissing + SystemPresenceGate.maximumSampleGap - 0.1))
+    XCTAssertTrue(gate.isActive)
+    XCTAssertTrue(
+      gate.update(
+        cpuTotal: nil, thermalState: 0,
+        uptime: firstMissing + SystemPresenceGate.maximumSampleGap))
+    XCTAssertFalse(gate.isActive)
+    XCTAssertNil(gate.reason)
   }
 
   func testNilCPUResetsPendingActivation() {

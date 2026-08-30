@@ -25,6 +25,12 @@ struct SettingsTransferSnapshot: Equatable {
   var disabledActivities: [String]
   var disabledEventSources: [String]
   var systemAlwaysVisible: Bool
+  var systemAutoPresentCPU: Bool
+  var systemAutoPresentThermal: Bool
+  var systemAutoPresentMemoryPressure: Bool
+  var systemAutoPresentLowDiskSpace: Bool
+  var systemAutoPresentDiskThroughput: Bool
+  var systemAutoPresentNetworkThroughput: Bool
   var metricStyles: [String: String]
   var continuityAlwaysVisible: Bool
   var continuitySneaks: Bool
@@ -54,6 +60,12 @@ struct SettingsTransferPatch: Equatable {
   var disabledActivities: [String]?
   var disabledEventSources: [String]?
   var systemAlwaysVisible: Bool?
+  var systemAutoPresentCPU: Bool?
+  var systemAutoPresentThermal: Bool?
+  var systemAutoPresentMemoryPressure: Bool?
+  var systemAutoPresentLowDiskSpace: Bool?
+  var systemAutoPresentDiskThroughput: Bool?
+  var systemAutoPresentNetworkThroughput: Bool?
   var metricStyles: [String: String]?
   var continuityAlwaysVisible: Bool?
   var continuitySneaks: Bool?
@@ -83,6 +95,20 @@ struct SettingsTransferPatch: Equatable {
     if let disabledActivities { result.disabledActivities = disabledActivities }
     if let disabledEventSources { result.disabledEventSources = disabledEventSources }
     if let systemAlwaysVisible { result.systemAlwaysVisible = systemAlwaysVisible }
+    if let systemAutoPresentCPU { result.systemAutoPresentCPU = systemAutoPresentCPU }
+    if let systemAutoPresentThermal { result.systemAutoPresentThermal = systemAutoPresentThermal }
+    if let systemAutoPresentMemoryPressure {
+      result.systemAutoPresentMemoryPressure = systemAutoPresentMemoryPressure
+    }
+    if let systemAutoPresentLowDiskSpace {
+      result.systemAutoPresentLowDiskSpace = systemAutoPresentLowDiskSpace
+    }
+    if let systemAutoPresentDiskThroughput {
+      result.systemAutoPresentDiskThroughput = systemAutoPresentDiskThroughput
+    }
+    if let systemAutoPresentNetworkThroughput {
+      result.systemAutoPresentNetworkThroughput = systemAutoPresentNetworkThroughput
+    }
     if let metricStyles { result.metricStyles = metricStyles }
     if let continuityAlwaysVisible { result.continuityAlwaysVisible = continuityAlwaysVisible }
     if let continuitySneaks { result.continuitySneaks = continuitySneaks }
@@ -156,7 +182,9 @@ enum SettingsTransfer {
     "hapticsEnabled", "hideFromScreenRecording", "hideInFullscreen", "hoverCollapseTimeout",
     "hudEnabled", "hudStyle", "interactionMode", "launchAtLogin", "mediaPriorityList",
     "mediaSourceMode", "metricStyles", "remindersEnabled", "showOnAllDisplays",
-    "systemAlwaysVisible",
+    "systemAlwaysVisible", "systemAutoPresentCPU", "systemAutoPresentDiskThroughput",
+    "systemAutoPresentLowDiskSpace", "systemAutoPresentMemoryPressure",
+    "systemAutoPresentNetworkThroughput", "systemAutoPresentThermal",
   ]
 
   static let excludedPreferenceKeys: Set<String> = [
@@ -255,6 +283,12 @@ enum SettingsTransfer {
     case "disabledActivities": patch.disabledActivities != nil
     case "disabledEventSources": patch.disabledEventSources != nil
     case "systemAlwaysVisible": patch.systemAlwaysVisible != nil
+    case "systemAutoPresentCPU": patch.systemAutoPresentCPU != nil
+    case "systemAutoPresentThermal": patch.systemAutoPresentThermal != nil
+    case "systemAutoPresentMemoryPressure": patch.systemAutoPresentMemoryPressure != nil
+    case "systemAutoPresentLowDiskSpace": patch.systemAutoPresentLowDiskSpace != nil
+    case "systemAutoPresentDiskThroughput": patch.systemAutoPresentDiskThroughput != nil
+    case "systemAutoPresentNetworkThroughput": patch.systemAutoPresentNetworkThroughput != nil
     case "metricStyles": patch.metricStyles != nil
     case "continuityAlwaysVisible": patch.continuityAlwaysVisible != nil
     case "continuitySneaks": patch.continuitySneaks != nil
@@ -287,6 +321,12 @@ enum SettingsTransfer {
       "disabledActivities": value.disabledActivities,
       "disabledEventSources": value.disabledEventSources,
       "systemAlwaysVisible": value.systemAlwaysVisible,
+      "systemAutoPresentCPU": value.systemAutoPresentCPU,
+      "systemAutoPresentThermal": value.systemAutoPresentThermal,
+      "systemAutoPresentMemoryPressure": value.systemAutoPresentMemoryPressure,
+      "systemAutoPresentLowDiskSpace": value.systemAutoPresentLowDiskSpace,
+      "systemAutoPresentDiskThroughput": value.systemAutoPresentDiskThroughput,
+      "systemAutoPresentNetworkThroughput": value.systemAutoPresentNetworkThroughput,
       "metricStyles": value.metricStyles,
       "continuityAlwaysVisible": value.continuityAlwaysVisible,
       "continuitySneaks": value.continuitySneaks,
@@ -339,6 +379,15 @@ enum SettingsTransfer {
     patch.disabledActivities = try stringArray("disabledActivities", in: values, unique: true)
     patch.disabledEventSources = try stringArray("disabledEventSources", in: values, unique: true)
     patch.systemAlwaysVisible = try boolean("systemAlwaysVisible", in: values)
+    patch.systemAutoPresentCPU = try boolean("systemAutoPresentCPU", in: values)
+    patch.systemAutoPresentThermal = try boolean("systemAutoPresentThermal", in: values)
+    patch.systemAutoPresentMemoryPressure = try boolean(
+      "systemAutoPresentMemoryPressure", in: values)
+    patch.systemAutoPresentLowDiskSpace = try boolean("systemAutoPresentLowDiskSpace", in: values)
+    patch.systemAutoPresentDiskThroughput = try boolean(
+      "systemAutoPresentDiskThroughput", in: values)
+    patch.systemAutoPresentNetworkThroughput = try boolean(
+      "systemAutoPresentNetworkThroughput", in: values)
     patch.metricStyles = try stringDictionary("metricStyles", in: values)
     patch.continuityAlwaysVisible = try boolean("continuityAlwaysVisible", in: values)
     patch.continuitySneaks = try boolean("continuitySneaks", in: values)
@@ -492,6 +541,24 @@ enum SettingsTransfer {
     add(
       "systemAlwaysVisible", "System idle visibility", old.systemAlwaysVisible,
       new.systemAlwaysVisible)
+    add(
+      "systemAutoPresentCPU", "System CPU presence", old.systemAutoPresentCPU,
+      new.systemAutoPresentCPU)
+    add(
+      "systemAutoPresentDiskThroughput", "System disk activity presence",
+      old.systemAutoPresentDiskThroughput, new.systemAutoPresentDiskThroughput)
+    add(
+      "systemAutoPresentLowDiskSpace", "System low disk presence",
+      old.systemAutoPresentLowDiskSpace, new.systemAutoPresentLowDiskSpace)
+    add(
+      "systemAutoPresentMemoryPressure", "System memory presence",
+      old.systemAutoPresentMemoryPressure, new.systemAutoPresentMemoryPressure)
+    add(
+      "systemAutoPresentNetworkThroughput", "System network presence",
+      old.systemAutoPresentNetworkThroughput, new.systemAutoPresentNetworkThroughput)
+    add(
+      "systemAutoPresentThermal", "System thermal presence", old.systemAutoPresentThermal,
+      new.systemAutoPresentThermal)
     return changes
   }
 
@@ -529,7 +596,14 @@ enum SettingsTransferDefaults {
       launchAtLogin: Defaults[.launchAtLogin], activityOrder: Defaults[.activityOrder],
       disabledActivities: Defaults[.disabledActivities],
       disabledEventSources: Defaults[.disabledEventSources],
-      systemAlwaysVisible: Defaults[.systemAlwaysVisible], metricStyles: Defaults[.metricStyles],
+      systemAlwaysVisible: Defaults[.systemAlwaysVisible],
+      systemAutoPresentCPU: Defaults[.systemAutoPresentCPU],
+      systemAutoPresentThermal: Defaults[.systemAutoPresentThermal],
+      systemAutoPresentMemoryPressure: Defaults[.systemAutoPresentMemoryPressure],
+      systemAutoPresentLowDiskSpace: Defaults[.systemAutoPresentLowDiskSpace],
+      systemAutoPresentDiskThroughput: Defaults[.systemAutoPresentDiskThroughput],
+      systemAutoPresentNetworkThroughput: Defaults[.systemAutoPresentNetworkThroughput],
+      metricStyles: Defaults[.metricStyles],
       continuityAlwaysVisible: Defaults[.continuityAlwaysVisible],
       continuitySneaks: Defaults[.continuitySneaks])
   }
@@ -558,6 +632,20 @@ enum SettingsTransferDefaults {
     if let value = patch.disabledActivities { Defaults[.disabledActivities] = value }
     if let value = patch.disabledEventSources { Defaults[.disabledEventSources] = value }
     if let value = patch.systemAlwaysVisible { Defaults[.systemAlwaysVisible] = value }
+    if let value = patch.systemAutoPresentCPU { Defaults[.systemAutoPresentCPU] = value }
+    if let value = patch.systemAutoPresentThermal { Defaults[.systemAutoPresentThermal] = value }
+    if let value = patch.systemAutoPresentMemoryPressure {
+      Defaults[.systemAutoPresentMemoryPressure] = value
+    }
+    if let value = patch.systemAutoPresentLowDiskSpace {
+      Defaults[.systemAutoPresentLowDiskSpace] = value
+    }
+    if let value = patch.systemAutoPresentDiskThroughput {
+      Defaults[.systemAutoPresentDiskThroughput] = value
+    }
+    if let value = patch.systemAutoPresentNetworkThroughput {
+      Defaults[.systemAutoPresentNetworkThroughput] = value
+    }
     if let value = patch.metricStyles { Defaults[.metricStyles] = value }
     if let value = patch.continuityAlwaysVisible { Defaults[.continuityAlwaysVisible] = value }
     if let value = patch.continuitySneaks { Defaults[.continuitySneaks] = value }
