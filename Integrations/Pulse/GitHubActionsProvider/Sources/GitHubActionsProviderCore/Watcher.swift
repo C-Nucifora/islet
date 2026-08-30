@@ -29,6 +29,10 @@ public final class GitHubActionsWatcher<Runner: CommandRunning> {
         try reportHealth(failure)
         if configuration.once { throw ProviderError.commandFailed(failure) }
         Thread.sleep(forTimeInterval: backoff.failureDelay())
+      } catch ProviderError.invalidResponse {
+        try reportHealth(.offline)
+        if configuration.once { throw ProviderError.invalidResponse }
+        Thread.sleep(forTimeInterval: backoff.failureDelay())
       }
     }
   }

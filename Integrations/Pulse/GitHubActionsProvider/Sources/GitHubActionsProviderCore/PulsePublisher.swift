@@ -16,6 +16,7 @@ public struct PulsePublisher<Runner: CommandRunning> {
       "--source", "github-actions",
       "--state", presentation.state,
       "--priority", presentation.priority,
+      "--symbol", presentation.symbol,
     ]
     if presentation.expiresAfter > 0 {
       arguments.append(contentsOf: ["--expires", seconds(presentation.expiresAfter)])

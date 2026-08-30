@@ -139,6 +139,8 @@ final class ProviderTests: XCTestCase {
     XCTAssertTrue(arguments.contains("--expires"))
     XCTAssertTrue(arguments.contains("30"))
     XCTAssertEqual(arguments.filter { $0 == "--action" }.count, 2)
+    let symbolIndex = try XCTUnwrap(arguments.firstIndex(of: "--symbol"))
+    XCTAssertEqual(arguments[arguments.index(after: symbolIndex)], "checkmark.circle.fill")
   }
 
   func testRepeatedHealthFailurePublishesOnceAndDoesNotExpireBeforeRecovery() throws {
@@ -155,6 +157,23 @@ final class ProviderTests: XCTestCase {
     let arguments = try XCTUnwrap(runner.invocations.first?.arguments)
     XCTAssertFalse(arguments.contains("--expires"))
     XCTAssertTrue(arguments.contains("needsAction"))
+  }
+
+  func testInvalidGitHubResponsePublishesOfflineHealthBeforeOnceModeExits() throws {
+    let runner = RecordingRunner(results: [
+      CommandResult(status: 0, stdout: Data("not-json".utf8), stderr: Data()),
+      CommandResult(status: 0, stdout: Data(), stderr: Data()),
+    ])
+    let configuration = WatchConfiguration(repositories: ["C-Nucifora/islet"], once: true)
+    let watcher = GitHubActionsWatcher(configuration: configuration, runner: runner)
+
+    XCTAssertThrowsError(try watcher.run()) { error in
+      XCTAssertEqual(error as? ProviderError, .invalidResponse)
+    }
+    XCTAssertEqual(runner.invocations.count, 2)
+    let healthInvocation = try XCTUnwrap(runner.invocations.dropFirst().first)
+    XCTAssertTrue(healthInvocation.arguments.contains("github-actions-health"))
+    XCTAssertTrue(healthInvocation.arguments.contains("needsAction"))
   }
 
   func testCompletedRunPublishesOnceAndStopsDetailPolling() throws {
