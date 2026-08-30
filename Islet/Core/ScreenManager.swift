@@ -93,6 +93,8 @@ final class ScreenManager {
   private var instances: [String: PanelInstance] = [:]
   private var cancellables: Set<AnyCancellable> = []
   private var fullscreenTimer: AnyCancellable?
+  private var fullscreenTransitionRefreshes: Set<AnyCancellable> = []
+  private var fullscreenTransitionRevision = FullscreenTransitionRevision()
   /// Last-known notch measurements per display, so a transient empty aux-area read can't downgrade
   /// a built-in screen to the 200pt fallback for the rest of the session.
   private var stickiness = NotchStickiness()
@@ -127,12 +129,23 @@ final class ScreenManager {
       .publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
       .sink { [weak self] _ in
         self?.reassertAll()
-        self?.applyFullscreenVisibility()
+        self?.refreshFullscreenTransition()
       }
       .store(in: &cancellables)
     NSWorkspace.shared.notificationCenter
       .publisher(for: NSWorkspace.didActivateApplicationNotification)
-      .sink { [weak self] _ in self?.reassertAll() }
+      .sink { [weak self] _ in
+        self?.reassertAll()
+        self?.applyFullscreenVisibility()
+      }
+      .store(in: &cancellables)
+    NSWorkspace.shared.notificationCenter
+      .publisher(for: NSWorkspace.didWakeNotification)
+      .merge(
+        with: NSWorkspace.shared.notificationCenter.publisher(
+          for: NSWorkspace.sessionDidBecomeActiveNotification)
+      )
+      .sink { [weak self] _ in self?.refreshFullscreenTransition() }
       .store(in: &cancellables)
     Defaults.publisher(.hideFromScreenRecording)
       .sink { [weak self] change in
@@ -157,6 +170,7 @@ final class ScreenManager {
 
   func stop() {
     fullscreenTimer = nil
+    fullscreenTransitionRefreshes.removeAll()
     cancellables.removeAll()
     for instance in instances.values { instance.stop() }
     instances.removeAll()
@@ -246,14 +260,14 @@ final class ScreenManager {
 
   private func updateFullscreenObserving() {
     if Defaults[.hideInFullscreen] {
-      // Fullscreen enter/exit moves the active Space, and that observer is now registered
-      // unconditionally in `start()`. All that is left here is a slow safety poll, instead of
-      // scanning every window once a second.
-      fullscreenTimer = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
+      // Space and application notifications are the normal update path. This poll only recovers
+      // if WindowServer fails to send a notification or an update arrives while the Mac sleeps.
+      fullscreenTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
         .sink { [weak self] _ in self?.applyFullscreenVisibility() }
       applyFullscreenVisibility()
     } else {
       fullscreenTimer = nil
+      fullscreenTransitionRefreshes.removeAll()
       // Restore any panel we hid.
       for instance in instances.values where !instance.panel.isVisible {
         instance.panel.orderFrontRegardless()
@@ -274,4 +288,38 @@ final class ScreenManager {
       }
     }
   }
+
+  /// WindowServer can post the Space-change notification just before its current-Space snapshot
+  /// settles. Apply once now, then resample twice after the animation. Starting another transition
+  /// invalidates the older follow-ups, which prevents a rapid Space switch from replaying stale
+  /// work after the latest transition.
+  private func refreshFullscreenTransition() {
+    guard Defaults[.hideInFullscreen] else { return }
+    fullscreenTransitionRefreshes.removeAll()
+    let revision = fullscreenTransitionRevision.begin()
+    applyFullscreenVisibility()
+
+    for delay in FullscreenTransitionRevision.followUpDelays {
+      Just(())
+        .delay(for: .seconds(delay), scheduler: DispatchQueue.main)
+        .sink { [weak self] _ in
+          guard let self, fullscreenTransitionRevision.accepts(revision) else { return }
+          applyFullscreenVisibility()
+        }
+        .store(in: &fullscreenTransitionRefreshes)
+    }
+  }
+}
+
+nonisolated struct FullscreenTransitionRevision {
+  static let followUpDelays: [TimeInterval] = [0.2, 0.8]
+
+  private(set) var value = 0
+
+  mutating func begin() -> Int {
+    value &+= 1
+    return value
+  }
+
+  func accepts(_ revision: Int) -> Bool { revision == value }
 }
