@@ -55,7 +55,12 @@ struct T3HTTPTransport: Sendable {
     if let session {
       self.session = session
     } else {
-      self.session = URLSession(configuration: .ephemeral)
+      let configuration = URLSessionConfiguration.ephemeral
+      configuration.httpCookieStorage = nil
+      configuration.httpShouldSetCookies = false
+      configuration.urlCache = nil
+      configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+      self.session = URLSession(configuration: configuration)
     }
   }
 
@@ -73,6 +78,7 @@ struct T3HTTPTransport: Sendable {
     return try await withThrowingTaskGroup(of: T3HTTPResponse.self) { group in
       group.addTask {
         var authorizedRequest = request
+        Self.isolate(&authorizedRequest)
         try await Self.apply(authorization, to: &authorizedRequest)
         return try await response(for: authorizedRequest, session: session)
       }
@@ -91,6 +97,14 @@ struct T3HTTPTransport: Sendable {
   static func acceptsResponseGrowth(currentBytes: Int, additionalBytes: Int) -> Bool {
     currentBytes >= 0 && additionalBytes >= 0
       && currentBytes <= maximumResponseBytes - additionalBytes
+  }
+
+  private static func isolate(_ request: inout URLRequest) {
+    request.httpShouldHandleCookies = false
+    request.setValue(nil, forHTTPHeaderField: "Cookie")
+    request.cachePolicy = .reloadIgnoringLocalCacheData
+    request.setValue("no-store, no-cache", forHTTPHeaderField: "Cache-Control")
+    request.setValue("no-cache", forHTTPHeaderField: "Pragma")
   }
 
   private static func apply(_ authorization: T3Authorization, to request: inout URLRequest)
@@ -144,7 +158,7 @@ struct T3HTTPTransport: Sendable {
   }
 }
 
-private final class T3NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+private final class T3NoRedirectDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
   static let shared = T3NoRedirectDelegate()
 
   func urlSession(
@@ -153,6 +167,15 @@ private final class T3NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unc
     willPerformHTTPRedirection response: HTTPURLResponse,
     newRequest request: URLRequest,
     completionHandler: @escaping (URLRequest?) -> Void
+  ) {
+    completionHandler(nil)
+  }
+
+  func urlSession(
+    _ session: URLSession,
+    dataTask: URLSessionDataTask,
+    willCacheResponse proposedResponse: CachedURLResponse,
+    completionHandler: @escaping @Sendable (CachedURLResponse?) -> Void
   ) {
     completionHandler(nil)
   }

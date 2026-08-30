@@ -86,6 +86,19 @@ final class T3RelayClientTests: XCTestCase {
     }
   }
 
+  func testInventoryRejectsLiteralDotSegmentEnvironmentIDs() async throws {
+    for environmentID in [".", ".."] {
+      let recorder = T3RelayHTTPRecorder(responses: [
+        .inventory([Self.environmentJSON(environmentID: environmentID)])
+      ])
+      let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+
+      await assertInvalidResponse {
+        _ = try await client.listEnvironments(accountToken: "account")
+      }
+    }
+  }
+
   func testWhitespaceAccountTokenAndProofThumbprintAreRejectedBeforeDispatch() async throws {
     let accountRecorder = T3RelayHTTPRecorder(responses: [.inventory([])])
     let accountClient = makeClient(
@@ -127,6 +140,60 @@ final class T3RelayClientTests: XCTestCase {
         _ = try await client.listEnvironments(accountToken: "account")
       }
     }
+  }
+
+  func testInventoryRejectsOutOfRangeManagedPortsAndAcceptsPortBoundaries() async throws {
+    for port in [0, 65_536, 99_999] {
+      let invalidRows = [
+        Self.environmentJSON(httpBaseURL: "https://env-one.t3-relay-unit.test:\(port)"),
+        Self.environmentJSON(webSocketBaseURL: "wss://env-one.t3-relay-unit.test:\(port)/ws"),
+      ]
+      for row in invalidRows {
+        let recorder = T3RelayHTTPRecorder(responses: [.inventory([row])])
+        let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+        await assertInvalidResponse {
+          _ = try await client.listEnvironments(accountToken: "account")
+        }
+      }
+    }
+
+    let boundaryRows = [
+      Self.environmentJSON(
+        environmentID: "env-low-high",
+        httpBaseURL: "https://env-low-high.t3-relay-unit.test:1",
+        webSocketBaseURL: "wss://env-low-high.t3-relay-unit.test:65535/ws"),
+      Self.environmentJSON(
+        environmentID: "env-high-low",
+        httpBaseURL: "https://env-high-low.t3-relay-unit.test:65535",
+        webSocketBaseURL: "wss://env-high-low.t3-relay-unit.test:1/ws"),
+    ]
+    let recorder = T3RelayHTTPRecorder(responses: [.inventory(boundaryRows)])
+    let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+
+    let environments = try await client.listEnvironments(accountToken: "account")
+
+    XCTAssertEqual(environments.map(\.httpBaseURL.port), [1, 65_535])
+    XCTAssertEqual(environments.map(\.webSocketBaseURL.port), [65_535, 1])
+  }
+
+  func testCacheableInventoryCannotCrossBearerTokens() async throws {
+    let firstResponse = T3RelayHTTPResponse.inventory([
+      Self.environmentJSON(label: "First account")
+    ]).cacheable()
+    let recorder = T3RelayHTTPRecorder(responses: [
+      firstResponse,
+      .inventory([Self.environmentJSON(label: "Second account")]).cacheable(),
+    ])
+    let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+
+    let first = try await client.listEnvironments(accountToken: "first-bearer")
+    let second = try await client.listEnvironments(accountToken: "second-bearer")
+
+    XCTAssertEqual(first.only?.label, "First account")
+    XCTAssertEqual(second.only?.label, "Second account")
+    XCTAssertEqual(
+      recorder.requests().map { $0.value(forHTTPHeaderField: "Authorization") },
+      ["Bearer first-bearer", "Bearer second-bearer"])
   }
 
   func testAuthorizeMatchesPinnedRelayAndEnvironmentRequests() async throws {
@@ -249,6 +316,28 @@ final class T3RelayClientTests: XCTestCase {
       ])
   }
 
+  func testManagedPreflightAndBootstrapExchangeNeverReplayResponseCookies() async throws {
+    let recorder = T3RelayHTTPRecorder(responses: [
+      .relayToken(), .connect(),
+      .descriptor().with(headers: [
+        "Set-Cookie": "descriptor_cookie=secret; Path=/; Secure; HttpOnly"
+      ]),
+      .authState().with(headers: [
+        "Set-Cookie": "auth_cookie=secret; Path=/; Secure; HttpOnly"
+      ]),
+      .environmentToken(),
+    ])
+    let client = makeClient(
+      recorder: recorder, signer: T3RelayProofRecorder(), preloadManagedCookie: true)
+
+    _ = try await client.authorize(
+      environment: Self.environment(), accountToken: "account", grantID: grantID)
+
+    let requests = recorder.requests()
+    XCTAssertNil(requests[3].value(forHTTPHeaderField: "Cookie"))
+    XCTAssertNil(requests[4].value(forHTTPHeaderField: "Cookie"))
+  }
+
   func testDescriptorIdentityMismatchStopsBeforeAuthPreflightAndBootstrapExchange() async throws {
     let recorder = T3RelayHTTPRecorder(responses: [
       .relayToken(), .connect(), .descriptor(environmentID: "attacker"),
@@ -330,6 +419,20 @@ final class T3RelayClientTests: XCTestCase {
       "https://relay.t3-relay-unit.test/v1/environments/env%2Fwith%20space/connect")
   }
 
+  func testAuthorizeRejectsLiteralDotSegmentEnvironmentIDsBeforeDispatch() async throws {
+    for environmentID in [".", ".."] {
+      let recorder = T3RelayHTTPRecorder(responses: Self.authorizationResponses())
+      let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+
+      await assertInvalidResponse {
+        _ = try await client.authorize(
+          environment: Self.environment(environmentID: environmentID), accountToken: "account",
+          grantID: self.grantID)
+      }
+      XCTAssertTrue(recorder.requests().isEmpty)
+    }
+  }
+
   func testRotatedConnectEndpointIsValidatedAndUsedForEnvironmentRequests() async throws {
     let inventoryEnvironment = Self.environment(
       environmentID: "env-one", host: "old.t3-relay-unit.test")
@@ -351,6 +454,47 @@ final class T3RelayClientTests: XCTestCase {
     XCTAssertEqual(recorder.requests()[2].url?.host, "new.t3-relay-unit.test")
     XCTAssertEqual(recorder.requests()[3].url?.host, "new.t3-relay-unit.test")
     XCTAssertEqual(recorder.requests()[4].url?.host, "new.t3-relay-unit.test")
+  }
+
+  func testRotatedConnectEndpointRejectsOutOfRangePorts() async throws {
+    for port in [0, 65_536, 99_999] {
+      let invalidResponses = [
+        T3RelayHTTPResponse.connect(
+          httpBaseURL: "https://new.t3-relay-unit.test:\(port)/"),
+        .connect(webSocketBaseURL: "wss://new.t3-relay-unit.test:\(port)/ws"),
+      ]
+      for invalidResponse in invalidResponses {
+        let recorder = T3RelayHTTPRecorder(responses: [.relayToken(), invalidResponse])
+        let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+        await assertInvalidResponse {
+          _ = try await client.authorize(
+            environment: Self.environment(), accountToken: "account", grantID: self.grantID)
+        }
+        XCTAssertEqual(recorder.requests().count, 2)
+      }
+    }
+  }
+
+  func testRotatedConnectEndpointAcceptsPortBoundaries() async throws {
+    let endpointPairs = [(http: 1, webSocket: 65_535), (http: 65_535, webSocket: 1)]
+    for ports in endpointPairs {
+      let recorder = T3RelayHTTPRecorder(responses: [
+        .relayToken(),
+        .connect(
+          httpBaseURL: "https://new.t3-relay-unit.test:\(ports.http)/",
+          webSocketBaseURL: "wss://new.t3-relay-unit.test:\(ports.webSocket)/ws"),
+        .descriptor(), .authState(), .environmentToken(),
+      ])
+      let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+
+      let authorization = try await client.authorize(
+        environment: Self.environment(), accountToken: "account", grantID: grantID)
+
+      XCTAssertEqual(authorization.endpoint.baseURL.port, ports.http)
+      XCTAssertEqual(recorder.requests()[2].url?.port, ports.http)
+      XCTAssertEqual(recorder.requests()[3].url?.port, ports.http)
+      XCTAssertEqual(recorder.requests()[4].url?.port, ports.http)
+    }
   }
 
   func testRelayTokenRequiresPinnedTypeIssuedURNFiniteBoundedExpiryAndExactScope() async throws {
@@ -385,6 +529,36 @@ final class T3RelayClientTests: XCTestCase {
     for response in invalidBodies {
       let recorder = T3RelayHTTPRecorder(responses: [response])
       let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+      await assertInvalidResponse {
+        _ = try await client.authorize(
+          environment: Self.environment(), accountToken: "account", grantID: self.grantID)
+      }
+      XCTAssertEqual(recorder.requests().count, 1)
+    }
+  }
+
+  func testRelayScopeRequiresBoundedRFC6749ASCIIGrammar() async throws {
+    let malformedScopes = [
+      "environment:connect\t",
+      "environment:connect\n",
+      "environment:connect\u{00A0}",
+      " environment:connect",
+      "environment:connect ",
+      "environment:connect  ",
+      "environment:connect\"",
+      "environment:connect\\",
+      "environment:connect\u{7F}",
+      "environment:connect" + String(repeating: " ", count: 20_000),
+    ]
+
+    for scope in malformedScopes {
+      let response = T3RelayHTTPResponse.token(
+        accessToken: "relay",
+        issuedTokenType: "urn:ietf:params:oauth:token-type:access_token",
+        tokenType: "DPoP", expiresIn: 3_600, scope: scope)
+      let recorder = T3RelayHTTPRecorder(responses: [response])
+      let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+
       await assertInvalidResponse {
         _ = try await client.authorize(
           environment: Self.environment(), accountToken: "account", grantID: self.grantID)
@@ -431,6 +605,38 @@ final class T3RelayClientTests: XCTestCase {
       ]
       let recorder = T3RelayHTTPRecorder(responses: responses)
       let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+      await assertInvalidResponse {
+        _ = try await client.authorize(
+          environment: Self.environment(), accountToken: "account", grantID: self.grantID)
+      }
+      XCTAssertEqual(recorder.requests().count, 5)
+    }
+  }
+
+  func testEnvironmentScopeRequiresBoundedRFC6749ASCIIGrammar() async throws {
+    let malformedScopes = [
+      "orchestration:read\t",
+      "orchestration:read\n",
+      "orchestration:read\u{00A0}",
+      " orchestration:read",
+      "orchestration:read ",
+      "orchestration:read  ",
+      "orchestration:read\"",
+      "orchestration:read\\",
+      "orchestration:read\u{7F}",
+      "orchestration:read" + String(repeating: " ", count: 20_000),
+    ]
+
+    for scope in malformedScopes {
+      let invalidResponse = T3RelayHTTPResponse.token(
+        accessToken: "environment",
+        issuedTokenType: "urn:ietf:params:oauth:token-type:access_token",
+        tokenType: "DPoP", expiresIn: 3_600, scope: scope)
+      let recorder = T3RelayHTTPRecorder(responses: [
+        .relayToken(), .connect(), .descriptor(), .authState(), invalidResponse,
+      ])
+      let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+
       await assertInvalidResponse {
         _ = try await client.authorize(
           environment: Self.environment(), accountToken: "account", grantID: self.grantID)
@@ -747,16 +953,61 @@ final class T3RelayClientTests: XCTestCase {
     XCTAssertEqual(recorder.requests().filter { $0.url?.path == "/oauth/token" }.count, 2)
   }
 
+  func testClearCachesCannotReplayACachedFailedAuthGate() async throws {
+    let invalidAuth = T3RelayHTTPResponse.json(
+      status: 200,
+      #"{"authenticated":false,"auth":{"policy":"remote-reachable","bootstrapMethods":["one-time-token"],"sessionMethods":["bearer-access-token"],"sessionCookieName":"t3_session"}}"#
+    ).cacheable()
+    let recorder = T3RelayHTTPRecorder(responses: [
+      .relayToken(accessToken: "first-relay"), .connect(), .descriptor(), invalidAuth,
+      .relayToken(accessToken: "second-relay"), .connect(), .descriptor(), .authState(),
+      .environmentToken(accessToken: "fresh-environment"),
+    ])
+    let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+
+    await assertInvalidResponse {
+      _ = try await client.authorize(
+        environment: Self.environment(), accountToken: "account", grantID: self.grantID)
+    }
+    await client.clearCaches()
+
+    let authorization = try await client.authorize(
+      environment: Self.environment(), accountToken: "account", grantID: grantID)
+
+    switch authorization.authorization {
+    case .dpop(let accessToken, _): XCTAssertEqual(accessToken, "fresh-environment")
+    default: XCTFail("Expected DPoP authorization")
+    }
+    XCTAssertEqual(recorder.requests().count, 9)
+    XCTAssertEqual(
+      recorder.requests().filter { $0.url?.path == "/api/auth/session" }.count, 2)
+  }
+
   private func makeClient(
     recorder: T3RelayHTTPRecorder,
     signer: any T3DPoPProofProviding,
     now: @escaping @Sendable () -> Date? = { nil },
+    preloadManagedCookie: Bool = false,
     onRelayTaskReused: @escaping @Sendable () -> Void = {},
     onEnvironmentTaskReused: @escaping @Sendable () -> Void = {}
   ) -> T3RelayClient {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [T3RelayURLProtocol.self]
+    let cookieStorage = HTTPCookieStorage.sharedCookieStorage(
+      forGroupContainerIdentifier: "dev.islet.tests.\(UUID().uuidString)")
+    if preloadManagedCookie,
+      let cookie = HTTPCookie(properties: [
+        .domain: "env-one.t3-relay-unit.test", .path: "/", .name: "preexisting_cookie",
+        .value: "secret", .secure: "TRUE",
+      ])
+    {
+      cookieStorage.setCookie(cookie)
+    }
+    configuration.httpCookieStorage = cookieStorage
+    configuration.httpShouldSetCookies = true
+    configuration.requestCachePolicy = .useProtocolCachePolicy
     T3RelayURLProtocol.recorder = recorder
+    T3RelayURLProtocol.cookieStorage = cookieStorage
     let fixedNow = self.now
     return T3RelayClient(
       transport: T3HTTPTransport(session: URLSession(configuration: configuration)),
@@ -881,6 +1132,35 @@ extension T3ConnectConfiguration {
 private struct T3RelayHTTPResponse: Sendable {
   let status: Int
   let data: Data
+  let headers: [String: String]
+  let cacheStoragePolicy: URLCache.StoragePolicy
+
+  init(
+    status: Int,
+    data: Data,
+    headers: [String: String] = [:],
+    cacheStoragePolicy: URLCache.StoragePolicy = .notAllowed
+  ) {
+    self.status = status
+    self.data = data
+    self.headers = headers
+    self.cacheStoragePolicy = cacheStoragePolicy
+  }
+
+  func with(
+    headers: [String: String],
+    cacheStoragePolicy: URLCache.StoragePolicy = .notAllowed
+  ) -> Self {
+    Self(
+      status: status, data: data, headers: headers,
+      cacheStoragePolicy: cacheStoragePolicy)
+  }
+
+  func cacheable() -> Self {
+    with(
+      headers: ["Cache-Control": "public, max-age=3600"],
+      cacheStoragePolicy: .allowed)
+  }
 
   static func json(status: Int, _ body: String) -> Self {
     Self(status: status, data: Data(body.utf8))
@@ -971,6 +1251,7 @@ private final class T3RelayHTTPRecorder: @unchecked Sendable {
   private let lock = NSLock()
   private var responses: [T3RelayHTTPResponse]
   private var recordedRequests: [URLRequest] = []
+  private var cachedResponses: [String: T3RelayHTTPResponse] = [:]
   private var pending: [(T3RelayURLProtocol, T3RelayHTTPResponse)] = []
   private var requestWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
   private let suspendedResponseIndices: Set<Int>
@@ -991,11 +1272,35 @@ private final class T3RelayHTTPRecorder: @unchecked Sendable {
     if request.httpBody == nil, let stream = request.httpBodyStream {
       request.httpBody = Self.read(stream)
     }
+    if request.httpShouldHandleCookies,
+      request.value(forHTTPHeaderField: "Cookie") == nil,
+      let url = request.url,
+      let cookies = T3RelayURLProtocol.cookieStorage?.cookies(for: url), !cookies.isEmpty
+    {
+      for (field, value) in HTTPCookie.requestHeaderFields(with: cookies) {
+        request.setValue(value, forHTTPHeaderField: field)
+      }
+    }
 
     lock.lock()
+    if request.httpMethod == "GET",
+      request.cachePolicy != .reloadIgnoringLocalCacheData,
+      let cacheKey = request.url?.absoluteString,
+      let cachedResponse = cachedResponses[cacheKey]
+    {
+      lock.unlock()
+      loader.deliver(cachedResponse)
+      return
+    }
     recordedRequests.append(request)
     let index = recordedRequests.count
     let response = responses.isEmpty ? nil : responses.removeFirst()
+    if request.httpMethod == "GET", let response,
+      response.cacheStoragePolicy != .notAllowed,
+      let cacheKey = request.url?.absoluteString
+    {
+      cachedResponses[cacheKey] = response
+    }
     let satisfied = requestWaiters.filter { index >= $0.0 }
     requestWaiters.removeAll { index >= $0.0 }
     if let response, suspendedResponseIndices.contains(index) {
@@ -1063,6 +1368,7 @@ private final class T3RelayHTTPRecorder: @unchecked Sendable {
 
 private final class T3RelayURLProtocol: URLProtocol, @unchecked Sendable {
   nonisolated(unsafe) static var recorder: T3RelayHTTPRecorder?
+  nonisolated(unsafe) static var cookieStorage: HTTPCookieStorage?
 
   private let lock = NSLock()
   private var stopped = false
@@ -1085,10 +1391,19 @@ private final class T3RelayURLProtocol: URLProtocol, @unchecked Sendable {
 
   func deliver(_ response: T3RelayHTTPResponse) {
     guard !isStopped, let url = request.url else { return }
+    var headers = response.headers
+    headers["Content-Type"] = "application/json"
+    if response.headers.keys.contains(where: {
+      $0.caseInsensitiveCompare("Set-Cookie") == .orderedSame
+    }) {
+      let cookies = HTTPCookie.cookies(withResponseHeaderFields: headers, for: url)
+      for cookie in cookies { Self.cookieStorage?.setCookie(cookie) }
+    }
     let http = HTTPURLResponse(
       url: url, statusCode: response.status, httpVersion: "HTTP/1.1",
-      headerFields: ["Content-Type": "application/json"])!
-    client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+      headerFields: headers)!
+    client?.urlProtocol(
+      self, didReceive: http, cacheStoragePolicy: response.cacheStoragePolicy)
     client?.urlProtocol(self, didLoad: response.data)
     client?.urlProtocolDidFinishLoading(self)
   }

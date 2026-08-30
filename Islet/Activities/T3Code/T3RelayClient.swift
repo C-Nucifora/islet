@@ -18,6 +18,7 @@ actor T3RelayClient {
   private nonisolated static let maximumInventoryCount = 256
   private nonisolated static let maximumStringBytes = 16 * 1_024
   private nonisolated static let maximumURLBytes = 4 * 1_024
+  private nonisolated static let maximumScopeBytes = 16 * 1_024
   private nonisolated static let maximumAuthMethods = 32
   private nonisolated static let maximumBootstrapLifetime: TimeInterval = 10 * 60
   private nonisolated static let relayScope = "environment:connect"
@@ -88,7 +89,7 @@ actor T3RelayClient {
 
     var seenIDs = Set<String>()
     return try wire.environments.map { item in
-      guard let environmentID = Self.boundedString(item.environmentId),
+      guard let environmentID = Self.environmentID(item.environmentId),
         let label = Self.boundedString(item.label),
         let providerKind = Self.providerKind(item.endpoint.providerKind),
         let httpBaseURL = Self.managedHTTPURL(item.endpoint.httpBaseUrl),
@@ -388,7 +389,7 @@ actor T3RelayClient {
       deadline: Self.requestDeadline)
     try Self.requireSuccess(response)
     let wire = try Self.decode(ConnectResponse.self, from: response.data)
-    guard let responseEnvironmentID = Self.boundedString(wire.environmentId),
+    guard let responseEnvironmentID = Self.environmentID(wire.environmentId),
       let providerKind = Self.providerKind(wire.endpoint.providerKind),
       let httpBaseURL = Self.managedHTTPURL(wire.endpoint.httpBaseUrl),
       let webSocketBaseURL = Self.managedWebSocketURL(wire.endpoint.wsBaseUrl),
@@ -449,7 +450,7 @@ actor T3RelayClient {
   private nonisolated static func validate(
     _ environment: T3ConnectEnvironment
   ) throws -> T3ConnectEnvironment {
-    guard let environmentID = boundedString(environment.environmentID),
+    guard let environmentID = Self.environmentID(environment.environmentID),
       let label = boundedString(environment.label),
       let providerKind = providerKind(environment.providerKind),
       let httpBaseURL = managedHTTPURL(environment.httpBaseURL.absoluteString),
@@ -494,6 +495,13 @@ actor T3RelayClient {
     boundedString(token, maximumBytes: T3OAuthRecord.maximumTokenBytes) != nil
   }
 
+  private nonisolated static func environmentID(_ value: String) -> String? {
+    guard let value = boundedString(value), value != ".", value != ".." else {
+      return nil
+    }
+    return value
+  }
+
   private nonisolated static func providerKind(_ value: String) -> String? {
     guard let kind = boundedString(value),
       ["manual", "cloudflare_tunnel", "t3_relay"].contains(kind)
@@ -510,6 +518,7 @@ actor T3RelayClient {
       let host = components.host, !host.isEmpty,
       components.user == nil, components.password == nil,
       components.query == nil, components.fragment == nil,
+      validPort(components.port),
       components.path.isEmpty || components.path == "/"
     else {
       return nil
@@ -525,7 +534,8 @@ actor T3RelayClient {
       components.scheme?.lowercased() == "wss",
       let host = components.host, !host.isEmpty,
       components.user == nil, components.password == nil,
-      components.query == nil, components.fragment == nil
+      components.query == nil, components.fragment == nil,
+      validPort(components.port)
     else {
       return nil
     }
@@ -553,8 +563,13 @@ actor T3RelayClient {
     return URL(string: resource + path)
   }
 
+  private nonisolated static func validPort(_ port: Int?) -> Bool {
+    guard let port else { return true }
+    return (1...65_535).contains(port)
+  }
+
   private nonisolated static func percentEncodedPathComponent(_ value: String) -> String? {
-    guard let normalized = boundedString(value) else { return nil }
+    guard let normalized = environmentID(value) else { return nil }
     let hexadecimal = Array("0123456789ABCDEF".utf8)
     var encoded = [UInt8]()
     for byte in normalized.utf8 {
@@ -575,7 +590,25 @@ actor T3RelayClient {
   private nonisolated static func hasExactScope(
     _ value: String, expected: Set<String>
   ) -> Bool {
-    let scopes = value.split(whereSeparator: \Character.isWhitespace).map(String.init)
+    let bytes = Array(value.utf8)
+    guard !bytes.isEmpty, bytes.count <= maximumScopeBytes else { return false }
+    var scopes: [String] = []
+    var tokenBytes: [UInt8] = []
+    for byte in bytes {
+      if byte == 0x20 {
+        guard !tokenBytes.isEmpty else { return false }
+        scopes.append(String(decoding: tokenBytes, as: UTF8.self))
+        tokenBytes.removeAll(keepingCapacity: true)
+      } else {
+        guard byte == 0x21 || (0x23...0x5B).contains(byte) || (0x5D...0x7E).contains(byte)
+        else {
+          return false
+        }
+        tokenBytes.append(byte)
+      }
+    }
+    guard !tokenBytes.isEmpty else { return false }
+    scopes.append(String(decoding: tokenBytes, as: UTF8.self))
     return scopes.count == expected.count && Set(scopes) == expected
   }
 

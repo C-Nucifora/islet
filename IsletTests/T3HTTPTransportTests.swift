@@ -72,6 +72,24 @@ final class T3HTTPTransportTests: XCTestCase {
     }
   }
 
+  func testDispatchStripsCookiesAndBypassesAnInjectedSessionCache() async throws {
+    let recorder = T3HTTPTransportRecorder()
+    let transport = T3HTTPTransport(session: Self.session(recorder: recorder))
+    let origin = try T3HTTPOrigin(URL(string: "https://shell.t3-unit.test")!)
+    var request = URLRequest(url: URL(string: "https://shell.t3-unit.test/data")!)
+    request.httpShouldHandleCookies = true
+    request.cachePolicy = .returnCacheDataElseLoad
+    request.setValue("session=secret", forHTTPHeaderField: "Cookie")
+
+    _ = try await transport.send(request, expectedOrigin: origin, deadline: 1)
+
+    let snapshot = recorder.snapshot()
+    XCTAssertEqual(snapshot.cookieHeaders, [nil])
+    XCTAssertEqual(snapshot.cachePolicies, [.reloadIgnoringLocalCacheData])
+    XCTAssertEqual(snapshot.cacheControlHeaders, ["no-store, no-cache"])
+    XCTAssertEqual(snapshot.pragmaHeaders, ["no-cache"])
+  }
+
   func testOriginTreatsDefaultPortsAsTheSameOrigin() throws {
     let origin = try T3HTTPOrigin(URL(string: "https://RELAY.t3-unit.test:443")!)
 
@@ -119,6 +137,10 @@ private final class T3HTTPTransportRecorder: @unchecked Sendable {
   private var redirectTargetRequests = 0
   private var dpopProofs: [String] = []
   private var authorizationHeaders: [String] = []
+  private var cookieHeaders: [String?] = []
+  private var cachePolicies: [URLRequest.CachePolicy] = []
+  private var cacheControlHeaders: [String?] = []
+  private var pragmaHeaders: [String?] = []
 
   func record(_ request: URLRequest) {
     lock.lock()
@@ -129,15 +151,24 @@ private final class T3HTTPTransportRecorder: @unchecked Sendable {
     if let authorization = request.value(forHTTPHeaderField: "Authorization") {
       authorizationHeaders.append(authorization)
     }
+    cookieHeaders.append(request.value(forHTTPHeaderField: "Cookie"))
+    cachePolicies.append(request.cachePolicy)
+    cacheControlHeaders.append(request.value(forHTTPHeaderField: "Cache-Control"))
+    pragmaHeaders.append(request.value(forHTTPHeaderField: "Pragma"))
   }
 
   func snapshot() -> (
     requestCount: Int, redirectTargetRequests: Int, dpopProofs: [String],
-    authorizationHeaders: [String]
+    authorizationHeaders: [String], cookieHeaders: [String?],
+    cachePolicies: [URLRequest.CachePolicy], cacheControlHeaders: [String?],
+    pragmaHeaders: [String?]
   ) {
     lock.lock()
     defer { lock.unlock() }
-    return (requestCount, redirectTargetRequests, dpopProofs, authorizationHeaders)
+    return (
+      requestCount, redirectTargetRequests, dpopProofs, authorizationHeaders, cookieHeaders,
+      cachePolicies, cacheControlHeaders, pragmaHeaders
+    )
   }
 }
 
