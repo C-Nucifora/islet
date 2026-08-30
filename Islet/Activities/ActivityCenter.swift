@@ -36,6 +36,14 @@ final class ActivityCenter: ObservableObject {
         self?.objectWillChange.send()
       }
       .store(in: &cancellables)
+    ContextRuleCenter.shared.$resolution
+      .dropFirst()
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        self?.cacheInvalidated = true
+        self?.objectWillChange.send()
+      }
+      .store(in: &cancellables)
   }
 
   func register<T: NotchActivity & ObservableObject>(_ activity: T) {
@@ -64,7 +72,11 @@ final class ActivityCenter: ObservableObject {
     cachedActiveActivities =
       activities
       .filter(\.isActive)
-      .filter { ActivityEnablement.isEnabled($0.id, disabledActivities: disabled) }
+      .filter {
+        ContextRuleCenter.shared.isActivityVisible(
+          $0.id,
+          baselineVisible: ActivityEnablement.isEnabled($0.id, disabledActivities: disabled))
+      }
       .sorted {
         let ra = rank($0)
         let rb = rank($1)
@@ -94,8 +106,10 @@ final class ActivityCenter: ObservableObject {
     return sorted(
       activities.filter {
         ($0.isActive || $0.isAvailableWhenInactive)
-          && (ActivityEnablement.isEnabled($0.id, disabledActivities: disabled)
-            || ($0.isActive && $0.id == temporaryActivityID))
+          && ContextRuleCenter.shared.isActivityVisible(
+            $0.id,
+            baselineVisible: ActivityEnablement.isEnabled($0.id, disabledActivities: disabled)
+              || ($0.isActive && $0.id == temporaryActivityID))
       },
       order: order)
   }
