@@ -27,6 +27,36 @@ struct T3EnvironmentDescriptor: Decodable, Equatable, Sendable {
   let serverVersion: String?
 }
 
+struct T3EnvironmentAuthState: Decodable, Equatable, Sendable {
+  struct Auth: Decodable, Equatable, Sendable {
+    let policy: String
+    let bootstrapMethods: [String]
+    let sessionMethods: [String]
+    let sessionCookieName: String
+  }
+
+  let authenticated: Bool
+  let auth: Auth
+}
+
+struct T3ConnectEnvironment: Equatable, Identifiable, Sendable {
+  let environmentID: String
+  let label: String
+  let httpBaseURL: URL
+  let webSocketBaseURL: URL
+  let providerKind: String
+  let linkedAt: Date
+
+  var id: String { environmentID }
+}
+
+struct T3ConnectEnvironmentAuthorization: Sendable {
+  let descriptor: T3EnvironmentDescriptor
+  let endpoint: T3Endpoint
+  let authorization: T3Authorization
+  let expiresAt: Date
+}
+
 struct T3ShellSnapshot: Decodable, Equatable, Sendable {
   let snapshotSequence: Int?
   let projects: [T3ProjectShell]

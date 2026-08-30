@@ -21,6 +21,20 @@ final class T3CodeTests: XCTestCase {
         .isEmpty)
   }
 
+  func testEnvironmentAuthStateDecodesNestedSessionMethods() throws {
+    let data = Data(
+      #"{"authenticated":false,"auth":{"policy":"remote-reachable","bootstrapMethods":["one-time-token"],"sessionMethods":["bearer-access-token","dpop-access-token"],"sessionCookieName":"t3_session"}}"#
+        .utf8)
+
+    let state = try JSONDecoder().decode(T3EnvironmentAuthState.self, from: data)
+
+    XCTAssertFalse(state.authenticated)
+    XCTAssertEqual(state.auth.policy, "remote-reachable")
+    XCTAssertEqual(state.auth.bootstrapMethods, ["one-time-token"])
+    XCTAssertEqual(state.auth.sessionMethods, ["bearer-access-token", "dpop-access-token"])
+    XCTAssertEqual(state.auth.sessionCookieName, "t3_session")
+  }
+
   func testCredentialMigrationPreservesCanonicalValuesAndImportsMissingLegacyValues() {
     let merged = T3CredentialStore.merging(
       current: ["shared": "current", "current-only": "current-token"],

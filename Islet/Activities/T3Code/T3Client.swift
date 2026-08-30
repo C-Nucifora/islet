@@ -216,12 +216,14 @@ enum T3RedirectPolicy {
 
 struct T3TokenExchange: Decodable, Sendable {
   let accessToken: String
+  let issuedTokenType: String?
   let tokenType: String
   let expiresIn: Double
   let scope: String
 
   private enum CodingKeys: String, CodingKey {
     case accessToken = "access_token"
+    case issuedTokenType = "issued_token_type"
     case tokenType = "token_type"
     case expiresIn = "expires_in"
     case scope
@@ -232,11 +234,13 @@ struct T3Client: Sendable {
   let endpoint: T3Endpoint
   let authorization: T3Authorization
   let session: URLSession?
+  private let injectedTransport: T3HTTPTransport?
 
   init(endpoint: T3Endpoint, token: String?, session: URLSession? = nil) {
     self.endpoint = endpoint
     authorization = token.map(T3Authorization.bearer) ?? .none
     self.session = session
+    injectedTransport = nil
   }
 
   init(
@@ -247,6 +251,18 @@ struct T3Client: Sendable {
     self.endpoint = endpoint
     self.authorization = authorization
     self.session = session
+    injectedTransport = nil
+  }
+
+  init(
+    endpoint: T3Endpoint,
+    authorization: T3Authorization,
+    transport: T3HTTPTransport
+  ) {
+    self.endpoint = endpoint
+    self.authorization = authorization
+    session = nil
+    injectedTransport = transport
   }
 
   func fetchDescriptor(timeoutInterval: TimeInterval = 5) async throws -> T3EnvironmentDescriptor {
@@ -259,7 +275,27 @@ struct T3Client: Sendable {
     try await get("api/orchestration/shell", as: T3ShellSnapshot.self, authorized: true)
   }
 
+  func fetchAuthState(timeoutInterval: TimeInterval = 5) async throws -> T3EnvironmentAuthState {
+    try await get(
+      "api/auth/session", as: T3EnvironmentAuthState.self, authorized: false,
+      timeoutInterval: timeoutInterval)
+  }
+
   func exchange(pairingCredential: String) async throws -> T3TokenExchange {
+    try await exchangeCredential(pairingCredential, signer: nil)
+  }
+
+  func exchange(
+    pairingCredential: String,
+    signer: any T3DPoPProofProviding
+  ) async throws -> T3TokenExchange {
+    try await exchangeCredential(pairingCredential, signer: signer)
+  }
+
+  private func exchangeCredential(
+    _ pairingCredential: String,
+    signer: (any T3DPoPProofProviding)?
+  ) async throws -> T3TokenExchange {
     let fields = [
       ("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange"),
       ("subject_token", pairingCredential),
@@ -276,6 +312,11 @@ struct T3Client: Sendable {
     request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     request.httpBody = Self.formEncode(fields)
+    if let signer {
+      let proof = try await signer.proof(
+        method: "POST", url: request.url!, accessToken: nil)
+      request.setValue(proof, forHTTPHeaderField: "DPoP")
+    }
     return try await perform(request, as: T3TokenExchange.self, authorization: .none)
   }
 
@@ -293,7 +334,7 @@ struct T3Client: Sendable {
   ) async throws -> T {
     let origin = try T3HTTPOrigin(
       endpoint.baseURL, allowInsecureHTTP: endpoint.baseURL.scheme == "http")
-    let response = try await T3HTTPTransport(session: session).send(
+    let response = try await (injectedTransport ?? T3HTTPTransport(session: session)).send(
       request,
       authorization: authorization,
       expectedOrigin: origin,

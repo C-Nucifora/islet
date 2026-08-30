@@ -1,0 +1,723 @@
+import Foundation
+
+enum T3RelayClientError: Error, Equatable, LocalizedError {
+  case staleOperation
+
+  var errorDescription: String? {
+    switch self {
+    case .staleOperation:
+      "The T3 Connect authorization was invalidated."
+    }
+  }
+}
+
+actor T3RelayClient {
+  private nonisolated static let requestDeadline: TimeInterval = 30
+  private nonisolated static let cacheExpiryLeadTime: TimeInterval = 60
+  private nonisolated static let maximumTokenLifetime = T3OAuthRecord.maximumResponseLifetime
+  private nonisolated static let maximumInventoryCount = 256
+  private nonisolated static let maximumStringBytes = 16 * 1_024
+  private nonisolated static let maximumURLBytes = 4 * 1_024
+  private nonisolated static let maximumAuthMethods = 32
+  private nonisolated static let maximumBootstrapLifetime: TimeInterval = 10 * 60
+  private nonisolated static let relayScope = "environment:connect"
+  private nonisolated static let environmentScope = "orchestration:read"
+  private nonisolated static let tokenExchangeGrant =
+    "urn:ietf:params:oauth:grant-type:token-exchange"
+  private nonisolated static let jwtTokenURN = "urn:ietf:params:oauth:token-type:jwt"
+  private nonisolated static let accessTokenURN =
+    "urn:ietf:params:oauth:token-type:access_token"
+
+  private let transport: T3HTTPTransport
+  private let signer: any T3DPoPProofProviding
+  private let configuration: T3ConnectConfiguration
+  private let relayOrigin: T3HTTPOrigin?
+  private let relayResource: String?
+  private let now: @Sendable () -> Date
+  private let onRelayTaskReused: @Sendable () -> Void
+  private let onEnvironmentTaskReused: @Sendable () -> Void
+  private var generation: UInt64 = 0
+  private var relayCache: [RelayCacheKey: RelayToken] = [:]
+  private var relayTasks: [RelayCacheKey: PendingRelayTask] = [:]
+  private var environmentCache: [EnvironmentCacheKey: T3ConnectEnvironmentAuthorization] = [:]
+  private var environmentTasks: [EnvironmentCacheKey: PendingEnvironmentTask] = [:]
+  private var environmentInvalidations: [EnvironmentSelector: UInt64] = [:]
+
+  // MARK: Lifecycle
+
+  init(
+    transport: T3HTTPTransport = .shared,
+    signer: any T3DPoPProofProviding = T3DPoPSigner(store: T3ConnectCredentialStore()),
+    configuration: T3ConnectConfiguration = .production,
+    now: @escaping @Sendable () -> Date = Date.init,
+    onRelayTaskReused: @escaping @Sendable () -> Void = {},
+    onEnvironmentTaskReused: @escaping @Sendable () -> Void = {}
+  ) {
+    self.transport = transport
+    self.signer = signer
+    self.configuration = configuration
+    relayOrigin = try? T3HTTPOrigin(configuration.relayOrigin)
+    relayResource = Self.normalizedRelayOrigin(configuration.relayOrigin)
+    self.now = now
+    self.onRelayTaskReused = onRelayTaskReused
+    self.onEnvironmentTaskReused = onEnvironmentTaskReused
+  }
+
+  // MARK: Public operations
+
+  func listEnvironments(accountToken: String) async throws -> [T3ConnectEnvironment] {
+    guard Self.isUsableToken(accountToken), let relayOrigin,
+      let url = Self.relayURL(configuration.relayOrigin, path: "/v1/environments")
+    else {
+      throw T3ClientError.invalidResponse
+    }
+    let capturedGeneration = generation
+    var request = URLRequest(url: url)
+    request.httpMethod = "GET"
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    let response = try await transport.send(
+      request, authorization: .bearer(accountToken), expectedOrigin: relayOrigin,
+      deadline: Self.requestDeadline)
+    try Task.checkCancellation()
+    guard capturedGeneration == generation else { throw T3RelayClientError.staleOperation }
+    try Self.requireSuccess(response)
+    let wire = try Self.decode(InventoryResponse.self, from: response.data)
+    guard wire.environments.count <= Self.maximumInventoryCount else {
+      throw T3ClientError.invalidResponse
+    }
+
+    var seenIDs = Set<String>()
+    return try wire.environments.map { item in
+      guard let environmentID = Self.boundedString(item.environmentId),
+        let label = Self.boundedString(item.label),
+        let providerKind = Self.providerKind(item.endpoint.providerKind),
+        let httpBaseURL = Self.managedHTTPURL(item.endpoint.httpBaseUrl),
+        let webSocketBaseURL = Self.managedWebSocketURL(item.endpoint.wsBaseUrl),
+        let linkedAtString = Self.boundedString(item.linkedAt),
+        let linkedAt = Self.date(linkedAtString),
+        seenIDs.insert(environmentID).inserted
+      else {
+        throw T3ClientError.invalidResponse
+      }
+      return T3ConnectEnvironment(
+        environmentID: environmentID, label: label, httpBaseURL: httpBaseURL,
+        webSocketBaseURL: webSocketBaseURL, providerKind: providerKind, linkedAt: linkedAt)
+    }
+  }
+
+  func authorize(
+    environment: T3ConnectEnvironment,
+    accountToken: String,
+    grantID: UUID
+  ) async throws -> T3ConnectEnvironmentAuthorization {
+    guard Self.isUsableToken(accountToken) else { throw T3ClientError.invalidResponse }
+    let validatedEnvironment = try Self.validate(environment)
+    let capturedGeneration = generation
+    let selector = EnvironmentSelector(
+      grantID: grantID, environmentID: validatedEnvironment.environmentID)
+    let invalidation = environmentInvalidations[selector, default: 0]
+    let thumbprint = try await signer.keyThumbprint()
+    try requireCurrent(capturedGeneration, selector: selector, invalidation: invalidation)
+    guard Self.boundedString(thumbprint) != nil else {
+      throw T3ClientError.invalidResponse
+    }
+
+    let key = EnvironmentCacheKey(
+      grantID: grantID,
+      environmentID: validatedEnvironment.environmentID,
+      endpoint: validatedEnvironment.httpBaseURL.absoluteString,
+      thumbprint: thumbprint)
+    if let cached = environmentCache[key], Self.isCacheable(cached.expiresAt, now: now()) {
+      return cached
+    }
+    environmentCache.removeValue(forKey: key)
+
+    if let pending = environmentTasks[key] {
+      onEnvironmentTaskReused()
+      let authorization = try await pending.task.value
+      try Task.checkCancellation()
+      try requireCurrent(
+        capturedGeneration, selector: selector, invalidation: invalidation)
+      return authorization
+    }
+
+    let taskID = UUID()
+    let task = Task { [self] in
+      try await mintAuthorization(
+        environment: validatedEnvironment,
+        accountToken: accountToken,
+        grantID: grantID,
+        thumbprint: thumbprint,
+        capturedGeneration: capturedGeneration,
+        selector: selector,
+        invalidation: invalidation)
+    }
+    environmentTasks[key] = PendingEnvironmentTask(id: taskID, task: task)
+    do {
+      let authorization = try await task.value
+      try Task.checkCancellation()
+      try requireCurrent(
+        capturedGeneration, selector: selector, invalidation: invalidation)
+      if Self.isCacheable(authorization.expiresAt, now: now()) {
+        environmentCache[key] = authorization
+      }
+      clearEnvironmentTask(key: key, id: taskID)
+      return authorization
+    } catch {
+      clearEnvironmentTask(key: key, id: taskID)
+      throw error
+    }
+  }
+
+  func invalidateAuthorization(environmentID: String, grantID: UUID) async {
+    let selector = EnvironmentSelector(grantID: grantID, environmentID: environmentID)
+    environmentInvalidations[selector, default: 0] &+= 1
+    let cacheKeys = environmentCache.keys.filter {
+      $0.grantID == grantID && $0.environmentID == environmentID
+    }
+    for key in cacheKeys { environmentCache.removeValue(forKey: key) }
+    let taskKeys = environmentTasks.keys.filter {
+      $0.grantID == grantID && $0.environmentID == environmentID
+    }
+    for key in taskKeys {
+      environmentTasks.removeValue(forKey: key)?.task.cancel()
+    }
+  }
+
+  func clearCaches() async {
+    generation &+= 1
+    for pending in relayTasks.values { pending.task.cancel() }
+    for pending in environmentTasks.values { pending.task.cancel() }
+    relayCache.removeAll()
+    relayTasks.removeAll()
+    environmentCache.removeAll()
+    environmentTasks.removeAll()
+    environmentInvalidations.removeAll()
+  }
+
+  // MARK: Authorization flow
+
+  private func mintAuthorization(
+    environment: T3ConnectEnvironment,
+    accountToken: String,
+    grantID: UUID,
+    thumbprint: String,
+    capturedGeneration: UInt64,
+    selector: EnvironmentSelector,
+    invalidation: UInt64
+  ) async throws -> T3ConnectEnvironmentAuthorization {
+    var relayAuthorization = try await relayToken(
+      accountToken: accountToken, grantID: grantID, thumbprint: thumbprint,
+      capturedGeneration: capturedGeneration)
+    try requireCurrent(capturedGeneration, selector: selector, invalidation: invalidation)
+
+    let connected: ConnectedEnvironment
+    do {
+      connected = try await connect(
+        environmentID: environment.environmentID, relayToken: relayAuthorization.accessToken,
+        thumbprint: thumbprint)
+    } catch T3ClientError.unauthorized {
+      let relayKey = relayCacheKey(grantID: grantID, thumbprint: thumbprint)
+      invalidateRelayToken(relayKey, matching: relayAuthorization.id)
+      relayAuthorization = try await relayToken(
+        accountToken: accountToken, grantID: grantID, thumbprint: thumbprint,
+        capturedGeneration: capturedGeneration)
+      try requireCurrent(capturedGeneration, selector: selector, invalidation: invalidation)
+      connected = try await connect(
+        environmentID: environment.environmentID, relayToken: relayAuthorization.accessToken,
+        thumbprint: thumbprint)
+    }
+    try requireCurrent(capturedGeneration, selector: selector, invalidation: invalidation)
+    guard connected.environmentID == environment.environmentID else {
+      throw T3ClientError.invalidResponse
+    }
+
+    let endpoint = try T3Endpoint(connected.httpBaseURL)
+    let environmentClient = T3Client(
+      endpoint: endpoint, authorization: .none, transport: transport)
+    let descriptor = try await environmentClient.fetchDescriptor()
+    try requireCurrent(capturedGeneration, selector: selector, invalidation: invalidation)
+    guard descriptor.environmentId == environment.environmentID else {
+      throw T3ClientError.invalidResponse
+    }
+
+    let authState = try await environmentClient.fetchAuthState()
+    try requireCurrent(capturedGeneration, selector: selector, invalidation: invalidation)
+    guard Self.accepts(authState) else { throw T3ClientError.invalidResponse }
+
+    let exchange = try await environmentClient.exchange(
+      pairingCredential: connected.credential, signer: signer)
+    try requireCurrent(capturedGeneration, selector: selector, invalidation: invalidation)
+    let receivedAt = now()
+    guard Self.isUsableToken(exchange.accessToken),
+      exchange.issuedTokenType == Self.accessTokenURN,
+      exchange.tokenType == "DPoP",
+      Self.hasExactScope(exchange.scope, expected: [Self.environmentScope]),
+      exchange.expiresIn.isFinite, exchange.expiresIn > 0,
+      exchange.expiresIn <= Self.maximumTokenLifetime,
+      receivedAt.timeIntervalSince1970.isFinite
+    else {
+      throw T3ClientError.invalidResponse
+    }
+    let expiresAt = receivedAt.addingTimeInterval(exchange.expiresIn)
+    guard expiresAt.timeIntervalSince1970.isFinite else {
+      throw T3ClientError.invalidResponse
+    }
+    return T3ConnectEnvironmentAuthorization(
+      descriptor: descriptor,
+      endpoint: endpoint,
+      authorization: .dpop(accessToken: exchange.accessToken, signer: signer),
+      expiresAt: expiresAt)
+  }
+
+  private func relayToken(
+    accountToken: String,
+    grantID: UUID,
+    thumbprint: String,
+    capturedGeneration: UInt64
+  ) async throws -> RelayToken {
+    let key = relayCacheKey(grantID: grantID, thumbprint: thumbprint)
+    if let cached = relayCache[key], Self.isCacheable(cached.expiresAt, now: now()) {
+      return cached
+    }
+    relayCache.removeValue(forKey: key)
+    if let pending = relayTasks[key] {
+      onRelayTaskReused()
+      let token = try await pending.task.value
+      try Task.checkCancellation()
+      guard capturedGeneration == generation else {
+        throw T3RelayClientError.staleOperation
+      }
+      return token
+    }
+
+    let taskID = UUID()
+    let task = Task { [self] in
+      try await mintRelayToken(
+        accountToken: accountToken, capturedGeneration: capturedGeneration)
+    }
+    relayTasks[key] = PendingRelayTask(id: taskID, task: task)
+    do {
+      let token = try await task.value
+      try Task.checkCancellation()
+      guard capturedGeneration == generation else {
+        throw T3RelayClientError.staleOperation
+      }
+      if Self.isCacheable(token.expiresAt, now: now()) { relayCache[key] = token }
+      clearRelayTask(key: key, id: taskID)
+      return token
+    } catch {
+      clearRelayTask(key: key, id: taskID)
+      throw error
+    }
+  }
+
+  private func mintRelayToken(
+    accountToken: String,
+    capturedGeneration: UInt64
+  ) async throws -> RelayToken {
+    guard let relayOrigin, let relayResource,
+      let url = Self.relayURL(configuration.relayOrigin, path: "/v1/client/dpop-token")
+    else {
+      throw T3ClientError.invalidURL
+    }
+    let fields = [
+      ("grant_type", Self.tokenExchangeGrant),
+      ("subject_token", accountToken),
+      ("subject_token_type", Self.jwtTokenURN),
+      ("requested_token_type", Self.accessTokenURN),
+      ("resource", relayResource),
+      ("scope", Self.relayScope),
+      ("client_id", configuration.relayClientID),
+    ]
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue(
+      "application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+    request.httpBody = Data(Self.formBody(fields).utf8)
+    let proof = try await signer.proof(method: "POST", url: url, accessToken: nil)
+    request.setValue(proof, forHTTPHeaderField: "DPoP")
+    let response = try await transport.send(
+      request, expectedOrigin: relayOrigin, deadline: Self.requestDeadline)
+    try Task.checkCancellation()
+    guard capturedGeneration == generation else { throw T3RelayClientError.staleOperation }
+    try Self.requireSuccess(response)
+    let wire = try Self.decode(TokenResponse.self, from: response.data)
+    let receivedAt = now()
+    guard Self.isUsableToken(wire.accessToken),
+      wire.issuedTokenType == Self.accessTokenURN,
+      wire.tokenType == "DPoP",
+      Self.hasExactScope(wire.scope, expected: [Self.relayScope]),
+      wire.expiresIn > 0,
+      Double(wire.expiresIn) <= Self.maximumTokenLifetime,
+      receivedAt.timeIntervalSince1970.isFinite
+    else {
+      throw T3ClientError.invalidResponse
+    }
+    let expiresAt = receivedAt.addingTimeInterval(Double(wire.expiresIn))
+    guard expiresAt.timeIntervalSince1970.isFinite else {
+      throw T3ClientError.invalidResponse
+    }
+    return RelayToken(id: UUID(), accessToken: wire.accessToken, expiresAt: expiresAt)
+  }
+
+  private func connect(
+    environmentID: String,
+    relayToken: String,
+    thumbprint: String
+  ) async throws -> ConnectedEnvironment {
+    guard let relayOrigin,
+      let encodedID = Self.percentEncodedPathComponent(environmentID),
+      let url = Self.relayURL(
+        configuration.relayOrigin,
+        path: "/v1/environments/\(encodedID)/connect")
+    else {
+      throw T3ClientError.invalidURL
+    }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try JSONEncoder().encode(
+      ConnectRequest(clientProofKeyThumbprint: thumbprint))
+    let response = try await transport.send(
+      request,
+      authorization: .dpop(accessToken: relayToken, signer: signer),
+      expectedOrigin: relayOrigin,
+      deadline: Self.requestDeadline)
+    try Self.requireSuccess(response)
+    let wire = try Self.decode(ConnectResponse.self, from: response.data)
+    guard let responseEnvironmentID = Self.boundedString(wire.environmentId),
+      let providerKind = Self.providerKind(wire.endpoint.providerKind),
+      let httpBaseURL = Self.managedHTTPURL(wire.endpoint.httpBaseUrl),
+      let webSocketBaseURL = Self.managedWebSocketURL(wire.endpoint.wsBaseUrl),
+      let credential = Self.boundedString(wire.credential),
+      let expiresAtString = Self.boundedString(wire.expiresAt),
+      let expiresAt = Self.date(expiresAtString)
+    else {
+      throw T3ClientError.invalidResponse
+    }
+    let lifetime = expiresAt.timeIntervalSince(now())
+    guard lifetime.isFinite, lifetime > 0, lifetime <= Self.maximumBootstrapLifetime else {
+      throw T3ClientError.invalidResponse
+    }
+    return ConnectedEnvironment(
+      environmentID: responseEnvironmentID, httpBaseURL: httpBaseURL,
+      webSocketBaseURL: webSocketBaseURL, providerKind: providerKind,
+      credential: credential)
+  }
+
+  // MARK: Cache state
+
+  private func relayCacheKey(grantID: UUID, thumbprint: String) -> RelayCacheKey {
+    RelayCacheKey(
+      grantID: grantID,
+      relayOrigin: relayResource ?? configuration.relayOrigin.absoluteString,
+      clientID: configuration.relayClientID,
+      scope: Self.relayScope,
+      thumbprint: thumbprint)
+  }
+
+  private func invalidateRelayToken(_ key: RelayCacheKey, matching tokenID: UUID) {
+    if relayCache[key]?.id == tokenID { relayCache.removeValue(forKey: key) }
+  }
+
+  private func requireCurrent(
+    _ capturedGeneration: UInt64,
+    selector: EnvironmentSelector,
+    invalidation: UInt64
+  ) throws {
+    try Task.checkCancellation()
+    guard capturedGeneration == generation,
+      environmentInvalidations[selector, default: 0] == invalidation
+    else {
+      throw T3RelayClientError.staleOperation
+    }
+  }
+
+  private func clearRelayTask(key: RelayCacheKey, id: UUID) {
+    if relayTasks[key]?.id == id { relayTasks.removeValue(forKey: key) }
+  }
+
+  private func clearEnvironmentTask(key: EnvironmentCacheKey, id: UUID) {
+    if environmentTasks[key]?.id == id { environmentTasks.removeValue(forKey: key) }
+  }
+
+  // MARK: Validation and encoding
+
+  private nonisolated static func validate(
+    _ environment: T3ConnectEnvironment
+  ) throws -> T3ConnectEnvironment {
+    guard let environmentID = boundedString(environment.environmentID),
+      let label = boundedString(environment.label),
+      let providerKind = providerKind(environment.providerKind),
+      let httpBaseURL = managedHTTPURL(environment.httpBaseURL.absoluteString),
+      let webSocketBaseURL = managedWebSocketURL(
+        environment.webSocketBaseURL.absoluteString),
+      environment.linkedAt.timeIntervalSince1970.isFinite
+    else {
+      throw T3ClientError.invalidResponse
+    }
+    return T3ConnectEnvironment(
+      environmentID: environmentID, label: label, httpBaseURL: httpBaseURL,
+      webSocketBaseURL: webSocketBaseURL, providerKind: providerKind,
+      linkedAt: environment.linkedAt)
+  }
+
+  private nonisolated static func accepts(_ state: T3EnvironmentAuthState) -> Bool {
+    !state.authenticated
+      && boundedString(state.auth.policy) != nil
+      && boundedString(state.auth.sessionCookieName) != nil
+      && boundedStrings(state.auth.bootstrapMethods, maximumCount: maximumAuthMethods)
+      && boundedStrings(state.auth.sessionMethods, maximumCount: maximumAuthMethods)
+      && state.auth.sessionMethods.contains("dpop-access-token")
+  }
+
+  private nonisolated static func boundedStrings(
+    _ strings: [String], maximumCount: Int
+  ) -> Bool {
+    strings.count <= maximumCount && strings.allSatisfy { boundedString($0) != nil }
+  }
+
+  private nonisolated static func boundedString(
+    _ value: String, maximumBytes: Int = maximumStringBytes
+  ) -> String? {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, trimmed == value, value.utf8.count <= maximumBytes else {
+      return nil
+    }
+    return value
+  }
+
+  private nonisolated static func isUsableToken(_ token: String) -> Bool {
+    boundedString(token, maximumBytes: T3OAuthRecord.maximumTokenBytes) != nil
+  }
+
+  private nonisolated static func providerKind(_ value: String) -> String? {
+    guard let kind = boundedString(value),
+      ["manual", "cloudflare_tunnel", "t3_relay"].contains(kind)
+    else {
+      return nil
+    }
+    return kind
+  }
+
+  private nonisolated static func managedHTTPURL(_ value: String) -> URL? {
+    guard value.utf8.count <= maximumURLBytes,
+      var components = URLComponents(string: value),
+      components.scheme?.lowercased() == "https",
+      let host = components.host, !host.isEmpty,
+      components.user == nil, components.password == nil,
+      components.query == nil, components.fragment == nil,
+      components.path.isEmpty || components.path == "/"
+    else {
+      return nil
+    }
+    components.scheme = "https"
+    components.path = "/"
+    return components.url
+  }
+
+  private nonisolated static func managedWebSocketURL(_ value: String) -> URL? {
+    guard value.utf8.count <= maximumURLBytes,
+      var components = URLComponents(string: value),
+      components.scheme?.lowercased() == "wss",
+      let host = components.host, !host.isEmpty,
+      components.user == nil, components.password == nil,
+      components.query == nil, components.fragment == nil
+    else {
+      return nil
+    }
+    components.scheme = "wss"
+    return components.url
+  }
+
+  private nonisolated static func normalizedRelayOrigin(_ url: URL) -> String? {
+    guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+      components.scheme?.lowercased() == "https",
+      let host = components.host, !host.isEmpty,
+      components.user == nil, components.password == nil,
+      components.query == nil, components.fragment == nil,
+      components.path.isEmpty || components.path == "/"
+    else {
+      return nil
+    }
+    components.scheme = "https"
+    components.path = ""
+    return components.url?.absoluteString
+  }
+
+  private nonisolated static func relayURL(_ origin: URL, path: String) -> URL? {
+    guard let resource = normalizedRelayOrigin(origin) else { return nil }
+    return URL(string: resource + path)
+  }
+
+  private nonisolated static func percentEncodedPathComponent(_ value: String) -> String? {
+    guard let normalized = boundedString(value) else { return nil }
+    let hexadecimal = Array("0123456789ABCDEF".utf8)
+    var encoded = [UInt8]()
+    for byte in normalized.utf8 {
+      if (byte >= 0x41 && byte <= 0x5A) || (byte >= 0x61 && byte <= 0x7A)
+        || (byte >= 0x30 && byte <= 0x39) || byte == 0x2D || byte == 0x2E || byte == 0x5F
+        || byte == 0x7E
+      {
+        encoded.append(byte)
+      } else {
+        encoded.append(0x25)
+        encoded.append(hexadecimal[Int(byte >> 4)])
+        encoded.append(hexadecimal[Int(byte & 0x0F)])
+      }
+    }
+    return String(decoding: encoded, as: UTF8.self)
+  }
+
+  private nonisolated static func hasExactScope(
+    _ value: String, expected: Set<String>
+  ) -> Bool {
+    let scopes = value.split(whereSeparator: \Character.isWhitespace).map(String.init)
+    return scopes.count == expected.count && Set(scopes) == expected
+  }
+
+  private nonisolated static func isCacheable(_ expiresAt: Date, now: Date) -> Bool {
+    expiresAt.timeIntervalSince(now) > cacheExpiryLeadTime
+  }
+
+  private nonisolated static func date(_ value: String) -> Date? {
+    let fractional = ISO8601DateFormatter()
+    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+  }
+
+  private nonisolated static func requireSuccess(_ response: T3HTTPResponse) throws {
+    if response.statusCode == 401 || response.statusCode == 403 {
+      throw T3ClientError.unauthorized
+    }
+    guard (200..<300).contains(response.statusCode) else {
+      throw T3ClientError.http(response.statusCode)
+    }
+  }
+
+  private nonisolated static func decode<Value: Decodable>(
+    _ type: Value.Type, from data: Data
+  ) throws -> Value {
+    do {
+      return try JSONDecoder().decode(type, from: data)
+    } catch {
+      throw T3ClientError.invalidResponse
+    }
+  }
+
+  private nonisolated static func formBody(_ fields: [(String, String)]) -> String {
+    fields.map { "\(formEncode($0.0))=\(formEncode($0.1))" }.joined(separator: "&")
+  }
+
+  private nonisolated static func formEncode(_ value: String) -> String {
+    let hexadecimal = Array("0123456789ABCDEF".utf8)
+    var encoded = [UInt8]()
+    encoded.reserveCapacity(value.utf8.count)
+    for byte in value.utf8 {
+      if (byte >= 0x41 && byte <= 0x5A) || (byte >= 0x61 && byte <= 0x7A)
+        || (byte >= 0x30 && byte <= 0x39) || byte == 0x2D || byte == 0x2E || byte == 0x5F
+        || byte == 0x7E
+      {
+        encoded.append(byte)
+      } else {
+        encoded.append(0x25)
+        encoded.append(hexadecimal[Int(byte >> 4)])
+        encoded.append(hexadecimal[Int(byte & 0x0F)])
+      }
+    }
+    return String(decoding: encoded, as: UTF8.self)
+  }
+
+  // MARK: Wire models
+
+  private struct InventoryResponse: Decodable {
+    let environments: [WireEnvironment]
+  }
+
+  private struct WireEnvironment: Decodable {
+    let environmentId: String
+    let label: String
+    let endpoint: WireEndpoint
+    let linkedAt: String
+  }
+
+  private struct WireEndpoint: Decodable {
+    let httpBaseUrl: String
+    let wsBaseUrl: String
+    let providerKind: String
+  }
+
+  private struct TokenResponse: Decodable {
+    let accessToken: String
+    let issuedTokenType: String
+    let tokenType: String
+    let expiresIn: Int
+    let scope: String
+
+    enum CodingKeys: String, CodingKey {
+      case accessToken = "access_token"
+      case issuedTokenType = "issued_token_type"
+      case tokenType = "token_type"
+      case expiresIn = "expires_in"
+      case scope
+    }
+  }
+
+  private struct ConnectRequest: Encodable {
+    let clientProofKeyThumbprint: String
+  }
+
+  private struct ConnectResponse: Decodable {
+    let environmentId: String
+    let endpoint: WireEndpoint
+    let credential: String
+    let expiresAt: String
+  }
+
+  private struct ConnectedEnvironment: Sendable {
+    let environmentID: String
+    let httpBaseURL: URL
+    let webSocketBaseURL: URL
+    let providerKind: String
+    let credential: String
+  }
+
+  private struct RelayToken: Sendable {
+    let id: UUID
+    let accessToken: String
+    let expiresAt: Date
+  }
+
+  private struct RelayCacheKey: Hashable, Sendable {
+    let grantID: UUID
+    let relayOrigin: String
+    let clientID: String
+    let scope: String
+    let thumbprint: String
+  }
+
+  private struct EnvironmentCacheKey: Hashable, Sendable {
+    let grantID: UUID
+    let environmentID: String
+    let endpoint: String
+    let thumbprint: String
+  }
+
+  private struct EnvironmentSelector: Hashable, Sendable {
+    let grantID: UUID
+    let environmentID: String
+  }
+
+  private struct PendingRelayTask: Sendable {
+    let id: UUID
+    let task: Task<RelayToken, any Error>
+  }
+
+  private struct PendingEnvironmentTask: Sendable {
+    let id: UUID
+    let task: Task<T3ConnectEnvironmentAuthorization, any Error>
+  }
+}
