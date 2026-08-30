@@ -10,18 +10,35 @@ struct IsletQuickAction: Identifiable {
   let detail: String
   let symbol: String
   let keywords: String
+  let opensIsletWindow: Bool
   let isAvailable: () -> Bool
   let perform: () -> Void
+
+  init(
+    id: String, title: String, detail: String, symbol: String, keywords: String,
+    opensIsletWindow: Bool = false, isAvailable: @escaping () -> Bool,
+    perform: @escaping () -> Void
+  ) {
+    self.id = id
+    self.title = title
+    self.detail = detail
+    self.symbol = symbol
+    self.keywords = keywords
+    self.opensIsletWindow = opensIsletWindow
+    self.isAvailable = isAvailable
+    self.perform = perform
+  }
 
   static var all: [Self] {
     [
       .init(
         id: "show", title: "Show Islet", detail: "Expand the notch panel",
-        symbol: "waveform.path.ecg", keywords: "open expand island notch", isAvailable: { true },
+        symbol: "waveform.path.ecg", keywords: "open expand island notch",
+        opensIsletWindow: true, isAvailable: { true },
         perform: { ScreenManager.shared.viewModel?.apply(.clickedNotch) }),
       .init(
         id: "shelf-open", title: "Open File Shelf", detail: "View files held in Islet",
-        symbol: "tray.full.fill", keywords: "files drop drag tray open",
+        symbol: "tray.full.fill", keywords: "files drop drag tray open", opensIsletWindow: true,
         isAvailable: { ActivityCenter.shared.isAvailableInExpandedSwitcher("shelf") },
         perform: {
           ShelfModel.shared.requestPresentation()
@@ -87,7 +104,8 @@ struct IsletQuickAction: Identifiable {
         id: "pulse-settings", title: "Open Pulse providers",
         detail: "Review providers, routing rules and session history",
         symbol: "point.3.connected.trianglepath.dotted",
-        keywords: "integration settings history sources token", isAvailable: { true },
+        keywords: "integration settings history sources token", opensIsletWindow: true,
+        isAvailable: { true },
         perform: { SettingsOpener.open(destination: .pulse) }),
       .init(
         id: "clipboard-pause", title: "Pause clipboard history",
@@ -107,7 +125,8 @@ struct IsletQuickAction: Identifiable {
         perform: { ClipboardModel.shared.clear() }),
       .init(
         id: "settings", title: "Open Settings", detail: "Configure activities and integrations",
-        symbol: "gearshape", keywords: "preferences configuration", isAvailable: { true },
+        symbol: "gearshape", keywords: "preferences configuration", opensIsletWindow: true,
+        isAvailable: { true },
         perform: { SettingsOpener.open(destination: .overview) }),
     ]
   }
@@ -137,8 +156,25 @@ struct CommandPaletteResult: Identifiable {
   let symbol: String
   let kind: CommandPaletteResultKind
   let searchableContent: [String]
+  let opensIsletWindow: Bool
   let isAvailable: () -> Bool
   let perform: () -> Void
+
+  init(
+    id: String, title: String, detail: String, symbol: String, kind: CommandPaletteResultKind,
+    searchableContent: [String], opensIsletWindow: Bool = false,
+    isAvailable: @escaping () -> Bool, perform: @escaping () -> Void
+  ) {
+    self.id = id
+    self.title = title
+    self.detail = detail
+    self.symbol = symbol
+    self.kind = kind
+    self.searchableContent = searchableContent
+    self.opensIsletWindow = opensIsletWindow
+    self.isAvailable = isAvailable
+    self.perform = perform
+  }
 }
 
 enum CommandPaletteSearch {
@@ -207,6 +243,7 @@ enum CommandPaletteCatalog {
       CommandPaletteResult(
         id: "action:\(action.id)", title: action.title, detail: action.detail,
         symbol: action.symbol, kind: .action, searchableContent: [action.keywords],
+        opensIsletWindow: action.opensIsletWindow,
         isAvailable: action.isAvailable, perform: action.perform)
     }
   }
@@ -216,7 +253,7 @@ enum CommandPaletteCatalog {
       CommandPaletteResult(
         id: "activity:\(activity.id)", title: "Open \(activity.name)",
         detail: "Show the \(activity.name) activity in Islet", symbol: activity.icon,
-        kind: .activity, searchableContent: [activity.id, activity.name],
+        kind: .activity, searchableContent: [activity.id, activity.name], opensIsletWindow: true,
         isAvailable: { ActivityCenter.shared.isAvailableInExpandedSwitcher(activity.id) },
         perform: { openActivity(activity.id) })
     }
@@ -230,6 +267,7 @@ enum CommandPaletteCatalog {
           detail: item.subtitle ?? "Pulse from \(item.source)", symbol: item.symbol,
           kind: .pulse,
           searchableContent: [item.source, item.subtitle ?? "", item.state.rawValue],
+          opensIsletWindow: true,
           isAvailable: { PulseCenter.shared.items.contains { $0.id == item.id } },
           perform: { openActivity("pulse") })
       ]
@@ -255,7 +293,8 @@ enum CommandPaletteCatalog {
         CommandPaletteResult(
           id: "setting:\(page.rawValue):\(index)", title: control,
           detail: "Settings · \(page.title)", symbol: page.icon, kind: .setting,
-          searchableContent: [page.title, page.subtitle], isAvailable: { true },
+          searchableContent: [page.title, page.subtitle], opensIsletWindow: true,
+          isAvailable: { true },
           perform: { SettingsOpener.open(page: page) })
       }
     }
@@ -276,17 +315,22 @@ final class CommandPaletteModel: ObservableObject {
   private let candidates: () -> [CommandPaletteResult]
   private let recentIDs: () -> [String]
   private let saveRecentIDs: ([String]) -> Void
+  private let dismiss: (_ restorePreviousApplication: Bool) -> Void
 
   init(
     candidates: @escaping () -> [CommandPaletteResult] = { CommandPaletteCatalog.all },
     recentIDs: @escaping () -> [String] = { Defaults[.commandPaletteRecentResultIDs] },
     saveRecentIDs: @escaping ([String]) -> Void = {
       Defaults[.commandPaletteRecentResultIDs] = $0
+    },
+    dismiss: @escaping (_ restorePreviousApplication: Bool) -> Void = {
+      QuickActionsOpener.close(restorePreviousApplication: $0)
     }
   ) {
     self.candidates = candidates
     self.recentIDs = recentIDs
     self.saveRecentIDs = saveRecentIDs
+    self.dismiss = dismiss
     refresh()
   }
 
@@ -331,7 +375,7 @@ final class CommandPaletteModel: ObservableObject {
     var recents = recentIDs().filter { $0 != result.id }
     recents.insert(result.id, at: 0)
     saveRecentIDs(Array(recents.prefix(5)))
-    QuickActionsOpener.close()
+    dismiss(!result.opensIsletWindow)
     result.perform()
   }
 }
@@ -360,13 +404,28 @@ private final class CommandPalettePanel: NSPanel {
     }
     handleCommand?(command)
   }
+
+  override func performClose(_ sender: Any?) {
+    guard let handleCommand else {
+      super.performClose(sender)
+      return
+    }
+    handleCommand(.close)
+  }
 }
 
 @MainActor
 enum QuickActionsOpener {
   private static var panel: CommandPalettePanel?
+  private static var previousApplication: NSRunningApplication?
 
   static func open() {
+    if panel?.isVisible != true {
+      let frontmost = NSWorkspace.shared.frontmostApplication
+      previousApplication =
+        frontmost?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+        ? nil : frontmost
+    }
     NSApp.activate(ignoringOtherApps: true)
     let model = CommandPaletteModel()
     let hosting = NSHostingController(rootView: QuickActionsView(model: model))
@@ -397,7 +456,12 @@ enum QuickActionsOpener {
     window.makeKeyAndOrderFront(nil)
   }
 
-  fileprivate static func close() { panel?.orderOut(nil) }
+  fileprivate static func close(restorePreviousApplication: Bool = true) {
+    panel?.orderOut(nil)
+    let application = previousApplication
+    previousApplication = nil
+    if restorePreviousApplication { application?.activate() }
+  }
 }
 
 private struct QuickActionsView: View {
