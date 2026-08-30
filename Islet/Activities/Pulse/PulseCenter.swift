@@ -63,6 +63,37 @@ final class PulseCenter: ObservableObject {
   static let shared = PulseCenter()
   static let maximumItems = 100
   static let maximumHistoryEntries = 200
+  static let maximumRevisionRecords = 2_048
+
+  private struct RevisionRecord {
+    var revision: UInt64
+    var ended: Bool
+  }
+
+  private enum OrderingError: LocalizedError {
+    case stale
+    case revisionRequired
+    case generationEnded
+    case capacity
+
+    var errorDescription: String? {
+      switch self {
+      case .stale: "revision is not newer than the last accepted command"
+      case .revisionRequired: "revision is required after an ordered stream starts"
+      case .generationEnded: "update cannot reopen an ended activity; use show or event"
+      case .capacity: "Pulse revision tracking is at capacity"
+      }
+    }
+
+    var code: PulseErrorCode {
+      switch self {
+      case .stale: .staleRevision
+      case .revisionRequired: .revisionRequired
+      case .generationEnded: .generationEnded
+      case .capacity: .capacityExceeded
+      }
+    }
+  }
 
   /// The presentation slice. `storedItems` also retains still-live filtered and muted work so
   /// changing a profile can reveal it again without requiring a provider retransmission.
@@ -86,6 +117,7 @@ final class PulseCenter: ObservableObject {
   }
   private let symbolAvailability: (String) -> Bool?
   private var storedItems: [PulseItem] = []
+  private var revisionRecords: [PulseItem.ID: RevisionRecord] = [:]
   private var deadlineTask: PulseDeadlineTask?
   private let clock: any PulseClock
   private let deadlineScheduler: any PulseDeadlineScheduling
@@ -164,6 +196,7 @@ final class PulseCenter: ObservableObject {
         let item = try PulseItem(
           payload: payload, now: now, previous: previous,
           staleTimeout: stalenessPolicy.timeout, symbolAvailability: symbolAvailability)
+        try validateRevision(command.revision, for: incomingID, operation: command.operation)
         guard policy(for: item.source) != .revoked else {
           record(operation: command.operation, item: nil, result: .rejected, date: now)
           return .failure(
@@ -177,6 +210,7 @@ final class PulseCenter: ObservableObject {
             "activity was evicted because Pulse is at capacity", code: .capacityExceeded,
             requestID: command.requestID)
         }
+        acceptRevision(command.revision, for: incomingID, ended: false)
         record(
           operation: command.operation, item: item,
           result: visible ? (previous == nil ? .shown : .updated) : .suppressed, date: now)
@@ -190,14 +224,21 @@ final class PulseCenter: ObservableObject {
           return .failure(
             "id is required for end", code: .invalidCommand, requestID: command.requestID)
         }
+        guard command.revision == nil || command.source != nil else {
+          record(operation: .end, item: nil, result: .rejected, date: now)
+          return .failure(
+            "source is required when end includes revision", code: .invalidCommand,
+            requestID: command.requestID)
+        }
         let identifier = try PulseItem.normalizedIdentifier(rawIdentifier)
         let matchingItems = storedItems.filter { $0.providerIdentifier == identifier }
+        let targetID: PulseItem.ID?
+        let item: PulseItem?
         if let source = command.source {
           let scopedID = try PulseItem.ID(source: source, providerIdentifier: identifier)
-          if let item = storedItems.first(where: { $0.id == scopedID }) {
-            storedItems.removeAll { $0.id == scopedID }
-            record(operation: .end, item: item, result: .ended, date: now)
-          } else if !matchingItems.isEmpty {
+          targetID = scopedID
+          item = storedItems.first(where: { $0.id == scopedID })
+          if item == nil, !matchingItems.isEmpty {
             record(operation: .end, item: nil, result: .rejected, date: now)
             return .failure(
               "id belongs to a different source", code: .sourceMismatch,
@@ -208,14 +249,27 @@ final class PulseCenter: ObservableObject {
           return .failure(
             "source is required because multiple providers use this id",
             code: .ambiguousIdentifier, requestID: command.requestID)
-        } else if let item = matchingItems.first {
-          storedItems.removeAll { $0.id == item.id }
-          record(operation: .end, item: item, result: .ended, date: now)
+        } else {
+          item = matchingItems.first
+          targetID = item?.id
+        }
+        if let targetID {
+          try validateRevision(command.revision, for: targetID, operation: .end)
+          if let item {
+            storedItems.removeAll { $0.id == item.id }
+            record(operation: .end, item: item, result: .ended, date: now)
+          }
+          acceptRevision(command.revision, for: targetID, ended: true)
         }
         refreshVisibleItems()
         scheduleDeadline()
         return .success(id: identifier, requestID: command.requestID)
       }
+    } catch let error as OrderingError {
+      // A retry or reordered command is a protocol no-op. Do not append history, since doing so
+      // would let repeated delivery change provider health and consume the bounded audit log.
+      return .failure(
+        error.localizedDescription, code: error.code, requestID: command.requestID)
     } catch {
       // Rejected wire data and error descriptions can contain secrets. Only the operation and
       // outcome are retained for local diagnostics.
@@ -288,6 +342,26 @@ final class PulseCenter: ObservableObject {
   }
 
   func clearHistory() { history.removeAll() }
+
+  private func validateRevision(
+    _ revision: UInt64?, for id: PulseItem.ID, operation: PulseOperation
+  ) throws {
+    try PulseRevision.validate(revision)
+    guard let record = revisionRecords[id] else {
+      if revision != nil, revisionRecords.count >= Self.maximumRevisionRecords {
+        throw OrderingError.capacity
+      }
+      return
+    }
+    guard let revision else { throw OrderingError.revisionRequired }
+    guard revision > record.revision else { throw OrderingError.stale }
+    if record.ended, operation == .update { throw OrderingError.generationEnded }
+  }
+
+  private func acceptRevision(_ revision: UInt64?, for id: PulseItem.ID, ended: Bool) {
+    guard let revision else { return }
+    revisionRecords[id] = RevisionRecord(revision: revision, ended: ended)
+  }
 
   func policy(for source: String) -> PulseSourcePolicy {
     sourcePolicies[sourceKey(source)] ?? .allowed
