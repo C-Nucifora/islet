@@ -295,6 +295,39 @@ final class T3ConnectSessionTests: XCTestCase {
     XCTAssertEqual(finalRecord, candidate)
   }
 
+  func testOwnedRefreshBecomesStaleWhenCommitFinishesBeforeOwnerReturns() async throws {
+    let expiringRecord = try record(expiresIn: 1)
+    let secureStore = try secureStore(oauthRecord: expiringRecord)
+    let recorder = T3OAuthHTTPRecorder(
+      responses: [
+        .json(
+          status: 200,
+          #"{"access_token":"old-grant-refresh","token_type":"Bearer","expires_in":3600}"#)
+      ])
+    let ownerGate = T3SessionGate()
+    let session = makeSession(
+      store: secureStore, recorder: recorder,
+      onOwnedRefreshCompleted: { await ownerGate.suspend() })
+    let refreshTask = Task { try await session.validOAuthRecord() }
+    await ownerGate.waitUntilSuspended()
+    let completedRefresh = try await secureStore.oauthRecord()
+    let candidate = try T3OAuthRecord(
+      grantID: newGrantID, accessToken: "linked-access", refreshToken: "linked-refresh",
+      expiresAt: now.addingTimeInterval(3_600), displayIdentity: "linked@example.com")
+
+    XCTAssertEqual(completedRefresh?.accessToken, "old-grant-refresh")
+    try await session.commit(candidate)
+    await ownerGate.resume()
+
+    do {
+      _ = try await refreshTask.value
+      XCTFail("Expected the completed old-grant refresh to become stale")
+    } catch T3ConnectSessionError.staleOperation {
+    }
+    let finalRecord = try await secureStore.oauthRecord()
+    XCTAssertEqual(finalRecord, candidate)
+  }
+
   func testLoadStoredAccountReturnsPersistedDisplayIdentity() async throws {
     let stored = try record(expiresIn: 1, displayIdentity: "person@example.com")
     let secureStore = try secureStore(oauthRecord: stored)
@@ -310,7 +343,8 @@ final class T3ConnectSessionTests: XCTestCase {
     recorder: T3OAuthHTTPRecorder,
     grantID: UUID? = nil,
     onRefreshTaskReused: @escaping @Sendable () -> Void = {},
-    onSignOutBegan: @escaping @Sendable () -> Void = {}
+    onSignOutBegan: @escaping @Sendable () -> Void = {},
+    onOwnedRefreshCompleted: @escaping @Sendable () async -> Void = {}
   ) -> T3ConnectSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [T3OAuthURLProtocol.self]
@@ -324,7 +358,8 @@ final class T3ConnectSessionTests: XCTestCase {
       now: { fixedNow },
       grantID: { grantID ?? UUID() },
       onRefreshTaskReused: onRefreshTaskReused,
-      onSignOutBegan: onSignOutBegan)
+      onSignOutBegan: onSignOutBegan,
+      onOwnedRefreshCompleted: onOwnedRefreshCompleted)
   }
 
   private func makeSession(
@@ -644,6 +679,33 @@ private final class T3SessionSignal: @unchecked Sendable {
         lock.unlock()
       }
     }
+  }
+}
+
+private actor T3SessionGate {
+  private var suspended = false
+  private var suspendedWaiter: CheckedContinuation<Void, Never>?
+  private var resumeContinuation: CheckedContinuation<Void, Never>?
+
+  func suspend() async {
+    suspended = true
+    suspendedWaiter?.resume()
+    suspendedWaiter = nil
+    await withCheckedContinuation { continuation in
+      resumeContinuation = continuation
+    }
+  }
+
+  func waitUntilSuspended() async {
+    if suspended { return }
+    await withCheckedContinuation { continuation in
+      suspendedWaiter = continuation
+    }
+  }
+
+  func resume() {
+    resumeContinuation?.resume()
+    resumeContinuation = nil
   }
 }
 

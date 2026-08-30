@@ -44,6 +44,7 @@ actor T3ConnectSession {
   private let grantID: @Sendable () -> UUID
   private let onRefreshTaskReused: @Sendable () -> Void
   private let onSignOutBegan: @Sendable () -> Void
+  private let onOwnedRefreshCompleted: @Sendable () async -> Void
   private var refreshTask: (id: UUID, task: Task<T3OAuthRecord, any Error>)?
   private var generation: UInt64 = 0
   private var accountTransitionInProgress = false
@@ -55,7 +56,8 @@ actor T3ConnectSession {
     now: @escaping @Sendable () -> Date = Date.init,
     grantID: @escaping @Sendable () -> UUID = UUID.init,
     onRefreshTaskReused: @escaping @Sendable () -> Void = {},
-    onSignOutBegan: @escaping @Sendable () -> Void = {}
+    onSignOutBegan: @escaping @Sendable () -> Void = {},
+    onOwnedRefreshCompleted: @escaping @Sendable () async -> Void = {}
   ) {
     self.credentialStore = credentialStore
     self.transport = transport
@@ -65,6 +67,7 @@ actor T3ConnectSession {
     self.grantID = grantID
     self.onRefreshTaskReused = onRefreshTaskReused
     self.onSignOutBegan = onSignOutBegan
+    self.onOwnedRefreshCompleted = onOwnedRefreshCompleted
   }
 
   func loadStoredAccount() async throws -> T3ConnectAccount? {
@@ -112,7 +115,12 @@ actor T3ConnectSession {
     refreshTask = (taskID, task)
     do {
       let refreshed = try await task.value
+      await onOwnedRefreshCompleted()
       clearRefreshTask(id: taskID)
+      try Task.checkCancellation()
+      guard capturedGeneration == generation, !accountTransitionInProgress else {
+        throw T3ConnectSessionError.staleOperation
+      }
       return refreshed
     } catch {
       clearRefreshTask(id: taskID)
