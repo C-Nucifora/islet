@@ -8,12 +8,18 @@ version from the tag and the build number from the exact tagged commit.
 The workflow intentionally stops before publication unless every release prerequisite below is
 present. This repository does not contain an update-signing private key.
 
-Before tagging a release, validate the bundled Pulse Shortcuts starter kit. The importability check
-uses the macOS Shortcuts parser and does not add anything to your library:
+Before tagging a release, validate the Pulse Shortcuts source workflows. The importability check
+signs each checked source with the macOS Shortcuts tool and does not add anything to your library:
 
 ```sh
 Scripts/validate-pulse-shortcuts.sh --verify-importability
 ```
+
+The release workflow generates the distributed Shortcuts directly from those checked sources,
+builds a universal `arm64` and `x86_64` app, signs it with Developer ID,
+submits it to Apple's notary service, staples the ticket, verifies it with Gatekeeper, and attaches
+the app zip, checksum, and generated Shortcuts to a GitHub release. It will not publish an unsigned
+or unnotarized build.
 
 ## Update behavior and trust boundary
 

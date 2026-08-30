@@ -8,12 +8,12 @@
       "capabilities": ["events", "progress"],
       "setup": "Import a starter shortcut or add an Islet action.",
       "examples": [
-        {"name": "Transient event", "file": "shortcuts/01-transient-event.shortcut"},
-        {"name": "Progress task", "file": "shortcuts/02-progress-task.shortcut"},
-        {"name": "Failed task", "file": "shortcuts/03-failed-task.shortcut"},
-        {"name": "Guarded completion", "file": "shortcuts/04-guarded-completion.shortcut"},
-        {"name": "Focus profile", "file": "shortcuts/05-focus-profile.shortcut"},
-        {"name": "Focus timer", "file": "shortcuts/06-focus-timer.shortcut"}
+        {"name": "Transient event", "file": "https://github.com/C-Nucifora/islet/releases/latest/download/01-transient-event.shortcut"},
+        {"name": "Progress task", "file": "https://github.com/C-Nucifora/islet/releases/latest/download/02-progress-task.shortcut"},
+        {"name": "Failed task", "file": "https://github.com/C-Nucifora/islet/releases/latest/download/03-failed-task.shortcut"},
+        {"name": "Guarded completion", "file": "https://github.com/C-Nucifora/islet/releases/latest/download/04-guarded-completion.shortcut"},
+        {"name": "Focus profile", "file": "https://github.com/C-Nucifora/islet/releases/latest/download/05-focus-profile.shortcut"},
+        {"name": "Focus timer", "file": "https://github.com/C-Nucifora/islet/releases/latest/download/06-focus-timer.shortcut"}
       ]
     },
     {
