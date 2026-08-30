@@ -21,6 +21,9 @@ final class NotchViewModel: ObservableObject {
   /// Drawn island width for the live tab count.
   @Published private(set) var expandedWidth: CGFloat = Metrics.expandedSize.width
   @Published private(set) var compactTargetRevision: UInt = 0
+  /// Home dismissal and snooze state belongs to the panel model, not the expanded view. The model
+  /// survives tab changes and collapse/reopen cycles, while `IdleDashboardView` does not.
+  @Published private(set) var homeAttentionDisposition = HomeAttentionDisposition()
   /// Live 0...1 pressure against the hover barrier. The view turns this into elastic stretch.
   @Published private(set) var barrierProgress: CGFloat = 0
   var preventAutoClose = false
@@ -121,6 +124,22 @@ final class NotchViewModel: ObservableObject {
         || ActivityEnablement.isEnabled(activityID)
     }
     return selectedActivityID == nil && ActivityCenter.shared.primaryActivity?.id == activityID
+  }
+
+  func visibleHomeAttentionItems(_ items: [HomeAttentionItem], now: Date) -> [HomeAttentionItem] {
+    homeAttentionDisposition.visible(items, now: now)
+  }
+
+  func reconcileHomeAttention(with items: [HomeAttentionItem]) {
+    homeAttentionDisposition.reconcile(with: items)
+  }
+
+  func dismissHomeAttention(_ item: HomeAttentionItem) {
+    homeAttentionDisposition.dismiss(item)
+  }
+
+  func snoozeHomeAttention(_ item: HomeAttentionItem, until: Date) {
+    homeAttentionDisposition.snooze(item, until: until)
   }
 
   /// Resumes hover bookkeeping after ScreenManager restores an expanded presentation. Without

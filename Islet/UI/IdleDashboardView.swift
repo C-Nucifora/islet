@@ -6,6 +6,7 @@ import SwiftUI
 /// no source data. It reduces the live activity models into `HomeAttentionItem` values, then sends
 /// actions back to the source that supplied them.
 struct IdleDashboardView: View {
+  @ObservedObject var vm: NotchViewModel
   let onOpenActivity: (String) -> Void
 
   @ObservedObject private var calendar = AppState.calendar
@@ -21,7 +22,6 @@ struct IdleDashboardView: View {
   @Default(.pulseEnabled) private var pulseEnabled
   @Default(.batteryEnabled) private var batteryEnabled
 
-  @State private var disposition = HomeAttentionDisposition()
   @State private var showsAll = false
 
   var body: some View {
@@ -34,7 +34,7 @@ struct IdleDashboardView: View {
 
   @ViewBuilder private func dashboard(now: Date) -> some View {
     let allItems = sourceItems(now: now)
-    let visibleItems = disposition.visible(allItems, now: now)
+    let visibleItems = vm.visibleHomeAttentionItems(allItems, now: now)
     let overflow = HomeAttentionOverflow.split(visibleItems)
     let shownItems = showsAll ? visibleItems : overflow.primary
 
@@ -91,7 +91,7 @@ struct IdleDashboardView: View {
       }
     }
     .onChange(of: allItems.map(\.id), initial: true) { _, _ in
-      disposition.reconcile(with: allItems)
+      vm.reconcileHomeAttention(with: allItems)
     }
   }
 
@@ -208,13 +208,13 @@ struct IdleDashboardView: View {
     } else if item.source == .timer, item.state == "Done" {
       timer.cancel()
     } else {
-      disposition.dismiss(item)
+      vm.dismissHomeAttention(item)
     }
   }
 
   private func snooze(_ item: HomeAttentionItem, now: Date) {
     guard let until = Calendar.current.date(byAdding: .hour, value: 1, to: now) else { return }
-    disposition.snooze(item, until: until)
+    vm.snoozeHomeAttention(item, until: until)
   }
 }
 
