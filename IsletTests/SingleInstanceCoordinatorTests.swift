@@ -58,6 +58,34 @@ final class SingleInstanceCoordinatorTests: XCTestCase {
     XCTAssertEqual(try replacement.claim(owner: owner(processIdentifier: 606)), .primary)
   }
 
+  func testFailedActivationReclaimsLockReleasedDuringHandoff() throws {
+    let lockURL = temporaryDirectory.appendingPathComponent("instance.lock")
+    let first = SingleInstanceCoordinator(lockURL: lockURL)
+    let replacement = SingleInstanceCoordinator(lockURL: lockURL)
+    let firstOwner = owner(processIdentifier: 505)
+    let replacementOwner = owner(processIdentifier: 606)
+    XCTAssertEqual(try first.claim(owner: firstOwner), .primary)
+
+    var activationOwner: SingleInstanceOwner?
+    let resolution = try SingleInstanceLaunchResolver.resolve(
+      coordinator: replacement,
+      owner: replacementOwner,
+      activate: { existingOwner in
+        activationOwner = existingOwner
+        first.release()
+        return false
+      })
+
+    XCTAssertEqual(activationOwner, firstOwner)
+    XCTAssertEqual(resolution, .primary)
+    XCTAssertEqual(replacement.readOwner(), replacementOwner)
+
+    let third = SingleInstanceCoordinator(lockURL: lockURL)
+    XCTAssertEqual(
+      try third.claim(owner: owner(processIdentifier: 707)),
+      .secondary(owner: replacementOwner))
+  }
+
   func testVersionAndBundlePathChangesUseTheSameBundleLock() throws {
     let lockURL = temporaryDirectory.appendingPathComponent("instance.lock")
     let installed = SingleInstanceCoordinator(lockURL: lockURL)
