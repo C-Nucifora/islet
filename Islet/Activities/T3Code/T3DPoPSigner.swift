@@ -24,7 +24,11 @@ enum T3URLAuthorityCanonicalizer {
   private static func canonicalHost(_ host: String) -> String? {
     if host.hasPrefix("["), host.hasSuffix("]") {
       let literal = String(host.dropFirst().dropLast())
-      guard !literal.contains("%"), let address = IPv6Address(literal) else { return nil }
+      guard !literal.contains("%"), hasValidEmbeddedIPv4Suffix(literal),
+        let address = IPv6Address(literal)
+      else {
+        return nil
+      }
       return "[\(serializeIPv6(address.rawValue))]"
     }
 
@@ -40,6 +44,24 @@ enum T3URLAuthorityCanonicalizer {
       return serializeIPv4(candidate)
     }
     return host.lowercased()
+  }
+
+  private static func hasValidEmbeddedIPv4Suffix(_ literal: String) -> Bool {
+    guard literal.contains(".") else { return true }
+    guard let colon = literal.lastIndex(of: ":") else { return false }
+    let suffix = literal[literal.index(after: colon)...]
+    let octets = suffix.split(separator: ".", omittingEmptySubsequences: false)
+    guard octets.count == 4 else { return false }
+    return octets.allSatisfy { octet in
+      let bytes = octet.utf8
+      guard !bytes.isEmpty, bytes.allSatisfy({ (0x30...0x39).contains($0) }),
+        bytes.count == 1 || bytes.first != 0x30,
+        let value = UInt16(octet), value <= 255
+      else {
+        return false
+      }
+      return true
+    }
   }
 
   private static func isIPv4Number(_ value: Substring) -> Bool {

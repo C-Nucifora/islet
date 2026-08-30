@@ -121,6 +121,7 @@ final class T3DPoPSignerTests: XCTestCase {
       "https://example.123/resource", "https://1.2.3.256/resource",
       "https://1..2/resource", "https://.1/resource",
       "https://[fe80::1%25en0]/resource",
+      "https://[::ffff:192.168.001.001]/resource",
     ] {
       do {
         _ = try await signer.proof(

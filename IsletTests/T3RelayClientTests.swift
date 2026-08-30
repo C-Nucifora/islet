@@ -212,6 +212,25 @@ final class T3RelayClientTests: XCTestCase {
     }
   }
 
+  func testInventoryRejectsLeadingZeroEmbeddedIPv4InManagedIPv6URLs() async throws {
+    let invalidRows = [
+      Self.environmentJSON(
+        httpBaseURL: "https://[::ffff:192.168.001.001]"),
+      Self.environmentJSON(
+        webSocketBaseURL: "wss://[::ffff:192.168.001.001]/ws"),
+    ]
+
+    for row in invalidRows {
+      let recorder = T3RelayHTTPRecorder(responses: [.inventory([row])])
+      let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+
+      await assertInvalidResponse {
+        _ = try await client.listEnvironments(accountToken: "account")
+      }
+      XCTAssertEqual(recorder.requests().count, 1)
+    }
+  }
+
   func testCacheableInventoryCannotCrossBearerTokens() async throws {
     let firstResponse = T3RelayHTTPResponse.inventory([
       Self.environmentJSON(label: "First account")
@@ -556,6 +575,25 @@ final class T3RelayClientTests: XCTestCase {
         }
         XCTAssertEqual(recorder.requests().count, 2)
       }
+    }
+  }
+
+  func testRotatedConnectEndpointRejectsLeadingZeroEmbeddedIPv4InIPv6URLs() async throws {
+    let invalidResponses = [
+      T3RelayHTTPResponse.connect(
+        httpBaseURL: "https://[::ffff:192.168.001.001]/"),
+      .connect(webSocketBaseURL: "wss://[::ffff:192.168.001.001]/ws"),
+    ]
+
+    for invalidResponse in invalidResponses {
+      let recorder = T3RelayHTTPRecorder(responses: [.relayToken(), invalidResponse])
+      let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+
+      await assertInvalidResponse {
+        _ = try await client.authorize(
+          environment: Self.environment(), accountToken: "account", grantID: self.grantID)
+      }
+      XCTAssertEqual(recorder.requests().count, 2)
     }
   }
 
@@ -1480,7 +1518,8 @@ private final class T3RelayURLProtocol: URLProtocol, @unchecked Sendable {
   private var stopped = false
 
   override class func canInit(with request: URLRequest) -> Bool {
-    request.url?.host?.lowercased().hasSuffix("t3-relay-unit.test") == true
+    guard let host = request.url?.host?.lowercased() else { return false }
+    return host.hasSuffix("t3-relay-unit.test") || host == "::ffff:c0a8:101"
   }
 
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
