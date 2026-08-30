@@ -93,9 +93,27 @@ struct ProcessUsage: Equatable, Sendable {
   let startTime: UInt64
   let name: String
   let applicationPath: String?
-  let cpuNanoseconds: UInt64
+  /// `rusage_info_v4` reports Mach absolute-time ticks, not nanoseconds.
+  let cpuAbsoluteTime: UInt64
   let residentBytes: UInt64
   let diskBytes: UInt64
+}
+
+struct ProcessMachTimebase: Equatable, Sendable {
+  let numerator: UInt32
+  let denominator: UInt32
+
+  static let current: Self = {
+    var info = mach_timebase_info_data_t()
+    guard mach_timebase_info(&info) == KERN_SUCCESS, info.denom != 0 else {
+      return Self(numerator: 1, denominator: 1)
+    }
+    return Self(numerator: info.numer, denominator: info.denom)
+  }()
+
+  func seconds(forAbsoluteTime ticks: UInt64) -> Double {
+    Double(ticks) * Double(numerator) / Double(denominator) / 1_000_000_000
+  }
 }
 
 struct ProcessUsageCapture: Equatable, Sendable {
@@ -130,13 +148,18 @@ struct ProcessAttributionSnapshot: Equatable, Sendable {
 
 enum ProcessAttributionMath {
   static let maximumEntries = 3
+  static let sampleWindow: TimeInterval = 1
+  static let sampleWindowTolerance: TimeInterval = 0.35
 
   static func snapshots(
     for metrics: Set<ProcessMetricKind>, baseline: ProcessUsageCapture,
-    final: ProcessUsageCapture, capturedAt: Date
+    final: ProcessUsageCapture, capturedAt: Date,
+    machTimebase: ProcessMachTimebase = .current
   ) -> [ProcessMetricKind: ProcessAttributionSnapshot] {
     var result: [ProcessMetricKind: ProcessAttributionSnapshot] = [:]
     let elapsed = final.capturedAt - baseline.capturedAt
+    let rateWindowIsValid =
+      abs(elapsed - sampleWindow) <= sampleWindowTolerance
     let exitedCount = baseline.processes.keys.filter { final.processes[$0] == nil }.count
     let unreadableCount = max(baseline.unreadableCount, final.unreadableCount)
 
@@ -149,6 +172,14 @@ enum ProcessAttributionMath {
           capturedAt: capturedAt)
         continue
       }
+      if [.cpu, .disk].contains(metric), !rateWindowIsValid {
+        result[metric] = ProcessAttributionSnapshot(
+          metric: metric, entries: [],
+          availability: .unsupported(
+            "The one-second sampling window was interrupted, so no rate estimate was published."),
+          capturedAt: capturedAt)
+        continue
+      }
 
       var entries: [ProcessAttributionEntry] = []
       for process in final.processes.values {
@@ -158,9 +189,11 @@ enum ProcessAttributionMath {
           guard elapsed > 0, let old = matchingBaseline(for: process, in: baseline) else {
             continue
           }
-          guard let delta = monotonicDelta(from: old.cpuNanoseconds, to: process.cpuNanoseconds)
+          guard
+            let delta = monotonicDelta(
+              from: old.cpuAbsoluteTime, to: process.cpuAbsoluteTime)
           else { continue }
-          value = Double(delta) / 1_000_000_000 / elapsed
+          value = machTimebase.seconds(forAbsoluteTime: delta) / elapsed
         case .memory:
           value = Double(process.residentBytes)
         case .disk:
@@ -218,9 +251,14 @@ enum ProcessAttributionMath {
 }
 
 enum ProcessUsageReader {
-  static func capture(uptime: TimeInterval = ProcessInfo.processInfo.systemUptime)
-    -> ProcessUsageCapture
-  {
+  static func capture(
+    uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
+    isCancelled: @escaping @Sendable () -> Bool = { false }
+  ) -> ProcessUsageCapture {
+    guard !isCancelled() else {
+      return ProcessUsageCapture(
+        capturedAt: uptime, processes: [:], listedCount: 0, unreadableCount: 0)
+    }
     let count = proc_listallpids(nil, 0)
     guard count > 0 else {
       return ProcessUsageCapture(
@@ -240,6 +278,7 @@ enum ProcessUsageReader {
     var processes: [pid_t: ProcessUsage] = [:]
     var unreadable = 0
     for pid in pids.prefix(Int(readCount)) where pid > 0 {
+      if isCancelled() { break }
       guard let usage = usage(for: pid) else {
         unreadable += 1
         continue
@@ -252,6 +291,29 @@ enum ProcessUsageReader {
   }
 
   private static func usage(for pid: pid_t) -> ProcessUsage? {
+    guard let initial = resourceUsage(for: pid) else { return nil }
+    let initialPath = processPath(pid)
+    let initialName = processName(pid, path: initialPath)
+    guard let final = resourceUsage(for: pid),
+      final.ri_proc_start_abstime == initial.ri_proc_start_abstime
+    else { return nil }
+    let finalPath = processPath(pid)
+    let finalName = processName(pid, path: finalPath)
+    let cpuAbsoluteTime = final.ri_user_time.addingReportingOverflow(final.ri_system_time)
+    let diskBytes = final.ri_diskio_bytesread.addingReportingOverflow(final.ri_diskio_byteswritten)
+    guard initialPath == finalPath, initialName == finalName,
+      !cpuAbsoluteTime.overflow, !diskBytes.overflow
+    else { return nil }
+
+    return ProcessUsage(
+      pid: pid, startTime: final.ri_proc_start_abstime,
+      name: finalName, applicationPath: enclosingApplication(finalPath),
+      cpuAbsoluteTime: cpuAbsoluteTime.partialValue,
+      residentBytes: final.ri_resident_size,
+      diskBytes: diskBytes.partialValue)
+  }
+
+  private static func resourceUsage(for pid: pid_t) -> rusage_info_v4? {
     var info = rusage_info_v4()
     let result = withUnsafeMutablePointer(to: &info) { pointer in
       pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) {
@@ -259,14 +321,7 @@ enum ProcessUsageReader {
       }
     }
     guard result == 0 else { return nil }
-
-    let path = processPath(pid)
-    return ProcessUsage(
-      pid: pid, startTime: info.ri_proc_start_abstime,
-      name: processName(pid, path: path), applicationPath: enclosingApplication(path),
-      cpuNanoseconds: info.ri_user_time &+ info.ri_system_time,
-      residentBytes: info.ri_resident_size,
-      diskBytes: info.ri_diskio_bytesread &+ info.ri_diskio_byteswritten)
+    return info
   }
 
   private static func processName(_ pid: pid_t, path: String?) -> String {
@@ -298,7 +353,7 @@ enum ProcessUsageReader {
 
 @MainActor
 final class ProcessAttributionMonitor: ObservableObject {
-  static let sampleWindow: TimeInterval = 1
+  static let sampleWindow = ProcessAttributionMath.sampleWindow
 
   typealias UsageCapture = @Sendable () async -> ProcessUsageCapture
   typealias SampleDelay = @Sendable () async throws -> Void
@@ -315,7 +370,14 @@ final class ProcessAttributionMonitor: ObservableObject {
 
   init(
     usageCapture: @escaping UsageCapture = {
-      await Task.detached(priority: .utility) { ProcessUsageReader.capture() }.value
+      let captureTask = Task.detached(priority: .utility) {
+        ProcessUsageReader.capture(isCancelled: { Task.isCancelled })
+      }
+      return await withTaskCancellationHandler {
+        await captureTask.value
+      } onCancel: {
+        captureTask.cancel()
+      }
     },
     sampleDelay: @escaping SampleDelay = {
       try await Task.sleep(for: .seconds(ProcessAttributionMonitor.sampleWindow))
@@ -357,6 +419,8 @@ final class ProcessAttributionMonitor: ObservableObject {
       sampleTask = nil
       measuringMetrics = []
       trigger.reset()
+      snapshots = [:]
+      latestMetric = nil
       return
     }
     let crossings = trigger.observe(sample, thresholds: .current)
