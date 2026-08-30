@@ -245,9 +245,8 @@ final class TimerActivity: NotchActivity, ObservableObject {
         self?.notificationFallbackMessage = TimerActivity.notificationFallbackMessage
       }
     }
-    // A completion is a user-visible state, not a transient effect. Keep it until the user
-    // dismisses it or starts another timer. The TimerActivity outlives rebuilt panel views, so
-    // the completion card remains available while the island is rebuilt or reopened.
+    // A completion stays visible until the user dismisses it or starts another timer.
+    // TimerActivity outlives rebuilt panel views, so the card survives panel reconstruction.
   }
 
   // MARK: - Views

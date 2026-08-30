@@ -86,8 +86,10 @@ final class TimerLogicTests: XCTestCase {
     XCTAssertNil(box.sessionData)
   }
 
-  func testCompletedTimerRemainsActiveUntilDismissed() throws {
+  func testCompletedTimerRemainsActiveUntilDismissed() async throws {
     let activity = try completedActivity()
+
+    try await Task.sleep(for: .milliseconds(6_100))
 
     XCTAssertTrue(activity.finished)
     XCTAssertTrue(activity.isActive)
