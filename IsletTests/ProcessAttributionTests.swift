@@ -4,6 +4,7 @@ import XCTest
 @testable import Islet
 
 final class ProcessAttributionTests: XCTestCase {
+  private let armTimebase = ProcessMachTimebase(numerator: 125, denominator: 3)
   private let thresholds = ProcessAttributionThresholds(
     cpuFraction: 0.8, memoryFraction: 0.9, diskBytesPerSecond: 50_000_000,
     networkBytesPerSecond: 25_000_000)
@@ -60,19 +61,19 @@ final class ProcessAttributionTests: XCTestCase {
     let baseline = capture(
       at: 10,
       usages: [
-        usage(pid: 1, cpu: 1_000_000_000, memory: 100, disk: 1_000),
-        usage(pid: 2, cpu: 2_000_000_000, memory: 400, disk: 2_000),
+        usage(pid: 1, cpuTicks: 24_000_000, memory: 100, disk: 1_000),
+        usage(pid: 2, cpuTicks: 48_000_000, memory: 400, disk: 2_000),
       ])
     let final = capture(
-      at: 12,
+      at: 11,
       usages: [
-        usage(pid: 1, cpu: 2_000_000_000, memory: 500, disk: 5_000),
-        usage(pid: 2, cpu: 2_500_000_000, memory: 200, disk: 12_000),
+        usage(pid: 1, cpuTicks: 36_000_000, memory: 500, disk: 5_000),
+        usage(pid: 2, cpuTicks: 54_000_000, memory: 200, disk: 7_000),
       ])
 
     let result = ProcessAttributionMath.snapshots(
       for: [.cpu, .memory, .disk], baseline: baseline, final: final,
-      capturedAt: Date(timeIntervalSince1970: 20))
+      capturedAt: Date(timeIntervalSince1970: 20), machTimebase: armTimebase)
 
     XCTAssertEqual(try XCTUnwrap(result[.cpu]).entries.map(\.pid), [1, 2])
     XCTAssertEqual(try XCTUnwrap(result[.cpu]).entries[0].value, 0.5, accuracy: 1e-9)
@@ -92,8 +93,8 @@ final class ProcessAttributionTests: XCTestCase {
   }
 
   func testPIDReuseIsNotTreatedAsTheSameProcess() throws {
-    let old = usage(pid: 42, startTime: 100, cpu: 1_000_000_000)
-    let replacement = usage(pid: 42, startTime: 200, cpu: 9_000_000_000)
+    let old = usage(pid: 42, startTime: 100, cpuTicks: 24_000_000)
+    let replacement = usage(pid: 42, startTime: 200, cpuTicks: 216_000_000)
     let snapshot = try XCTUnwrap(
       ProcessAttributionMath.snapshots(
         for: [.cpu], baseline: capture(at: 1, usages: [old]),
@@ -102,8 +103,8 @@ final class ProcessAttributionTests: XCTestCase {
   }
 
   func testCounterRegressionDoesNotProduceAHugeFalseAttribution() throws {
-    let old = usage(pid: 42, cpu: 9_000_000_000, disk: 9_000)
-    let reset = usage(pid: 42, cpu: 1_000_000_000, disk: 1_000)
+    let old = usage(pid: 42, cpuTicks: 216_000_000, disk: 9_000)
+    let reset = usage(pid: 42, cpuTicks: 24_000_000, disk: 1_000)
     let snapshots = ProcessAttributionMath.snapshots(
       for: [.cpu, .disk], baseline: capture(at: 1, usages: [old]),
       final: capture(at: 2, usages: [reset]), capturedAt: Date())
@@ -134,6 +135,35 @@ final class ProcessAttributionTests: XCTestCase {
     XCTAssertTrue(reason.contains("reliable per-process network"))
   }
 
+  func testInterruptedRateWindowPublishesNoCPUOrDiskEstimate() throws {
+    let baseline = capture(
+      at: 1,
+      usages: [usage(pid: 1, cpuTicks: 24_000_000, memory: 100, disk: 1_000)])
+    let final = capture(
+      at: 3,
+      usages: [usage(pid: 1, cpuTicks: 48_000_000, memory: 200, disk: 9_000)])
+
+    let snapshots = ProcessAttributionMath.snapshots(
+      for: [.cpu, .memory, .disk], baseline: baseline, final: final, capturedAt: Date(),
+      machTimebase: armTimebase)
+
+    XCTAssertTrue(try XCTUnwrap(snapshots[.cpu]).entries.isEmpty)
+    XCTAssertTrue(try XCTUnwrap(snapshots[.disk]).entries.isEmpty)
+    XCTAssertEqual(try XCTUnwrap(snapshots[.memory]).entries.first?.value, 200)
+    guard case .unsupported(let reason) = try XCTUnwrap(snapshots[.cpu]).availability else {
+      return XCTFail("Expected an interrupted sampling-window result")
+    }
+    XCTAssertTrue(reason.contains("sampling window was interrupted"))
+  }
+
+  func testCancelledReaderStopsBeforeEnumeratingProcesses() {
+    let capture = ProcessUsageReader.capture(uptime: 42, isCancelled: { true })
+
+    XCTAssertEqual(capture.capturedAt, 42)
+    XCTAssertEqual(capture.listedCount, 0)
+    XCTAssertTrue(capture.processes.isEmpty)
+  }
+
   @MainActor
   func testMonitorDoesNotCaptureWhileHiddenAndUsesOneBoundedWindowPerCrossing() async {
     let savedEnabled = Defaults[.processAttributionEnabled]
@@ -146,8 +176,8 @@ final class ProcessAttributionTests: XCTestCase {
     Defaults[.processCPUThreshold] = 0.8
 
     let captures = ProcessCaptureStub([
-      capture(at: 1, usages: [usage(pid: 1, cpu: 1_000_000_000)]),
-      capture(at: 2, usages: [usage(pid: 1, cpu: 2_000_000_000)]),
+      capture(at: 1, usages: [usage(pid: 1, cpuTicks: 24_000_000)]),
+      capture(at: 2, usages: [usage(pid: 1, cpuTicks: 48_000_000)]),
     ])
     let monitor = ProcessAttributionMonitor(
       usageCapture: { await captures.next() }, sampleDelay: {})
@@ -173,6 +203,11 @@ final class ProcessAttributionTests: XCTestCase {
     await Task.yield()
     let steadyHighCaptureCount = await captures.count
     XCTAssertEqual(steadyHighCaptureCount, 2)
+
+    Defaults[.processAttributionEnabled] = false
+    monitor.observe(sample)
+    XCTAssertTrue(monitor.snapshots.isEmpty)
+    XCTAssertNil(monitor.latestMetric)
     monitor.setVisible(false)
   }
 
@@ -183,12 +218,12 @@ final class ProcessAttributionTests: XCTestCase {
   }
 
   private func usage(
-    pid: pid_t, startTime: UInt64 = 1, cpu: UInt64 = 0, memory: UInt64 = 0,
+    pid: pid_t, startTime: UInt64 = 1, cpuTicks: UInt64 = 0, memory: UInt64 = 0,
     disk: UInt64 = 0
   ) -> ProcessUsage {
     ProcessUsage(
       pid: pid, startTime: startTime, name: "Process \(pid)", applicationPath: nil,
-      cpuNanoseconds: cpu, residentBytes: memory, diskBytes: disk)
+      cpuAbsoluteTime: cpuTicks, residentBytes: memory, diskBytes: disk)
   }
 
   private func capture(
