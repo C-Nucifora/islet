@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Defaults
+import ImageIO
 import SwiftUI
 
 struct ClipboardItem: Identifiable, Equatable {
@@ -154,6 +155,335 @@ enum ClipboardPrivacyPolicy {
     guard segments.count == 3, segments.allSatisfy({ $0.count >= 8 }) else { return false }
     let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
     return segments.allSatisfy { $0.unicodeScalars.allSatisfy(allowed.contains) }
+  }
+}
+
+/// The general pasteboard does not publish representation sizes before a provider materializes
+/// them. We therefore inspect only PNG and TIFF, cap the total materialized bytes for those two
+/// representations, then validate their headers before ImageIO parses the file. This prevents a
+/// tiny compressed image from expanding into an unbounded bitmap while still allowing us to pick
+/// the smaller lossless form when an app offers both.
+enum ClipboardImagePolicy {
+  static let maximumImageReadBytes = ClipboardPrivacyPolicy.maximumImageBytes * 2
+  static let maximumImageDimension = 16_384
+  static let maximumDecodedImageBytes = 128 * 1024 * 1024
+
+  private static let supportedTypes: [NSPasteboard.PasteboardType] = [.png, .tiff]
+
+  static func payload(from pasteboard: NSPasteboard) -> ClipboardItem.ImagePayload? {
+    let availableTypes = Set(pasteboard.types ?? [])
+    var representations: [(type: NSPasteboard.PasteboardType, data: Data)] = []
+    var readBytes = 0
+
+    for type in supportedTypes where availableTypes.contains(type) {
+      guard let data = pasteboard.data(forType: type) else { continue }
+      guard data.count <= maximumImageReadBytes - readBytes else { return nil }
+      readBytes += data.count
+      representations.append((type: type, data: data))
+    }
+
+    return payload(from: representations)
+  }
+
+  /// The type is retained with the bytes so copy-back writes a PNG as PNG and a TIFF as TIFF.
+  /// PNG wins an exact-size tie because it is the smaller interchange format in ordinary use.
+  static func payload(
+    from representations: [(type: NSPasteboard.PasteboardType, data: Data)]
+  ) -> ClipboardItem.ImagePayload? {
+    var inspectedBytes = 0
+    var best: (type: NSPasteboard.PasteboardType, data: Data)?
+
+    for representation in representations where supportedTypes.contains(representation.type) {
+      guard representation.data.count <= maximumImageReadBytes - inspectedBytes else { return nil }
+      inspectedBytes += representation.data.count
+      guard representation.data.count <= ClipboardPrivacyPolicy.maximumImageBytes,
+        isSafeImageData(representation.data, for: representation.type)
+      else { continue }
+
+      guard let currentBest = best else {
+        best = representation
+        continue
+      }
+      if representation.data.count < currentBest.data.count
+        || (representation.data.count == currentBest.data.count
+          && representation.type == .png && currentBest.type != .png)
+      {
+        best = representation
+      }
+    }
+
+    guard let best else { return nil }
+    return ClipboardItem.ImagePayload(data: best.data, pasteboardTypeRawValue: best.type.rawValue)
+  }
+
+  private static func isSafeImageData(_ data: Data, for type: NSPasteboard.PasteboardType) -> Bool {
+    let headerIsSafe: Bool
+    switch type {
+    case .png: headerIsSafe = hasSafePNGHeader(data)
+    case .tiff: headerIsSafe = hasSafeTIFFHeader(data)
+    default: return false
+    }
+    guard headerIsSafe, let source = CGImageSourceCreateWithData(data as CFData, nil),
+      let sourceType = CGImageSourceGetType(source), sourceType as String == type.rawValue,
+      CGImageSourceGetCount(source) == 1,
+      CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete
+    else { return false }
+    return true
+  }
+
+  private static func hasSafePNGHeader(_ data: Data) -> Bool {
+    let signature: [UInt8] = [137, 80, 78, 71, 13, 10, 26, 10]
+    guard data.count >= 33, Array(data.prefix(8)) == signature,
+      readBigEndianUInt32(data, at: 8) == 13,
+      Array(data[12..<16]) == [73, 72, 68, 82],
+      let width = readBigEndianUInt32(data, at: 16),
+      let height = readBigEndianUInt32(data, at: 20),
+      let bitDepth = byte(in: data, at: 24),
+      let colorType = byte(in: data, at: 25),
+      byte(in: data, at: 26) == 0,
+      byte(in: data, at: 27) == 0,
+      let interlace = byte(in: data, at: 28), interlace <= 1,
+      isValidPNGBitDepth(bitDepth, for: colorType),
+      hasSafeDecodedSize(width: Int(width), height: Int(height), bytesPerPixel: 8)
+    else { return false }
+
+    var offset = 8
+    var foundIEND = false
+    while offset <= data.count - 12 {
+      guard let length = readBigEndianUInt32(data, at: offset) else { return false }
+      let payloadOffset = offset + 8
+      guard length <= UInt32(data.count - payloadOffset - 4) else { return false }
+      let nextOffset = payloadOffset + Int(length) + 4
+      if Array(data[(offset + 4)..<payloadOffset]) == [73, 69, 78, 68] {
+        guard length == 0, nextOffset == data.count else { return false }
+        foundIEND = true
+        break
+      }
+      offset = nextOffset
+    }
+    return foundIEND
+  }
+
+  private static func isValidPNGBitDepth(_ bitDepth: UInt8, for colorType: UInt8) -> Bool {
+    switch colorType {
+    case 0: return [1, 2, 4, 8, 16].contains(bitDepth)
+    case 2, 4, 6: return [8, 16].contains(bitDepth)
+    case 3: return [1, 2, 4, 8].contains(bitDepth)
+    default: return false
+    }
+  }
+
+  private static func hasSafeTIFFHeader(_ data: Data) -> Bool {
+    guard data.count >= 8 else { return false }
+    let byteOrder: TIFFByteOrder
+    switch (byte(in: data, at: 0), byte(in: data, at: 1)) {
+    case (73, 73): byteOrder = .littleEndian
+    case (77, 77): byteOrder = .bigEndian
+    default: return false
+    }
+    guard readTIFFUInt16(data, at: 2, order: byteOrder) == 42,
+      let directoryOffset = readTIFFUInt32(data, at: 4, order: byteOrder),
+      let directory = TIFFDirectory(data: data, offset: Int(directoryOffset), order: byteOrder),
+      directory.nextOffset == 0,
+      let width = directory.singleValue(forTag: 256),
+      let height = directory.singleValue(forTag: 257)
+    else { return false }
+
+    let bitsPerSample: [UInt32]
+    if directory.contains(tag: 258) {
+      guard let parsedBits = directory.values(forTag: 258) else { return false }
+      bitsPerSample = parsedBits
+    } else {
+      // TIFF 6.0 defaults BitsPerSample to one when the tag is omitted.
+      bitsPerSample = [1]
+    }
+    let samplesPerPixel: UInt32
+    if directory.contains(tag: 277) {
+      guard let parsedSamples = directory.singleValue(forTag: 277) else { return false }
+      samplesPerPixel = parsedSamples
+    } else {
+      samplesPerPixel = 1
+    }
+    let compression: UInt32
+    if directory.contains(tag: 259) {
+      guard let parsedCompression = directory.singleValue(forTag: 259) else { return false }
+      compression = parsedCompression
+    } else {
+      compression = 1
+    }
+    guard bitsPerSample.allSatisfy({ $0 > 0 && $0 <= 64 }), samplesPerPixel > 0,
+      samplesPerPixel <= 16,
+      let maximumBitsPerSample = bitsPerSample.max(),
+      isLosslessTIFFCompression(compression)
+    else { return false }
+
+    let bitsPerPixel = Int(maximumBitsPerSample) * Int(samplesPerPixel)
+    // ImageIO commonly expands palette and low-bit-depth sources into 32- or 64-bit pixel buffers.
+    // Retain an eight-byte floor so the decoded-size limit describes memory use, not file packing.
+    let bytesPerPixel = max(8, (bitsPerPixel + 7) / 8)
+    return bytesPerPixel > 0
+      && hasSafeDecodedSize(width: Int(width), height: Int(height), bytesPerPixel: bytesPerPixel)
+  }
+
+  static func isLosslessTIFFCompression(_ compression: UInt32) -> Bool {
+    switch compression {
+    // None, CCITT RLE/Fax, LZW, Deflate, and PackBits are lossless TIFF encodings.
+    case 1, 2, 3, 4, 5, 8, 32_773, 32_946: true
+    default: false
+    }
+  }
+
+  private static func hasSafeDecodedSize(width: Int, height: Int, bytesPerPixel: Int) -> Bool {
+    guard width > 0, height > 0, width <= maximumImageDimension, height <= maximumImageDimension,
+      let pixelCount = checkedProduct(width, height),
+      let decodedBytes = checkedProduct(pixelCount, bytesPerPixel)
+    else { return false }
+    return decodedBytes <= maximumDecodedImageBytes
+  }
+
+  private static func checkedProduct(_ lhs: Int, _ rhs: Int) -> Int? {
+    let result = lhs.multipliedReportingOverflow(by: rhs)
+    return result.overflow ? nil : result.partialValue
+  }
+
+  private static func byte(in data: Data, at offset: Int) -> UInt8? {
+    guard offset >= 0, offset < data.count else { return nil }
+    return data[data.startIndex + offset]
+  }
+
+  private static func readBigEndianUInt32(_ data: Data, at offset: Int) -> UInt32? {
+    guard offset >= 0, offset <= data.count - 4 else { return nil }
+    return UInt32(data[data.startIndex + offset]) << 24
+      | UInt32(data[data.startIndex + offset + 1]) << 16
+      | UInt32(data[data.startIndex + offset + 2]) << 8
+      | UInt32(data[data.startIndex + offset + 3])
+  }
+
+  private enum TIFFByteOrder { case littleEndian, bigEndian }
+
+  private struct TIFFDirectory {
+    private struct Entry {
+      let type: UInt16
+      let count: UInt32
+      let valueFieldOffset: Int
+      let valueOffset: Int
+    }
+
+    private let data: Data
+    private let order: TIFFByteOrder
+    private let entries: [UInt16: Entry]
+    let nextOffset: UInt32
+
+    init?(data: Data, offset: Int, order: TIFFByteOrder) {
+      guard offset >= 0,
+        let entryCount = ClipboardImagePolicy.readTIFFUInt16(data, at: offset, order: order),
+        entryCount <= 64,
+        let entriesStart = ClipboardImagePolicy.checkedAdd(offset, 2),
+        let entriesBytes = ClipboardImagePolicy.checkedProduct(Int(entryCount), 12),
+        let nextOffsetPosition = ClipboardImagePolicy.checkedAdd(entriesStart, entriesBytes),
+        nextOffsetPosition <= data.count - 4,
+        let nextOffset = ClipboardImagePolicy.readTIFFUInt32(
+          data, at: nextOffsetPosition, order: order)
+      else { return nil }
+
+      var parsedEntries: [UInt16: Entry] = [:]
+      for index in 0..<Int(entryCount) {
+        guard let entryOffset = ClipboardImagePolicy.checkedAdd(entriesStart, index * 12),
+          let tag = ClipboardImagePolicy.readTIFFUInt16(data, at: entryOffset, order: order),
+          let type = ClipboardImagePolicy.readTIFFUInt16(data, at: entryOffset + 2, order: order),
+          let count = ClipboardImagePolicy.readTIFFUInt32(data, at: entryOffset + 4, order: order),
+          let valueOffset = ClipboardImagePolicy.readTIFFUInt32(
+            data, at: entryOffset + 8, order: order)
+        else { return nil }
+        parsedEntries[tag] = Entry(
+          type: type,
+          count: count,
+          valueFieldOffset: entryOffset + 8,
+          valueOffset: Int(valueOffset))
+      }
+
+      self.data = data
+      self.order = order
+      entries = parsedEntries
+      self.nextOffset = nextOffset
+    }
+
+    func singleValue(forTag tag: UInt16) -> UInt32? {
+      guard let values = values(forTag: tag), values.count == 1 else { return nil }
+      return values[0]
+    }
+
+    func contains(tag: UInt16) -> Bool { entries[tag] != nil }
+
+    func values(forTag tag: UInt16) -> [UInt32]? {
+      guard let entry = entries[tag], entry.count > 0, entry.count <= 16,
+        let valueSize = ClipboardImagePolicy.tiffValueSize(for: entry.type),
+        let byteCount = ClipboardImagePolicy.checkedProduct(Int(entry.count), valueSize)
+      else { return nil }
+
+      let valueStart = byteCount <= 4 ? entry.valueFieldOffset : entry.valueOffset
+      guard valueStart <= data.count - byteCount else { return nil }
+
+      var values: [UInt32] = []
+      values.reserveCapacity(Int(entry.count))
+      for index in 0..<Int(entry.count) {
+        guard let valueOffset = ClipboardImagePolicy.checkedAdd(valueStart, index * valueSize),
+          let value = ClipboardImagePolicy.readTIFFValue(
+            data, at: valueOffset, type: entry.type, order: order)
+        else { return nil }
+        values.append(value)
+      }
+      return values
+    }
+  }
+
+  private static func tiffValueSize(for type: UInt16) -> Int? {
+    switch type {
+    case 1, 2, 6, 7: return 1
+    case 3, 8: return 2
+    case 4, 9, 11: return 4
+    case 5, 10, 12: return 8
+    default: return nil
+    }
+  }
+
+  private static func readTIFFValue(
+    _ data: Data, at offset: Int, type: UInt16, order: TIFFByteOrder
+  ) -> UInt32? {
+    switch type {
+    case 1, 2, 6, 7: return byte(in: data, at: offset).map(UInt32.init)
+    case 3, 8: return readTIFFUInt16(data, at: offset, order: order).map(UInt32.init)
+    case 4, 9, 11: return readTIFFUInt32(data, at: offset, order: order)
+    default: return nil
+    }
+  }
+
+  private static func readTIFFUInt16(
+    _ data: Data, at offset: Int, order: TIFFByteOrder
+  ) -> UInt16? {
+    guard offset >= 0, offset <= data.count - 2 else { return nil }
+    let first = UInt16(data[data.startIndex + offset])
+    let second = UInt16(data[data.startIndex + offset + 1])
+    switch order {
+    case .littleEndian: return first | second << 8
+    case .bigEndian: return first << 8 | second
+    }
+  }
+
+  private static func readTIFFUInt32(
+    _ data: Data, at offset: Int, order: TIFFByteOrder
+  ) -> UInt32? {
+    guard offset >= 0, offset <= data.count - 4 else { return nil }
+    let bytes = (0..<4).map { UInt32(data[data.startIndex + offset + $0]) }
+    switch order {
+    case .littleEndian: return bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24
+    case .bigEndian: return bytes[0] << 24 | bytes[1] << 16 | bytes[2] << 8 | bytes[3]
+    }
+  }
+
+  private static func checkedAdd(_ lhs: Int, _ rhs: Int) -> Int? {
+    let result = lhs.addingReportingOverflow(rhs)
+    return result.overflow ? nil : result.partialValue
   }
 }
 
@@ -556,13 +886,7 @@ final class ClipboardModel: ObservableObject {
   }
 
   private static func imagePayload(from pasteboard: NSPasteboard) -> ClipboardItem.ImagePayload? {
-    for type in [NSPasteboard.PasteboardType.tiff, .png] {
-      guard let data = pasteboard.data(forType: type),
-        data.count <= ClipboardPrivacyPolicy.maximumImageBytes
-      else { continue }
-      return ClipboardItem.ImagePayload(data: data, pasteboardTypeRawValue: type.rawValue)
-    }
-    return nil
+    ClipboardImagePolicy.payload(from: pasteboard)
   }
 }
 

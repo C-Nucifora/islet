@@ -358,6 +358,131 @@ final class ClipboardPrivacyPolicyTests: XCTestCase {
     XCTAssertEqual(payload.pasteboardTypeRawValue, "public.png")
   }
 
+  func testImagePolicyRetainsAPNGOnlyRepresentation() throws {
+    let png = try imageData(as: .png)
+
+    let payload = try XCTUnwrap(
+      ClipboardImagePolicy.payload(from: [(type: .png, data: png)]))
+
+    XCTAssertEqual(payload.data, png)
+    XCTAssertEqual(payload.pasteboardTypeRawValue, NSPasteboard.PasteboardType.png.rawValue)
+  }
+
+  func testImagePolicyRetainsATIFFOnlyRepresentation() throws {
+    let tiff = try imageData(as: .tiff)
+
+    let payload = try XCTUnwrap(
+      ClipboardImagePolicy.payload(from: [(type: .tiff, data: tiff)]))
+
+    XCTAssertEqual(payload.data, tiff)
+    XCTAssertEqual(payload.pasteboardTypeRawValue, NSPasteboard.PasteboardType.tiff.rawValue)
+  }
+
+  func testImagePolicyChoosesTheSmallerLosslessRepresentationAndRoundTripsItsType() throws {
+    let png = try imageData(as: .png)
+    let tiff = try imageData(as: .tiff)
+
+    let expected = png.count <= tiff.count ? png : tiff
+    let expectedType: NSPasteboard.PasteboardType = png.count <= tiff.count ? .png : .tiff
+    let pasteboard = NSPasteboard(
+      name: NSPasteboard.Name("islet-tests-image-\\(UUID().uuidString)"))
+    let item = NSPasteboardItem()
+    XCTAssertTrue(item.setData(tiff, forType: .tiff))
+    XCTAssertTrue(item.setData(png, forType: .png))
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.writeObjects([item]))
+
+    let payload = try XCTUnwrap(ClipboardImagePolicy.payload(from: pasteboard))
+    XCTAssertEqual(payload.data, expected)
+    XCTAssertEqual(payload.pasteboardTypeRawValue, expectedType.rawValue)
+
+    let selectedFromRepresentations = try XCTUnwrap(
+      ClipboardImagePolicy.payload(from: [(type: .tiff, data: tiff), (type: .png, data: png)]))
+    XCTAssertEqual(selectedFromRepresentations, payload)
+
+    let copyBackPasteboard = NSPasteboard(
+      name: NSPasteboard.Name("islet-tests-image-copy-back-\\(UUID().uuidString)"))
+    copyBackPasteboard.clearContents()
+    XCTAssertTrue(
+      copyBackPasteboard.setData(
+        payload.data,
+        forType: NSPasteboard.PasteboardType(rawValue: payload.pasteboardTypeRawValue)))
+    XCTAssertEqual(copyBackPasteboard.data(forType: expectedType), expected)
+  }
+
+  func testImagePolicyRejectsMalformedOversizedAndOverDimensionImages() {
+    let malformedPNG = Data([137, 80, 78, 71, 13, 10, 26, 10])
+    let oversizedPNG = Data(count: ClipboardPrivacyPolicy.maximumImageBytes + 1)
+    let overDimensionPNG = pngHeader(
+      width: ClipboardImagePolicy.maximumImageDimension + 1, height: 1)
+    let oversizedDecodedPNG = pngHeader(
+      width: ClipboardImagePolicy.maximumImageDimension,
+      height: ClipboardImagePolicy.maximumImageDimension)
+
+    XCTAssertNil(ClipboardImagePolicy.payload(from: [(type: .png, data: malformedPNG)]))
+    XCTAssertNil(ClipboardImagePolicy.payload(from: [(type: .png, data: oversizedPNG)]))
+    XCTAssertNil(ClipboardImagePolicy.payload(from: [(type: .png, data: overDimensionPNG)]))
+    XCTAssertNil(ClipboardImagePolicy.payload(from: [(type: .png, data: oversizedDecodedPNG)]))
+  }
+
+  func testImagePolicyRejectsRepresentationsThatExceedTheCombinedReadBudget() throws {
+    let png = try imageData(as: .png)
+    let overBudgetTIFF = Data(count: ClipboardImagePolicy.maximumImageReadBytes)
+
+    XCTAssertNil(
+      ClipboardImagePolicy.payload(
+        from: [(type: .png, data: png), (type: .tiff, data: overBudgetTIFF)]))
+  }
+
+  func testImagePolicyAcceptsOnlyLosslessTIFFCompressionModes() {
+    for compression in [UInt32(1), 2, 3, 4, 5, 8, 32_773, 32_946] {
+      XCTAssertTrue(ClipboardImagePolicy.isLosslessTIFFCompression(compression))
+    }
+    XCTAssertFalse(ClipboardImagePolicy.isLosslessTIFFCompression(6))
+    XCTAssertFalse(ClipboardImagePolicy.isLosslessTIFFCompression(7))
+    XCTAssertFalse(ClipboardImagePolicy.isLosslessTIFFCompression(32_865))
+    XCTAssertFalse(ClipboardImagePolicy.isLosslessTIFFCompression(.max))
+  }
+
+  private func imageData(as type: NSBitmapImageRep.FileType) throws -> Data {
+    let representation = try XCTUnwrap(
+      NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: 2,
+        pixelsHigh: 2,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bitmapFormat: [],
+        bytesPerRow: 0,
+        bitsPerPixel: 0))
+    for x in 0..<2 {
+      for y in 0..<2 {
+        representation.setColor(NSColor(red: 0.2, green: 0.6, blue: 0.9, alpha: 1), atX: x, y: y)
+      }
+    }
+    return try XCTUnwrap(representation.representation(using: type, properties: [:]))
+  }
+
+  private func pngHeader(width: Int, height: Int) -> Data {
+    var data = Data([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82])
+    appendBigEndian(UInt32(width), to: &data)
+    appendBigEndian(UInt32(height), to: &data)
+    data.append(contentsOf: [8, 6, 0, 0, 0])
+    data.append(contentsOf: [0, 0, 0, 0])
+    data.append(contentsOf: [0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130])
+    return data
+  }
+
+  private func appendBigEndian(_ value: UInt32, to data: inout Data) {
+    data.append(UInt8(truncatingIfNeeded: value >> 24))
+    data.append(UInt8(truncatingIfNeeded: value >> 16))
+    data.append(UInt8(truncatingIfNeeded: value >> 8))
+    data.append(UInt8(truncatingIfNeeded: value))
+  }
+
   func testMultipleFileURLsRoundTripInOrder() async throws {
     let source = NSPasteboard(name: NSPasteboard.Name("islet-tests-source-\(UUID().uuidString)"))
     let destination = NSPasteboard(
