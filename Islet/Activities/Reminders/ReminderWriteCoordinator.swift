@@ -6,6 +6,7 @@ struct ReminderListItem: Identifiable, Equatable, Sendable {
   let title: String
   let colorHex: String?
   let isDefault: Bool
+  let isWritable: Bool
 }
 
 struct ReminderDraft: Equatable, Sendable {
@@ -14,6 +15,7 @@ struct ReminderDraft: Equatable, Sendable {
   var dueDate: Date?
   var hasDueTime: Bool
   var priority: Int
+  var sourceRevision: ReminderWriteRecord.Revision? = nil
 
   static let empty = ReminderDraft(
     title: "", listID: nil, dueDate: nil, hasDueTime: false, priority: 0)
@@ -121,12 +123,34 @@ final class ReminderWriteCoordinator {
 
   func lists() -> [ReminderListItem] {
     guard store.authorization.canRead else { return [] }
-    return store.reminderLists()
+    return store.reminderLists().filter(\.isWritable)
   }
 
   func defaultListID() -> String? {
-    guard store.authorization.canRead else { return nil }
-    return store.defaultListID()
+    guard store.authorization.canRead, let id = store.defaultListID(), listIsWritable(id) else {
+      return nil
+    }
+    return id
+  }
+
+  func draft(for item: ReminderItem) -> Result<ReminderDraft, ReminderWriteError> {
+    do {
+      try checkPermission()
+      guard let record = store.record(withID: item.id) else {
+        throw ReminderWriteError.missingReminder
+      }
+      guard listIsWritable(record.listID) else { throw ReminderWriteError.missingList }
+      let hasDueTime =
+        record.dueDateComponents?.hour != nil || record.dueDateComponents?.minute != nil
+        || record.dueDateComponents?.second != nil
+      return .success(
+        ReminderDraft(
+          title: record.title, listID: record.listID,
+          dueDate: RemindersLogic.dueDate(from: record.dueDateComponents),
+          hasDueTime: hasDueTime, priority: record.priority, sourceRevision: record.revision))
+    } catch {
+      return .failure(map(error))
+    }
   }
 
   func create(_ draft: ReminderDraft) -> Result<ReminderItem, ReminderWriteError> {
@@ -134,7 +158,7 @@ final class ReminderWriteCoordinator {
       try checkPermission()
       let title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !title.isEmpty else { throw ReminderWriteError.emptyTitle }
-      guard let listID = draft.listID ?? store.defaultListID(), listExists(listID) else {
+      guard let listID = draft.listID ?? defaultListID(), listIsWritable(listID) else {
         throw ReminderWriteError.missingList
       }
       var normalized = draft
@@ -153,20 +177,25 @@ final class ReminderWriteCoordinator {
       try checkPermission()
       let title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !title.isEmpty else { throw ReminderWriteError.emptyTitle }
-      guard let listID = draft.listID, listExists(listID) else {
+      guard let listID = draft.listID, listIsWritable(listID) else {
         throw ReminderWriteError.missingList
+      }
+      guard let sourceRevision = draft.sourceRevision else {
+        throw ReminderWriteError.changedElsewhere
       }
       guard var record = store.record(withID: item.id) else {
         throw ReminderWriteError.missingReminder
       }
-      let revision = record.revision
+      guard record.revision == sourceRevision else {
+        throw ReminderWriteError.changedElsewhere
+      }
       record.title = title
       record.priority = draft.priority
       record.listID = listID
       record.dueDateComponents = draft.dueDate.map {
         RemindersLogic.dueComponents(for: $0, hasTime: draft.hasDueTime)
       }
-      return .success(try store.save(record, expectedRevision: revision).item)
+      return .success(try store.save(record, expectedRevision: sourceRevision).item)
     } catch {
       return .failure(map(error))
     }
@@ -177,7 +206,7 @@ final class ReminderWriteCoordinator {
   > {
     do {
       try checkPermission()
-      guard listExists(listID) else { throw ReminderWriteError.missingList }
+      guard listIsWritable(listID) else { throw ReminderWriteError.missingList }
       guard var record = store.record(withID: item.id) else {
         throw ReminderWriteError.missingReminder
       }
@@ -254,8 +283,8 @@ final class ReminderWriteCoordinator {
     guard store.authorization.canRead else { throw ReminderWriteError.permissionDenied }
   }
 
-  private func listExists(_ id: String) -> Bool {
-    store.reminderLists().contains { $0.id == id }
+  private func listIsWritable(_ id: String) -> Bool {
+    store.reminderLists().contains { $0.id == id && $0.isWritable }
   }
 
   private func map(_ error: Error) -> ReminderWriteError {
@@ -283,7 +312,8 @@ final class EventKitReminderWriteStore: ReminderWriteStore {
         ReminderListItem(
           id: $0.calendarIdentifier, title: $0.title,
           colorHex: ColorHex.string(from: $0.cgColor),
-          isDefault: $0.calendarIdentifier == defaultID)
+          isDefault: $0.calendarIdentifier == defaultID,
+          isWritable: $0.allowsContentModifications)
       }
       .sorted {
         if $0.isDefault != $1.isDefault { return $0.isDefault }
@@ -336,7 +366,9 @@ final class EventKitReminderWriteStore: ReminderWriteStore {
   }
 
   private func reminderList(withID id: String) -> EKCalendar? {
-    store.calendars(for: .reminder).first { $0.calendarIdentifier == id }
+    store.calendars(for: .reminder).first {
+      $0.calendarIdentifier == id && $0.allowsContentModifications
+    }
   }
 
   private func record(from reminder: EKReminder) -> ReminderWriteRecord {
