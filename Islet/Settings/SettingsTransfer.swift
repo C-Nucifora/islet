@@ -218,9 +218,9 @@ enum SettingsTransfer {
     "clipboardPausedUntil",
     "commandPaletteRecentResultIDs", "commandPaletteShortcut", "contextManualOverride",
     "contextRules", "continuityEnabled", "hiddenCalendarIDs",
-    "onboardingVersion", "portsEnabled", "pulseEnabled", "pulseRevisionStateData",
-    "systemEnabled", "t3CodeEnabled",
-    "t3RemoteEnvironments",
+    "onboardingVersion", "portsEnabled", "pulseEnabled", "pulseHistoryMaximumEntries",
+    "pulseHistoryPersistenceEnabled", "pulseHistoryRetentionDays", "pulseRevisionStateData",
+    "systemEnabled", "t3CodeEnabled", "t3RemoteEnvironments",
   ]
 
   static func exportData(

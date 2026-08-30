@@ -279,8 +279,9 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "Shared bearer token", "Quick Actions", "Reveal token folder", "Dismiss visible",
         "Rotate provider token", "Provider examples", "Allow Mute Revoke Policy",
         "Other sources seen this session", "Pulse history", "Show session history",
+        "Keep history after quitting", "Retention period", "Maximum entries", "Export history",
         "History filter", "All Accepted Filtered Rejected", "Clear history",
-        "source result priority time local scripts CLI access token delivery",
+        "source result priority state operation time local scripts CLI access token delivery privacy",
       ]
     case .permissions:
       pageContent + [
@@ -530,6 +531,9 @@ struct SettingsView: View {
   @Default(.clipboardPausedFocusIdentifiers) private var clipboardPausedFocusIdentifiers
   @Default(.clipboardClearHistoryOnPause) private var clipboardClearHistoryOnPause
   @Default(.commandPaletteShortcut) private var commandPaletteShortcut
+  @Default(.pulseHistoryPersistenceEnabled) private var pulseHistoryPersistenceEnabled
+  @Default(.pulseHistoryRetentionDays) private var pulseHistoryRetentionDays
+  @Default(.pulseHistoryMaximumEntries) private var pulseHistoryMaximumEntries
 
   @State private var selection: SettingsCategory?
   @State private var detailPage: SettingsDetailPage?
@@ -695,6 +699,39 @@ struct SettingsView: View {
     Binding(
       get: { pulse.policy(for: source) },
       set: { pulse.setPolicy($0, for: source) })
+  }
+
+  private var pulseHistoryPersistenceBinding: Binding<Bool> {
+    Binding(
+      get: { pulseHistoryPersistenceEnabled },
+      set: { enabled in
+        pulseHistoryPersistenceEnabled = enabled
+        applyPulseHistoryConfiguration()
+      })
+  }
+
+  private var pulseHistoryRetentionBinding: Binding<Int> {
+    Binding(
+      get: {
+        PulseHistoryConfiguration.allowedRetentionDays.contains(pulseHistoryRetentionDays)
+          ? pulseHistoryRetentionDays : PulseHistoryConfiguration.defaultRetentionDays
+      },
+      set: { days in
+        pulseHistoryRetentionDays = days
+        applyPulseHistoryConfiguration()
+      })
+  }
+
+  private var pulseHistoryMaximumEntriesBinding: Binding<Int> {
+    Binding(
+      get: {
+        PulseHistoryConfiguration.allowedEntryCounts.contains(pulseHistoryMaximumEntries)
+          ? pulseHistoryMaximumEntries : PulseHistoryConfiguration.defaultMaximumEntries
+      },
+      set: { count in
+        pulseHistoryMaximumEntries = count
+        applyPulseHistoryConfiguration()
+      })
   }
 
   var body: some View {
@@ -1893,7 +1930,7 @@ struct SettingsView: View {
           PulseProviderRow(status: status, center: pulse)
         }
         if !pulse.unlistedSources.isEmpty {
-          Text("Other sources seen this session").font(.caption.weight(.medium))
+          Text("Other sources in history").font(.caption.weight(.medium))
           ForEach(pulse.unlistedSources, id: \.self) { source in
             LabeledContent {
               Picker("Policy", selection: sourcePolicyBinding(source)) {
@@ -1910,11 +1947,37 @@ struct SettingsView: View {
         }
       }
       Section("Pulse history") {
-        Toggle("Show session history", isOn: $showPulseHistory)
+        Toggle("Show history", isOn: $showPulseHistory)
+        Toggle("Keep history after quitting", isOn: pulseHistoryPersistenceBinding)
         Text(
-          "Stored in memory until Islet quits. History includes source, result, priority and time. It excludes payload text, links, tokens and errors."
+          pulseHistoryPersistenceEnabled
+            ? "Saved history contains source, result, priority, state, operation and time. It excludes item identifiers, payload text, progress, links, tokens and errors."
+            : "History stays in memory until Islet quits. Saving is off by default. History never contains item identifiers, payload text, progress, links, tokens or errors."
         )
         .font(.caption).foregroundStyle(.secondary)
+        LabeledContent("Retention period") {
+          Picker("Retention period", selection: pulseHistoryRetentionBinding) {
+            ForEach(PulseHistoryConfiguration.allowedRetentionDays, id: \.self) { days in
+              Text(days == 1 ? "1 day" : "\(days) days").tag(days)
+            }
+          }
+          .labelsHidden()
+          .frame(width: 120)
+        }
+        .disabled(!pulseHistoryPersistenceEnabled)
+        LabeledContent("Maximum entries") {
+          Picker("Maximum entries", selection: pulseHistoryMaximumEntriesBinding) {
+            ForEach(PulseHistoryConfiguration.allowedEntryCounts, id: \.self) { count in
+              Text("\(count)").tag(count)
+            }
+          }
+          .labelsHidden()
+          .frame(width: 120)
+        }
+        if let error = pulse.historyPersistenceError {
+          Label(error, systemImage: "exclamationmark.triangle.fill")
+            .font(.caption).foregroundStyle(.orange)
+        }
         if showPulseHistory {
           Picker("History filter", selection: $pulseHistoryFilter) {
             ForEach(PulseHistoryFilter.allCases) { filter in Text(filter.rawValue).tag(filter) }
@@ -1923,22 +1986,22 @@ struct SettingsView: View {
           if filteredPulseHistory.isEmpty {
             Text(
               pulse.history.isEmpty
-                ? "No provider activity this session." : "No matching history entries."
+                ? "No provider activity recorded." : "No matching history entries."
             )
             .foregroundStyle(.secondary)
           } else {
             ForEach(filteredPulseHistory.prefix(30)) { entry in
               PulseHistoryRow(entry: entry)
             }
-            HStack {
-              Text(
-                "Showing \(min(30, filteredPulseHistory.count)) of \(filteredPulseHistory.count)"
-              )
+            Text("Showing \(min(30, filteredPulseHistory.count)) of \(filteredPulseHistory.count)")
               .font(.caption).foregroundStyle(.secondary)
-              Spacer()
-              Button("Clear history") { pulse.clearHistory() }
-            }
           }
+        }
+        HStack {
+          Button("Export history…") { exportPulseHistory() }
+            .disabled(pulse.history.isEmpty)
+          Button("Clear history", role: .destructive) { pulse.clearHistory() }
+            .disabled(pulse.history.isEmpty)
         }
       }
     }
@@ -2316,6 +2379,34 @@ struct SettingsView: View {
         "The token was replaced and all provider connections were disconnected. Providers must read the new token before reconnecting."
     } catch {
       pulseTokenRotationResult = "The token could not be rotated: \(error.localizedDescription)"
+    }
+  }
+
+  private func applyPulseHistoryConfiguration() {
+    pulse.configureHistoryPersistence(
+      enabled: pulseHistoryPersistenceEnabled,
+      retentionDays: pulseHistoryRetentionBinding.wrappedValue,
+      maximumEntries: pulseHistoryMaximumEntriesBinding.wrappedValue)
+  }
+
+  private func exportPulseHistory() {
+    let panel = NSSavePanel()
+    panel.allowedContentTypes = [.json]
+    panel.canCreateDirectories = true
+    panel.nameFieldStringValue = "Islet Pulse History.json"
+    panel.title = "Export Pulse history"
+    panel.prompt = "Export"
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+
+    do {
+      let count = pulse.history.count
+      try pulse.exportHistoryData().write(to: url, options: .atomic)
+      settingsTransferNotice = SettingsTransferNotice(
+        title: "Pulse history exported",
+        message: "Saved \(count) metadata entr\(count == 1 ? "y" : "ies").")
+    } catch {
+      settingsTransferNotice = SettingsTransferNotice(
+        title: "Pulse history could not be exported", message: error.localizedDescription)
     }
   }
 

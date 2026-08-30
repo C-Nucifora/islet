@@ -307,6 +307,13 @@ extension Defaults.Keys {
   static let pulseStaleTimeout = Key<Double>(
     "pulseStaleTimeout", default: PulseStalenessPolicy.defaultTimeout)
   static let pulseRevisionStateData = Key<Data?>("pulseRevisionStateData")
+  /// Pulse history stays memory-only unless the user opts in to saving its limited metadata.
+  static let pulseHistoryPersistenceEnabled = Key<Bool>(
+    "pulseHistoryPersistenceEnabled", default: false)
+  static let pulseHistoryRetentionDays = Key<Int>(
+    "pulseHistoryRetentionDays", default: PulseHistoryConfiguration.defaultRetentionDays)
+  static let pulseHistoryMaximumEntries = Key<Int>(
+    "pulseHistoryMaximumEntries", default: PulseHistoryConfiguration.defaultMaximumEntries)
   static let t3RemoteEnvironments = Key<[T3EnvironmentProfile]>(
     "t3RemoteEnvironments", default: [])
   static let timerSessionData = Key<Data?>("timerSessionData")
