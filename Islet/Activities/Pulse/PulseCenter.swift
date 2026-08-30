@@ -22,6 +22,12 @@ final class PulseCenter: ObservableObject {
   }
   private let deliveryProfileKey: Defaults.Key<PulseDeliveryProfile>
   private let sourcePoliciesKey: Defaults.Key<[String: String]>
+  var ruleDeliveryProfile: PulseDeliveryProfile? {
+    didSet {
+      guard ruleDeliveryProfile != oldValue else { return }
+      refreshVisibleItems()
+    }
+  }
   private let symbolAvailability: (String) -> Bool?
   private var storedItems: [PulseItem] = []
   private var expiryTask: Task<Void, Never>?
@@ -50,6 +56,9 @@ final class PulseCenter: ObservableObject {
   var primary: PulseItem? { items.first }
   var retainedItemCount: Int { storedItems.count }
   var hiddenItemCount: Int { max(0, storedItems.count - items.count) }
+  var effectiveDeliveryProfile: PulseDeliveryProfile {
+    ruleDeliveryProfile ?? deliveryProfile
+  }
 
   @discardableResult
   func applyIfEnabled(
@@ -264,7 +273,7 @@ final class PulseCenter: ObservableObject {
   }
 
   private func shouldPresent(_ item: PulseItem) -> Bool {
-    policy(for: item.source) == .allowed && deliveryProfile.allows(item)
+    policy(for: item.source) == .allowed && effectiveDeliveryProfile.allows(item)
   }
 
   private func sortStoredItems() {
