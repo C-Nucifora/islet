@@ -435,7 +435,18 @@ do {
     source.resume()
   }
 
-  try process.run()
+  do {
+    try process.run()
+  } catch {
+    interruptSource.cancel()
+    terminateSource.cancel()
+    publisher.finish(
+      PulseStatus(
+        operation: "event", title: "\(noun) failed",
+        subtitle: "\(options.label) · could not start xcodebuild", state: "failed",
+        priority: "critical", progress: nil, expiry: 60, includeFailureAction: false))
+    throw error
+  }
   signalLock.lock()
   let pendingSignal = receivedSignal
   signalLock.unlock()

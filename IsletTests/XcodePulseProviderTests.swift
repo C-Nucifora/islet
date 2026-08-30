@@ -149,6 +149,22 @@ final class XcodePulseProviderTests: XCTestCase {
     XCTAssertTrue(final.contains("<cancelled>"))
   }
 
+  func testLaunchFailureReplacesTheRunningItemWithAnExpiringFailure() throws {
+    try FileManager.default.removeItem(at: xcodebuildURL)
+
+    let result = try runProvider(
+      scenario: "success",
+      providerArguments: ["--id", "launch-failure", "--label", "Sample", "--", "build"])
+
+    XCTAssertEqual(result.status, 70)
+    let records = try pulseRecords()
+    XCTAssertEqual(records.count, 2)
+    XCTAssertTrue(records.first?.contains("<active>") == true)
+    XCTAssertTrue(records.last?.contains("<failed>") == true)
+    XCTAssertTrue(records.last?.contains("<--expires><60>") == true)
+    XCTAssertFalse(records.last?.contains(temporaryDirectory.path) == true)
+  }
+
   func testFailurePathPublishesOnlyTruncatedFilenameAndLine() throws {
     let result = try runProvider(
       scenario: "path-failure",
