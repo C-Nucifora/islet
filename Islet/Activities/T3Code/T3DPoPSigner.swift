@@ -35,6 +35,7 @@ actor T3DPoPSigner: T3DPoPProofProviding {
   private let store: T3ConnectCredentialStore
   private let now: @Sendable () -> Date
   private let makeJTI: @Sendable () -> String
+  private let onKeyLoadWaiterQueued: @Sendable () -> Void
   private var cachedKey: P256.Signing.PrivateKey?
   private var generation: UInt64 = 0
   private var loadingGenerations: Set<UInt64> = []
@@ -43,11 +44,13 @@ actor T3DPoPSigner: T3DPoPProofProviding {
   init(
     store: T3ConnectCredentialStore,
     now: @escaping @Sendable () -> Date = Date.init,
-    makeJTI: @escaping @Sendable () -> String = { UUID().uuidString }
+    makeJTI: @escaping @Sendable () -> String = { UUID().uuidString },
+    onKeyLoadWaiterQueued: @escaping @Sendable () -> Void = {}
   ) {
     self.store = store
     self.now = now
     self.makeJTI = makeJTI
+    self.onKeyLoadWaiterQueued = onKeyLoadWaiterQueued
   }
 
   func keyThumbprint() async throws -> String {
@@ -87,6 +90,7 @@ actor T3DPoPSigner: T3DPoPProofProviding {
     if loadingGenerations.contains(capturedGeneration) {
       let key = try await withCheckedThrowingContinuation { continuation in
         keyLoadWaiters[capturedGeneration, default: []].append(continuation)
+        onKeyLoadWaiterQueued()
       }
       guard capturedGeneration == generation else { throw T3DPoPSignerError.reset }
       return key
@@ -166,10 +170,10 @@ actor T3DPoPSigner: T3DPoPProofProviding {
 
   private func issuedAt() throws -> Int {
     let seconds = now().timeIntervalSince1970.rounded(.down)
-    guard seconds.isFinite, seconds >= Double(Int.min), seconds <= Double(Int.max) else {
+    guard let issuedAt = Int(exactly: seconds) else {
       throw T3DPoPSignerError.invalidTimestamp
     }
-    return Int(seconds)
+    return issuedAt
   }
 
   private struct Header: Encodable {

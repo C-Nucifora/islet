@@ -4,6 +4,7 @@ import Security
 enum T3ConnectCredentialStoreError: Error, LocalizedError {
   case keychain(OSStatus)
   case invalidRecord
+  case staleOperation
 
   var errorDescription: String? {
     switch self {
@@ -11,6 +12,8 @@ enum T3ConnectCredentialStoreError: Error, LocalizedError {
       SecCopyErrorMessageString(status, nil) as String? ?? "Keychain error \(status)"
     case .invalidRecord:
       "The saved T3 Connect credential is unreadable. It was left unchanged."
+    case .staleOperation:
+      "The T3 Connect credential operation was invalidated by sign-out."
     }
   }
 }
@@ -89,16 +92,35 @@ actor T3ConnectCredentialStore {
   private let store: any T3SecureRecordStore
   private var oauthCache: Cache<T3OAuthRecord> = .unloaded
   private var proofKeyCache: Cache<Data> = .unloaded
+  private var generation: UInt64 = 0
+  private var signOutInProgress = false
+  private var signOutWaiters: [CheckedContinuation<Void, Never>] = []
+  private var oauthOperationInProgress = false
+  private var oauthOperationWaiters: [CheckedContinuation<Void, Never>] = []
+  private var proofKeyOperationInProgress = false
+  private var proofKeyOperationWaiters: [CheckedContinuation<Void, Never>] = []
 
   init(store: any T3SecureRecordStore = T3KeychainSecureRecordStore()) {
     self.store = store
   }
 
   func loadOAuthRecord() async throws -> T3OAuthRecord? {
+    if signOutInProgress { await waitForSignOutCompletion() }
     if case .loaded(let record) = oauthCache { return record }
-    guard let data = try await store.data(service: Self.service, account: Self.oauthAccount) else {
+    let capturedGeneration = generation
+    let store = store
+    let storedData = try await withStoreLock(.oauth) {
+      try await store.data(service: Self.service, account: Self.oauthAccount)
+    }
+    guard let data = storedData else {
+      guard capturedGeneration == generation else {
+        throw T3ConnectCredentialStoreError.staleOperation
+      }
       oauthCache = .loaded(nil)
       return nil
+    }
+    guard capturedGeneration == generation else {
+      throw T3ConnectCredentialStoreError.staleOperation
     }
     guard let record = try? JSONDecoder().decode(T3OAuthRecord.self, from: data) else {
       throw T3ConnectCredentialStoreError.invalidRecord
@@ -108,32 +130,138 @@ actor T3ConnectCredentialStore {
   }
 
   func replaceOAuthRecord(_ record: T3OAuthRecord) async throws {
+    if signOutInProgress { await waitForSignOutCompletion() }
+    let capturedGeneration = generation
     let data = try JSONEncoder().encode(record)
-    try await store.replace(
-      data, service: Self.service, account: Self.oauthAccount,
-      label: "Islet T3 Connect account")
+    let store = store
+    try await withStoreLock(.oauth) {
+      try await store.replace(
+        data, service: Self.service, account: Self.oauthAccount,
+        label: "Islet T3 Connect account")
+    }
+    guard capturedGeneration == generation else {
+      throw T3ConnectCredentialStoreError.staleOperation
+    }
     oauthCache = .loaded(record)
   }
 
   func loadProofKey() async throws -> Data? {
+    if signOutInProgress { await waitForSignOutCompletion() }
     if case .loaded(let key) = proofKeyCache { return key }
-    let key = try await store.data(service: Self.service, account: Self.dpopKeyAccount)
+    let capturedGeneration = generation
+    let store = store
+    let key = try await withStoreLock(.proofKey) {
+      try await store.data(service: Self.service, account: Self.dpopKeyAccount)
+    }
+    guard capturedGeneration == generation else {
+      throw T3ConnectCredentialStoreError.staleOperation
+    }
     proofKeyCache = .loaded(key)
     return key
   }
 
   func replaceProofKey(_ key: Data) async throws {
-    try await store.replace(
-      key, service: Self.service, account: Self.dpopKeyAccount,
-      label: "Islet T3 Connect proof key")
+    if signOutInProgress { await waitForSignOutCompletion() }
+    let capturedGeneration = generation
+    let store = store
+    try await withStoreLock(.proofKey) {
+      try await store.replace(
+        key, service: Self.service, account: Self.dpopKeyAccount,
+        label: "Islet T3 Connect proof key")
+    }
+    guard capturedGeneration == generation else {
+      throw T3ConnectCredentialStoreError.staleOperation
+    }
     proofKeyCache = .loaded(key)
   }
 
   func signOut() async throws {
-    try await store.delete(service: Self.service, account: Self.oauthAccount)
+    guard !signOutInProgress else { throw T3ConnectCredentialStoreError.staleOperation }
+    signOutInProgress = true
+    generation &+= 1
     oauthCache = .loaded(nil)
-    try await store.delete(service: Self.service, account: Self.dpopKeyAccount)
     proofKeyCache = .loaded(nil)
+
+    let store = store
+    do {
+      try await withStoreLock(.oauth) {
+        try await store.delete(service: Self.service, account: Self.oauthAccount)
+      }
+      try await withStoreLock(.proofKey) {
+        try await store.delete(service: Self.service, account: Self.dpopKeyAccount)
+      }
+      finishSignOut()
+    } catch {
+      finishSignOut()
+      throw error
+    }
+  }
+
+  private func waitForSignOutCompletion() async {
+    await withCheckedContinuation { continuation in
+      signOutWaiters.append(continuation)
+    }
+  }
+
+  private func finishSignOut() {
+    signOutInProgress = false
+    let waiters = signOutWaiters
+    signOutWaiters.removeAll()
+    for waiter in waiters {
+      waiter.resume()
+    }
+  }
+
+  private func withStoreLock<Value: Sendable>(
+    _ operationKind: StoreOperationKind,
+    operation: @escaping @Sendable () async throws -> Value
+  ) async throws -> Value {
+    await acquireStoreOperation(operationKind)
+    defer { releaseStoreOperation(operationKind) }
+    return try await operation()
+  }
+
+  private func acquireStoreOperation(_ operationKind: StoreOperationKind) async {
+    switch operationKind {
+    case .oauth:
+      if !oauthOperationInProgress {
+        oauthOperationInProgress = true
+        return
+      }
+      await withCheckedContinuation { continuation in
+        oauthOperationWaiters.append(continuation)
+      }
+    case .proofKey:
+      if !proofKeyOperationInProgress {
+        proofKeyOperationInProgress = true
+        return
+      }
+      await withCheckedContinuation { continuation in
+        proofKeyOperationWaiters.append(continuation)
+      }
+    }
+  }
+
+  private func releaseStoreOperation(_ operationKind: StoreOperationKind) {
+    switch operationKind {
+    case .oauth:
+      if oauthOperationWaiters.isEmpty {
+        oauthOperationInProgress = false
+      } else {
+        oauthOperationWaiters.removeFirst().resume()
+      }
+    case .proofKey:
+      if proofKeyOperationWaiters.isEmpty {
+        proofKeyOperationInProgress = false
+      } else {
+        proofKeyOperationWaiters.removeFirst().resume()
+      }
+    }
+  }
+
+  private enum StoreOperationKind: Sendable {
+    case oauth
+    case proofKey
   }
 
   private enum Cache<Value: Sendable>: Sendable {

@@ -77,6 +77,36 @@ final class T3DPoPSignerTests: XCTestCase {
     XCTAssertEqual(payload["ath"] as? String, "Pxa-1wifRlPl7yG_0oJNfzqq7MelmOfonFgOFgapzFI")
   }
 
+  func testIssuedAtAcceptsLargestExactlyRepresentableIntTimestamp() async throws {
+    let secureStore = T3DPoPSignerSecureStore(proofKey: fixedPrivateKey)
+    let signer = T3DPoPSigner(
+      store: T3ConnectCredentialStore(store: secureStore),
+      now: { Date(timeIntervalSince1970: Double(Int.max).nextDown) },
+      makeJTI: { "fixed-jti" })
+
+    let proof = try await signer.proof(
+      method: "GET", url: URL(string: "https://server.example/resource")!, accessToken: nil)
+    let payload = try decodeProof(proof).payload
+
+    XCTAssertEqual(payload["iat"] as? Int, 9_223_372_036_854_774_784)
+  }
+
+  func testIssuedAtRejectsNonrepresentableIntTimestamp() async throws {
+    let secureStore = T3DPoPSignerSecureStore(proofKey: fixedPrivateKey)
+    let signer = T3DPoPSigner(
+      store: T3ConnectCredentialStore(store: secureStore),
+      now: { Date(timeIntervalSince1970: Double(Int.max)) },
+      makeJTI: { "fixed-jti" })
+
+    do {
+      _ = try await signer.proof(
+        method: "GET", url: URL(string: "https://server.example/resource")!, accessToken: nil)
+      XCTFail("Expected the nonrepresentable timestamp to fail")
+    } catch let error as T3DPoPSignerError {
+      XCTAssertEqual(error, .invalidTimestamp)
+    }
+  }
+
   func testEveryProofUsesNewJTI() async throws {
     let secureStore = T3DPoPSignerSecureStore(proofKey: fixedPrivateKey)
     let sequence = T3TestJTISequence()
@@ -126,12 +156,15 @@ final class T3DPoPSignerTests: XCTestCase {
 
   func testConcurrentFirstUsePersistsOneSharedKey() async throws {
     let secureStore = T3DPoPSignerSecureStore(suspendFirstProofKeyRead: true)
-    let signer = makeSigner(store: secureStore)
+    let secondWaiterQueued = T3TestSignal()
+    let signer = makeSigner(
+      store: secureStore,
+      onKeyLoadWaiterQueued: { secondWaiterQueued.signal() })
     let firstLoad = Task { try await signer.keyThumbprint() }
     await secureStore.waitForFirstProofKeyRead()
 
     let secondLoad = Task { try await signer.keyThumbprint() }
-    for _ in 0..<10 { await Task.yield() }
+    await secondWaiterQueued.wait()
     await secureStore.resumeFirstProofKeyRead()
 
     let firstThumbprint = try await firstLoad.value
@@ -141,32 +174,80 @@ final class T3DPoPSignerTests: XCTestCase {
     XCTAssertEqual(replacements.count, 1)
   }
 
-  func testResetBlocksStaleLoadFromReplacingCurrentGeneration() async throws {
-    let firstKey = fixedPrivateKey
-    let secondKey = Data((33...64).map(UInt8.init))
+  func testResetRejectsSuspendedStaleSignerLoad() async throws {
     let secureStore = T3DPoPSignerSecureStore(
-      proofKey: firstKey, suspendFirstProofKeyRead: true)
+      proofKey: fixedPrivateKey, suspendFirstProofKeyRead: true)
     let signer = makeSigner(store: secureStore)
     let staleLoad = Task { try await signer.keyThumbprint() }
     await secureStore.waitForFirstProofKeyRead()
 
     await signer.reset()
-    await secureStore.setProofKey(secondKey)
-    let currentThumbprint = try await signer.keyThumbprint()
-    XCTAssertEqual(currentThumbprint, try independentThumbprint(privateRaw: secondKey))
-
     await secureStore.resumeFirstProofKeyRead()
-    _ = try? await staleLoad.value
-
-    let thumbprintAfterStaleLoad = try await signer.keyThumbprint()
-    XCTAssertEqual(thumbprintAfterStaleLoad, currentThumbprint)
+    do {
+      _ = try await staleLoad.value
+      XCTFail("Expected reset to reject the stale signer load")
+    } catch let error as T3DPoPSignerError {
+      XCTAssertEqual(error, .reset)
+    }
   }
 
-  private func makeSigner(store: T3DPoPSignerSecureStore) -> T3DPoPSigner {
+  func testSignOutCannotLetSuspendedProofKeyLoadRestoreDeletedKey() async throws {
+    let secureStore = T3DPoPSignerSecureStore(
+      proofKey: fixedPrivateKey, suspendFirstProofKeyRead: true)
+    let credentials = T3ConnectCredentialStore(store: secureStore)
+    let signer = makeSigner(credentials: credentials)
+    let staleLoad = Task { try await signer.keyThumbprint() }
+    await secureStore.waitForFirstProofKeyRead()
+
+    let signOut = Task { try await credentials.signOut() }
+    await secureStore.waitForOAuthDeletion()
+    await secureStore.resumeFirstProofKeyRead()
+    try await signOut.value
+    _ = try? await staleLoad.value
+
+    await signer.reset()
+    let reloadedThumbprint = try await signer.keyThumbprint()
+    XCTAssertNotEqual(reloadedThumbprint, try independentThumbprint(privateRaw: fixedPrivateKey))
+  }
+
+  func testSignOutDeletesProofKeyWrittenBySuspendedStaleReplacement() async throws {
+    let secureStore = T3DPoPSignerSecureStore(suspendFirstProofKeyReplacement: true)
+    let credentials = T3ConnectCredentialStore(store: secureStore)
+    let signer = makeSigner(credentials: credentials)
+    let staleGeneration = Task { try await signer.keyThumbprint() }
+    await secureStore.waitForFirstProofKeyReplacement()
+
+    let signOut = Task { try await credentials.signOut() }
+    await secureStore.waitForOAuthDeletion()
+    await secureStore.resumeFirstProofKeyReplacement()
+    try await signOut.value
+    _ = try? await staleGeneration.value
+    let replacements = await secureStore.replacementPayloads()
+    let staleKey = try XCTUnwrap(replacements.first)
+
+    await signer.reset()
+    let reloadedThumbprint = try await signer.keyThumbprint()
+    XCTAssertNotEqual(reloadedThumbprint, try independentThumbprint(privateRaw: staleKey))
+  }
+
+  private func makeSigner(
+    store: T3DPoPSignerSecureStore,
+    onKeyLoadWaiterQueued: @escaping @Sendable () -> Void = {}
+  ) -> T3DPoPSigner {
+    makeSigner(
+      credentials: T3ConnectCredentialStore(store: store),
+      onKeyLoadWaiterQueued: onKeyLoadWaiterQueued)
+  }
+
+  private func makeSigner(
+    credentials: T3ConnectCredentialStore,
+    onKeyLoadWaiterQueued: @escaping @Sendable () -> Void = {}
+  ) -> T3DPoPSigner {
     T3DPoPSigner(
-      store: T3ConnectCredentialStore(store: store),
+      store: credentials,
       now: { Date(timeIntervalSince1970: 1_800_000_000) },
-      makeJTI: { "fixed-jti" })
+      makeJTI: { "fixed-jti" },
+      onKeyLoadWaiterQueued: onKeyLoadWaiterQueued)
   }
 
   private func decodeProof(_ proof: String) throws -> T3DecodedDPoPProof {
@@ -220,16 +301,28 @@ private enum T3DPoPSignerTestError: Error {
 private actor T3DPoPSignerSecureStore: T3SecureRecordStore {
   private var records: [String: Data]
   private let suspendFirstProofKeyRead: Bool
+  private let suspendFirstProofKeyReplacement: Bool
   private var proofKeyReadCount = 0
+  private var proofKeyReplacementCount = 0
   private var firstProofKeyReadStarted = false
   private var firstProofKeyReadWaiter: CheckedContinuation<Void, Never>?
   private var firstProofKeyReadContinuation: CheckedContinuation<Data?, Never>?
   private var firstProofKeyReadValue: Data?
+  private var firstProofKeyReplacementStarted = false
+  private var firstProofKeyReplacementWaiter: CheckedContinuation<Void, Never>?
+  private var firstProofKeyReplacementContinuation: CheckedContinuation<Void, Never>?
+  private var oauthDeletionStarted = false
+  private var oauthDeletionWaiter: CheckedContinuation<Void, Never>?
   private var replacements: [Data] = []
 
-  init(proofKey: Data? = nil, suspendFirstProofKeyRead: Bool = false) {
+  init(
+    proofKey: Data? = nil,
+    suspendFirstProofKeyRead: Bool = false,
+    suspendFirstProofKeyReplacement: Bool = false
+  ) {
     records = proofKey.map { [T3ConnectCredentialStore.dpopKeyAccount: $0] } ?? [:]
     self.suspendFirstProofKeyRead = suspendFirstProofKeyRead
+    self.suspendFirstProofKeyReplacement = suspendFirstProofKeyReplacement
   }
 
   func data(service: String, account: String) async throws -> Data? {
@@ -249,11 +342,27 @@ private actor T3DPoPSignerSecureStore: T3SecureRecordStore {
   }
 
   func replace(_ data: Data, service: String, account: String, label: String) async throws {
+    if account == T3ConnectCredentialStore.dpopKeyAccount {
+      proofKeyReplacementCount += 1
+      if suspendFirstProofKeyReplacement, proofKeyReplacementCount == 1 {
+        firstProofKeyReplacementStarted = true
+        firstProofKeyReplacementWaiter?.resume()
+        firstProofKeyReplacementWaiter = nil
+        await withCheckedContinuation { continuation in
+          firstProofKeyReplacementContinuation = continuation
+        }
+      }
+      replacements.append(data)
+    }
     records[account] = data
-    if account == T3ConnectCredentialStore.dpopKeyAccount { replacements.append(data) }
   }
 
   func delete(service: String, account: String) async throws {
+    if account == T3ConnectCredentialStore.oauthAccount {
+      oauthDeletionStarted = true
+      oauthDeletionWaiter?.resume()
+      oauthDeletionWaiter = nil
+    }
     records.removeValue(forKey: account)
   }
 
@@ -270,8 +379,23 @@ private actor T3DPoPSignerSecureStore: T3SecureRecordStore {
     firstProofKeyReadValue = nil
   }
 
-  func setProofKey(_ data: Data) {
-    records[T3ConnectCredentialStore.dpopKeyAccount] = data
+  func waitForFirstProofKeyReplacement() async {
+    if firstProofKeyReplacementStarted { return }
+    await withCheckedContinuation { continuation in
+      firstProofKeyReplacementWaiter = continuation
+    }
+  }
+
+  func resumeFirstProofKeyReplacement() {
+    firstProofKeyReplacementContinuation?.resume()
+    firstProofKeyReplacementContinuation = nil
+  }
+
+  func waitForOAuthDeletion() async {
+    if oauthDeletionStarted { return }
+    await withCheckedContinuation { continuation in
+      oauthDeletionWaiter = continuation
+    }
   }
 
   func replacementPayloads() -> [Data] {
@@ -288,6 +412,36 @@ private final class T3TestJTISequence: @unchecked Sendable {
     defer { lock.unlock() }
     value += 1
     return "jti-\(value)"
+  }
+}
+
+private final class T3TestSignal: @unchecked Sendable {
+  private let lock = NSLock()
+  private var isSignaled = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  func signal() {
+    lock.lock()
+    isSignaled = true
+    let pendingWaiters = waiters
+    waiters.removeAll()
+    lock.unlock()
+    for waiter in pendingWaiters {
+      waiter.resume()
+    }
+  }
+
+  func wait() async {
+    await withCheckedContinuation { continuation in
+      lock.lock()
+      if isSignaled {
+        lock.unlock()
+        continuation.resume()
+      } else {
+        waiters.append(continuation)
+        lock.unlock()
+      }
+    }
   }
 }
 
