@@ -76,6 +76,21 @@ final class CommandPaletteTests: XCTestCase {
     XCTAssertEqual(performedID, "second")
   }
 
+  func testPerformRestoresPreviousAppUnlessResultOpensAnIsletWindow() {
+    var restoreDecisions: [Bool] = []
+    let background = result(id: "background", title: "Background", detail: "")
+    let foreground = result(
+      id: "foreground", title: "Foreground", detail: "", opensIsletWindow: true)
+    let model = CommandPaletteModel(
+      candidates: { [background, foreground] }, recentIDs: { [] }, saveRecentIDs: { _ in },
+      dismiss: { restoreDecisions.append($0) })
+
+    model.perform(background)
+    model.perform(foreground)
+
+    XCTAssertEqual(restoreDecisions, [true, false])
+  }
+
   func testEverySettingsPageExposesAnIndividualControl() {
     for page in SettingsDetailPage.allCases {
       XCTAssertFalse(page.paletteControls.isEmpty, "\(page) has no palette controls")
@@ -84,11 +99,13 @@ final class CommandPaletteTests: XCTestCase {
 
   private func result(
     id: String, title: String, detail: String, searchableContent: [String] = [],
-    isAvailable: Bool = true, perform: @escaping () -> Void = {}
+    opensIsletWindow: Bool = false, isAvailable: Bool = true,
+    perform: @escaping () -> Void = {}
   ) -> CommandPaletteResult {
     CommandPaletteResult(
       id: id, title: title, detail: detail, symbol: "bolt", kind: .action,
-      searchableContent: searchableContent, isAvailable: { isAvailable }, perform: perform)
+      searchableContent: searchableContent, opensIsletWindow: opensIsletWindow,
+      isAvailable: { isAvailable }, perform: perform)
   }
 }
 
