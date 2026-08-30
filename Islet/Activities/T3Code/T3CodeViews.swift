@@ -1,8 +1,21 @@
 import Defaults
 import SwiftUI
 
+struct T3CompactLeadingView: View {
+  @ObservedObject var activity: T3CodeActivity
+  @Environment(\.appTheme) private var appTheme
+
+  var body: some View {
+    Image(systemName: "terminal.fill")
+      .foregroundStyle(activity.compactColor(for: appTheme))
+      .font(.caption2)
+      .accessibilityHidden(true)
+  }
+}
+
 struct T3CompactStatusView: View {
   @ObservedObject var activity: T3CodeActivity
+  @Environment(\.appTheme) private var appTheme
 
   var body: some View {
     HStack(spacing: 3) {
@@ -12,7 +25,7 @@ struct T3CompactStatusView: View {
       Text("\(activity.agents.count)")
         .font(.caption.weight(.semibold)).monospacedDigit()
     }
-    .foregroundStyle(activity.compactColor)
+    .foregroundStyle(activity.compactColor(for: appTheme))
     .accessibilityLabel("\(activity.agents.count) active T3 Code agents")
   }
 }

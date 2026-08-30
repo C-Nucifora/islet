@@ -71,47 +71,62 @@ enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
       (.classic, .timer):
       .orange
     case (.classic, .clipboard): .purple
-    case (.classic, .ports): .cyan
-    case (.classic, .shelf): .blue
+    case (.classic, .ports), (.classic, .pulse): .cyan
+    case (.classic, .shelf), (.classic, .continuity): .blue
+    case (.classic, .nowPlaying), (.classic, .t3Code): .green
     case (.classic, .battery): .white
 
-    case (.mono, .interaction), (.mono, .calendar), (.mono, .timer), (.mono, .battery):
+    case (.mono, .interaction), (.mono, .calendar), (.mono, .timer), (.mono, .battery),
+      (.mono, .nowPlaying), (.mono, .t3Code):
       .white
-    case (.mono, .clipboard), (.mono, .shelf): Color(white: 0.82)
-    case (.mono, .ports), (.mono, .system), (.mono, .reminders): Color(white: 0.68)
+    case (.mono, .clipboard), (.mono, .shelf), (.mono, .continuity): Color(white: 0.82)
+    case (.mono, .ports), (.mono, .system), (.mono, .reminders), (.mono, .pulse):
+      Color(white: 0.68)
 
-    case (.ocean, .interaction), (.ocean, .shelf): .blue
-    case (.ocean, .calendar), (.ocean, .system), (.ocean, .timer), (.ocean, .battery): .cyan
+    case (.ocean, .interaction), (.ocean, .shelf), (.ocean, .continuity), (.ocean, .t3Code):
+      .blue
+    case (.ocean, .calendar), (.ocean, .system), (.ocean, .timer), (.ocean, .battery),
+      (.ocean, .pulse):
+      .cyan
     case (.ocean, .clipboard): .indigo
-    case (.ocean, .ports), (.ocean, .reminders): .teal
+    case (.ocean, .ports), (.ocean, .reminders), (.ocean, .nowPlaying): .teal
 
-    case (.violet, .interaction), (.violet, .clipboard): .purple
-    case (.violet, .calendar), (.violet, .reminders): .pink
-    case (.violet, .ports), (.violet, .shelf): .indigo
+    case (.violet, .interaction), (.violet, .clipboard), (.violet, .nowPlaying),
+      (.violet, .t3Code):
+      .purple
+    case (.violet, .calendar), (.violet, .reminders), (.violet, .pulse): .pink
+    case (.violet, .ports), (.violet, .shelf), (.violet, .continuity): .indigo
     case (.violet, .system), (.violet, .timer), (.violet, .battery):
       Color(red: 0.72, green: 0.48, blue: 1)
 
-    case (.sunset, .interaction), (.sunset, .calendar), (.sunset, .timer), (.sunset, .battery):
+    case (.sunset, .interaction), (.sunset, .calendar), (.sunset, .timer), (.sunset, .battery),
+      (.sunset, .nowPlaying), (.sunset, .t3Code):
       .orange
-    case (.sunset, .clipboard), (.sunset, .reminders): .pink
+    case (.sunset, .clipboard), (.sunset, .reminders), (.sunset, .pulse): .pink
     case (.sunset, .ports): .yellow
-    case (.sunset, .shelf), (.sunset, .system): Color(red: 1, green: 0.38, blue: 0.25)
+    case (.sunset, .shelf), (.sunset, .system), (.sunset, .continuity):
+      Color(red: 1, green: 0.38, blue: 0.25)
 
-    case (.forest, .interaction), (.forest, .calendar), (.forest, .timer), (.forest, .battery):
+    case (.forest, .interaction), (.forest, .calendar), (.forest, .timer), (.forest, .battery),
+      (.forest, .nowPlaying), (.forest, .t3Code):
       .green
-    case (.forest, .clipboard), (.forest, .shelf): .mint
-    case (.forest, .ports), (.forest, .system), (.forest, .reminders): .teal
+    case (.forest, .clipboard), (.forest, .shelf), (.forest, .continuity): .mint
+    case (.forest, .ports), (.forest, .system), (.forest, .reminders), (.forest, .pulse):
+      .teal
 
     // Catppuccin Mocha accents: mauve, pink, sapphire, teal, peach, green and blue.
-    case (.catppuccin, .interaction), (.catppuccin, .clipboard):
+    case (.catppuccin, .interaction), (.catppuccin, .clipboard), (.catppuccin, .t3Code):
       Color(red: 0.80, green: 0.65, blue: 0.97)
     case (.catppuccin, .calendar), (.catppuccin, .reminders):
       Color(red: 0.96, green: 0.76, blue: 0.91)
     case (.catppuccin, .ports): Color(red: 0.58, green: 0.89, blue: 0.84)
-    case (.catppuccin, .shelf): Color(red: 0.54, green: 0.71, blue: 0.98)
-    case (.catppuccin, .system): Color(red: 0.45, green: 0.78, blue: 0.93)
+    case (.catppuccin, .shelf), (.catppuccin, .continuity):
+      Color(red: 0.54, green: 0.71, blue: 0.98)
+    case (.catppuccin, .system), (.catppuccin, .pulse):
+      Color(red: 0.45, green: 0.78, blue: 0.93)
     case (.catppuccin, .timer), (.catppuccin, .battery):
       Color(red: 0.98, green: 0.70, blue: 0.53)
+    case (.catppuccin, .nowPlaying): Color(red: 0.65, green: 0.89, blue: 0.63)
     }
   }
 }
@@ -142,15 +157,19 @@ enum BatteryFlowRole: Sendable {
   case batteryCharge
 }
 
-enum AppThemeRole: Hashable, Sendable {
+enum AppThemeRole: CaseIterable, Hashable, Sendable {
   case interaction
   case battery
   case calendar
   case clipboard
+  case continuity
+  case nowPlaying
   case ports
+  case pulse
   case reminders
   case shelf
   case system
+  case t3Code
   case timer
 }
 

@@ -162,7 +162,7 @@ struct TimerRingView: View {
         Circle()
           .trim(from: 0, to: activity.progressNow)
           .stroke(
-            activity.finished ? Color.green : appTheme.color(for: .timer),
+            appTheme.color(for: .timer),
             style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
           )
           .rotationEffect(.degrees(-90))
@@ -183,7 +183,7 @@ struct TimerCountdownText: View {
     TimelineView(.animation(minimumInterval: 0.5, paused: !activity.isRunning)) { _ in
       Text(TimerFormat.mmss(activity.remainingNow))
         .font(.caption.weight(.semibold)).monospacedDigit()
-        .foregroundStyle(activity.finished ? Color.green : appTheme.color(for: .timer))
+        .foregroundStyle(appTheme.color(for: .timer))
         .accessibilityLabel(activity.label.map { "\($0) timer" } ?? "Timer")
         .accessibilityValue(
           activity.finished

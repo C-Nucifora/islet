@@ -186,11 +186,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   }
 
   var compactLeading: AnyView {
-    AnyView(
-      Image(systemName: "terminal.fill")
-        .foregroundStyle(compactColor)
-        .font(.caption2)
-        .accessibilityHidden(true))
+    AnyView(T3CompactLeadingView(activity: self))
   }
 
   var compactTrailing: AnyView {
@@ -201,15 +197,12 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     AnyView(T3CodeExpandedView(activity: self))
   }
 
-  var compactColor: Color {
+  func compactColor(for theme: AppTheme) -> Color {
     if agents.contains(where: { $0.phase == .needsInput || $0.phase == .needsApproval }) {
       return .orange
     }
     if agents.contains(where: { $0.phase == .failed }) { return .red }
-    if agents.contains(where: { $0.phase == .working || $0.phase == .monitoring }) {
-      return .purple
-    }
-    return .green
+    return theme.color(for: .t3Code)
   }
 
   private func restartMonitors(clearSnapshots: Bool = true) {

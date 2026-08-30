@@ -8,7 +8,7 @@ struct CompactArtworkView: View {
       if let img = activity.artwork(for: activity.primaryKey) {
         Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
       } else {
-        Image(systemName: "music.note").font(.caption).foregroundStyle(.secondary)
+        Image(systemName: "music.note").font(.caption).appThemeForeground(.nowPlaying)
       }
     }
     .frame(width: 18, height: 18)
@@ -19,6 +19,7 @@ struct CompactArtworkView: View {
 
 struct CompactBarsView: View {
   @ObservedObject var activity: NowPlayingActivity
+  @Environment(\.appTheme) private var appTheme
 
   var body: some View {
     TimelineView(
@@ -29,7 +30,7 @@ struct CompactBarsView: View {
         ForEach(0..<4) { i in
           let phase = t * 3 + Double(i) * 0.9
           Capsule()
-            .fill(.green)
+            .fill(appTheme.color(for: .nowPlaying))
             .frame(
               width: 2.5,
               height: activity.playback?.isPlaying == true
