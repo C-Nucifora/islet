@@ -293,6 +293,15 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
               "Could not remove rejected local T3 credential: \(error.localizedDescription)")
           }
         }
+      } catch let error as T3CredentialStoreError {
+        guard !Task.isCancelled else { return }
+        updateCredentialError(error, for: "local")
+        failures += 1
+        upsert(
+          T3EnvironmentSnapshot(
+            id: "local", label: "This Mac", baseURL: endpoint.baseURL.absoluteString,
+            isLocal: true, platform: nil, serverVersion: nil,
+            state: .credentialError(error.localizedDescription), agents: []))
       } catch {
         guard !Task.isCancelled else { return }
         updateCredentialError(error, for: "local")
@@ -312,7 +321,10 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     guard
       let url = URL(string: profile.baseURL),
       let endpoint = try? T3Endpoint(url, allowInsecureRemoteHTTP: true)
-    else { return }
+    else {
+      upsert(snapshot(profile, descriptor: nil, state: .offline("Invalid endpoint"), agents: []))
+      return
+    }
     var failures = 0
     let monitorKey = Self.remoteMonitorKey(profile.id)
     while !Task.isCancelled {
@@ -343,13 +355,25 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         guard !Task.isCancelled else { return }
         failures += 1
         upsert(snapshot(profile, descriptor: nil, state: .needsPairing, agents: []))
+      } catch let error as T3CredentialStoreError {
+        guard !Task.isCancelled else { return }
+        failures += 1
+        updateCredentialError(error, for: monitorKey)
+        upsert(
+          snapshot(
+            profile, descriptor: nil, state: .credentialError(error.localizedDescription),
+            agents: []))
       } catch {
         guard !Task.isCancelled else { return }
         updateCredentialError(error, for: monitorKey)
         failures += 1
+        let state: T3ConnectionState =
+          failures == 1
+          ? .offline(error.localizedDescription)
+          : .reconnecting(error.localizedDescription)
         upsert(
           snapshot(
-            profile, descriptor: nil, state: .offline(error.localizedDescription), agents: []))
+            profile, descriptor: nil, state: state, agents: []))
       }
       let delay = Self.reconnectDelay(failureCount: failures, remote: true)
       try? await Task.sleep(for: .seconds(Self.jitter(delay)))
@@ -463,6 +487,44 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   ) -> [T3EnvironmentProfile] {
     var seen: Set<String> = []
     return profiles.filter { $0.enabled && seen.insert($0.id).inserted }
+  }
+
+  /// The compact agent list is intentionally empty when no work is active, but the expanded view
+  /// must still show the configured machines that need attention. Build those rows from Defaults
+  /// rather than relying on a monitor to publish a snapshot first.
+  nonisolated static func visibleEnvironments(
+    snapshots: [T3EnvironmentSnapshot], profiles: [T3EnvironmentProfile]
+  ) -> [T3EnvironmentSnapshot] {
+    let local = snapshots.filter(\.isLocal)
+    let remotes = enabledRemoteProfiles(profiles).map { profile in
+      let id = remoteSnapshotID(environmentID: profile.id, baseURL: profile.baseURL)
+      return snapshots.first(where: { $0.id == id })
+        ?? T3EnvironmentSnapshot(
+          id: id, label: profile.label, baseURL: profile.baseURL, isLocal: false,
+          platform: nil, serverVersion: nil, state: .connecting, agents: [])
+    }
+    return (local + remotes).sorted {
+      if $0.isLocal != $1.isLocal { return $0.isLocal }
+      return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+    }
+  }
+
+  nonisolated static func environmentActions(
+    for state: T3ConnectionState, isLocal: Bool
+  ) -> [T3EnvironmentAction] {
+    var actions: [T3EnvironmentAction]
+    switch state {
+    case .needsPairing:
+      actions = [.pair]
+    case .offline, .reconnecting:
+      actions = [.retry]
+    case .credentialError:
+      actions = [.openSettings]
+    case .connecting, .connected:
+      actions = []
+    }
+    if !isLocal { actions.append(.disable) }
+    return actions
   }
 
   nonisolated static func localCredentialID(environmentID: String, baseURL: String) -> String {

@@ -32,6 +32,7 @@ struct T3CompactStatusView: View {
 
 struct T3CodeExpandedView: View {
   @ObservedObject var activity: T3CodeActivity
+  @Default(.t3RemoteEnvironments) private var profiles
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
@@ -43,7 +44,7 @@ struct T3CodeExpandedView: View {
           .font(.caption2).foregroundStyle(.secondary)
       }
 
-      if activity.agents.isEmpty {
+      if visibleEnvironments.isEmpty {
         VStack(spacing: 5) {
           Image(systemName: "checkmark.circle").font(.title3).foregroundStyle(.green)
           Text("No active agents").font(.caption)
@@ -53,7 +54,15 @@ struct T3CodeExpandedView: View {
       } else {
         ScrollView(.vertical, showsIndicators: false) {
           VStack(spacing: 7) {
-            ForEach(activity.environments.filter { !$0.agents.isEmpty }) { environment in
+            if activity.agents.isEmpty {
+              VStack(spacing: 3) {
+                Text("No active agents").font(.caption)
+                Text(connectionSummary).font(.system(size: 9)).foregroundStyle(.secondary)
+              }
+              .frame(maxWidth: .infinity)
+              .padding(.bottom, 2)
+            }
+            ForEach(visibleEnvironments) { environment in
               environmentGroup(environment)
             }
           }
@@ -65,10 +74,14 @@ struct T3CodeExpandedView: View {
   }
 
   private var connectionSummary: String {
-    let connected = activity.environments.filter { $0.state == .connected }.count
+    let connected = visibleEnvironments.filter { $0.state == .connected }.count
     return connected == 0
       ? "Open T3 Code or add a machine in Settings"
       : "Connected to \(connected) machine\(connected == 1 ? "" : "s")"
+  }
+
+  private var visibleEnvironments: [T3EnvironmentSnapshot] {
+    T3CodeActivity.visibleEnvironments(snapshots: activity.environments, profiles: profiles)
   }
 
   private func environmentGroup(_ environment: T3EnvironmentSnapshot) -> some View {
@@ -77,13 +90,66 @@ struct T3CodeExpandedView: View {
         Image(systemName: environment.isLocal ? "laptopcomputer" : "network")
         Text(environment.label).lineLimit(1)
         Spacer()
-        Circle().fill(.green).frame(width: 5, height: 5)
+        Circle().fill(connectionColor(environment.state)).frame(width: 5, height: 5)
       }
       .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
 
-      ForEach(environment.agents) { agent in
-        T3AgentRow(agent: agent)
+      if environment.agents.isEmpty {
+        HStack(spacing: 5) {
+          Text(environment.state.label).font(.caption2).foregroundStyle(
+            connectionColor(environment.state))
+          if let detail = environment.state.detail {
+            Text(detail).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+          }
+          Spacer(minLength: 0)
+          environmentActions(for: environment)
+        }
+        .padding(.vertical, 4).padding(.horizontal, 7)
+        .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.06)))
+      } else {
+        ForEach(environment.agents) { agent in
+          T3AgentRow(agent: agent)
+        }
       }
+    }
+  }
+
+  @ViewBuilder private func environmentActions(for environment: T3EnvironmentSnapshot) -> some View
+  {
+    let actions = T3CodeActivity.environmentActions(
+      for: environment.state, isLocal: environment.isLocal)
+    HStack(spacing: 5) {
+      if actions.contains(.pair) {
+        Button("Pair") { SettingsOpener.open(destination: .integrations) }
+      }
+      if actions.contains(.retry) {
+        Button("Retry") { activity.reconnect() }
+      }
+      if actions.contains(.openSettings) {
+        Button("Open settings") { SettingsOpener.open(destination: .integrations) }
+      }
+      if actions.contains(.disable), let profile = remoteProfile(for: environment) {
+        Button("Disable") { activity.setRemoteEnabled(false, environmentID: profile.id) }
+      }
+    }
+    .buttonStyle(.borderless)
+    .font(.system(size: 9, weight: .semibold))
+  }
+
+  private func remoteProfile(for environment: T3EnvironmentSnapshot) -> T3EnvironmentProfile? {
+    profiles.first {
+      environment.id
+        == T3CodeActivity.remoteSnapshotID(
+          environmentID: $0.id, baseURL: $0.baseURL)
+    }
+  }
+
+  private func connectionColor(_ state: T3ConnectionState) -> Color {
+    switch state {
+    case .connected: .green
+    case .needsPairing, .reconnecting: .orange
+    case .offline, .credentialError: .red
+    case .connecting: .secondary
     }
   }
 }
@@ -252,8 +318,8 @@ struct T3SettingsSection: View {
   private func connectionColor(_ state: T3ConnectionState?) -> Color {
     switch state {
     case .some(.connected): .green
-    case .some(.needsPairing): .orange
-    case .some(.offline): .red
+    case .some(.needsPairing), .some(.reconnecting): .orange
+    case .some(.offline), .some(.credentialError): .red
     default: .secondary
     }
   }
