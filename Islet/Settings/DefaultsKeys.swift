@@ -304,6 +304,8 @@ extension Defaults.Keys {
   /// strings so a newer policy value cannot prevent older Islet versions from restoring the
   /// policies they understand.
   static let pulseSourcePolicies = Key<[String: String]>("pulseSourcePolicies", default: [:])
+  static let pulseStaleTimeout = Key<Double>(
+    "pulseStaleTimeout", default: PulseStalenessPolicy.defaultTimeout)
   static let t3RemoteEnvironments = Key<[T3EnvironmentProfile]>(
     "t3RemoteEnvironments", default: [])
   static let timerSessionData = Key<Data?>("timerSessionData")

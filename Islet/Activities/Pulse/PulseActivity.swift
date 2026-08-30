@@ -52,7 +52,7 @@ private struct PulseCompactIcon: View {
 
   private var color: Color {
     if item?.state == .failed { return .red }
-    if item?.state == .needsAction { return .orange }
+    if item?.state == .needsAction || item?.state == .stale { return .orange }
     return appTheme.color(for: .pulse)
   }
 }
@@ -76,7 +76,7 @@ struct PulseExpandedView: View {
         Text("\(center.items.count)")
           .font(.caption.monospacedDigit())
           .foregroundStyle(.secondary)
-          .accessibilityLabel("\(center.items.count) active items")
+          .accessibilityLabel("\(center.items.count) visible Pulse items")
         Menu {
           Picker("Delivery", selection: $center.deliveryProfile) {
             ForEach(PulseDeliveryProfile.allCases) { profile in
@@ -136,6 +136,12 @@ private struct PulseItemRow: View {
             .accessibilityLabel("Progress")
             .accessibilityValue(Text(progress, format: .percent))
         }
+        if item.state == .stale {
+          Text(item.isStaleKept ? "Provider silent, kept" : "Provider stopped updating")
+            .font(.caption2)
+            .foregroundStyle(.orange)
+            .lineLimit(1)
+        }
       }
       Spacer(minLength: 4)
       if !item.actions.isEmpty {
@@ -152,6 +158,14 @@ private struct PulseItemRow: View {
         .fixedSize()
         .accessibilityLabel("Actions for \(item.title)")
         .help("Actions for \(item.title)")
+      }
+      if item.state == .stale, !item.isStaleKept {
+        Button("Keep") { center.keepStale(item.id) }
+          .buttonStyle(.plain)
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.orange)
+          .accessibilityLabel("Keep stale item \(item.title)")
+          .help("Keep \(item.title) until you dismiss it")
       }
       Button {
         center.dismiss(item.id)
@@ -171,7 +185,7 @@ private struct PulseItemRow: View {
 
   private var accent: Color {
     if item.state == .failed { return .red }
-    if item.state == .needsAction { return .orange }
+    if item.state == .needsAction || item.state == .stale { return .orange }
     return Color(isletHex: item.accentHex) ?? .cyan
   }
 
@@ -183,6 +197,7 @@ private struct PulseItemRow: View {
     case .succeeded: "succeeded"
     case .failed: "failed"
     case .cancelled: "cancelled"
+    case .stale: "stale"
     }
   }
 }
