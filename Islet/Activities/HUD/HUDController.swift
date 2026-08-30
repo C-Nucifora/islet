@@ -187,6 +187,15 @@ final class HUDController: ObservableObject {
     externalBrightnessController.cancelAll()
   }
 
+  @discardableResult
+  func dismiss() -> Bool {
+    guard hud != nil else { return false }
+    hideTask?.cancel()
+    hideTask = nil
+    hud = nil
+    return true
+  }
+
   private func tearDownTap() {
     if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: false) }
     if let runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes) }
@@ -318,6 +327,9 @@ final class HUDController: ObservableObject {
 
   private func present(_ snapshot: HUDSnapshot) {
     hud = snapshot
+    let name = snapshot.kind == .volume ? "Volume" : "Brightness"
+    let level = Int((snapshot.level * 100).rounded())
+    A11y.announce("\(name), \(level) percent")
     hideTask?.cancel()
     hideTask = Task { [weak self] in
       try? await Task.sleep(for: .milliseconds(1400))

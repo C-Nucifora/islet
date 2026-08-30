@@ -503,6 +503,10 @@ final class ScreenManager: ObservableObject {
       panel.fileURLsDropped = { urls in
         ShelfModel.shared.importDroppedURLs(urls)
       }
+      panel.keyboardCommandHandler = { [weak vm] command in
+        guard let vm else { return false }
+        return Self.handleKeyboardCommand(command, viewModel: vm)
+      }
       panel.alphaValue = 0
       panel.orderFrontRegardless()
       panel.setFrame(vm.panelFrame, display: true)
@@ -542,6 +546,70 @@ final class ScreenManager: ObservableObject {
       open(
         activityID: pendingOpenedActivity.id,
         allowingDisabledActivity: pendingOpenedActivity.allowingDisabledActivity)
+    }
+  }
+
+  private static func handleKeyboardCommand(
+    _ command: IslandKeyboardCommand, viewModel: NotchViewModel
+  ) -> Bool {
+    guard viewModel.state.isExpanded else { return false }
+    let activities = ActivityCenter.shared.expandedActivities
+    let tabIDs = [ExpandedSelectionPolicy.homeID] + activities.map(\.id)
+    let currentID = ExpandedSelectionPolicy.effectiveSelection(
+      tabIDs: tabIDs, storedSelection: viewModel.selectedActivityID,
+      shelfPresentationActive: ShelfModel.shared.isDropPresentationActive
+        || ShelfModel.shared.presentationRequest != nil,
+      primaryActivityID: ActivityCenter.shared.primaryActivity?.id)
+
+    if let selectedID = IslandKeyboardPolicy.selectedID(
+      for: command, tabIDs: tabIDs, currentID: currentID)
+    {
+      viewModel.selectActivity(selectedID)
+      A11y.announce(
+        selectedID == ExpandedSelectionPolicy.homeID
+          ? "Home selected" : "\(ActivityCatalog.name(for: selectedID)) selected")
+      return true
+    }
+
+    switch command {
+    case .primaryAction:
+      guard currentID != ExpandedSelectionPolicy.homeID,
+        let activity = activities.first(where: { $0.id == currentID })
+      else {
+        A11y.announce("Home has no primary action")
+        return true
+      }
+      let announcement = activity.accessibilityPrimaryActionName
+      guard activity.performAccessibilityPrimaryAction() else {
+        A11y.announce("\(ActivityCatalog.name(for: currentID)) has no available primary action")
+        return true
+      }
+      if let announcement { A11y.announce(announcement) }
+      return true
+    case .dismissTransient:
+      if HUDController.shared.dismiss() || SneakQueue.shared.dismissCurrent() {
+        A11y.announce("Dismissed")
+        return true
+      }
+      if RemindersProvider.shared.lastActionError != nil {
+        RemindersProvider.shared.dismissActionError()
+        A11y.announce("Dismissed")
+        return true
+      }
+      if let activity = activities.first(where: { $0.id == currentID }),
+        activity.dismissAccessibilityTransient()
+      {
+        A11y.announce("Dismissed")
+        return true
+      }
+      A11y.announce("Nothing to dismiss")
+      return true
+    case .close:
+      viewModel.apply(.clickedNotch)
+      A11y.announce("Islet closed")
+      return true
+    case .selectTab, .cycleTab:
+      return false
     }
   }
 

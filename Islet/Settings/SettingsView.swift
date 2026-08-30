@@ -2896,7 +2896,7 @@ private struct SettingsNavigationButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .background(configuration.isPressed ? Color.accentColor.opacity(0.16) : .clear)
-      .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+      .animation(Motion.gated(.easeOut(duration: 0.1)), value: configuration.isPressed)
   }
 }
 

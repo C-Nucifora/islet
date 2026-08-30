@@ -25,10 +25,18 @@ protocol NotchActivity: AnyObject {
   /// Height tier this activity's expanded view wants. Defaults to the base tier; dense tabs
   /// (power, system stats) return `Metrics.tallExpandedHeight`.
   var preferredExpandedHeight: CGFloat { get }
+  /// The action invoked by Command-Return while this activity is selected.
+  var accessibilityPrimaryActionName: String? { get }
+  @discardableResult func performAccessibilityPrimaryAction() -> Bool
+  /// Dismisses an error, completed item, or other temporary state without closing the island.
+  @discardableResult func dismissAccessibilityTransient() -> Bool
 }
 
 extension NotchActivity {
   var tabIcon: String { "app.dashed" }
   var isAvailableWhenInactive: Bool { false }
   var preferredExpandedHeight: CGFloat { Metrics.expandedSize.height }
+  var accessibilityPrimaryActionName: String? { nil }
+  func performAccessibilityPrimaryAction() -> Bool { false }
+  func dismissAccessibilityTransient() -> Bool { false }
 }

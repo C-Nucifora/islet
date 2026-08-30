@@ -38,6 +38,12 @@ enum Motion {
   static func gated(_ animation: Animation, reduceMotion: Bool) -> Animation? {
     reduceMotion ? nil : animation
   }
+
+  /// Repeating and symbol-driven effects do not follow SwiftUI's transaction animation. Views
+  /// use this policy to remove those effects completely under Reduce Motion.
+  static func allowsDecorativeMotion(reduceMotion: Bool) -> Bool {
+    !reduceMotion
+  }
 }
 
 /// Per-source event choreography. A Phase 3 `SystemEvent` names one of these and the sneak renderer

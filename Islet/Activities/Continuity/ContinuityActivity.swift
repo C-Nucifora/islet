@@ -47,4 +47,23 @@ final class ContinuityActivity: NotchActivity, ObservableObject {
   var compactLeading: AnyView { AnyView(ContinuityCompactLeading(activity: self)) }
   var compactTrailing: AnyView { AnyView(ContinuityCompactTrailing(activity: self)) }
   var expandedView: AnyView { AnyView(ContinuityExpandedView(activity: self)) }
+
+  var accessibilityPrimaryActionName: String? {
+    promoted == nil ? nil : "Opened iPhone Mirroring"
+  }
+
+  func performAccessibilityPrimaryAction() -> Bool {
+    guard promoted != nil else { return false }
+    return Self.openIPhoneMirroring()
+  }
+
+  @discardableResult
+  static func openIPhoneMirroring() -> Bool {
+    guard
+      let url = NSWorkspace.shared.urlForApplication(
+        withBundleIdentifier: "com.apple.ScreenContinuity")
+    else { return false }
+    NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+    return true
+  }
 }

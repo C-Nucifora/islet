@@ -1,3 +1,4 @@
+import AppKit
 import Defaults
 import SwiftUI
 
@@ -25,6 +26,8 @@ enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
   }
 
   var accentColor: Color { color(for: .interaction) }
+
+  private static let readableIndigo = Color(red: 0.48, green: 0.44, blue: 1)
 
   func powerFlowColor(for role: BatteryFlowRole) -> Color {
     switch (self, role) {
@@ -64,6 +67,10 @@ enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
     }
   }
 
+  func powerFlowColor(for role: BatteryFlowRole, style: BatteryGraphStyle) -> Color {
+    style == .monochrome ? .white : powerFlowColor(for: role)
+  }
+
   func color(for role: AppThemeRole) -> Color {
     switch (self, role) {
     case (.classic, .interaction): .blue
@@ -88,14 +95,15 @@ enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
     case (.ocean, .calendar), (.ocean, .system), (.ocean, .timer), (.ocean, .battery),
       (.ocean, .pulse):
       .cyan
-    case (.ocean, .clipboard): .indigo
+    case (.ocean, .clipboard): Self.readableIndigo
     case (.ocean, .ports), (.ocean, .reminders), (.ocean, .nowPlaying): .teal
 
     case (.violet, .interaction), (.violet, .clipboard), (.violet, .nowPlaying),
       (.violet, .t3Code):
       .purple
     case (.violet, .calendar), (.violet, .reminders), (.violet, .pulse): .pink
-    case (.violet, .ports), (.violet, .shelf), (.violet, .continuity): .indigo
+    case (.violet, .ports), (.violet, .shelf), (.violet, .continuity):
+      Self.readableIndigo
     case (.violet, .system), (.violet, .timer), (.violet, .battery):
       Color(red: 0.72, green: 0.48, blue: 1)
 
@@ -149,12 +157,37 @@ enum BatteryGraphStyle: String, CaseIterable, Codable, Identifiable, Sendable {
 
 extension BatteryGraphStyle: Defaults.Serializable {}
 
-enum BatteryFlowRole: Sendable {
+enum BatteryFlowRole: CaseIterable, Sendable {
   case externalPower
   case batterySupplement
   case systemLoad
   case usbOutput
   case batteryCharge
+}
+
+enum AppThemeContrast {
+  static let minimumTextRatio = 4.5
+  static let minimumGraphicalRatio = 3.0
+
+  static func ratio(foreground: Color, background: Color = .black) -> Double? {
+    guard let foreground = NSColor(foreground).usingColorSpace(.sRGB),
+      let background = NSColor(background).usingColorSpace(.sRGB)
+    else { return nil }
+    let lighter = max(relativeLuminance(foreground), relativeLuminance(background))
+    let darker = min(relativeLuminance(foreground), relativeLuminance(background))
+    return (lighter + 0.05) / (darker + 0.05)
+  }
+
+  private static func relativeLuminance(_ color: NSColor) -> Double {
+    func linear(_ component: CGFloat) -> Double {
+      let value = Double(component)
+      return value <= 0.04045
+        ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * linear(color.redComponent)
+      + 0.7152 * linear(color.greenComponent)
+      + 0.0722 * linear(color.blueComponent)
+  }
 }
 
 enum AppThemeRole: CaseIterable, Hashable, Sendable {

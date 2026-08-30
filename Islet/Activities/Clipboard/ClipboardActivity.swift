@@ -1102,6 +1102,21 @@ final class ClipboardActivity: NotchActivity, ObservableObject {
         .font(.caption.weight(.semibold)).monospacedDigit().appThemeForeground(.clipboard))
   }
   var expandedView: AnyView { AnyView(ClipboardView(model: model)) }
+
+  var accessibilityPrimaryActionName: String? {
+    model.items.first.map { "Copied \($0.preview)" }
+  }
+
+  func performAccessibilityPrimaryAction() -> Bool {
+    guard let item = model.items.first else { return false }
+    return model.copyBack(item)
+  }
+
+  func dismissAccessibilityTransient() -> Bool {
+    guard model.lastWriteError != nil else { return false }
+    model.dismissWriteError()
+    return true
+  }
 }
 
 struct ClipboardView: View {
