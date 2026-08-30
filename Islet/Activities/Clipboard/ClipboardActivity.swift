@@ -197,6 +197,43 @@ struct ClipboardPollingPolicy {
   }
 }
 
+@MainActor
+protocol ClipboardPollingTask: AnyObject {
+  func cancel()
+}
+
+@MainActor
+protocol ClipboardPollingScheduling: AnyObject {
+  func schedule(
+    after delay: TimeInterval, action: @escaping @MainActor () -> Void
+  ) -> any ClipboardPollingTask
+}
+
+@MainActor
+private final class RunLoopClipboardPollingTask: ClipboardPollingTask {
+  private var timer: Timer?
+
+  init(_ timer: Timer) { self.timer = timer }
+
+  func cancel() {
+    timer?.invalidate()
+    timer = nil
+  }
+}
+
+@MainActor
+final class RunLoopClipboardPollingScheduler: ClipboardPollingScheduling {
+  func schedule(
+    after delay: TimeInterval, action: @escaping @MainActor () -> Void
+  ) -> any ClipboardPollingTask {
+    let timer = Timer(timeInterval: delay, repeats: false) { _ in
+      Task { @MainActor in action() }
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    return RunLoopClipboardPollingTask(timer)
+  }
+}
+
 /// Session-only clipboard history: polls the pasteboard, keeps recent copies, and lets you re-copy.
 /// Off by default (it would otherwise capture everything copied, including passwords).
 @MainActor
@@ -224,13 +261,15 @@ final class ClipboardModel: ObservableObject {
   private let loginSession: () -> String?
   private var lastChange: Int
   private var ownWriteChange = -1
-  private var pollingTimer: Timer?
+  private var pollingTimer: (any ClipboardPollingTask)?
   private var cancellables: Set<AnyCancellable> = []
   private var isRunning = false
+  private let pollingPolicy: ClipboardPollingPolicy
+  private let pollingScheduler: any ClipboardPollingScheduling
+  private var pollingState = ClipboardPollingPolicy.State()
+  private var pollingGeneration: UInt64 = 0
   private var historyGeneration: UInt64 = 0
   private let pasteboardTransactions = ClipboardPasteboardTransaction.Pipeline()
-  private let pollingPolicy: ClipboardPollingPolicy
-  private var pollingState = ClipboardPollingPolicy.State()
 
   init(
     pasteboard: NSPasteboard = .general,
@@ -238,7 +277,8 @@ final class ClipboardModel: ObservableObject {
     contextMonitor: (any ClipboardContextMonitoring)? = nil,
     now: @escaping () -> Date = Date.init,
     loginSession: @escaping () -> String? = ClipboardLoginSession.currentIdentifier,
-    pollingPolicy: ClipboardPollingPolicy = ClipboardPollingPolicy()
+    pollingPolicy: ClipboardPollingPolicy = ClipboardPollingPolicy(),
+    pollingScheduler: (any ClipboardPollingScheduling)? = nil
   ) {
     self.pasteboard = pasteboard
     self.privacyStore = privacyStore ?? DefaultsClipboardPrivacyStore()
@@ -246,6 +286,7 @@ final class ClipboardModel: ObservableObject {
     self.now = now
     self.loginSession = loginSession
     self.pollingPolicy = pollingPolicy
+    self.pollingScheduler = pollingScheduler ?? RunLoopClipboardPollingScheduler()
     self.lastChange = pasteboard.changeCount
     self.privacyStore.onChange = { [weak self] in self?.privacyConfigurationDidChange() }
     self.contextMonitor.onChange = { [weak self] context in self?.contextDidChange(context) }
@@ -304,7 +345,8 @@ final class ClipboardModel: ObservableObject {
     if active {
       // The pasteboard may have changed while Islet was inactive. Check once on return, then let
       // the idle policy choose the next wake-up.
-      poll()
+      cancelPollingTimer()
+      pollNow()
     } else {
       // Clipboard History is useful for copies made in other apps. Keep one slower background
       // wake-up instead of treating an inactive menu-bar app as fully disabled.
@@ -315,20 +357,25 @@ final class ClipboardModel: ObservableObject {
   private func scheduleNextPoll() {
     cancelPollingTimer()
     guard let delay = pollingPolicy.nextDelay(for: pollingState) else { return }
-    let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
-      Task { @MainActor in self?.poll() }
+    let generation = pollingGeneration
+    pollingTimer = pollingScheduler.schedule(after: delay) { [weak self] in
+      self?.poll(generation: generation)
     }
-    pollingTimer = timer
-    RunLoop.main.add(timer, forMode: .common)
   }
 
   private func cancelPollingTimer() {
-    pollingTimer?.invalidate()
+    pollingGeneration &+= 1
+    pollingTimer?.cancel()
     pollingTimer = nil
   }
 
-  func pollNow() {
+  private func poll(generation: UInt64) {
+    guard generation == pollingGeneration else { return }
     pollingTimer = nil
+    pollNow()
+  }
+
+  func pollNow() {
     guard pollingPolicy.nextDelay(for: pollingState) != nil else { return }
     refreshPrivacyState()
     guard !contextMonitor.refreshApplication() else { return }
@@ -414,6 +461,8 @@ final class ClipboardModel: ObservableObject {
     invalidatePendingCopyBacks()
     items = []
     lastWriteError = nil
+    lastChange = pasteboard.changeCount
+    scheduleNextPoll()
   }
   func dismissWriteError() { lastWriteError = nil }
 
