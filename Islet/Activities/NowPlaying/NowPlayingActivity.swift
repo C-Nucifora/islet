@@ -525,4 +525,15 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   var compactLeading: AnyView { AnyView(CompactArtworkView(activity: self)) }
   var compactTrailing: AnyView { AnyView(CompactBarsView(activity: self)) }
   var expandedView: AnyView { AnyView(ExpandedPlayerView(activity: self)) }
+
+  var accessibilityPrimaryActionName: String? {
+    guard let playback, !playback.isAdvertisement else { return nil }
+    return playback.isPlaying ? "Playback paused" : "Playback started"
+  }
+
+  func performAccessibilityPrimaryAction() -> Bool {
+    guard let playback, !playback.isAdvertisement else { return false }
+    MediaRemoteCommands.shared.togglePlayPause()
+    return true
+  }
 }

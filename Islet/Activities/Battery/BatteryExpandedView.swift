@@ -367,8 +367,7 @@ struct BatteryExpandedView: View {
     }
 
     private func color(for item: FlowItem) -> Color {
-      guard graphStyle == .coloured else { return .white }
-      return appTheme.powerFlowColor(for: item.role)
+      appTheme.powerFlowColor(for: item.role, style: graphStyle)
     }
 
     private func segments(

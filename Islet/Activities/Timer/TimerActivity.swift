@@ -355,6 +355,28 @@ final class TimerActivity: NotchActivity, ObservableObject {
   private static let notificationFallbackMessage =
     "Timer notifications are off. Islet will still play its completion sound and show Done in the island."
 
+  var accessibilityPrimaryActionName: String? {
+    if finished { return lastDuration == nil ? nil : "Timer repeated" }
+    if isRunning { return "Timer paused" }
+    if isPaused { return "Timer resumed" }
+    return nil
+  }
+
+  func performAccessibilityPrimaryAction() -> Bool {
+    if finished, lastDuration != nil {
+      restartLastTimer()
+      return true
+    }
+    guard isRunning || isPaused else { return false }
+    togglePause()
+    return true
+  }
+
+  func dismissAccessibilityTransient() -> Bool {
+    guard finished else { return false }
+    cancel()
+    return true
+  }
 }
 
 /// A thin progress ring driven live off the activity, ticking only while running.
@@ -429,6 +451,13 @@ struct TimerExpandedView: View {
           }
         }
         .frame(width: 96, height: 96)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(activity.label.map { "\($0) timer" } ?? "Timer")
+        .accessibilityValue(
+          activity.finished
+            ? "Done"
+            : "\(TimerFormat.accessible(activity.remainingNow)) remaining\(activity.isPaused ? ", paused" : "")"
+        )
       }
 
       VStack(spacing: 10) {

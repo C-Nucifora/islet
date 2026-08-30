@@ -8,6 +8,7 @@ final class NotchPanel: NSPanel, NSDraggingDestination {
   var fileDragTargetChanged: ((Bool) -> Void)?
   var fileURLsDropped: (([URL]) -> Bool)?
   private var isFileDragTargeted = false
+  var keyboardCommandHandler: ((IslandKeyboardCommand) -> Bool)?
 
   init(frame: CGRect) {
     super.init(
@@ -28,8 +29,21 @@ final class NotchPanel: NSPanel, NSDraggingDestination {
     registerForDraggedTypes([.fileURL])
   }
 
-  override var canBecomeKey: Bool { false }
+  // A nonactivating panel can accept focus without bringing the accessory app to the foreground.
+  // The panel remains mouse-transparent while closed, so it only joins keyboard navigation after
+  // the user or VoiceOver enters the expanded island.
+  override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { false }
+
+  override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    if dispatchKeyboardCommand(event) { return true }
+    return super.performKeyEquivalent(with: event)
+  }
+
+  override func keyDown(with event: NSEvent) {
+    if dispatchKeyboardCommand(event) { return }
+    super.keyDown(with: event)
+  }
 
   /// AppKit is otherwise free to adjust the rect handed to `setFrame` — to keep a title bar on
   /// screen, to respect the menu bar, to fit a "usable" area. The island is positioned to the pixel
@@ -104,5 +118,20 @@ final class NotchPanel: NSPanel, NSDraggingDestination {
     guard targeted != isFileDragTargeted else { return }
     isFileDragTargeted = targeted
     fileDragTargetChanged?(targeted)
+  }
+
+  private func dispatchKeyboardCommand(_ event: NSEvent) -> Bool {
+    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    var mappedModifiers: IslandKeyboardModifiers = []
+    if modifiers.contains(.command) { mappedModifiers.insert(.command) }
+    if modifiers.contains(.control) { mappedModifiers.insert(.control) }
+    if modifiers.contains(.option) { mappedModifiers.insert(.option) }
+    if modifiers.contains(.shift) { mappedModifiers.insert(.shift) }
+    let isEditingText = firstResponder is NSTextView || firstResponder is NSTextField
+    let stroke = IslandKeyStroke(
+      key: event.charactersIgnoringModifiers ?? "", modifiers: mappedModifiers,
+      isEditingText: isEditingText)
+    guard let command = IslandKeyboardPolicy.command(for: stroke) else { return false }
+    return keyboardCommandHandler?(command) ?? false
   }
 }

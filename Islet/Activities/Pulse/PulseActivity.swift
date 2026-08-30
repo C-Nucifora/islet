@@ -37,6 +37,12 @@ final class PulseActivity: NotchActivity, ObservableObject {
   }
 
   var expandedView: AnyView { AnyView(PulseExpandedView(center: center)) }
+
+  func dismissAccessibilityTransient() -> Bool {
+    guard let item = center.primary else { return false }
+    center.dismiss(item.id)
+    return true
+  }
 }
 
 private struct PulseCompactIcon: View {
@@ -127,7 +133,7 @@ private struct PulseItemRow: View {
       Image(systemName: item.symbol)
         .frame(width: 18)
         .foregroundStyle(accent)
-        .accessibilityLabel("\(item.source), \(stateLabel)")
+        .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         Text(item.title).font(.caption.weight(.semibold)).lineLimit(1)
         Text("\(item.source) · \(item.providerIdentifier)")
@@ -147,6 +153,10 @@ private struct PulseItemRow: View {
             .font(.caption2)
             .foregroundStyle(.orange)
             .lineLimit(1)
+        } else if item.state != .active, item.state != .progress {
+          Label(stateLabel.capitalized, systemImage: stateSymbol)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(accent)
         }
       }
       Spacer(minLength: 4)
@@ -197,6 +207,11 @@ private struct PulseItemRow: View {
     .padding(.horizontal, 8)
     .padding(.vertical, 6)
     .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(
+      ActivityAccessibilityText.pulseItem(
+        source: item.source, title: item.title, state: stateLabel, subtitle: item.subtitle)
+    )
     .confirmationDialog(
       "Open Pulse web destination?",
       isPresented: Binding(
@@ -261,6 +276,18 @@ private struct PulseItemRow: View {
     case .failed: "failed"
     case .cancelled: "cancelled"
     case .stale: "stale"
+    }
+  }
+
+  private var stateSymbol: String {
+    switch item.state {
+    case .active: "circle.fill"
+    case .progress: "clock"
+    case .needsAction: "exclamationmark.circle.fill"
+    case .succeeded: "checkmark.circle.fill"
+    case .failed: "xmark.octagon.fill"
+    case .cancelled: "xmark.circle.fill"
+    case .stale: "clock.badge.exclamationmark.fill"
     }
   }
 }

@@ -71,6 +71,22 @@ final class ShelfActivity: NotchActivity, ObservableObject {
 
   var shelfView: ShelfView { ShelfView(model: model, airDrop: airDrop) }
   var expandedView: AnyView { AnyView(shelfView) }
+
+  var accessibilityPrimaryActionName: String? {
+    model.items.first.map { "Opened \($0.name)" }
+  }
+
+  func performAccessibilityPrimaryAction() -> Bool {
+    guard let item = model.items.first else { return false }
+    model.open(item)
+    return true
+  }
+
+  func dismissAccessibilityTransient() -> Bool {
+    guard model.lastError != nil else { return false }
+    model.dismissError()
+    return true
+  }
 }
 
 struct ShelfView: View {
@@ -234,6 +250,9 @@ struct ShelfView: View {
             .foregroundStyle(.secondary)
           }
           .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel("Empty Shelf drop area")
+          .accessibilityHint("Drag files to the island to add them")
       } else {
         ScrollView(.horizontal, showsIndicators: false) {
           LazyHStack(spacing: 10) {

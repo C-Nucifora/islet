@@ -207,6 +207,13 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     return .available
   }
 
+  var accessibilityPrimaryActionName: String? { "T3 Code reconnecting" }
+
+  func performAccessibilityPrimaryAction() -> Bool {
+    reconnect()
+    return true
+  }
+
   func addRemote(pairingLink: String, allowInsecureHTTP: Bool = false) async throws {
     let target = try T3PairingTarget.parse(
       pairingLink, allowInsecureRemoteHTTP: allowInsecureHTTP)

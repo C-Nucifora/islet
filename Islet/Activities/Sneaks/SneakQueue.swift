@@ -21,6 +21,13 @@ final class SneakQueue: ObservableObject {
     drainIfNeeded()
   }
 
+  @discardableResult
+  func dismissCurrent() -> Bool {
+    guard current != nil else { return false }
+    withAnimation(Motion.gated(Motion.compact)) { current = nil }
+    return true
+  }
+
   private func drainIfNeeded() {
     guard drainTask == nil else { return }
     drainTask = Task { [weak self] in
