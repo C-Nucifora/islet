@@ -14,6 +14,7 @@ enum SettingsDestination: String, Sendable {
 
 extension Notification.Name {
   static let isletSettingsDestination = Notification.Name("IsletSettingsDestination")
+  static let isletSettingsPage = Notification.Name("IsletSettingsPage")
 }
 
 /// Opens Islet's settings in an AppKit-managed window. This is reliable from anywhere (the notch
@@ -33,7 +34,21 @@ enum SettingsOpener {
       }
       return
     }
-    let hosting = NSHostingController(rootView: SettingsView(destination: destination ?? .overview))
+    createWindow(rootView: SettingsView(destination: destination ?? .overview))
+  }
+
+  static func open(page: SettingsDetailPage) {
+    NSApp.activate(ignoringOtherApps: true)
+    if let window {
+      window.makeKeyAndOrderFront(nil)
+      NotificationCenter.default.post(name: .isletSettingsPage, object: page.rawValue)
+      return
+    }
+    createWindow(rootView: SettingsView(page: page))
+  }
+
+  private static func createWindow(rootView: SettingsView) {
+    let hosting = NSHostingController(rootView: rootView)
     let win = NSWindow(contentViewController: hosting)
     win.title = "Settings"
     win.styleMask = [.titled, .closable, .resizable]
