@@ -180,22 +180,27 @@ actor T3ConnectCredentialStore {
     guard !signOutInProgress else { throw T3ConnectCredentialStoreError.staleOperation }
     signOutInProgress = true
     generation &+= 1
-    oauthCache = .loaded(nil)
-    proofKeyCache = .loaded(nil)
 
     let store = store
+    var firstError: (any Error)?
     do {
       try await withStoreLock(.oauth) {
         try await store.delete(service: Self.service, account: Self.oauthAccount)
       }
+      oauthCache = .loaded(nil)
+    } catch {
+      firstError = error
+    }
+    do {
       try await withStoreLock(.proofKey) {
         try await store.delete(service: Self.service, account: Self.dpopKeyAccount)
       }
-      finishSignOut()
+      proofKeyCache = .loaded(nil)
     } catch {
-      finishSignOut()
-      throw error
+      if firstError == nil { firstError = error }
     }
+    finishSignOut()
+    if let firstError { throw firstError }
   }
 
   private func waitForSignOutCompletion() async {

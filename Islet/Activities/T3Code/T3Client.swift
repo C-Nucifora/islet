@@ -239,7 +239,7 @@ struct T3Client: Sendable {
   init(endpoint: T3Endpoint, token: String?, session: URLSession? = nil) {
     self.endpoint = endpoint
     authorization = token.map(T3Authorization.bearer) ?? .none
-    self.session = session
+    self.session = session ?? T3HTTPTransport.shared.session
     injectedTransport = nil
   }
 
@@ -250,7 +250,7 @@ struct T3Client: Sendable {
   ) {
     self.endpoint = endpoint
     self.authorization = authorization
-    self.session = session
+    self.session = session ?? T3HTTPTransport.shared.session
     injectedTransport = nil
   }
 

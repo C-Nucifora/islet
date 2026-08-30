@@ -47,12 +47,15 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
   private(set) var boundPort: UInt16?
 
   private let timeout: Duration
+  private let waitForHeaderDeadline: @Sendable () async -> Void
+  private let onHeaderDeadlineExpired: @Sendable () -> Void
   private let responseCompletionGate: @Sendable () async -> Void
   private let onResponseCompletionHandled: @Sendable () -> Void
   private let onWaitForCallbackEntered: @Sendable () -> Void
   private let queue = DispatchQueue(label: "dev.islet.t3-oauth-callback", qos: .userInitiated)
   private var listener: NWListener?
   private var connections: [ObjectIdentifier: NWConnection] = [:]
+  private var headerDeadlineTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
   private var startContinuation: CheckedContinuation<Void, any Error>?
   private var callbackContinuation: CheckedContinuation<T3OAuthCallbackResult, any Error>?
   private var timeoutTask: Task<Void, Never>?
@@ -68,12 +71,18 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
 
   init(
     port: UInt16, timeout: Duration,
+    waitForHeaderDeadline: @escaping @Sendable () async -> Void = {
+      try? await Task.sleep(for: .seconds(5))
+    },
+    onHeaderDeadlineExpired: @escaping @Sendable () -> Void = {},
     responseCompletionGate: @escaping @Sendable () async -> Void = {},
     onResponseCompletionHandled: @escaping @Sendable () -> Void = {},
     onWaitForCallbackEntered: @escaping @Sendable () -> Void = {}
   ) {
     configuredPort = port
     self.timeout = timeout
+    self.waitForHeaderDeadline = waitForHeaderDeadline
+    self.onHeaderDeadlineExpired = onHeaderDeadlineExpired
     self.responseCompletionGate = responseCompletionGate
     self.onResponseCompletionHandled = onResponseCompletionHandled
     self.onWaitForCallbackEntered = onWaitForCallbackEntered
@@ -198,6 +207,11 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
     }
     let id = ObjectIdentifier(connection)
     connections[id] = connection
+    headerDeadlineTasks[id] = Task { [weak self, weak connection, waitForHeaderDeadline] in
+      await waitForHeaderDeadline()
+      guard !Task.isCancelled, let self, let connection else { return }
+      await self.expireHeader(on: connection, id: id)
+    }
     connection.stateUpdateHandler = { [weak self, weak connection] state in
       guard let self, let connection else { return }
       Task { await self.handleConnectionState(state, connection: connection, id: id) }
@@ -214,18 +228,17 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
       guard let boundPort, let localEndpoint = connection.currentPath?.localEndpoint,
         Self.isIPv4Loopback(localEndpoint, port: boundPort)
       else {
-        connection.cancel()
-        connections[id] = nil
+        dropConnection(connection, id: id)
         return
       }
       receive(on: connection, id: id, buffer: Data())
     case .failed, .cancelled:
+      headerDeadlineTasks.removeValue(forKey: id)?.cancel()
       connections[id] = nil
     case .setup, .preparing, .waiting:
       break
     @unknown default:
-      connection.cancel()
-      connections[id] = nil
+      dropConnection(connection, id: id)
     }
   }
 
@@ -310,6 +323,7 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
     _ response: ResponseKind, on connection: NWConnection, id: ObjectIdentifier,
     result: T3OAuthCallbackResult?
   ) {
+    headerDeadlineTasks.removeValue(forKey: id)?.cancel()
     let capturedGeneration = generation
     connection.send(
       content: response.data, contentContext: .finalMessage, isComplete: true,
@@ -345,9 +359,24 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
     activeListener?.newConnectionHandler = nil
     activeListener?.cancel()
     for (id, connection) in connections where id != preservedID {
+      headerDeadlineTasks.removeValue(forKey: id)?.cancel()
       connection.cancel()
       connections[id] = nil
     }
+  }
+
+  private func expireHeader(on connection: NWConnection, id: ObjectIdentifier) {
+    guard connections[id] === connection, !completing else { return }
+    headerDeadlineTasks[id] = nil
+    connections[id] = nil
+    connection.cancel()
+    onHeaderDeadlineExpired()
+  }
+
+  private func dropConnection(_ connection: NWConnection, id: ObjectIdentifier) {
+    headerDeadlineTasks.removeValue(forKey: id)?.cancel()
+    connections[id] = nil
+    connection.cancel()
   }
 
   private func finish(returning result: T3OAuthCallbackResult) {
@@ -388,6 +417,8 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
     activeListener?.stateUpdateHandler = nil
     activeListener?.newConnectionHandler = nil
     activeListener?.cancel()
+    for task in headerDeadlineTasks.values { task.cancel() }
+    headerDeadlineTasks.removeAll()
     for connection in connections.values { connection.cancel() }
     connections.removeAll()
   }

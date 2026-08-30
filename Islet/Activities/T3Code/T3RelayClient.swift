@@ -135,7 +135,7 @@ actor T3RelayClient {
 
     if let pending = environmentTasks[key] {
       onEnvironmentTaskReused()
-      let authorization = try await pending.task.value
+      let authorization = try await waitForEnvironmentTask(pending, key: key)
       try Task.checkCancellation()
       try requireCurrent(
         capturedGeneration, selector: selector, invalidation: invalidation)
@@ -153,9 +153,10 @@ actor T3RelayClient {
         selector: selector,
         invalidation: invalidation)
     }
-    environmentTasks[key] = PendingEnvironmentTask(id: taskID, task: task)
+    environmentTasks[key] = PendingEnvironmentTask(id: taskID, task: task, waiterIDs: [])
     do {
-      let authorization = try await task.value
+      let authorization = try await waitForEnvironmentTask(
+        PendingEnvironmentTask(id: taskID, task: task, waiterIDs: []), key: key)
       try Task.checkCancellation()
       try requireCurrent(
         capturedGeneration, selector: selector, invalidation: invalidation)
@@ -165,7 +166,7 @@ actor T3RelayClient {
       clearEnvironmentTask(key: key, id: taskID)
       return authorization
     } catch {
-      clearEnvironmentTask(key: key, id: taskID)
+      if !Task.isCancelled { clearEnvironmentTask(key: key, id: taskID) }
       throw error
     }
   }
@@ -284,7 +285,7 @@ actor T3RelayClient {
     relayCache.removeValue(forKey: key)
     if let pending = relayTasks[key] {
       onRelayTaskReused()
-      let token = try await pending.task.value
+      let token = try await waitForRelayTask(pending, key: key)
       try Task.checkCancellation()
       guard capturedGeneration == generation else {
         throw T3RelayClientError.staleOperation
@@ -297,9 +298,10 @@ actor T3RelayClient {
       try await mintRelayToken(
         accountToken: accountToken, capturedGeneration: capturedGeneration)
     }
-    relayTasks[key] = PendingRelayTask(id: taskID, task: task)
+    relayTasks[key] = PendingRelayTask(id: taskID, task: task, waiterIDs: [])
     do {
-      let token = try await task.value
+      let token = try await waitForRelayTask(
+        PendingRelayTask(id: taskID, task: task, waiterIDs: []), key: key)
       try Task.checkCancellation()
       guard capturedGeneration == generation else {
         throw T3RelayClientError.staleOperation
@@ -308,7 +310,7 @@ actor T3RelayClient {
       clearRelayTask(key: key, id: taskID)
       return token
     } catch {
-      clearRelayTask(key: key, id: taskID)
+      if !Task.isCancelled { clearRelayTask(key: key, id: taskID) }
       throw error
     }
   }
@@ -445,6 +447,83 @@ actor T3RelayClient {
     if environmentTasks[key]?.id == id { environmentTasks.removeValue(forKey: key) }
   }
 
+  private func waitForRelayTask(
+    _ pending: PendingRelayTask, key: RelayCacheKey
+  ) async throws -> RelayToken {
+    let waiterID = UUID()
+    guard relayTasks[key]?.id == pending.id else { throw T3RelayClientError.staleOperation }
+    relayTasks[key]?.waiterIDs.insert(waiterID)
+    let waiter = T3RelayTaskWaiter<RelayToken>()
+    Task { [self] in
+      let result = await pending.task.result
+      waiter.resolve(with: result)
+      releaseRelayWaiter(key: key, taskID: pending.id, waiterID: waiterID, cancelIfUnused: false)
+    }
+    return try await withTaskCancellationHandler {
+      try await waiter.value()
+    } onCancel: {
+      waiter.resolve(with: .failure(CancellationError()))
+      Task {
+        await self.releaseRelayWaiter(
+          key: key, taskID: pending.id, waiterID: waiterID, cancelIfUnused: true)
+      }
+    }
+  }
+
+  private func waitForEnvironmentTask(
+    _ pending: PendingEnvironmentTask, key: EnvironmentCacheKey
+  ) async throws -> T3ConnectEnvironmentAuthorization {
+    let waiterID = UUID()
+    guard environmentTasks[key]?.id == pending.id else {
+      throw T3RelayClientError.staleOperation
+    }
+    environmentTasks[key]?.waiterIDs.insert(waiterID)
+    let waiter = T3RelayTaskWaiter<T3ConnectEnvironmentAuthorization>()
+    Task { [self] in
+      let result = await pending.task.result
+      waiter.resolve(with: result)
+      releaseEnvironmentWaiter(
+        key: key, taskID: pending.id, waiterID: waiterID, cancelIfUnused: false)
+    }
+    return try await withTaskCancellationHandler {
+      try await waiter.value()
+    } onCancel: {
+      waiter.resolve(with: .failure(CancellationError()))
+      Task {
+        await self.releaseEnvironmentWaiter(
+          key: key, taskID: pending.id, waiterID: waiterID, cancelIfUnused: true)
+      }
+    }
+  }
+
+  private func releaseRelayWaiter(
+    key: RelayCacheKey, taskID: UUID, waiterID: UUID, cancelIfUnused: Bool
+  ) {
+    guard var pending = relayTasks[key], pending.id == taskID,
+      pending.waiterIDs.remove(waiterID) != nil
+    else { return }
+    if cancelIfUnused, pending.waiterIDs.isEmpty {
+      relayTasks.removeValue(forKey: key)
+      pending.task.cancel()
+    } else {
+      relayTasks[key] = pending
+    }
+  }
+
+  private func releaseEnvironmentWaiter(
+    key: EnvironmentCacheKey, taskID: UUID, waiterID: UUID, cancelIfUnused: Bool
+  ) {
+    guard var pending = environmentTasks[key], pending.id == taskID,
+      pending.waiterIDs.remove(waiterID) != nil
+    else { return }
+    if cancelIfUnused, pending.waiterIDs.isEmpty {
+      environmentTasks.removeValue(forKey: key)
+      pending.task.cancel()
+    } else {
+      environmentTasks[key] = pending
+    }
+  }
+
   // MARK: Validation and encoding
 
   private nonisolated static func validate(
@@ -468,17 +547,21 @@ actor T3RelayClient {
 
   private nonisolated static func accepts(_ state: T3EnvironmentAuthState) -> Bool {
     !state.authenticated
-      && boundedString(state.auth.policy) != nil
-      && boundedString(state.auth.sessionCookieName) != nil
-      && boundedStrings(state.auth.bootstrapMethods, maximumCount: maximumAuthMethods)
-      && boundedStrings(state.auth.sessionMethods, maximumCount: maximumAuthMethods)
+      && boundedWireString(state.auth.policy)
+      && boundedWireString(state.auth.sessionCookieName)
+      && boundedWireStrings(state.auth.bootstrapMethods, maximumCount: maximumAuthMethods)
+      && boundedWireStrings(state.auth.sessionMethods, maximumCount: maximumAuthMethods)
       && state.auth.sessionMethods.contains("dpop-access-token")
   }
 
-  private nonisolated static func boundedStrings(
+  private nonisolated static func boundedWireStrings(
     _ strings: [String], maximumCount: Int
   ) -> Bool {
-    strings.count <= maximumCount && strings.allSatisfy { boundedString($0) != nil }
+    strings.count <= maximumCount && strings.allSatisfy(boundedWireString)
+  }
+
+  private nonisolated static func boundedWireString(_ value: String) -> Bool {
+    value.utf8.count <= maximumStringBytes
   }
 
   private nonisolated static func boundedString(
@@ -750,10 +833,44 @@ actor T3RelayClient {
   private struct PendingRelayTask: Sendable {
     let id: UUID
     let task: Task<RelayToken, any Error>
+    var waiterIDs: Set<UUID>
   }
 
   private struct PendingEnvironmentTask: Sendable {
     let id: UUID
     let task: Task<T3ConnectEnvironmentAuthorization, any Error>
+    var waiterIDs: Set<UUID>
+  }
+}
+
+private final class T3RelayTaskWaiter<Value: Sendable>: @unchecked Sendable {
+  private let lock = NSLock()
+  private var continuation: CheckedContinuation<Value, any Error>?
+  private var result: Result<Value, any Error>?
+
+  func value() async throws -> Value {
+    try await withCheckedThrowingContinuation { continuation in
+      lock.lock()
+      if let result {
+        lock.unlock()
+        continuation.resume(with: result)
+      } else {
+        self.continuation = continuation
+        lock.unlock()
+      }
+    }
+  }
+
+  func resolve(with result: Result<Value, any Error>) {
+    lock.lock()
+    guard self.result == nil else {
+      lock.unlock()
+      return
+    }
+    self.result = result
+    let continuation = continuation
+    self.continuation = nil
+    lock.unlock()
+    continuation?.resume(with: result)
   }
 }

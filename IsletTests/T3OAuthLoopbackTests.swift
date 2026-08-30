@@ -282,6 +282,57 @@ final class T3OAuthLoopbackTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(result, .authorizationCode("right"))
   }
 
+  func testIdleConnectionExpiresBeforeValidBrowserCallback() async throws {
+    let deadlineGate = T3FirstHeaderDeadlineGate()
+    let deadlineExpired = T3LoopbackSignal()
+    let fixture = try await LoopbackFixture(
+      waitForHeaderDeadline: { await deadlineGate.wait() },
+      onHeaderDeadlineExpired: { deadlineExpired.signal() })
+    defer { Task { await fixture.listener.cancel() } }
+    let resultTask = Task { try await fixture.listener.waitForCallback() }
+    let idleConnection = try await openIdleConnection(port: fixture.port)
+    defer { idleConnection.close() }
+
+    await deadlineGate.waitUntilSuspended()
+    await deadlineGate.resume()
+    await deadlineExpired.wait()
+    let response = try await send(
+      "GET /callback?state=expected-state&code=right HTTP/1.1\r\n"
+        + "Host: 127.0.0.1\r\n\r\n",
+      port: fixture.port)
+    guard response.hasPrefix("HTTP/1.1 200") else {
+      resultTask.cancel()
+      _ = try? await resultTask.value
+      XCTFail("The idle connection blocked the browser callback")
+      return
+    }
+
+    let result = try await resultTask.value
+    XCTAssertEqual(result, .authorizationCode("right"))
+  }
+
+  private func openIdleConnection(port: UInt16) async throws -> T3IdleLoopbackConnection {
+    try await Task.detached {
+      let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+      guard descriptor >= 0 else { throw POSIXError(.ENETDOWN) }
+      var address = sockaddr_in()
+      address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+      address.sin_family = sa_family_t(AF_INET)
+      address.sin_port = port.bigEndian
+      address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+      let connectResult = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+          Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+      }
+      guard connectResult == 0 else {
+        close(descriptor)
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .ECONNREFUSED)
+      }
+      return T3IdleLoopbackConnection(descriptor: descriptor)
+    }.value
+  }
+
   private func send(_ request: String, port: UInt16) async throws -> String {
     try await Task.detached {
       let descriptor = socket(AF_INET, SOCK_STREAM, 0)
@@ -332,17 +383,42 @@ final class T3OAuthLoopbackTests: XCTestCase, @unchecked Sendable {
   }
 }
 
+private final class T3IdleLoopbackConnection: @unchecked Sendable {
+  private let lock = NSLock()
+  private var descriptor: Int32?
+
+  init(descriptor: Int32) {
+    self.descriptor = descriptor
+  }
+
+  func close() {
+    lock.lock()
+    let descriptor = descriptor
+    self.descriptor = nil
+    lock.unlock()
+    if let descriptor { Darwin.close(descriptor) }
+  }
+
+  deinit { close() }
+}
+
 private struct LoopbackFixture {
   let listener: T3OAuthLoopbackListener
   let port: UInt16
 
   init(
+    waitForHeaderDeadline: @escaping @Sendable () async -> Void = {
+      try? await Task.sleep(for: .seconds(5))
+    },
+    onHeaderDeadlineExpired: @escaping @Sendable () -> Void = {},
     responseCompletionGate: @escaping @Sendable () async -> Void = {},
     onResponseCompletionHandled: @escaping @Sendable () -> Void = {},
     onWaitForCallbackEntered: @escaping @Sendable () -> Void = {}
   ) async throws {
     let listener = T3OAuthLoopbackListener(
       port: 0, timeout: .seconds(2),
+      waitForHeaderDeadline: waitForHeaderDeadline,
+      onHeaderDeadlineExpired: onHeaderDeadlineExpired,
       responseCompletionGate: responseCompletionGate,
       onResponseCompletionHandled: onResponseCompletionHandled,
       onWaitForCallbackEntered: onWaitForCallbackEntered)
@@ -375,6 +451,35 @@ private actor T3LoopbackGate {
     await withCheckedContinuation { continuation in
       suspendedWaiter = continuation
     }
+  }
+
+  func resume() {
+    resumeContinuation?.resume()
+    resumeContinuation = nil
+  }
+}
+
+private actor T3FirstHeaderDeadlineGate {
+  private var isFirstWait = true
+  private var suspended = false
+  private var suspendedWaiter: CheckedContinuation<Void, Never>?
+  private var resumeContinuation: CheckedContinuation<Void, Never>?
+
+  func wait() async {
+    guard isFirstWait else {
+      try? await Task.sleep(for: .seconds(5))
+      return
+    }
+    isFirstWait = false
+    suspended = true
+    suspendedWaiter?.resume()
+    suspendedWaiter = nil
+    await withCheckedContinuation { resumeContinuation = $0 }
+  }
+
+  func waitUntilSuspended() async {
+    if suspended { return }
+    await withCheckedContinuation { suspendedWaiter = $0 }
   }
 
   func resume() {

@@ -486,6 +486,24 @@ final class T3RelayClientTests: XCTestCase {
     }
   }
 
+  func testAuthPreflightIgnoresBoundedAncillaryAuthValues() async throws {
+    let recorder = T3RelayHTTPRecorder(responses: [
+      .relayToken(), .connect(), .descriptor(),
+      .json(
+        status: 200,
+        #"{"authenticated":false,"auth":{"policy":"","bootstrapMethods":[""],"sessionMethods":["dpop-access-token"],"sessionCookieName":""}}"#
+      ),
+      .environmentToken(),
+    ])
+    let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+
+    let authorization = try await client.authorize(
+      environment: Self.environment(), accountToken: "account", grantID: grantID)
+
+    XCTAssertEqual(authorization.descriptor.environmentId, "env-one")
+    XCTAssertEqual(recorder.requests().last?.url?.path, "/oauth/token")
+  }
+
   func testConnectResponseMustMatchIdentityAndContainSecureManagedEndpoints() async throws {
     let invalidResponses = [
       T3RelayHTTPResponse.connect(environmentID: "attacker"),
@@ -861,6 +879,141 @@ final class T3RelayClientTests: XCTestCase {
     recorder.resumeAll()
     _ = try? await first.value
     _ = try? await second.value
+  }
+
+  func testCancelingOnlyAuthorizationWaiterReturnsAndStopsSharedMint() async throws {
+    let waiterReturned = expectation(description: "canceled waiter returned")
+    let mintStopped = expectation(description: "shared mint stopped")
+    let recorder = T3RelayHTTPRecorder(
+      responses: Self.authorizationResponses(), suspendedResponseIndices: [1],
+      onStop: { mintStopped.fulfill() })
+    let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+    let currentGrantID = grantID
+    let caller = Task {
+      do {
+        _ = try await client.authorize(
+          environment: Self.environment(), accountToken: "account", grantID: currentGrantID)
+        XCTFail("Expected cancellation")
+      } catch is CancellationError {
+      } catch {
+        XCTFail("Expected cancellation, got \(error)")
+      }
+      waiterReturned.fulfill()
+    }
+    await recorder.waitForRequestCount(1)
+
+    caller.cancel()
+    await fulfillment(of: [waiterReturned, mintStopped], timeout: 0.5)
+    recorder.resumeAll()
+    await caller.value
+    XCTAssertEqual(recorder.requests().count, 1)
+  }
+
+  func testCancelingOneAuthorizationWaiterKeepsSharedMintForRemainingWaiter() async throws {
+    let canceledWaiterReturned = expectation(description: "canceled waiter returned")
+    let reused = T3RelayTestSignal()
+    let recorder = T3RelayHTTPRecorder(
+      responses: Self.authorizationResponses(), suspendedResponseIndices: [1])
+    let client = makeClient(
+      recorder: recorder, signer: T3RelayProofRecorder(),
+      onEnvironmentTaskReused: { reused.signal() })
+    let currentGrantID = grantID
+    let first = Task {
+      do {
+        _ = try await client.authorize(
+          environment: Self.environment(), accountToken: "account", grantID: currentGrantID)
+        XCTFail("Expected cancellation")
+      } catch is CancellationError {
+      } catch {
+        XCTFail("Expected cancellation, got \(error)")
+      }
+      canceledWaiterReturned.fulfill()
+    }
+    await recorder.waitForRequestCount(1)
+    let second = Task {
+      try await client.authorize(
+        environment: Self.environment(), accountToken: "account", grantID: currentGrantID)
+    }
+    await reused.wait()
+
+    first.cancel()
+    await fulfillment(of: [canceledWaiterReturned], timeout: 0.5)
+    XCTAssertEqual(recorder.stopCount(), 0)
+    recorder.resumeAll()
+
+    await first.value
+    let authorization = try await second.value
+    XCTAssertEqual(authorization.descriptor.environmentId, "env-one")
+    XCTAssertEqual(recorder.requests().count, 5)
+  }
+
+  func testCancelingOneEnvironmentTaskKeepsRelayMintForAnotherEnvironmentTask() async throws {
+    let canceledWaiterReturned = expectation(description: "canceled waiter returned")
+    let relayReused = T3RelayTestSignal()
+    let tail = Array(Self.authorizationResponses().dropFirst())
+    let recorder = T3RelayHTTPRecorder(
+      responses: [.relayToken()] + tail + tail, suspendedResponseIndices: [1])
+    let client = makeClient(
+      recorder: recorder, signer: T3RelayProofRecorder(),
+      onRelayTaskReused: { relayReused.signal() })
+    let firstEnvironment = Self.environment(host: "first.t3-relay-unit.test")
+    let secondEnvironment = Self.environment(host: "second.t3-relay-unit.test")
+    let currentGrantID = grantID
+    let first = Task {
+      do {
+        _ = try await client.authorize(
+          environment: firstEnvironment, accountToken: "account", grantID: currentGrantID)
+        XCTFail("Expected cancellation")
+      } catch is CancellationError {
+      } catch {
+        XCTFail("Expected cancellation, got \(error)")
+      }
+      canceledWaiterReturned.fulfill()
+    }
+    await recorder.waitForRequestCount(1)
+    let second = Task {
+      try await client.authorize(
+        environment: secondEnvironment, accountToken: "account", grantID: currentGrantID)
+    }
+    await relayReused.wait()
+
+    first.cancel()
+    await fulfillment(of: [canceledWaiterReturned], timeout: 0.5)
+    XCTAssertEqual(recorder.stopCount(), 0)
+    recorder.resumeAll()
+
+    await first.value
+    let authorization = try await second.value
+    XCTAssertEqual(authorization.descriptor.environmentId, "env-one")
+    XCTAssertEqual(recorder.requests().filter { $0.url?.path == "/v1/client/dpop-token" }.count, 1)
+  }
+
+  func testCancelingOnlyWaiterDuringConnectStopsEnvironmentMint() async throws {
+    let waiterReturned = expectation(description: "canceled waiter returned")
+    let mintStopped = expectation(description: "connect request stopped")
+    let recorder = T3RelayHTTPRecorder(
+      responses: Self.authorizationResponses(), suspendedResponseIndices: [2],
+      onStop: { mintStopped.fulfill() })
+    let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+    let currentGrantID = grantID
+    let caller = Task {
+      do {
+        _ = try await client.authorize(
+          environment: Self.environment(), accountToken: "account", grantID: currentGrantID)
+        XCTFail("Expected cancellation")
+      } catch is CancellationError {
+      } catch {
+        XCTFail("Expected cancellation, got \(error)")
+      }
+      waiterReturned.fulfill()
+    }
+    await recorder.waitForRequestCount(2)
+
+    caller.cancel()
+    await fulfillment(of: [waiterReturned, mintStopped], timeout: 0.5)
+    recorder.resumeAll()
+    await caller.value
+    XCTAssertEqual(recorder.requests().count, 2)
   }
 
   func testGrantIDPartitionsRelayAndEnvironmentCachesAcrossRelink() async throws {
@@ -1400,15 +1553,19 @@ private final class T3RelayHTTPRecorder: @unchecked Sendable {
   private var requestWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
   private let suspendedResponseIndices: Set<Int>
   private let onRequest: @Sendable (Int) -> Void
+  private let onStop: @Sendable () -> Void
+  private var stoppedLoaders = 0
 
   init(
     responses: [T3RelayHTTPResponse],
     suspendedResponseIndices: Set<Int> = [],
-    onRequest: @escaping @Sendable (Int) -> Void = { _ in }
+    onRequest: @escaping @Sendable (Int) -> Void = { _ in },
+    onStop: @escaping @Sendable () -> Void = {}
   ) {
     self.responses = responses
     self.suspendedResponseIndices = suspendedResponseIndices
     self.onRequest = onRequest
+    self.onStop = onStop
   }
 
   func handle(_ loader: T3RelayURLProtocol) {
@@ -1496,6 +1653,22 @@ private final class T3RelayHTTPRecorder: @unchecked Sendable {
     if let (loader, response) = delivery { loader.deliver(response) }
   }
 
+  func stopped(_ loader: T3RelayURLProtocol) {
+    lock.lock()
+    let wasPending = pending.contains { $0.0 === loader }
+    pending.removeAll { $0.0 === loader }
+    if wasPending { stoppedLoaders += 1 }
+    let shouldNotify = wasPending && stoppedLoaders == 1
+    lock.unlock()
+    if shouldNotify { onStop() }
+  }
+
+  func stopCount() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return stoppedLoaders
+  }
+
   private static func read(_ stream: InputStream) -> Data {
     stream.open()
     defer { stream.close() }
@@ -1530,8 +1703,13 @@ private final class T3RelayURLProtocol: URLProtocol, @unchecked Sendable {
 
   override func stopLoading() {
     lock.lock()
+    guard !stopped else {
+      lock.unlock()
+      return
+    }
     stopped = true
     lock.unlock()
+    Self.recorder?.stopped(self)
   }
 
   func deliver(_ response: T3RelayHTTPResponse) {

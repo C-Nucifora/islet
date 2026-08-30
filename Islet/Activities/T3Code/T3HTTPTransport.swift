@@ -49,7 +49,7 @@ struct T3HTTPTransport: Sendable {
   static let maximumResponseBytes = 2 * 1024 * 1024
   static let shared = T3HTTPTransport()
 
-  private let session: URLSession
+  let session: URLSession
 
   init(session: URLSession? = nil) {
     if let session {
