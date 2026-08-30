@@ -25,8 +25,8 @@ struct SystemExpandedView: View {
       for: kind, requested: MetricDisplayStyle.resolve(metricStyles[kind.rawValue]))
   }
 
-  private func ring(_ kind: SystemMetricKind) -> [Double] {
-    monitor.rings[kind]?.values ?? []
+  private func ring(_ kind: SystemMetricKind) -> MetricRing? {
+    monitor.rings[kind]
   }
 
   var body: some View {
@@ -153,8 +153,13 @@ struct SystemExpandedView: View {
       }
       // An empty ring means either a cold start or `.thermal`, which has no series. Drawing an
       // empty 28 × 14 plate in either case is just a smudge, so skip it.
-      if style.needsHistory, !ring(kind).isEmpty {
-        SparklineView(values: ring(kind), scale: scale)
+      if style.needsHistory, let history = ring(kind), !history.samples.isEmpty {
+        SparklineView(history: history, scale: scale)
+        Text(SystemChartHistory.timeSpanLabel)
+          .font(.system(size: 9, weight: .medium))
+          .monospacedDigit()
+          .foregroundStyle(.secondary)
+          .accessibilityLabel("Last five minutes")
       }
       if style == .combined {
         detail()

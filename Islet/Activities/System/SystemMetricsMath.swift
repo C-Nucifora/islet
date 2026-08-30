@@ -71,20 +71,79 @@ func ratePerSecond(
   return Double(delta) / elapsed
 }
 
-/// A bounded, oldest-first history of one series. Backed by a plain array rather than a rotating
-/// index because every consumer wants the values in draw order and 60 elements is nothing.
+/// The time span displayed by System sparklines. Samples can arrive at different cadences, but a
+/// chart always represents this much wall-clock time ending at its newest sample.
+enum SystemChartHistory {
+  static let timeWindow: TimeInterval = 5 * 60
+  static let maximumRenderedSamples = 60
+  static let maximumRetainedSamples = 300
+  static let maximumContiguousGap: TimeInterval = 60
+
+  static let timeSpanLabel = "5m"
+}
+
+/// A single value plus the instant it was measured. The chart must retain this information: a
+/// sample count has no stable relationship to elapsed time while the monitor changes cadence.
+struct TimedMetricSample: Equatable, Sendable {
+  let timestamp: Date
+  let value: Double
+}
+
+/// A bounded, oldest-first history of one series.
+///
+/// The ring retains at most five minutes of measurements and 300 entries. The sample cap is a
+/// safety backstop for a bursty source. A gap longer than one minute clears the series so sleep,
+/// a suspended app, and a stalled run loop never draw a line that implies unmeasured activity.
 struct MetricRing: Equatable, Sendable {
   let capacity: Int
-  private(set) var values: [Double] = []
+  let timeWindow: TimeInterval
+  let maximumContiguousGap: TimeInterval
+  private(set) var samples: [TimedMetricSample] = []
 
-  init(capacity: Int) {
+  init(
+    capacity: Int,
+    timeWindow: TimeInterval = SystemChartHistory.timeWindow,
+    maximumContiguousGap: TimeInterval = SystemChartHistory.maximumContiguousGap
+  ) {
     self.capacity = max(1, capacity)
+    self.timeWindow = max(0, timeWindow)
+    self.maximumContiguousGap = max(0, maximumContiguousGap)
   }
 
   mutating func push(_ value: Double) {
-    values.append(value)
-    if values.count > capacity { values.removeFirst(values.count - capacity) }
+    push(value, at: Date())
   }
 
-  var latest: Double? { values.last }
+  mutating func push(_ value: Double, at timestamp: Date) {
+    guard value.isFinite else { return }
+    advance(to: timestamp)
+    // A wall-clock adjustment can move backwards. Do not put an out-of-order reading on a chart.
+    guard samples.last?.timestamp ?? timestamp <= timestamp else { return }
+    samples.append(TimedMetricSample(timestamp: timestamp, value: value))
+    trimToBounds(referenceDate: timestamp)
+  }
+
+  /// Ages existing history even when a source has no usable value on this tick. That matters for
+  /// counter-derived disk and network rates, which are intentionally nil after a sleep gap.
+  mutating func advance(to timestamp: Date) {
+    if let newest = samples.last,
+      timestamp.timeIntervalSince(newest.timestamp) > maximumContiguousGap
+    {
+      samples.removeAll()
+      return
+    }
+    trimToBounds(referenceDate: timestamp)
+  }
+
+  var values: [Double] { samples.map(\.value) }
+  var latest: Double? { samples.last?.value }
+  var latestTimestamp: Date? { samples.last?.timestamp }
+
+  private mutating func trimToBounds(referenceDate: Date) {
+    let cutoff = referenceDate.addingTimeInterval(-timeWindow)
+    samples.removeAll { $0.timestamp < cutoff }
+    if samples.count > capacity {
+      samples.removeFirst(samples.count - capacity)
+    }
+  }
 }
