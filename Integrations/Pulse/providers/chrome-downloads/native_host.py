@@ -20,6 +20,7 @@ SOURCE = "chrome-downloads"
 MAX_NATIVE_MESSAGE = 1024 * 1024
 CANCEL_ERRORS = {"USER_CANCELED", "USER_SHUTDOWN"}
 ACTIVE_EXPIRY_SECONDS = 90
+TERMINAL_REVEAL_SECONDS = 8
 
 
 def active_expiry() -> str:
@@ -62,6 +63,7 @@ class ChromeDownloadProvider:
             return None
         if kind == "end":
             identifier = self._identifier(message)
+            self.reveal.remove(self._reveal_action_id(identifier))
             self.pulse.end(identifier, SOURCE)
             self.published.discard(identifier)
             return None
@@ -73,6 +75,7 @@ class ChromeDownloadProvider:
         state = item.get("state")
         error = item.get("error")
         if state == "interrupted" and error in CANCEL_ERRORS:
+            self.reveal.remove(self._reveal_action_id(identifier))
             self.pulse.end(identifier, SOURCE)
             self.published.discard(identifier)
             return None
@@ -112,10 +115,19 @@ class ChromeDownloadProvider:
             )
 
         filename = item.get("filename")
+        action_id = self._reveal_action_id(identifier)
         if isinstance(filename, str) and item.get("exists") is not False:
-            action = self.reveal.action(Path(filename), f"reveal-{identifier[-24:]}")
+            action = self.reveal.action(
+                Path(filename),
+                action_id,
+                expires_in=TERMINAL_REVEAL_SECONDS if terminal else None,
+            )
             if action:
                 activity["actions"] = [action]
+            else:
+                self.reveal.remove(action_id)
+        else:
+            self.reveal.remove(action_id)
 
         command = {"operation": "event" if terminal else "update", "activity": activity}
         self.pulse.send(command)
@@ -149,6 +161,10 @@ class ChromeDownloadProvider:
         ):
             raise ValueError("download identity is missing")
         return activity_id(profile_id, download_id)
+
+    @staticmethod
+    def _reveal_action_id(identifier: str) -> str:
+        return f"reveal-{identifier[-24:]}"
 
 
 def read_message(stream: BinaryIO) -> dict[str, Any] | None:

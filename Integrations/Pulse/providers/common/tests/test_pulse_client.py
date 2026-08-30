@@ -89,6 +89,24 @@ class RevealServerTests(unittest.TestCase):
             finally:
                 server.close()
 
+    def test_expired_reveal_action_returns_not_found(self) -> None:
+        now = [100.0]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.pdf"
+            path.touch()
+            server = pulse_client.RevealServer(clock=lambda: now[0])
+            try:
+                action = server.action(path, "finished-transfer", expires_in=8)
+                self.assertIsNotNone(action)
+
+                now[0] += 8
+
+                with self.assertRaises(error.HTTPError) as failure:
+                    request.urlopen(action["url"], timeout=1)
+                self.assertEqual(failure.exception.code, 404)
+            finally:
+                server.close()
+
 
 if __name__ == "__main__":
     unittest.main()

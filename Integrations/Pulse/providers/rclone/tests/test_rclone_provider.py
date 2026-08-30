@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import io
+import os
 from pathlib import Path
 import tempfile
+import threading
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "rclone_provider.py"
@@ -21,9 +25,11 @@ class FakeRC:
         self.calls: list[tuple[str, str | None]] = []
 
     def call(self, method: str, parameters: dict | None = None) -> dict:
-        group = parameters.get("group") if parameters else None
-        self.calls.append((method, group))
-        return self.responses.get((method, group), {})
+        selector = None
+        if parameters:
+            selector = parameters.get("group", parameters.get("jobid"))
+        self.calls.append((method, selector))
+        return self.responses.get((method, selector), {})
 
 
 class FakePulse:
@@ -66,6 +72,43 @@ class FakeReveal:
         pass
 
 
+class RecordingHandler(BaseHTTPRequestHandler):
+    server: "RecordingHTTPServer"
+
+    def do_POST(self) -> None:  # noqa: N802, inherited callback name.
+        length = int(self.headers.get("Content-Length", "0"))
+        self.rfile.read(length)
+        self.server.requests.append(
+            {"path": self.path, "authorization": self.headers.get("Authorization")}
+        )
+        payload = b"{}"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        pass
+
+
+class RecordingHTTPServer(ThreadingHTTPServer):
+    def __init__(self) -> None:
+        super().__init__(("127.0.0.1", 0), RecordingHandler)
+        self.requests: list[dict[str, str | None]] = []
+        self.thread = threading.Thread(target=self.serve_forever, daemon=True)
+        self.thread.start()
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.server_address[1]}"
+
+    def close(self) -> None:
+        self.shutdown()
+        self.server_close()
+        self.thread.join(timeout=2)
+
+
 def fixture(transferring: list[dict], transferred: list[dict] | None = None) -> FakeRC:
     return FakeRC(
         {
@@ -77,6 +120,12 @@ def fixture(transferring: list[dict], transferred: list[dict] | None = None) -> 
             },
             ("core/stats", "job/7"): {"transferring": transferring},
             ("core/transferred", "job/7"): {"transferred": transferred or []},
+            ("job/status", 7): {
+                "executeId": "instance-a",
+                "finished": False,
+                "group": "job/7",
+                "id": 7,
+            },
         }
     )
 
@@ -152,6 +201,12 @@ class RcloneProviderTests(unittest.TestCase):
                     "executeId": "instance-a",
                     "runningIds": [7],
                 },
+                ("job/status", 7): {
+                    "executeId": "instance-a",
+                    "finished": False,
+                    "group": "job/7",
+                    "id": 7,
+                },
                 ("core/stats", "job/7"): {
                     "transferring": [
                         {"name": "same.bin", "bytes": 10, "size": 100}
@@ -198,6 +253,64 @@ class RcloneProviderTests(unittest.TestCase):
 
         self.assertNotIn(("core/stats", "job/99"), provider.rc.calls)
         self.assertNotIn(("core/transferred", "job/99"), provider.rc.calls)
+
+    def test_job_list_request_is_not_polled_as_a_transfer_group(self) -> None:
+        rc = FakeRC(
+            {
+                ("job/list", None): {
+                    "executeId": "instance-a",
+                    "runningIds": [101],
+                },
+                ("job/status", 101): {
+                    "executeId": "instance-a",
+                    "finished": True,
+                    "group": "job/101",
+                    "id": 101,
+                },
+                ("core/stats", "global_stats"): {},
+                ("core/transferred", None): {"transferred": []},
+            }
+        )
+        provider, pulse = self.provider(rc)
+
+        provider.observe()
+
+        self.assertEqual(pulse.commands, [])
+        self.assertIn(("job/status", 101), rc.calls)
+        self.assertNotIn(("core/stats", "job/101"), rc.calls)
+        self.assertNotIn(("core/transferred", "job/101"), rc.calls)
+
+    def test_running_job_uses_its_reported_custom_stats_group(self) -> None:
+        rc = FakeRC(
+            {
+                ("job/list", None): {
+                    "executeId": "instance-a",
+                    "runningIds": [7],
+                },
+                ("job/status", 7): {
+                    "executeId": "instance-a",
+                    "finished": False,
+                    "group": "backup-batch",
+                    "id": 7,
+                },
+                ("core/stats", "backup-batch"): {
+                    "transferring": [
+                        {"name": "archive.bin", "bytes": 25, "size": 100}
+                    ]
+                },
+                ("core/transferred", "backup-batch"): {"transferred": []},
+                ("core/stats", "global_stats"): {},
+                ("core/transferred", None): {"transferred": []},
+            }
+        )
+        provider, pulse = self.provider(rc)
+
+        provider.observe()
+
+        self.assertEqual(len(pulse.commands), 1)
+        self.assertEqual(pulse.commands[0]["activity"]["progress"], 0.25)
+        self.assertIn(("core/stats", "backup-batch"), rc.calls)
+        self.assertNotIn(("core/stats", "job/7"), rc.calls)
 
     def test_progress_budget_rotates_across_large_transfer_sets(self) -> None:
         transfers = [
@@ -325,6 +438,70 @@ class RcloneProviderTests(unittest.TestCase):
         self.assertEqual(len(pulse.commands), 1)
         self.assertEqual(pulse.commands[0]["activity"]["state"], "failed")
         self.assertEqual(restarted_pulse.commands, [])
+
+    def test_restart_recovers_a_later_completion_in_the_same_millisecond(self) -> None:
+        first = {
+            "bytes": 1,
+            "checked": False,
+            "completed_at": "2026-08-31T07:57:17.884100000+10:00",
+            "error": "",
+            "group": "job/7",
+            "name": "first.bin",
+            "size": 1,
+            "started_at": "2026-08-31T07:57:17+10:00",
+            "what": "transferring",
+        }
+        second = {
+            **first,
+            "completed_at": "2026-08-31T07:57:17.884900000+10:00",
+            "name": "second.bin",
+        }
+        responses = {
+            ("job/list", None): {"executeId": "instance-a", "runningIds": []},
+            ("core/stats", "global_stats"): {},
+            ("core/transferred", None): {"transferred": [first]},
+        }
+        provider, _ = self.provider(FakeRC(responses))
+        provider.observe()
+
+        responses[("core/transferred", None)] = {"transferred": [first, second]}
+        restarted, pulse = self.provider(FakeRC(responses), provider.persisted(True))
+        restarted.observe()
+
+        self.assertEqual(
+            [command["activity"]["title"] for command in pulse.commands],
+            ["Transfer complete: second.bin"],
+        )
+
+    def test_restart_recovers_an_unseen_completion_at_the_exact_watermark(self) -> None:
+        first = {
+            "bytes": 1,
+            "checked": False,
+            "completed_at": "2026-08-31T07:57:17.884500000+10:00",
+            "error": "",
+            "group": "job/7",
+            "name": "first.bin",
+            "size": 1,
+            "started_at": "2026-08-31T07:57:17+10:00",
+            "what": "transferring",
+        }
+        second = {**first, "name": "second.bin"}
+        responses = {
+            ("job/list", None): {"executeId": "instance-a", "runningIds": []},
+            ("core/stats", "global_stats"): {},
+            ("core/transferred", None): {"transferred": [first]},
+        }
+        provider, _ = self.provider(FakeRC(responses))
+        provider.observe()
+
+        responses[("core/transferred", None)] = {"transferred": [first, second]}
+        restarted, pulse = self.provider(FakeRC(responses), provider.persisted(True))
+        restarted.observe()
+
+        self.assertEqual(
+            [command["activity"]["title"] for command in pulse.commands],
+            ["Transfer complete: second.bin"],
+        )
 
     def test_cancelled_or_removed_active_transfer_is_ended(self) -> None:
         identifier = rclone.opaque_id("instance-a", 7, "cancelled.bin")
@@ -470,6 +647,53 @@ class RcloneClientTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             rclone.RcloneClient("http://user:secret@127.0.0.1:5572")
 
+    def test_loopback_requests_ignore_environment_proxies(self) -> None:
+        origin = RecordingHTTPServer()
+        proxy = RecordingHTTPServer()
+        try:
+            environment = {
+                "HTTP_PROXY": proxy.url,
+                "NO_PROXY": "",
+                "http_proxy": proxy.url,
+                "no_proxy": "",
+            }
+            with mock.patch.dict(os.environ, environment, clear=True):
+                rclone.RcloneClient(origin.url).call("core/stats")
+
+            self.assertEqual([item["path"] for item in origin.requests], ["/core/stats"])
+            self.assertEqual(proxy.requests, [])
+        finally:
+            proxy.close()
+            origin.close()
+
+    def test_observation_calls_do_not_send_control_credentials(self) -> None:
+        server = RecordingHTTPServer()
+        try:
+            client = rclone.RcloneClient(server.url, "islet", "secret")
+
+            for method in ("job/list", "job/status", "core/stats", "core/transferred"):
+                client.call(method)
+
+            self.assertEqual(
+                [item["authorization"] for item in server.requests],
+                [None, None, None, None],
+            )
+        finally:
+            server.close()
+
+    def test_authenticated_control_call_still_sends_credentials(self) -> None:
+        server = RecordingHTTPServer()
+        try:
+            client = rclone.RcloneClient(server.url, "islet", "secret")
+
+            client.call("sync/copy")
+
+            self.assertEqual(
+                server.requests[0]["authorization"], "Basic aXNsZXQ6c2VjcmV0"
+            )
+        finally:
+            server.close()
+
     def test_interval_cannot_exceed_the_active_heartbeat_window(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state_file = Path(directory) / "state.json"
@@ -496,6 +720,18 @@ class RcloneClientTests(unittest.TestCase):
                                 str(state_file),
                             ]
                         )
+
+
+class StateStoreTests(unittest.TestCase):
+    def test_save_does_not_change_an_existing_parent_directory_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            parent.chmod(0o755)
+            store = rclone.StateStore(parent / "state.json")
+
+            store.save({"published": [], "seen": [], "completedAfter": 0})
+
+            self.assertEqual(parent.stat().st_mode & 0o777, 0o755)
 
 
 if __name__ == "__main__":

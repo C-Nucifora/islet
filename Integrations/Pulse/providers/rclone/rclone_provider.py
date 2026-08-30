@@ -20,7 +20,7 @@ import time
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 from pulse_client import PulseClient, PulseError, RevealServer, safe_child  # noqa: E402
@@ -32,6 +32,10 @@ ACTIVE_EXPIRY_SECONDS = 90
 ACTIVE_HEARTBEAT_SECONDS = 30
 MAX_INTERVAL_SECONDS = ACTIVE_HEARTBEAT_SECONDS
 TERMINAL_REVEAL_SECONDS = 8
+NANOSECONDS_PER_MILLISECOND = 1_000_000
+PUBLIC_OBSERVATION_METHODS = frozenset(
+    {"core/stats", "core/transferred", "job/list", "job/status"}
+)
 _RFC3339 = re.compile(
     r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$"
 )
@@ -59,10 +63,10 @@ def event_id(
     return hashlib.sha256(basis.encode()).hexdigest()
 
 
-def completion_milliseconds(record: dict[str, Any]) -> int | None:
+def completion_nanoseconds(record: dict[str, Any]) -> int | None:
     legacy = record.get("timestamp")
     if isinstance(legacy, int) and not isinstance(legacy, bool):
-        return legacy
+        return legacy * NANOSECONDS_PER_MILLISECOND
     current = record.get("completed_at")
     if not isinstance(current, str):
         return None
@@ -70,17 +74,16 @@ def completion_milliseconds(record: dict[str, Any]) -> int | None:
     if match is None:
         return None
     base, fraction, zone = match.groups()
-    microseconds = ((fraction or "") + "000000")[:6]
-    normalized = f"{base}.{microseconds}{'+00:00' if zone == 'Z' else zone}"
+    nanoseconds = int(((fraction or "") + "000000000")[:9])
+    normalized = f"{base}{'+00:00' if zone == 'Z' else zone}"
     try:
         completed = datetime.fromisoformat(normalized).astimezone(timezone.utc)
     except ValueError:
         return None
     elapsed = completed - datetime(1970, 1, 1, tzinfo=timezone.utc)
     return (
-        elapsed.days * 86_400_000
-        + elapsed.seconds * 1_000
-        + elapsed.microseconds // 1_000
+        (elapsed.days * 86_400 + elapsed.seconds) * 1_000_000_000
+        + nanoseconds
     )
 
 
@@ -121,7 +124,7 @@ class RcloneClient:
                 "rclone RC URL cannot contain credentials, query, or fragment"
             )
         self.url = url.rstrip("/")
-        self.opener = build_opener(_RejectRedirects)
+        self.opener = build_opener(ProxyHandler({}), _RejectRedirects)
         self.authorization = None
         if user is not None or password is not None:
             encoded = base64.b64encode(
@@ -139,7 +142,7 @@ class RcloneClient:
             {"Content-Type": "application/json"},
             method="POST",
         )
-        if self.authorization:
+        if self.authorization and method not in PUBLIC_OBSERVATION_METHODS:
             request.add_header("Authorization", self.authorization)
         try:
             with self.opener.open(request, timeout=5) as response:
@@ -187,19 +190,31 @@ class StateStore:
         try:
             value = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
+            now = time.time_ns()
             return {
                 "enabled": not self.disabled_path.exists(),
                 "published": [],
                 "seen": [],
-                "completedAfter": int(time.time() * 1000),
+                "completedAfter": now // NANOSECONDS_PER_MILLISECOND,
+                "completedAfterNanoseconds": now,
+                "completedAtKeys": [],
             }
         if not isinstance(value, dict):
+            now = time.time_ns()
             return {
                 "enabled": not self.disabled_path.exists(),
                 "published": [],
                 "seen": [],
-                "completedAfter": int(time.time() * 1000),
+                "completedAfter": now // NANOSECONDS_PER_MILLISECOND,
+                "completedAfterNanoseconds": now,
+                "completedAtKeys": [],
             }
+        legacy_watermark = value.get("completedAfter", 0)
+        if not isinstance(legacy_watermark, int) or isinstance(legacy_watermark, bool):
+            legacy_watermark = 0
+        exact_watermark = value.get("completedAfterNanoseconds")
+        if not isinstance(exact_watermark, int) or isinstance(exact_watermark, bool):
+            exact_watermark = legacy_watermark * NANOSECONDS_PER_MILLISECOND
         return {
             "enabled": not self.disabled_path.exists(),
             "published": [
@@ -208,16 +223,19 @@ class StateStore:
             "seen": [item for item in value.get("seen", []) if isinstance(item, str)][
                 -512:
             ],
-            "completedAfter": value.get("completedAfter", 0)
-            if isinstance(value.get("completedAfter", 0), int)
-            else 0,
+            "completedAfter": legacy_watermark,
+            "completedAfterNanoseconds": exact_watermark,
+            "completedAtKeys": [
+                item
+                for item in value.get("completedAtKeys", [])
+                if isinstance(item, str)
+            ][-512:],
         }
 
     def save(self, value: dict[str, Any]) -> None:
         value = dict(value)
         value["enabled"] = not self.disabled_path.exists()
-        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(self.path.parent, 0o700)
+        self._ensure_parent()
         descriptor, temporary = tempfile.mkstemp(
             prefix=".rclone-", dir=self.path.parent
         )
@@ -234,7 +252,7 @@ class StateStore:
                 pass
 
     def set_enabled(self, enabled: bool) -> dict[str, Any]:
-        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._ensure_parent()
         if enabled:
             try:
                 self.disabled_path.unlink()
@@ -246,6 +264,12 @@ class StateStore:
         state = self.load()
         self.save(state)
         return state
+
+    def _ensure_parent(self) -> None:
+        try:
+            self.path.parent.mkdir(mode=0o700, parents=True)
+        except FileExistsError:
+            pass
 
     def save_runtime(self, value: dict[str, Any]) -> bool:
         """Update observation state without overwriting a concurrent enable or disable command."""
@@ -273,7 +297,17 @@ class RcloneProvider:
         self.reveal_root = reveal_root
         self.published = set((state or {}).get("published", []))
         self.seen = set((state or {}).get("seen", []))
-        self.completed_after = int((state or {}).get("completedAfter", 0))
+        state_value = state or {}
+        exact_watermark = state_value.get("completedAfterNanoseconds")
+        if not isinstance(exact_watermark, int) or isinstance(exact_watermark, bool):
+            legacy_watermark = state_value.get("completedAfter", 0)
+            if not isinstance(legacy_watermark, int) or isinstance(
+                legacy_watermark, bool
+            ):
+                legacy_watermark = 0
+            exact_watermark = legacy_watermark * NANOSECONDS_PER_MILLISECOND
+        self.completed_after_nanoseconds = exact_watermark
+        self.completed_at_keys = set(state_value.get("completedAtKeys", []))
         self.fingerprints: dict[str, str] = {}
         self.last_published_at: dict[str, float] = {}
         self.reveal_deadlines: dict[str, float] = {}
@@ -296,22 +330,32 @@ class RcloneProvider:
         active: set[str] = set()
         active_candidates: list[tuple[str, int | str, dict[str, Any]]] = []
         terminal: set[str] = set()
-        max_timestamp = self.completed_after
+        max_timestamp = self.completed_after_nanoseconds
+        keys_at_max_timestamp = set(self.completed_at_keys)
 
         def consume_completed(records: object, fallback_scope: int | str) -> None:
-            nonlocal max_timestamp
+            nonlocal keys_at_max_timestamp, max_timestamp
             if not isinstance(records, list):
                 return
             for record in records:
                 if not isinstance(record, dict) or record.get("checked") is True:
                     continue
-                timestamp = completion_milliseconds(record)
+                timestamp = completion_nanoseconds(record)
                 if timestamp is None:
                     continue
                 scope = transfer_scope(record, fallback_scope)
-                max_timestamp = max(max_timestamp, timestamp)
                 key = event_id(execute_id, scope, timestamp, record)
-                if timestamp <= self.completed_after or key in self.seen:
+                if timestamp > max_timestamp:
+                    max_timestamp = timestamp
+                    keys_at_max_timestamp = {key}
+                elif timestamp == max_timestamp:
+                    keys_at_max_timestamp.add(key)
+                if timestamp < self.completed_after_nanoseconds or (
+                    timestamp == self.completed_after_nanoseconds
+                    and key in self.completed_at_keys
+                ):
+                    continue
+                if key in self.seen:
                     continue
                 identifier = self._publish_terminal(execute_id, scope, record)
                 self.seen.add(key)
@@ -321,7 +365,17 @@ class RcloneProvider:
         for raw_job_id in running_job_ids:
             if not isinstance(raw_job_id, int) or isinstance(raw_job_id, bool):
                 continue
-            group = {"group": f"job/{raw_job_id}"}
+            status = self._call("job/status", {"jobid": raw_job_id})
+            if status.get("finished") is not False:
+                continue
+            reported_group = status.get("group")
+            group_name = (
+                reported_group
+                if isinstance(reported_group, str) and reported_group
+                else f"job/{raw_job_id}"
+            )
+            group = {"group": group_name}
+            scope = transfer_scope({"group": group_name}, raw_job_id)
             stats = self._call("core/stats", group)
             transfers = stats.get("transferring", [])
             if isinstance(transfers, list):
@@ -331,11 +385,11 @@ class RcloneProvider:
                         and isinstance(transfer.get("name"), str)
                         and transfer["name"]
                     ):
-                        active.add(opaque_id(execute_id, raw_job_id, transfer["name"]))
-                        active_candidates.append((execute_id, raw_job_id, transfer))
+                        active.add(opaque_id(execute_id, scope, transfer["name"]))
+                        active_candidates.append((execute_id, scope, transfer))
 
             completed = self._call("core/transferred", group).get("transferred", [])
-            consume_completed(completed, raw_job_id)
+            consume_completed(completed, scope)
 
         # The aggregate transfer map is keyed by name and can collapse same-name rows from
         # different groups. Query the persistent process's top-level group directly instead.
@@ -370,7 +424,8 @@ class RcloneProvider:
         for identifier in self.published - active - terminal:
             self._end(identifier)
         self.published.intersection_update(active)
-        self.completed_after = max_timestamp
+        self.completed_after_nanoseconds = max_timestamp
+        self.completed_at_keys = set(sorted(keys_at_max_timestamp)[-512:])
         if len(self.seen) > 512:
             self.seen = set(sorted(self.seen)[-512:])
 
@@ -536,7 +591,13 @@ class RcloneProvider:
             "published": sorted(self.published),
             "seen": sorted(self.seen)[-512:],
             "completedAfter": self.completed_after,
+            "completedAfterNanoseconds": self.completed_after_nanoseconds,
+            "completedAtKeys": sorted(self.completed_at_keys)[-512:],
         }
+
+    @property
+    def completed_after(self) -> int:
+        return self.completed_after_nanoseconds // NANOSECONDS_PER_MILLISECOND
 
     def close(self) -> None:
         self.disable()

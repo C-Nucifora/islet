@@ -409,6 +409,68 @@ test("rejected terminal command releases the native host for restart recovery", 
   assert.equal(port.disconnected, true);
 });
 
+test("failed final terminal delivery retries without another browser event", async () => {
+  const harness = createHarness();
+  await harness.settle();
+  await harness.events.created.emit(download(14));
+  await harness.settle();
+  harness.setAutoAcknowledge(false);
+  harness.setSearch(async (query) =>
+    query.id === 14 ? [download(14, "complete", 100)] : []
+  );
+
+  await harness.events.changed.emit({ id: 14, state: { current: "complete" } });
+  await harness.settle();
+  const firstTerminal = harness.messages.at(-1);
+  await harness.ports[0].onMessage.emit({ ok: false, requestID: firstTerminal.requestID });
+  await harness.settle();
+
+  assert.equal(harness.intervals.size, 0);
+  assert.equal(harness.timeouts.size, 1);
+  harness.setAutoAcknowledge(true);
+  harness.fireTimeouts();
+  await harness.settle();
+
+  assert.equal(harness.ports.length, 2);
+  assert.equal(
+    harness.messages.filter(
+      (command) => command.kind === "upsert" && command.item.state === "complete"
+    ).length,
+    2
+  );
+  assert.deepEqual(harness.state.knownIDs, []);
+});
+
+test("failed final terminal delivery uses a bounded retry budget", async () => {
+  const harness = createHarness();
+  await harness.settle();
+  await harness.events.created.emit(download(15));
+  await harness.settle();
+  harness.setAutoAcknowledge(false);
+  harness.setSearch(async (query) =>
+    query.id === 15 ? [download(15, "interrupted", 50)] : []
+  );
+
+  await harness.events.changed.emit({ id: 15, state: { current: "interrupted" } });
+  await harness.settle();
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const port = harness.ports.at(-1);
+    const command = harness.messages.at(-1);
+    await port.onMessage.emit({ ok: false, requestID: command.requestID });
+    await harness.settle();
+    if (attempt < 4) {
+      assert.equal(harness.timeouts.size, 1);
+      harness.fireTimeouts();
+      await harness.settle();
+    }
+  }
+
+  assert.equal(harness.messages.length, 6);
+  assert.equal(harness.timeouts.size, 0);
+  assert.deepEqual(harness.state.knownIDs, [15]);
+});
+
 test("terminal state supersedes in-flight progress after the stale acknowledgement", async () => {
   const harness = createHarness({ autoAcknowledge: false });
   await harness.settle();
@@ -428,4 +490,22 @@ test("terminal state supersedes in-flight progress after the stale acknowledgeme
   assert.equal(harness.ports[0].disconnected, false);
   assert.equal(harness.messages.length, 2);
   assert.equal(harness.messages[1].item.state, "complete");
+});
+
+test("acknowledged terminal ignores later property-only changes", async () => {
+  const harness = createHarness();
+  await harness.settle();
+  await harness.events.created.emit(download(16));
+  await harness.settle();
+  harness.setSearch(async (query) =>
+    query.id === 16 ? [download(16, "complete", 100)] : []
+  );
+  await harness.events.changed.emit({ id: 16, state: { current: "complete" } });
+  await harness.settle();
+  harness.clearMessages();
+
+  await harness.events.changed.emit({ id: 16, exists: { previous: true, current: false } });
+  await harness.settle();
+
+  assert.deepEqual(harness.messages, []);
 });

@@ -13,7 +13,7 @@ import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 
@@ -127,12 +127,21 @@ class PulseClient:
 class _RevealHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, maximum_actions: int) -> None:
+    def __init__(self, maximum_actions: int, clock: Callable[[], float]) -> None:
         super().__init__(("127.0.0.1", 0), _RevealHandler)
         self.maximum_actions = maximum_actions
+        self.clock = clock
         self.paths: dict[str, Path] = {}
         self.action_tokens: dict[str, str] = {}
+        self.deadlines: dict[str, float] = {}
         self.paths_lock = threading.Lock()
+
+    def remove_token_locked(self, token: str) -> None:
+        self.paths.pop(token, None)
+        self.deadlines.pop(token, None)
+        for action_id, current_token in list(self.action_tokens.items()):
+            if current_token == token:
+                self.action_tokens.pop(action_id, None)
 
 
 class _RevealHandler(BaseHTTPRequestHandler):
@@ -142,6 +151,10 @@ class _RevealHandler(BaseHTTPRequestHandler):
         token = self.path.removeprefix("/reveal/")
         with self.server.paths_lock:
             path = self.server.paths.get(token)
+            deadline = self.server.deadlines.get(token)
+            if deadline is not None and deadline <= self.server.clock():
+                self.server.remove_token_locked(token)
+                path = None
         if path is None or not path.exists():
             self.send_error(404)
             return
@@ -163,12 +176,21 @@ class _RevealHandler(BaseHTTPRequestHandler):
 class RevealServer:
     """Loopback-only HTTP bridge for Pulse's HTTP(S)-only action contract."""
 
-    def __init__(self, maximum_actions: int = MAX_REVEAL_ACTIONS) -> None:
-        self._server = _RevealHTTPServer(maximum_actions)
+    def __init__(
+        self,
+        maximum_actions: int = MAX_REVEAL_ACTIONS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._server = _RevealHTTPServer(maximum_actions, clock)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 
-    def action(self, path: Path, action_id: str = "reveal") -> dict[str, str] | None:
+    def action(
+        self,
+        path: Path,
+        action_id: str = "reveal",
+        expires_in: float | None = None,
+    ) -> dict[str, str] | None:
         try:
             resolved = path.expanduser().resolve(strict=True)
         except OSError:
@@ -178,12 +200,16 @@ class RevealServer:
             previous = self._server.action_tokens.pop(action_id, None)
             if previous:
                 self._server.paths.pop(previous, None)
+                self._server.deadlines.pop(previous, None)
             self._server.action_tokens[action_id] = token
             self._server.paths[token] = resolved
+            if expires_in is not None:
+                self._server.deadlines[token] = self._server.clock() + expires_in
             while len(self._server.action_tokens) > self._server.maximum_actions:
                 oldest_action = next(iter(self._server.action_tokens))
                 oldest_token = self._server.action_tokens.pop(oldest_action)
                 self._server.paths.pop(oldest_token, None)
+                self._server.deadlines.pop(oldest_token, None)
         port = self._server.server_address[1]
         return {
             "id": action_id,
@@ -195,12 +221,14 @@ class RevealServer:
         with self._server.paths_lock:
             self._server.paths.clear()
             self._server.action_tokens.clear()
+            self._server.deadlines.clear()
 
     def remove(self, action_id: str) -> None:
         with self._server.paths_lock:
             token = self._server.action_tokens.pop(action_id, None)
             if token:
                 self._server.paths.pop(token, None)
+                self._server.deadlines.pop(token, None)
 
     def close(self) -> None:
         self._server.shutdown()

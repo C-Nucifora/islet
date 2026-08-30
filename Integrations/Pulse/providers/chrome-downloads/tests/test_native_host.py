@@ -31,9 +31,19 @@ class FakePulse:
 class FakeReveal:
     def __init__(self) -> None:
         self.paths: list[Path] = []
+        self.action_ids: list[str] = []
+        self.expiries: list[float | None] = []
+        self.removed: list[str] = []
 
-    def action(self, path: Path, action_id: str = "reveal") -> dict | None:
+    def action(
+        self,
+        path: Path,
+        action_id: str = "reveal",
+        expires_in: float | None = None,
+    ) -> dict | None:
         self.paths.append(path)
+        self.action_ids.append(action_id)
+        self.expiries.append(expires_in)
         if not path.exists():
             return None
         return {
@@ -44,6 +54,9 @@ class FakeReveal:
 
     def clear(self) -> None:
         self.paths.clear()
+
+    def remove(self, action_id: str) -> None:
+        self.removed.append(action_id)
 
     def close(self) -> None:
         pass
@@ -101,6 +114,35 @@ class ChromeNativeHostTests(unittest.TestCase):
         self.assertEqual(pulse.commands, [])
         self.assertEqual(pulse.ended[0][1], host.SOURCE)
 
+    def test_cancellation_revokes_its_reveal_action(self) -> None:
+        provider, _, reveal = self.provider()
+        with tempfile.NamedTemporaryFile() as temporary:
+            provider.command_for(self.message(8, filename=temporary.name))
+            action_id = reveal.action_ids[-1]
+
+            provider.command_for(
+                self.message(
+                    8,
+                    filename=temporary.name,
+                    state="interrupted",
+                    error="USER_CANCELED",
+                )
+            )
+
+        self.assertEqual(reveal.removed, [action_id])
+
+    def test_missing_active_file_revokes_its_previous_reveal_action(self) -> None:
+        provider, _, reveal = self.provider()
+        with tempfile.NamedTemporaryFile() as temporary:
+            provider.command_for(self.message(9, filename=temporary.name))
+            action_id = reveal.action_ids[-1]
+
+            provider.command_for(
+                self.message(9, filename=temporary.name, exists=False)
+            )
+
+        self.assertEqual(reveal.removed, [action_id])
+
     def test_inaccessible_file_omits_reveal_action(self) -> None:
         provider, pulse, reveal = self.provider()
         provider.command_for(self.message(5))
@@ -119,7 +161,7 @@ class ChromeNativeHostTests(unittest.TestCase):
         self.assertLessEqual(remaining, 90)
 
     def test_existing_file_gets_loopback_reveal_action(self) -> None:
-        provider, pulse, _ = self.provider()
+        provider, pulse, reveal = self.provider()
         with tempfile.NamedTemporaryFile() as temporary:
             provider.command_for(
                 self.message(6, filename=temporary.name, state="complete")
@@ -130,6 +172,7 @@ class ChromeNativeHostTests(unittest.TestCase):
         self.assertEqual(command["activity"]["progress"], 1.0)
         action = command["activity"]["actions"][0]
         self.assertTrue(action["url"].startswith("http://127.0.0.1/"))
+        self.assertEqual(reveal.expiries[-1], 8)
 
 
 if __name__ == "__main__":

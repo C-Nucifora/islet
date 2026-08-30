@@ -4,10 +4,15 @@ const NATIVE_HOST = "dev.islet.pulse.chrome_downloads";
 const POLL_MILLISECONDS = 2000;
 const HOST_IDLE_MILLISECONDS = 10_000;
 const COMMANDS_PER_FLUSH = 12;
+const RETRY_INITIAL_MILLISECONDS = 250;
+const RETRY_MAX_MILLISECONDS = 2000;
+const RETRY_LIMIT = 4;
 let tracker = null;
 let nativePort = null;
 let pollTimer = null;
 let hostIdleTimer = null;
+let retryTimer = null;
+let retryAttempts = 0;
 let listenersRegistered = false;
 let lifecycleTail = Promise.resolve();
 let persistenceTail = Promise.resolve();
@@ -62,6 +67,26 @@ function cancelHostIdleTimer() {
   hostIdleTimer = null;
 }
 
+function resetRetryState() {
+  if (retryTimer !== null) clearTimeout(retryTimer);
+  retryTimer = null;
+  retryAttempts = 0;
+}
+
+function scheduleRetry() {
+  if (!pending.size || inFlight.size || retryTimer !== null || retryAttempts >= RETRY_LIMIT)
+    return;
+  const delay = Math.min(
+    RETRY_INITIAL_MILLISECONDS * 2 ** retryAttempts,
+    RETRY_MAX_MILLISECONDS
+  );
+  retryAttempts += 1;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    flushPending();
+  }, delay);
+}
+
 function scheduleHostDisconnect() {
   if (!nativePort || pending.size || inFlight.size || hasActiveDownloads()) {
     cancelHostIdleTimer();
@@ -79,6 +104,7 @@ function scheduleHostDisconnect() {
 
 function notifyDrainWaiters() {
   if (pending.size || inFlight.size) return;
+  resetRetryState();
   for (const resolve of drainWaiters) resolve();
   drainWaiters.clear();
   scheduleHostDisconnect();
@@ -123,6 +149,7 @@ function connectHost() {
     inFlight.delete(requestID);
     const command = pending.get(key);
     if (response.ok === true) {
+      retryAttempts = 0;
       const finishAcknowledgement = () => {
         flushPending();
         notifyDrainWaiters();
@@ -139,6 +166,7 @@ function connectHost() {
     inFlight.clear();
     port.disconnect();
     notifyDrainWaiters();
+    scheduleRetry();
   });
   port.onDisconnect.addListener(() => {
     if (nativePort !== port) return;
@@ -146,6 +174,7 @@ function connectHost() {
     inFlight.clear();
     cancelHostIdleTimer();
     notifyDrainWaiters();
+    scheduleRetry();
   });
   return nativePort;
 }
@@ -156,7 +185,13 @@ function flushPending() {
     return;
   }
   cancelHostIdleTimer();
-  const port = connectHost();
+  let port;
+  try {
+    port = connectHost();
+  } catch (_error) {
+    scheduleRetry();
+    return;
+  }
   const activeKeys = new Set(inFlight.values());
   for (const [key, command] of pending) {
     if (inFlight.size >= COMMANDS_PER_FLUSH) break;
@@ -169,6 +204,7 @@ function flushPending() {
       inFlight.clear();
       if (nativePort === port) nativePort = null;
       port.disconnect();
+      scheduleRetry();
       break;
     }
   }
@@ -239,6 +275,7 @@ function onCreated(item) {
 function onChanged(delta) {
   return serializeLifecycle(async () => {
     if (!tracker) return;
+    if (!delta.state && !tracker.snapshot().includes(delta.id)) return;
     const items = await chrome.downloads.search({ id: delta.id });
     await publish(items.length ? tracker.ingest(items[0]) : tracker.erase(delta.id));
   });
@@ -286,6 +323,7 @@ async function disableObservation() {
   if (pollTimer !== null) clearInterval(pollTimer);
   pollTimer = null;
   cancelHostIdleTimer();
+  resetRetryState();
   const cleanup = tracker ? tracker.disable() : [];
   pending.clear();
   inFlight.clear();
@@ -302,6 +340,7 @@ async function disableObservation() {
   pending.clear();
   inFlight.clear();
   tracker = null;
+  resetRetryState();
   await persistKnownIDs();
   notifyDrainWaiters();
 }
