@@ -193,7 +193,7 @@ final class BatteryMonitor: ObservableObject {
   func refresh() {
     applyState(Self.readState())
 
-    let reading = CPUPowerReadingStore.shared.reading()
+    let reading = cpuPowerSamplingService.cachedReading()
     if reading != cpuPowerReading { cpuPowerReading = reading }
     let fresh = SmartBatteryReader.read(cpuPowerReading: reading)
     let smoothed = fresh.map { PowerSmoothing.smooth(metrics, into: $0) }
@@ -214,9 +214,10 @@ final class BatteryMonitor: ObservableObject {
     }
     isSampling = true
     let expectedGeneration = generation
+    let cpuPowerSamplingService = cpuPowerSamplingService
     samplingTask = Task { [weak self] in
       let snapshot = await Task.detached(priority: .utility) {
-        let cpuPowerReading = CPUPowerReadingStore.shared.reading()
+        let cpuPowerReading = cpuPowerSamplingService.cachedReading()
         return BatteryReadSnapshot(
           state: BatteryMonitor.readState(),
           metrics: SmartBatteryReader.read(

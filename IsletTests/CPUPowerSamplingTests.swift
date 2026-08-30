@@ -270,6 +270,20 @@ final class CPUPowerSamplingTests: XCTestCase {
     XCTAssertEqual(sleeper.intervals, [12])
   }
 
+  func testBatteryMonitorReadsFromItsInjectedSamplingServiceStore() {
+    let store = CPUPowerReadingStore(now: { 10 }, staleAfter: 5)
+    store.record(watts: 42.25, at: 10)
+    let service = CPUPowerSamplingService(
+      dependencies: CPUPowerSamplingDependencies(
+        now: { 10 }, sleep: { _ in }, sample: { nil }),
+      store: store)
+    let monitor = BatteryMonitor(cpuPowerSamplingService: service)
+
+    monitor.refresh()
+
+    XCTAssertEqual(monitor.cpuPowerReading, CPUPowerReading.fresh(watts: 42.25))
+  }
+
   func testSystemMonitorDoesNotRequestUnusedCPUPowerSampling() async {
     let probe = SampleProbe(values: [9])
     let sleeper = TestSleeper()
