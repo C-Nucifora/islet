@@ -136,4 +136,46 @@ final class AirDropShareControllerTests: XCTestCase {
     XCTAssertEqual(controller.state, .ready)
     XCTAssertTrue(controller.isActionEnabled)
   }
+
+  @MainActor
+  func testShelfActivityKeepsAirDropFailureAcrossPresentationRecreation() {
+    var finish: ((AirDropShareOutcome) -> Void)?
+    let controller = AirDropShareController(
+      serviceAvailable: { true },
+      startShare: { _, completion in
+        finish = completion
+        return .started
+      })
+    let activity = ShelfActivity(airDrop: controller)
+    var presentation: ShelfView? = activity.shelfView
+
+    presentation?.airDrop.share([URL(fileURLWithPath: "/Shelf/report.pdf")])
+    presentation = nil
+    let recreatedPresentation = activity.shelfView
+    finish?(.failed("The receiving device is no longer available."))
+
+    XCTAssertEqual(
+      recreatedPresentation.airDrop.state,
+      .failed("The receiving device is no longer available."))
+  }
+
+  @MainActor
+  func testShelfActivityKeepsAirDropCancellationAcrossPresentationRecreation() {
+    var finish: ((AirDropShareOutcome) -> Void)?
+    let controller = AirDropShareController(
+      serviceAvailable: { true },
+      startShare: { _, completion in
+        finish = completion
+        return .started
+      })
+    let activity = ShelfActivity(airDrop: controller)
+    var presentation: ShelfView? = activity.shelfView
+
+    presentation?.airDrop.share([URL(fileURLWithPath: "/Shelf/report.pdf")])
+    presentation = nil
+    let recreatedPresentation = activity.shelfView
+    finish?(.cancelled)
+
+    XCTAssertEqual(recreatedPresentation.airDrop.state, .cancelled)
+  }
 }

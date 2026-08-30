@@ -11,9 +11,18 @@ final class ShelfActivity: NotchActivity, ObservableObject {
   let isAvailableWhenInactive = true
   private(set) var activationDate: Date?
 
-  private let model = ShelfModel.shared
+  private let model: ShelfModel
+  let airDrop: AirDropShareController
   private var cancellables: Set<AnyCancellable> = []
   private var isMonitoring = false
+
+  init(
+    model: ShelfModel = .shared,
+    airDrop: AirDropShareController = AirDropShareController()
+  ) {
+    self.model = model
+    self.airDrop = airDrop
+  }
 
   var isActive: Bool { !model.items.isEmpty || model.isDropPresentationActive }
 
@@ -49,13 +58,14 @@ final class ShelfActivity: NotchActivity, ObservableObject {
         .font(.caption.weight(.semibold)).monospacedDigit().appThemeForeground(.shelf))
   }
 
-  var expandedView: AnyView { AnyView(ShelfView(model: model)) }
+  var shelfView: ShelfView { ShelfView(model: model, airDrop: airDrop) }
+  var expandedView: AnyView { AnyView(shelfView) }
 }
 
 struct ShelfView: View {
   @ObservedObject var model: ShelfModel
+  @ObservedObject var airDrop: AirDropShareController
   @Environment(\.appTheme) private var appTheme
-  @StateObject private var airDrop = AirDropShareController()
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
