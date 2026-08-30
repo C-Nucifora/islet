@@ -385,7 +385,6 @@ final class PortMonitor: ObservableObject {
 
     readerHealth = .failed(error: error, lastSuccessfulRead: lastSuccessfulRead)
     if !devices.isEmpty { devices = [] }
-    self.staleStartedAt = nil
     graceExpiryTask = nil
   }
 
@@ -416,7 +415,6 @@ final class PortMonitor: ObservableObject {
     let current = monotonicNow()
     let staleStartedAt = self.staleStartedAt ?? current
     guard current < staleStartedAt + gracePeriod else {
-      self.staleStartedAt = nil
       graceExpiryTask?.cancel()
       graceExpiryTask = nil
       readerHealth = .failed(error: error, lastSuccessfulRead: lastSuccessfulRead)

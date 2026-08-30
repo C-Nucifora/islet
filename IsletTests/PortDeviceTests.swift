@@ -144,6 +144,34 @@ final class PortDeviceTests: XCTestCase {
       .failed(error: .matchingServices(-1), lastSuccessfulRead: Date(timeIntervalSince1970: 1_000)))
   }
 
+  func testAnotherReadFailureAfterGraceExpiryDoesNotRestartStaleGrace() {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var monotonicNow: TimeInterval = 100
+    var results: [PortEnumerationResult] = [
+      .devices([USBDeviceFixtures.monitorDevice]),
+      .error(.matchingServices(-1)),
+      .error(.matchingServices(-2)),
+    ]
+    let monitor = PortMonitor(
+      reader: { results.removeFirst() }, now: { now }, monotonicNow: { monotonicNow },
+      gracePeriod: 10)
+
+    monitor.refresh()
+    now.addTimeInterval(1)
+    monotonicNow += 1
+    monitor.refresh()
+    now.addTimeInterval(10)
+    monotonicNow += 10
+    monitor.expireGraceIfNeeded()
+    monitor.retry()
+
+    XCTAssertTrue(monitor.devices.isEmpty)
+    XCTAssertEqual(
+      monitor.readerHealth,
+      .failed(error: .matchingServices(-2), lastSuccessfulRead: Date(timeIntervalSince1970: 1_000)))
+    XCTAssertEqual(monitor.readerHealth.summary, "IOKit matching failed (0xFFFFFFFE)")
+  }
+
   func testRetryRecoversReaderWithoutInventingDisconnectOrReconnectEvents() {
     var now = Date(timeIntervalSince1970: 1_000)
     var monotonicNow: TimeInterval = 100
