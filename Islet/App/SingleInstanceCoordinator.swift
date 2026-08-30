@@ -24,6 +24,12 @@ enum SingleInstanceClaim: Equatable {
   case secondary(owner: SingleInstanceOwner?)
 }
 
+enum SingleInstanceLaunchResolution: Equatable {
+  case primary
+  case activatedExisting
+  case secondaryStillOwned(owner: SingleInstanceOwner?)
+}
+
 /// Holds a BSD advisory lock for the process lifetime. The file stores diagnostics only. The
 /// kernel drops ownership when the descriptor closes, including after a crash or app replacement.
 final class SingleInstanceCoordinator {
@@ -109,6 +115,30 @@ final class SingleInstanceCoordinator {
         } else {
           throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
+      }
+    }
+  }
+}
+
+enum SingleInstanceLaunchResolver {
+  /// Resolves the handoff race where the previous owner exits after the first failed claim but
+  /// before AppKit can activate it. A failed activation gets one fresh lock claim; if the kernel
+  /// has released ownership, this process becomes the primary instead of terminating too.
+  static func resolve(
+    coordinator: SingleInstanceCoordinator,
+    owner: SingleInstanceOwner,
+    activate: (SingleInstanceOwner?) -> Bool
+  ) throws -> SingleInstanceLaunchResolution {
+    switch try coordinator.claim(owner: owner) {
+    case .primary:
+      return .primary
+    case .secondary(let existingOwner):
+      if activate(existingOwner) { return .activatedExisting }
+      switch try coordinator.claim(owner: owner) {
+      case .primary:
+        return .primary
+      case .secondary(let currentOwner):
+        return .secondaryStillOwned(owner: currentOwner)
       }
     }
   }
