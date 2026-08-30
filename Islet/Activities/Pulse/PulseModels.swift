@@ -67,6 +67,8 @@ struct PulseAction: Codable, Equatable, Identifiable, Sendable {
     self.title = title
     self.url = url
   }
+
+  var destination: PulseActionDestination? { try? PulseActionDestination.validate(url) }
 }
 
 /// The deliberately small wire payload accepted from local providers. Optional presentation fields
@@ -112,6 +114,7 @@ struct PulseItem: Equatable, Identifiable, Sendable {
   static let maximumActionURLLength = 2_048
 
   let id: ID
+  let providerIdentity: PulseProviderIdentity
   var providerIdentifier: String
   var source: String
   var title: String
@@ -132,6 +135,7 @@ struct PulseItem: Equatable, Identifiable, Sendable {
 
   init(
     payload: PulsePayload, now: Date, previous: PulseItem? = nil,
+    providerIdentity suppliedProviderIdentity: PulseProviderIdentity? = nil,
     staleTimeout: TimeInterval = PulseStalenessPolicy.defaultTimeout,
     symbolAvailability: (String) -> Bool? = PulseSymbolValidator.platformAvailability
   ) throws {
@@ -139,6 +143,12 @@ struct PulseItem: Equatable, Identifiable, Sendable {
       payload.id, field: "id", limit: Self.maximumIdentifierLength)
     source = try Self.clean(payload.source, field: "source", limit: 80)
     id = try ID(source: source, providerIdentifier: providerIdentifier)
+    providerIdentity =
+      try suppliedProviderIdentity
+      ?? PulseProviderIdentity(credentialID: "source-local", source: source)
+    guard providerIdentity.sourceKey == id.normalizedSource else {
+      throw PulseValidationError.unsafeProviderIdentity
+    }
     title = try Self.clean(payload.title, field: "title", limit: 180)
     if let raw = payload.subtitle?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
       guard raw.count <= 240 else { throw PulseValidationError.tooLong("subtitle", 240) }
@@ -182,18 +192,7 @@ struct PulseItem: Equatable, Identifiable, Sendable {
       let id = try Self.clean(
         action.id, field: "action id", limit: Self.maximumIdentifierLength)
       let title = try Self.clean(action.title, field: "action title", limit: 60)
-      let urlString = action.url.absoluteString
-      guard urlString.count <= Self.maximumActionURLLength else {
-        throw PulseValidationError.tooLong("action URL", Self.maximumActionURLLength)
-      }
-      guard
-        let components = URLComponents(url: action.url, resolvingAgainstBaseURL: false),
-        let scheme = components.scheme?.lowercased(),
-        ["http", "https"].contains(scheme),
-        components.host?.isEmpty == false,
-        components.user == nil,
-        components.password == nil
-      else { throw PulseValidationError.unsafeActionURL }
+      _ = try PulseActionDestination.validate(action.url)
       return PulseAction(id: id, title: title, url: action.url)
     }
     guard Set(actions.map(\.id)).count == actions.count else {
@@ -291,6 +290,7 @@ enum PulseValidationError: LocalizedError, Equatable {
   case duplicateActionID
   case unsafeActionURL
   case invalidRevision
+  case unsafeProviderIdentity
 
   var errorDescription: String? {
     switch self {
@@ -302,8 +302,10 @@ enum PulseValidationError: LocalizedError, Equatable {
     case .providerSetStale: "stale is an Islet-managed state"
     case .tooManyActions: "an activity may expose at most three actions"
     case .duplicateActionID: "action ids must be unique within an activity"
-    case .unsafeActionURL: "action URLs must be http or https URLs without credentials"
+    case .unsafeActionURL:
+      "action URLs must use an unambiguous HTTP or HTTPS host without credentials or controls"
     case .invalidRevision: "revision must be an integer from 0 through \(PulseRevision.maximum)"
+    case .unsafeProviderIdentity: "the action provider identity does not match its source"
     }
   }
 }

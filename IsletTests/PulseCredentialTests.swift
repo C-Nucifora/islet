@@ -402,6 +402,50 @@ final class PulseCredentialTests: XCTestCase {
     XCTAssertEqual(thenClause["required"] as? [String], ["requestID"])
   }
 
+  func testTrustCleanupFailureCannotKeepOrRestoreWebActionAuthorization() throws {
+    let credentialDirectory = try temporaryDirectory()
+    let trustDirectory = try temporaryDirectory()
+    defer {
+      try? FileManager.default.setAttributes(
+        [.posixPermissions: 0o700], ofItemAtPath: trustDirectory.path)
+      try? FileManager.default.removeItem(at: credentialDirectory)
+      try? FileManager.default.removeItem(at: trustDirectory)
+    }
+    let credentials = PulseCredentialStore(supportDirectory: credentialDirectory)
+    let trusts = PulseActionTrustStore(supportDirectory: trustDirectory)
+    let server = PulseServer(credentialStore: credentials, actionTrustStore: trusts)
+    let summary = try server.createProvider(
+      name: "Build", source: "build", permissions: [.events, .webActions])
+    let provider = try PulseProviderIdentity(credentialID: summary.id, source: summary.source)
+    let destination = try PulseActionDestination.validate(
+      XCTUnwrap(URL(string: "https://example.com/jobs")))
+    try trusts.trust(destination, for: provider)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o500], ofItemAtPath: trustDirectory.path)
+
+    XCTAssertThrowsError(try server.setPermissions([.events], for: summary.id))
+    XCTAssertFalse(
+      try XCTUnwrap(credentials.credentials.first { $0.id == summary.id })
+        .permissions.contains(.webActions))
+    XCTAssertFalse(credentials.isCurrentProvider(provider))
+    XCTAssertThrowsError(
+      try server.setPermissions([.events, .webActions], for: summary.id))
+    XCTAssertFalse(
+      try XCTUnwrap(credentials.credentials.first { $0.id == summary.id })
+        .permissions.contains(.webActions))
+
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o700], ofItemAtPath: trustDirectory.path)
+    try server.setPermissions([.events, .webActions], for: summary.id)
+    try trusts.trust(destination, for: provider)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o500], ofItemAtPath: trustDirectory.path)
+
+    XCTAssertThrowsError(try server.revokeCredential(summary.id))
+    XCTAssertNotNil(credentials.credentials.first { $0.id == summary.id }?.revokedAt)
+    XCTAssertFalse(credentials.isCurrentProvider(provider))
+  }
+
   @MainActor
   func testLastUseMetadataWriteFailureDoesNotRejectAnAuthorizedCommand() throws {
     let fixture = try fixture(permissions: [.events])
