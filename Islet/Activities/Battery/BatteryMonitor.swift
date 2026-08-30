@@ -7,6 +7,7 @@ private struct BatteryReadSnapshot: Sendable {
   let state: BatteryState?
   let metrics: BatteryMetrics?
   let peripherals: [PeripheralBattery]?
+  let cpuPowerReading: CPUPowerReading
 }
 
 /// Owns one power-source notification on one run loop. Registering in common modes keeps IOPS
@@ -57,6 +58,7 @@ final class BatteryMonitor: ObservableObject {
   @Published private(set) var hasFreshState = false
   @Published private(set) var metrics: BatteryMetrics?
   @Published private(set) var peripherals: [PeripheralBattery] = []
+  @Published private(set) var cpuPowerReading = CPUPowerReading.unavailable
 
   /// Seeded snapshots keep off-screen previews deterministic without starting the IOKit readers.
   init(
@@ -99,6 +101,7 @@ final class BatteryMonitor: ObservableObject {
     guard !isRunning else { return }
     isRunning = true
     generation += 1
+    updateCPUPowerSampling()
     scheduleRefresh(includeStable: true)
     let opaque = Unmanaged.passUnretained(self).toOpaque()
     let callback: IOPowerSourceCallbackType = { context in
@@ -129,6 +132,7 @@ final class BatteryMonitor: ObservableObject {
     guard isRunning else { return }
     isRunning = false
     generation += 1
+    CPUPowerSamplingService.shared.setNeeded(false, for: .battery)
     samplingTask?.cancel()
     samplingTask = nil
     isSampling = false
@@ -143,6 +147,7 @@ final class BatteryMonitor: ObservableObject {
     hasFreshState = false
     metrics = nil
     peripherals = []
+    cpuPowerReading = .unavailable
     lastStableRead = nil
     stateGracePeriod.reset()
   }
@@ -150,6 +155,7 @@ final class BatteryMonitor: ObservableObject {
   private func setFastMetrics(_ live: Bool) {
     guard live != fastMetrics else { return }
     fastMetrics = live
+    updateCPUPowerSampling()
     guard isRunning else { return }
     restartMetricsTimer()
     scheduleRefresh(includeStable: false)  // update immediately on the transition
@@ -177,7 +183,9 @@ final class BatteryMonitor: ObservableObject {
   func refresh() {
     applyState(Self.readState())
 
-    let fresh = SmartBatteryReader.read()
+    let reading = CPUPowerReadingStore.shared.reading()
+    if reading != cpuPowerReading { cpuPowerReading = reading }
+    let fresh = SmartBatteryReader.read(cpuPowerReading: reading)
     let smoothed = fresh.map { PowerSmoothing.smooth(metrics, into: $0) }
     if smoothed != metrics { metrics = smoothed }
 
@@ -198,10 +206,13 @@ final class BatteryMonitor: ObservableObject {
     let expectedGeneration = generation
     samplingTask = Task { [weak self] in
       let snapshot = await Task.detached(priority: .utility) {
-        BatteryReadSnapshot(
+        let cpuPowerReading = CPUPowerReadingStore.shared.reading()
+        return BatteryReadSnapshot(
           state: BatteryMonitor.readState(),
-          metrics: SmartBatteryReader.read(includeStable: includeStable),
-          peripherals: includeStable ? PeripheralBatteryReader.read() : nil)
+          metrics: SmartBatteryReader.read(
+            includeStable: includeStable, cpuPowerReading: cpuPowerReading),
+          peripherals: includeStable ? PeripheralBatteryReader.read() : nil,
+          cpuPowerReading: cpuPowerReading)
       }.value
       guard let self else { return }
       guard self.isRunning, self.generation == expectedGeneration else {
@@ -223,12 +234,21 @@ final class BatteryMonitor: ObservableObject {
 
   private func energyPolicyDidChange() {
     guard isRunning else { return }
+    updateCPUPowerSampling()
     restartMetricsTimer()
     scheduleRefresh(includeStable: false)
   }
 
+  private func updateCPUPowerSampling() {
+    CPUPowerSamplingService.shared.setConstrained(energyPolicy.isConstrained)
+    CPUPowerSamplingService.shared.setNeeded(isRunning && fastMetrics, for: .battery)
+  }
+
   private func apply(_ snapshot: BatteryReadSnapshot, includeStable: Bool) {
     applyState(snapshot.state)
+    if snapshot.cpuPowerReading != cpuPowerReading {
+      cpuPowerReading = snapshot.cpuPowerReading
+    }
 
     var fresh = snapshot.metrics
     if !includeStable, var current = fresh, let previous = metrics {

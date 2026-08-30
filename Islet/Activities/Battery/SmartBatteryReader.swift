@@ -29,15 +29,21 @@ enum SmartBatteryReader {
     "DesignCycleCount9C",
   ]
 
-  static func read(includeStable: Bool = true) -> BatteryMetrics? {
+  static func read(
+    includeStable: Bool = true,
+    cpuPowerReading: CPUPowerReading = CPUPowerReadingStore.shared.reading()
+  ) -> BatteryMetrics? {
     let keys = includeStable ? liveKeys + stableKeys : liveKeys
     guard
       let props = IORegistryReader.properties(matching: "AppleSmartBattery", keys: keys)
     else { return nil }
 
-    // IOReport is sampled only after confirming this Mac has an internal battery. It is a private,
-    // optional estimate, so failure never prevents the public/IOKit battery snapshot from landing.
-    let cpuPowerWatts = CPUPowerReader.shared.readWatts()
+    // CPU power has its own sampler. Registry refreshes only read its cache, so the 250 ms
+    // IOReport window cannot delay battery, charger or peripheral updates.
+    // Do not render an old CPU split as though it belonged to this battery snapshot. The service
+    // retains stale values for diagnostics and future clients, but the power-flow graph gets only
+    // a reading inside the current freshness window.
+    let cpuPowerWatts = cpuPowerReading.freshWatts
 
     // The registry dict is primary: it carries the description ("pd charger") and the negotiated
     // PD ladder, which the public IOPS dict strips down to little more than the wattage — showing

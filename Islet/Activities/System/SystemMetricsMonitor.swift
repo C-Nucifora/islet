@@ -17,6 +17,7 @@ final class SystemMetricsMonitor: ObservableObject {
 
   @Published private(set) var sample = SystemMetricsSample()
   @Published private(set) var rings: [SystemMetricKind: MetricRing] = [:]
+  @Published private(set) var cpuPowerReading = CPUPowerReading.unavailable
 
   /// Retained by `SystemExpandedView` via `.liveSampling(_:)`.
   private(set) lazy var liveGate = LiveSamplingGate { [weak self] live in
@@ -44,6 +45,7 @@ final class SystemMetricsMonitor: ObservableObject {
     guard !isRunning else { return }
     isRunning = true
     generation += 1
+    updateCPUPowerSampling()
     clusters = CPUTopology.current()
     powerCancellable = NotificationCenter.default.publisher(
       for: .NSProcessInfoPowerStateDidChange
@@ -62,17 +64,20 @@ final class SystemMetricsMonitor: ObservableObject {
     guard isRunning else { return }
     isRunning = false
     generation += 1
+    CPUPowerSamplingService.shared.setNeeded(false, for: .system)
     timer = nil
     powerCancellable = nil
     energyCancellable = nil
     previous = nil
     previousDate = nil
     isSampling = false
+    cpuPowerReading = .unavailable
   }
 
   private func setLive(_ live: Bool) {
     guard live != isLive else { return }
     isLive = live
+    updateCPUPowerSampling()
     guard isRunning else { return }
     restartTimer()
     tick()  // don't make the user wait a whole interval for the first fast sample
@@ -109,6 +114,8 @@ final class SystemMetricsMonitor: ObservableObject {
       clusters: clusters)
     previous = raw
     previousDate = now
+    let nextPowerReading = CPUPowerReadingStore.shared.reading()
+    if nextPowerReading != cpuPowerReading { cpuPowerReading = nextPowerReading }
     sample = next
     pushRings(next, at: now)
     isSampling = false
@@ -122,8 +129,14 @@ final class SystemMetricsMonitor: ObservableObject {
 
   private func energyPolicyDidChange() {
     guard isRunning else { return }
+    updateCPUPowerSampling()
     restartTimer()
     tick()
+  }
+
+  private func updateCPUPowerSampling() {
+    CPUPowerSamplingService.shared.setConstrained(energyPolicy.isConstrained)
+    CPUPowerSamplingService.shared.setNeeded(isRunning && isLive, for: .system)
   }
 
   private func pushRings(_ sample: SystemMetricsSample, at timestamp: Date) {
