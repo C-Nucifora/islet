@@ -46,11 +46,12 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   private var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
 
   var agents: [T3AgentSnapshot] {
-    Self.sortedAgents(environments.flatMap(\.agents))
+    T3AgentSnapshot.sortedForAttention(environments.flatMap(\.agents))
   }
 
   var liveAgents: [T3AgentSnapshot] {
-    Self.sortedAgents(environments.filter { !$0.isStale }.flatMap(\.agents))
+    T3AgentSnapshot.sortedForAttention(
+      environments.filter { !$0.isStale }.flatMap(\.agents))
   }
 
   var compactPresentation: CompactPresentation {
@@ -60,20 +61,13 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   nonisolated static func compactPresentation(
     for environments: [T3EnvironmentSnapshot]
   ) -> CompactPresentation {
-    let live = sortedAgents(environments.filter { !$0.isStale }.flatMap(\.agents))
-    let stale = sortedAgents(environments.filter(\.isStale).flatMap(\.agents))
+    let live = T3AgentSnapshot.sortedForAttention(
+      environments.filter { !$0.isStale }.flatMap(\.agents))
+    let stale = T3AgentSnapshot.sortedForAttention(
+      environments.filter(\.isStale).flatMap(\.agents))
     return CompactPresentation(
       liveAgentCount: live.count, staleAgentCount: stale.count,
       leadingPhase: live.first?.phase)
-  }
-
-  private nonisolated static func sortedAgents(
-    _ agents: [T3AgentSnapshot]
-  ) -> [T3AgentSnapshot] {
-    agents.sorted {
-      if $0.phase.rank != $1.phase.rank { return $0.phase.rank < $1.phase.rank }
-      return $0.updatedAt > $1.updatedAt
-    }
   }
 
   var isActive: Bool { !agents.isEmpty }
@@ -605,6 +599,18 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       if $0.isLocal != $1.isLocal { return $0.isLocal }
       return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
     }
+  }
+
+  nonisolated static func expandedRows(
+    snapshots: [T3EnvironmentSnapshot], profiles: [T3EnvironmentProfile]
+  ) -> [T3ExpandedRow] {
+    let visible = visibleEnvironments(snapshots: snapshots, profiles: profiles)
+    let labels = Dictionary(uniqueKeysWithValues: visible.map { ($0.id, $0.label) })
+    let agents = T3AgentSnapshot.sortedForAttention(visible.flatMap(\.agents)).map { agent in
+      T3ExpandedRow.agent(
+        agent, environmentLabel: labels[agent.environmentID] ?? agent.environmentID)
+    }
+    return agents + visible.filter(\.agents.isEmpty).map(T3ExpandedRow.environment)
   }
 
   nonisolated static func environmentActions(
