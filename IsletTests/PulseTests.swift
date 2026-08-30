@@ -408,6 +408,7 @@ final class PulseTests: XCTestCase {
           token: "test", operation: .end, activity: nil, id: payload.id,
           source: payload.source, revision: 101), now: now
       ).ok)
+    firstProcess.flushRevisionPersistence()
 
     let restartedProcess = PulseCenter(
       clock: TestPulseClock(now: now), revisionStore: persistence.store)
@@ -427,6 +428,7 @@ final class PulseTests: XCTestCase {
     let firstProcess = PulseCenter(
       clock: TestPulseClock(now: initialDate), revisionStore: persistence.store)
     XCTAssertTrue(firstProcess.apply(end, now: initialDate).ok)
+    firstProcess.flushRevisionPersistence()
 
     let afterRetention = initialDate.addingTimeInterval(31 * 24 * 60 * 60)
     let restartedProcess = PulseCenter(
@@ -459,6 +461,7 @@ final class PulseTests: XCTestCase {
       token: "private-token", operation: .show, activity: payload, id: nil, revision: 4)
 
     XCTAssertTrue(center.apply(command, now: Date(timeIntervalSince1970: 8_000)).ok)
+    center.flushRevisionPersistence()
 
     let data = try XCTUnwrap(persistence.data)
     let storedText = String(decoding: data, as: UTF8.self)
@@ -467,6 +470,35 @@ final class PulseTests: XCTestCase {
     XCTAssertFalse(storedText.contains("private action"))
     XCTAssertFalse(storedText.contains("private-path"))
     XCTAssertFalse(storedText.contains("private-token"))
+  }
+
+  @MainActor
+  func testRevisionPersistenceCoalescesABurstAndKeepsTheNewestRevision() {
+    let persistence = PulseRevisionPersistenceBox()
+    let now = Date(timeIntervalSince1970: 8_500)
+    let center = PulseCenter(
+      clock: TestPulseClock(now: now), revisionStore: persistence.store,
+      revisionPersistenceDelay: 60)
+    let payload = PulsePayload(
+      id: "coalesced", source: "build", title: "Running", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+
+    for revision in 1...50 {
+      XCTAssertTrue(center.apply(command(.show, payload, revision: UInt64(revision)), now: now).ok)
+    }
+    XCTAssertEqual(persistence.writeCount, 0)
+
+    center.flushRevisionPersistence()
+    XCTAssertEqual(persistence.writeCount, 1)
+
+    let restarted = PulseCenter(
+      clock: TestPulseClock(now: now), revisionStore: persistence.store,
+      revisionPersistenceDelay: 60)
+    XCTAssertEqual(
+      restarted.apply(command(.show, payload, revision: 49), now: now).errorCode,
+      .staleRevision)
+    XCTAssertTrue(restarted.apply(command(.show, payload, revision: 51), now: now).ok)
   }
 
   @MainActor
@@ -1571,13 +1603,32 @@ private final class TestPulseDeadlineScheduler: PulseDeadlineScheduling {
   }
 }
 
-@MainActor
-private final class PulseRevisionPersistenceBox {
-  var data: Data?
+private final class PulseRevisionPersistenceBox: @unchecked Sendable {
+  private let lock = NSLock()
+  private var storedData: Data?
+  private var writes = 0
+
+  var data: Data? {
+    lock.lock()
+    defer { lock.unlock() }
+    return storedData
+  }
+
+  var writeCount: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return writes
+  }
 
   var store: PulseRevisionPersistenceStore {
     PulseRevisionPersistenceStore(
       readData: { [weak self] in self?.data },
-      writeData: { [weak self] in self?.data = $0 })
+      writeData: { [weak self] data in
+        guard let self else { return }
+        lock.lock()
+        storedData = data
+        writes += 1
+        lock.unlock()
+      })
   }
 }

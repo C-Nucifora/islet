@@ -200,6 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     MainActor.assumeIsolated {
       reminderCommandHotKey.stop()
       KeepAwakeManager.shared.stop(reason: .quit)
+      PulseCenter.shared.flushRevisionPersistence()
       AppState.nowPlaying.stop()
       AppState.battery.stop()
       AppState.calendar.stop()
