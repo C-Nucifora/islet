@@ -23,13 +23,16 @@ jobs:
     name: Sign, notarize, and publish
     needs: ci
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 60
     environment: release
     permissions:
+      attestations: write
       contents: write
+      id-token: write
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       DERIVED_DATA: ${{ github.workspace }}/DerivedData
+      EXPECTED_TEAM_IDENTIFIER: ${{ vars.DEVELOPER_ID_TEAM_ID }}
 
     steps:
       - name: Check out tagged source
@@ -38,7 +41,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Validate release tag
+      - name: Set isolated release paths
+        run: |
+          {
+            echo "RELEASE_OUTPUT=$RUNNER_TEMP/release"
+            echo "RELEASE_NOTES=$RUNNER_TEMP/release-notes.md"
+          } >> "$GITHUB_ENV"
+
+      - name: Validate release tag and source commit
         id: version
         run: |
           if [[ ! "$GITHUB_REF_NAME" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
@@ -47,14 +57,100 @@ jobs:
           fi
 
           release_commit=$(git rev-parse 'HEAD^{commit}')
-          git fetch origin main:refs/remotes/origin/main
-          if ! git merge-base --is-ancestor "$release_commit" origin/main; then
-            echo "The release commit must be on origin/main." >&2
+          if [[ "$release_commit" != "$GITHUB_SHA" ]]; then
+            echo "The checked-out commit does not match the tag event." >&2
+            exit 1
+          fi
+          if [[ "$(git cat-file -t "$GITHUB_REF_NAME")" != "tag" ]]; then
+            echo "Release tags must be annotated." >&2
             exit 1
           fi
 
-          echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          echo "commit=$release_commit" >> "$GITHUB_OUTPUT"
+          git fetch origin main:refs/remotes/origin/main
+          main_commit=$(git rev-parse 'origin/main^{commit}')
+          if [[ "$release_commit" != "$main_commit" ]]; then
+            echo "The release tag must point at the current origin/main commit." >&2
+            exit 1
+          fi
+
+          build=$(git rev-list --count "$release_commit")
+          [[ "$build" =~ ^[1-9][0-9]*$ ]]
+          {
+            echo "value=${GITHUB_REF_NAME#v}"
+            echo "commit=$release_commit"
+            echo "build=$build"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate repository release controls
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_SETTINGS_TOKEN }}
+        run: |
+          test -n "$GH_TOKEN" || {
+            echo "Missing secret: RELEASE_SETTINGS_TOKEN (repository Administration: read)." >&2
+            exit 1
+          }
+          test -n "$EXPECTED_TEAM_IDENTIFIER" || {
+            echo "Missing repository variable: DEVELOPER_ID_TEAM_ID." >&2
+            exit 1
+          }
+          [[ "$EXPECTED_TEAM_IDENTIFIER" =~ ^[A-Z0-9]{10}$ ]] || {
+            echo "DEVELOPER_ID_TEAM_ID must be a 10-character Apple team identifier." >&2
+            exit 1
+          }
+          license_file=$(find . -maxdepth 1 -type f -iname 'LICENSE*' -print -quit)
+          test -n "$license_file" || {
+            echo "A maintainer-approved Islet license is required before the first release (issue #108)." >&2
+            exit 1
+          }
+
+          immutable=$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/immutable-releases" \
+              --jq '.enabled'
+          )
+          [[ "$immutable" == "true" ]] || {
+            echo "Immutable releases must be enabled before publishing." >&2
+            exit 1
+          }
+
+          protected_tag_ruleset=false
+          while IFS= read -r ruleset_id; do
+            ruleset=$(gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/rulesets/$ruleset_id")
+            if jq -e '
+              (.conditions.ref_name.include | any(. == "~ALL" or . == "refs/tags/v*")) and
+              (.conditions.ref_name.exclude | length == 0) and
+              ([.rules[].type] | index("creation") != null) and
+              ([.rules[].type] | index("update") != null) and
+              ([.rules[].type] | index("deletion") != null)
+            ' <<< "$ruleset" >/dev/null; then
+              protected_tag_ruleset=true
+              break
+            fi
+          done < <(
+            gh api --paginate \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/rulesets?includes_parents=true" \
+              --jq '.[] | select(.target == "tag" and .enforcement == "active") | .id'
+          )
+          [[ "$protected_tag_ruleset" == "true" ]] || {
+            echo "An active v* tag ruleset must restrict creation, updates, and deletion." >&2
+            exit 1
+          }
+
+      - name: Refuse an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; tags and releases are never reused." >&2
+            exit 1
+          fi
 
       - name: Install XcodeGen
         run: |
@@ -94,11 +190,13 @@ jobs:
             -project Islet.xcodeproj \
             -scheme Islet \
             -derivedDataPath "$DERIVED_DATA" \
-            -onlyUsePackageVersionsFromResolvedFile
+            -onlyUsePackageVersionsFromResolvedFile \
+            -packageAuthorizationProvider netrc
           cmp Package.resolved Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
-      - name: Build universal app
+      - name: Build universal app from the tagged commit
         env:
+          RELEASE_BUILD: ${{ steps.version.outputs.build }}
           RELEASE_VERSION: ${{ steps.version.outputs.value }}
         run: |
           xcodebuild \
@@ -111,49 +209,65 @@ jobs:
             ARCHS='arm64 x86_64' \
             ONLY_ACTIVE_ARCH=NO \
             MARKETING_VERSION="$RELEASE_VERSION" \
-            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            CURRENT_PROJECT_VERSION="$RELEASE_BUILD" \
             CODE_SIGNING_ALLOWED=NO \
             build
 
-      - name: Verify app contents
+      - name: Verify app contents and update trust configuration
         env:
+          RELEASE_BUILD: ${{ steps.version.outputs.build }}
           RELEASE_VERSION: ${{ steps.version.outputs.value }}
         run: |
           app="$DERIVED_DATA/Build/Products/Release/Islet.app"
-          framework="$app/Contents/Frameworks/MediaRemoteAdapter.framework/MediaRemoteAdapter"
+          mediaremote="$app/Contents/Frameworks/MediaRemoteAdapter.framework/MediaRemoteAdapter"
+          sparkle="$app/Contents/Frameworks/Sparkle.framework/Sparkle"
           for architecture in arm64 x86_64; do
             lipo "$app/Contents/MacOS/Islet" -verify_arch "$architecture"
-            lipo "$framework" -verify_arch "$architecture"
+            lipo "$mediaremote" -verify_arch "$architecture"
+            lipo "$sparkle" -verify_arch "$architecture"
           done
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" == "dev.islet" ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" == "$RELEASE_VERSION" ]]
-          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" == "$GITHUB_RUN_NUMBER" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" == "$RELEASE_BUILD" ]]
+          copyright=$(/usr/libexec/PlistBuddy -c 'Print :NSHumanReadableCopyright' "$app/Contents/Info.plist")
+          test -n "${copyright//[[:space:]]/}" || {
+            echo "NSHumanReadableCopyright must be set after resolving issue #108." >&2
+            exit 1
+          }
+          Scripts/validate-update-config.sh "$app/Contents/Info.plist"
 
-      - name: Sign app
+      - name: Sign app and embedded update services
         env:
           CERTIFICATE_P12_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_P12 }}
           CERTIFICATE_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
         run: |
-          test -n "$CERTIFICATE_P12_BASE64" || { echo "Missing secret: DEVELOPER_ID_APPLICATION_P12" >&2; exit 1; }
-          test -n "$CERTIFICATE_P12_PASSWORD" || { echo "Missing secret: DEVELOPER_ID_APPLICATION_P12_PASSWORD" >&2; exit 1; }
+          test -n "$CERTIFICATE_P12_BASE64" || {
+            echo "Missing secret: DEVELOPER_ID_APPLICATION_P12" >&2
+            exit 1
+          }
+          test -n "$CERTIFICATE_P12_PASSWORD" || {
+            echo "Missing secret: DEVELOPER_ID_APPLICATION_P12_PASSWORD" >&2
+            exit 1
+          }
 
           app="$DERIVED_DATA/Build/Products/Release/Islet.app"
-          framework="$app/Contents/Frameworks/MediaRemoteAdapter.framework"
-          keychain_path="$RUNNER_TEMP/islet-signing.keychain-db"
+          mediaremote="$app/Contents/Frameworks/MediaRemoteAdapter.framework"
+          sparkle="$app/Contents/Frameworks/Sparkle.framework"
+          keychain_file="$RUNNER_TEMP/islet-signing.keychain-db"
           keychain_password=$(openssl rand -base64 32)
-          certificate_path="$RUNNER_TEMP/developer-id.p12"
+          certificate_file="$RUNNER_TEMP/developer-id.p12"
           cleanup() {
-            security delete-keychain "$keychain_path" >/dev/null 2>&1 || true
-            rm -f "$certificate_path"
+            security delete-keychain "$keychain_file" >/dev/null 2>&1 || true
+            rm -f "$certificate_file"
           }
           trap cleanup EXIT
 
-          printf '%s' "$CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate_path"
-          security create-keychain -p "$keychain_password" "$keychain_path"
-          security set-keychain-settings -lut 21600 "$keychain_path"
-          security unlock-keychain -p "$keychain_password" "$keychain_path"
-          security import "$certificate_path" \
-            -k "$keychain_path" \
+          printf '%s' "$CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate_file"
+          security create-keychain -p "$keychain_password" "$keychain_file"
+          security set-keychain-settings -lut 21600 "$keychain_file"
+          security unlock-keychain -p "$keychain_password" "$keychain_file"
+          security import "$certificate_file" \
+            -k "$keychain_file" \
             -P "$CERTIFICATE_P12_PASSWORD" \
             -T /usr/bin/codesign \
             -T /usr/bin/security
@@ -161,11 +275,11 @@ jobs:
             -S apple-tool:,apple:,codesign: \
             -s \
             -k "$keychain_password" \
-            "$keychain_path"
-          security list-keychains -d user -s "$keychain_path"
+            "$keychain_file"
+          security list-keychains -d user -s "$keychain_file"
 
           signing_identity=$(
-            security find-identity -v -p codesigning "$keychain_path" |
+            security find-identity -v -p codesigning "$keychain_file" |
               sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' |
               head -1
           )
@@ -174,11 +288,28 @@ jobs:
             exit 1
           fi
 
-          codesign --force --sign "$signing_identity" --options runtime --timestamp "$framework"
-          codesign --force --sign "$signing_identity" --options runtime --timestamp "$app"
+          sign() {
+            codesign --force --sign "$signing_identity" --options runtime --timestamp "$@"
+          }
+          sign "$sparkle/Versions/B/XPCServices/Installer.xpc"
+          sign --preserve-metadata=entitlements "$sparkle/Versions/B/XPCServices/Downloader.xpc"
+          sign "$sparkle/Versions/B/Autoupdate"
+          sign "$sparkle/Versions/B/Updater.app"
+          sign "$sparkle"
+          sign "$mediaremote"
+          sign "$app"
+
           codesign --verify --deep --strict --verbose=2 "$app"
           codesign --display --verbose=4 "$app" 2>&1 | grep -F "Authority=Developer ID Application:"
           codesign --display --verbose=4 "$app" 2>&1 | grep -F "runtime"
+          actual_team=$(
+            codesign --display --verbose=4 "$app" 2>&1 |
+              sed -n 's/^TeamIdentifier=//p'
+          )
+          [[ "$actual_team" == "$EXPECTED_TEAM_IDENTIFIER" ]] || {
+            echo "The signing identity does not match DEVELOPER_ID_TEAM_ID." >&2
+            exit 1
+          }
 
           entitlements="$RUNNER_TEMP/islet-release-entitlements.plist"
           rm -f "$entitlements"
@@ -189,23 +320,31 @@ jobs:
             exit 1
           fi
 
-      - name: Notarize and package app
+      - name: Notarize, staple, and package app
         env:
-          RELEASE_VERSION: ${{ steps.version.outputs.value }}
-          NOTARY_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          NOTARY_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           NOTARY_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
         run: |
-          test -n "$NOTARY_KEY_ID" || { echo "Missing secret: APP_STORE_CONNECT_KEY_ID" >&2; exit 1; }
-          test -n "$NOTARY_ISSUER_ID" || { echo "Missing secret: APP_STORE_CONNECT_ISSUER_ID" >&2; exit 1; }
-          test -n "$NOTARY_PRIVATE_KEY" || { echo "Missing secret: APP_STORE_CONNECT_PRIVATE_KEY" >&2; exit 1; }
+          test -n "$NOTARY_KEY_ID" || {
+            echo "Missing secret: APP_STORE_CONNECT_KEY_ID" >&2
+            exit 1
+          }
+          test -n "$NOTARY_ISSUER_ID" || {
+            echo "Missing secret: APP_STORE_CONNECT_ISSUER_ID" >&2
+            exit 1
+          }
+          test -n "$NOTARY_PRIVATE_KEY" || {
+            echo "Missing secret: APP_STORE_CONNECT_PRIVATE_KEY" >&2
+            exit 1
+          }
 
           app="$DERIVED_DATA/Build/Products/Release/Islet.app"
           notary_key="$RUNNER_TEMP/AuthKey_${NOTARY_KEY_ID}.p8"
           submission="$RUNNER_TEMP/Islet-notarization.zip"
-          output_dir="$RUNNER_TEMP/release"
           artifact_name="Islet-${RELEASE_VERSION}.zip"
-          artifact="$output_dir/$artifact_name"
+          artifact="$RELEASE_OUTPUT/$artifact_name"
           trap 'rm -f "$notary_key"' EXIT
 
           printf '%s' "$NOTARY_PRIVATE_KEY" > "$notary_key"
@@ -219,16 +358,214 @@ jobs:
           xcrun stapler validate "$app"
           spctl --assess --type execute --verbose=2 "$app"
 
-          mkdir -p "$output_dir"
+          mkdir -p "$RELEASE_OUTPUT"
           ditto -c -k --sequesterRsrc --keepParent "$app" "$artifact"
-          (cd "$output_dir" && shasum -a 256 "$artifact_name" > "$artifact_name.sha256")
-          echo "RELEASE_ARTIFACT=$artifact" >> "$GITHUB_ENV"
 
-      - name: Publish GitHub release
+      - name: Generate release notes from the exact tag
         env:
-          RELEASE_VERSION: ${{ steps.version.outputs.value }}
-          RELEASE_COMMIT: ${{ steps.version.outputs.commit }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ steps.version.outputs.commit }}
+        run: |
+          gh api \
+            --method POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$GITHUB_REF_NAME" \
+            -f target_commitish="$RELEASE_COMMIT" \
+            --jq '.body' > "$RELEASE_NOTES"
+          test -s "$RELEASE_NOTES" || {
+            echo "GitHub generated empty release notes." >&2
+            exit 1
+          }
+
+      - name: Generate and verify signed Sparkle metadata
+        env:
+          RELEASE_BUILD: ${{ steps.version.outputs.build }}
+          RELEASE_COMMIT: ${{ steps.version.outputs.commit }}
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+        run: |
+          test -n "$SPARKLE_ED25519_PRIVATE_KEY" || {
+            echo "Missing secret: SPARKLE_ED25519_PRIVATE_KEY" >&2
+            exit 1
+          }
+
+          app="$DERIVED_DATA/Build/Products/Release/Islet.app"
+          configured_public_key=$(
+            /usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$app/Contents/Info.plist"
+          )
+          derived_public_key=$(
+            printf '%s\n' "$SPARKLE_ED25519_PRIVATE_KEY" |
+              xcrun swift -e '
+                import CryptoKit
+                import Foundation
+
+                let input = FileHandle.standardInput.readDataToEndOfFile()
+                let encoded = String(decoding: input, as: UTF8.self)
+                  .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let seed = Data(base64Encoded: encoded), seed.count == 32 else {
+                  fatalError("The Sparkle private key must be a 32-byte base64 seed.")
+                }
+                let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: seed)
+                print(privateKey.publicKey.rawRepresentation.base64EncodedString())
+              '
+          )
+          [[ "$derived_public_key" == "$configured_public_key" ]] || {
+            echo "SPARKLE_ED25519_PRIVATE_KEY does not match the app's SUPublicEDKey." >&2
+            exit 1
+          }
+
+          artifact_name="Islet-${RELEASE_VERSION}.zip"
+          artifact="$RELEASE_OUTPUT/$artifact_name"
+          feed_notes="$RELEASE_OUTPUT/Islet-${RELEASE_VERSION}.md"
+          appcast="$RELEASE_OUTPUT/appcast.xml"
+          checksum_file="$RELEASE_OUTPUT/SHA256SUMS"
+          manifest="$RELEASE_OUTPUT/release-manifest.json"
+          sparkle_tools="$DERIVED_DATA/SourcePackages/artifacts/sparkle/Sparkle/bin"
+          generate_appcast="$sparkle_tools/generate_appcast"
+          sign_update="$sparkle_tools/sign_update"
+          test -x "$generate_appcast" || {
+            echo "Pinned Sparkle generate_appcast tool is missing." >&2
+            exit 1
+          }
+          test -x "$sign_update" || {
+            echo "Pinned Sparkle sign_update tool is missing." >&2
+            exit 1
+          }
+
+          install -m 0644 "$RELEASE_NOTES" "$feed_notes"
+          printf '%s\n' "$SPARKLE_ED25519_PRIVATE_KEY" |
+            "$generate_appcast" \
+              --ed-key-file - \
+              --download-url-prefix \
+              "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/" \
+              --embed-release-notes \
+              --maximum-deltas 0 \
+              --maximum-versions 1 \
+              -o "$appcast" \
+              "$RELEASE_OUTPUT"
+          rm -f "$feed_notes"
+
+          enclosure_signature=$(
+            xmllint \
+              --xpath 'string(/rss/channel/item/enclosure/@*[local-name()="edSignature"])' \
+              "$appcast"
+          )
+          test -n "$enclosure_signature" || {
+            echo "generate_appcast did not sign the archive." >&2
+            exit 1
+          }
+          printf '%s\n' "$SPARKLE_ED25519_PRIVATE_KEY" |
+            "$sign_update" --verify --ed-key-file - "$artifact" "$enclosure_signature"
+          printf '%s\n' "$SPARKLE_ED25519_PRIVATE_KEY" |
+            "$sign_update" --verify --ed-key-file - "$appcast"
+
+          archive_sha=$(shasum -a 256 "$artifact" | awk '{print $1}')
+          appcast_sha=$(shasum -a 256 "$appcast" | awk '{print $1}')
+          archive_size=$(stat -f %z "$artifact")
+          appcast_size=$(stat -f %z "$appcast")
+          jq -n -S \
+            --arg tag "$GITHUB_REF_NAME" \
+            --arg commit "$RELEASE_COMMIT" \
+            --arg version "$RELEASE_VERSION" \
+            --arg build "$RELEASE_BUILD" \
+            --arg team "$EXPECTED_TEAM_IDENTIFIER" \
+            --arg archive_name "$artifact_name" \
+            --arg archive_sha "$archive_sha" \
+            --argjson archive_size "$archive_size" \
+            --arg appcast_sha "$appcast_sha" \
+            --argjson appcast_size "$appcast_size" \
+            '{
+              schemaVersion: 1,
+              repository: "C-Nucifora/islet",
+              tag: $tag,
+              commit: $commit,
+              version: $version,
+              build: $build,
+              bundleIdentifier: "dev.islet",
+              developerIDTeamIdentifier: $team,
+              channel: "stable",
+              artifacts: {
+                archive: {name: $archive_name, sha256: $archive_sha, size: $archive_size},
+                appcast: {name: "appcast.xml", sha256: $appcast_sha, size: $appcast_size}
+              }
+            }' > "$manifest"
+
+          (
+            cd "$RELEASE_OUTPUT"
+            shasum -a 256 "$artifact_name" appcast.xml release-manifest.json > SHA256SUMS
+          )
+          Scripts/verify-release-assets.sh \
+            "$app" \
+            "$artifact" \
+            "$appcast" \
+            "$checksum_file" \
+            "$manifest" \
+            "$GITHUB_REF_NAME" \
+            "$RELEASE_COMMIT" \
+            "$RELEASE_VERSION" \
+            "$RELEASE_BUILD" \
+            "$EXPECTED_TEAM_IDENTIFIER"
+
+      - name: Attest exact release assets
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ env.RELEASE_OUTPUT }}/*
+
+      - name: Verify attestations and tag before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ steps.version.outputs.commit }}
+        run: |
+          expected_assets=(
+            "$RELEASE_OUTPUT/Islet-${{ steps.version.outputs.value }}.zip"
+            "$RELEASE_OUTPUT/appcast.xml"
+            "$RELEASE_OUTPUT/release-manifest.json"
+            "$RELEASE_OUTPUT/SHA256SUMS"
+          )
+          [[ "$(find "$RELEASE_OUTPUT" -maxdepth 1 -type f | wc -l | tr -d ' ')" == "4" ]]
+          for asset in "${expected_assets[@]}"; do
+            test -f "$asset"
+            gh attestation verify "$asset" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-digest "$RELEASE_COMMIT" \
+              --source-ref "$GITHUB_REF"
+          done
+
+          remote_commit=$(
+            git ls-remote --exit-code origin \
+              "refs/tags/$GITHUB_REF_NAME" \
+              "refs/tags/$GITHUB_REF_NAME^{}" |
+              awk '$2 ~ /\^\{\}$/ { peeled = $1 } $2 !~ /\^\{\}$/ { direct = $1 } END { print peeled ? peeled : direct }'
+          )
+          [[ "$remote_commit" == "$RELEASE_COMMIT" ]] || {
+            echo "Remote tag $GITHUB_REF_NAME no longer points to $RELEASE_COMMIT." >&2
+            exit 1
+          }
+
+      - name: Create validated draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ steps.version.outputs.commit }}
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "$RELEASE_OUTPUT/Islet-${RELEASE_VERSION}.zip" \
+            "$RELEASE_OUTPUT/appcast.xml" \
+            "$RELEASE_OUTPUT/release-manifest.json" \
+            "$RELEASE_OUTPUT/SHA256SUMS" \
+            --draft \
+            --verify-tag \
+            --target "$RELEASE_COMMIT" \
+            --notes-file "$RELEASE_NOTES" \
+            --title "Islet $RELEASE_VERSION"
+
+      - name: Verify draft asset digests and publish immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ steps.version.outputs.commit }}
         run: |
           remote_commit=$(
             git ls-remote --exit-code origin \
@@ -236,15 +573,47 @@ jobs:
               "refs/tags/$GITHUB_REF_NAME^{}" |
               awk '$2 ~ /\^\{\}$/ { peeled = $1 } $2 !~ /\^\{\}$/ { direct = $1 } END { print peeled ? peeled : direct }'
           )
-          if [[ "$remote_commit" != "$RELEASE_COMMIT" ]]; then
-            echo "Remote tag $GITHUB_REF_NAME no longer points to $RELEASE_COMMIT." >&2
+          [[ "$remote_commit" == "$RELEASE_COMMIT" ]] || {
+            echo "Remote tag changed after draft creation; refusing to publish." >&2
             exit 1
-          fi
+          }
 
-          gh release create "$GITHUB_REF_NAME" \
-            "$RELEASE_ARTIFACT" \
-            "$RELEASE_ARTIFACT.sha256" \
-            --verify-tag \
-            --target "$RELEASE_COMMIT" \
-            --generate-notes \
-            --title "Islet $RELEASE_VERSION"
+          release_id=$(gh release view "$GITHUB_REF_NAME" --json databaseId,isDraft \
+            --jq 'select(.isDraft == true) | .databaseId')
+          test -n "$release_id" || {
+            echo "Expected a draft release." >&2
+            exit 1
+          }
+          release_json="$RUNNER_TEMP/draft-release.json"
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$release_json"
+          [[ "$(jq '.assets | length' "$release_json")" == "4" ]]
+          for asset in "$RELEASE_OUTPUT"/*; do
+            name=$(basename "$asset")
+            size=$(stat -f %z "$asset")
+            digest="sha256:$(shasum -a 256 "$asset" | awk '{print $1}')"
+            jq -e \
+              --arg name "$name" \
+              --arg digest "$digest" \
+              --argjson size "$size" \
+              '[.assets[] | select(
+                .name == $name and
+                .state == "uploaded" and
+                .size == $size and
+                .digest == $digest
+              )] | length == 1' \
+              "$release_json" >/dev/null
+          done
+
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          published_release=$(
+            gh release view "$GITHUB_REF_NAME" --json isDraft,isImmutable,targetCommitish
+          )
+          jq -e \
+            --arg commit "$RELEASE_COMMIT" \
+            '.isDraft == false and
+              .isImmutable == true and
+              .targetCommitish == $commit' \
+            <<< "$published_release" >/dev/null

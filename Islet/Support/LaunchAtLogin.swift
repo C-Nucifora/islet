@@ -2,6 +2,48 @@ import Combine
 import Defaults
 import ServiceManagement
 
+enum LaunchAtLoginRegistrationStatus: Equatable, Sendable {
+  case enabled
+  case requiresApproval
+  case notRegistered
+  case notFound
+  case unknown
+
+  init(_ status: SMAppService.Status) {
+    switch status {
+    case .enabled: self = .enabled
+    case .requiresApproval: self = .requiresApproval
+    case .notRegistered: self = .notRegistered
+    case .notFound: self = .notFound
+    @unknown default: self = .unknown
+    }
+  }
+}
+
+enum LaunchAtLoginRegistrationAction: Equatable, Sendable {
+  case none
+  case register
+  case unregister
+}
+
+enum LaunchAtLoginPolicy {
+  static func action(
+    desiredEnabled: Bool, status: LaunchAtLoginRegistrationStatus
+  ) -> LaunchAtLoginRegistrationAction {
+    if desiredEnabled {
+      switch status {
+      case .enabled, .requiresApproval, .unknown: .none
+      case .notRegistered, .notFound: .register
+      }
+    } else {
+      switch status {
+      case .enabled, .requiresApproval: .unregister
+      case .notRegistered, .notFound, .unknown: .none
+      }
+    }
+  }
+}
+
 @MainActor
 final class LaunchAtLoginStatus: ObservableObject {
   static let shared = LaunchAtLoginStatus()
@@ -40,12 +82,11 @@ enum LaunchAtLogin {
 
   static func apply(_ enabled: Bool) {
     do {
-      if enabled {
-        if SMAppService.mainApp.status != .enabled { try SMAppService.mainApp.register() }
-      } else {
-        if SMAppService.mainApp.status == .enabled {
-          try SMAppService.mainApp.unregister()
-        }
+      let status = LaunchAtLoginRegistrationStatus(SMAppService.mainApp.status)
+      switch LaunchAtLoginPolicy.action(desiredEnabled: enabled, status: status) {
+      case .none: break
+      case .register: try SMAppService.mainApp.register()
+      case .unregister: try SMAppService.mainApp.unregister()
       }
       LaunchAtLoginStatus.shared.refresh()
     } catch {

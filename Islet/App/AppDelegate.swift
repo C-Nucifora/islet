@@ -144,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     timerCompletionNotifications.start()
     Task { @MainActor in
       ActivityEnablement.migrateLegacyPreferencesIfNeeded()
+      AppUpdateController.shared.start()
       // Bring a persisted activity order forward before anything renders from it: entries added to
       // the catalogue after the order was first written would otherwise be missing from Settings.
       let merged = ActivityCatalog.mergedOrder(Defaults[.activityOrder])
