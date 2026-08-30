@@ -147,6 +147,15 @@ final class PulseCredentialStore: ObservableObject {
     return credential.isLegacy ? legacyTokenURL : credentialURL(for: id)
   }
 
+  func isCurrentProvider(_ identity: PulseProviderIdentity) -> Bool {
+    guard (try? prepare()) != nil else { return false }
+    return credentials.contains {
+      !$0.isRevoked && $0.id == identity.credentialID
+        && sourceKey($0.source) == identity.sourceKey
+        && $0.permissions.contains(.webActions)
+    }
+  }
+
   func prepare() throws {
     guard !hasLoaded else { return }
     do {

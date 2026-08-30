@@ -279,6 +279,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "provider credentials permissions rotation revocation age last use", "Quick Actions",
         "Reveal credential folder", "Dismiss visible",
         "Rotate provider credential", "Provider examples", "Allow Mute Revoke Policy",
+        "Trusted web destinations host origin allowlist loopback revoke",
         "Other sources seen this session", "Pulse history", "Show session history",
         "Keep history after quitting", "Retention period", "Maximum entries", "Export history",
         "History filter", "All Accepted Filtered Rejected", "Clear history",
@@ -475,6 +476,7 @@ struct SettingsView: View {
   @ObservedObject private var pulse = PulseCenter.shared
   @ObservedObject private var pulseServer = PulseServer.shared
   @ObservedObject private var pulseCredentials = PulseServer.shared.credentialStore
+  @ObservedObject private var pulseActionTrust = PulseServer.shared.actionTrustStore
   @ObservedObject private var permissions = PermissionCenter.shared
   @ObservedObject private var hud = HUDController.shared
   @ObservedObject private var continuity = ContinuityMonitor.shared
@@ -1936,6 +1938,35 @@ struct SettingsView: View {
           }
         }
       }
+      Section("Trusted web destinations") {
+        Text(
+          "Each entry trusts one canonical origin for one credential-bound provider. Paths, queries, action titles and payload text are never stored."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        if let error = pulseActionTrust.lastError {
+          Label(error, systemImage: "exclamationmark.triangle.fill")
+            .foregroundStyle(.orange)
+        } else if pulseActionTrust.trusts.isEmpty {
+          ContentUnavailableView(
+            "No trusted destinations", systemImage: "link.badge.plus",
+            description: Text("Opening a new Pulse web origin always asks first."))
+        } else {
+          ForEach(pulseActionTrust.trusts) { trust in
+            PulseTrustedDestinationRow(
+              trust: trust,
+              providerName: pulseCredentials.credentials.first {
+                $0.id == trust.provider.credentialID
+              }?.name,
+              revoke: {
+                do {
+                  try pulseActionTrust.revoke(trust)
+                } catch {
+                  pulseCredentialResult = error.localizedDescription
+                }
+              })
+          }
+        }
+      }
       Section("Provider examples") {
         Text(
           "Providers run outside Islet. They can publish only the listed data and cannot read other activities."
@@ -2025,6 +2056,7 @@ struct SettingsView: View {
       }
     }
     .formStyle(.grouped)
+    .onAppear { try? pulseActionTrust.prepare() }
   }
 
   private var diagnosticsForm: some View {
@@ -2990,6 +3022,39 @@ private struct PulseCredentialRow: View {
           reportError(error.localizedDescription)
         }
       })
+  }
+}
+
+private struct PulseTrustedDestinationRow: View {
+  let trust: PulseActionTrust
+  let providerName: String?
+  let revoke: () -> Void
+
+  var body: some View {
+    HStack(spacing: 10) {
+      Image(systemName: trust.kind == .loopback ? "desktopcomputer" : "globe")
+        .frame(width: 18)
+        .foregroundStyle(trust.kind == .loopback ? .orange : .secondary)
+        .accessibilityHidden(true)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(trust.canonicalOrigin).font(.caption.monospaced()).textSelection(.enabled)
+        Text(
+          providerName.map { "\($0) · \(trust.provider.sourceKey)" }
+            ?? trust.provider.sourceKey
+        )
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        if trust.kind == .loopback {
+          Text("Local loopback destination")
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.orange)
+        }
+      }
+      Spacer()
+      Button("Revoke", role: .destructive, action: revoke)
+        .accessibilityLabel("Revoke trusted destination \(trust.displayHost)")
+    }
+    .padding(.vertical, 3)
   }
 }
 
