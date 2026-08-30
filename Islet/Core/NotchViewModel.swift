@@ -6,6 +6,8 @@ import SwiftUI
 @MainActor
 final class NotchViewModel: ObservableObject {
   @Published private(set) var state: NotchState = .closed
+  /// The expanded switcher's explicit choice. A nil value lets the view choose its normal default.
+  @Published private(set) var selectedActivityID: String?
   /// Screen-coordinate footprint the visible island should occupy right now. The AppKit panel is
   /// permanently reserved at `reservedPanelFrame`; keeping this logical footprint separate lets
   /// pointer passthrough and alignment follow only the pixels the island actually draws.
@@ -50,7 +52,8 @@ final class NotchViewModel: ObservableObject {
 
   init(
     geometry: NotchGeometry, modeOverride: InteractionMode? = nil,
-    barrierPushDistanceOverride: CGFloat? = nil
+    barrierPushDistanceOverride: CGFloat? = nil,
+    initialPresentation: PanelPresentationState = .initial
   ) {
     self.geometry = geometry
     self.modeOverride = modeOverride
@@ -58,6 +61,15 @@ final class NotchViewModel: ObservableObject {
     let initialFrame = geometry.collapsedPanelFrame()
     self.panelFrame = initialFrame
     self.actualPanelFrame = initialFrame
+    self.state = initialPresentation.notchState
+    self.selectedActivityID = initialPresentation.selectedActivityID
+    if state.isExpanded {
+      expandedWidth = min(
+        maximumExpandedWidth,
+        max(Metrics.expandedSize.width, ceil(initialPresentation.expandedWidth)))
+      expandedHeight = initialPresentation.expandedHeight
+    }
+    panelFrame = targetPanelFrame(for: state)
     // NSEvent monitors already deliver on the main thread, so no .receive(on:) hop is needed
     // (it would add a redundant async dispatch on every app-wide mouse move).
     EventMonitors.shared.mouseMovement
@@ -72,6 +84,33 @@ final class NotchViewModel: ObservableObject {
     EventMonitors.shared.fileDragMovement
       .sink { [weak self] p in self?.handleFileDragMoved(p) }
       .store(in: &cancellables)
+  }
+
+  var presentationState: PanelPresentationState {
+    PanelPresentationState(
+      notchState: state, selectedActivityID: selectedActivityID,
+      expandedWidth: expandedWidth, expandedHeight: expandedHeight)
+  }
+
+  func selectActivity(_ id: String?) {
+    if selectedActivityID != id { selectedActivityID = id }
+  }
+
+  /// Resumes hover bookkeeping after ScreenManager restores an expanded presentation. Without
+  /// this, an unpinned panel rebuilt while the pointer is already outside would never start its
+  /// normal collapse timer because the new model has not observed an exit event.
+  func resumePointerTracking(at location: CGPoint) {
+    lastMouseLocation = location
+    wasInside = region(hoverRegion, contains: location)
+    guard !wasInside else { return }
+    switch state {
+    case .peek:
+      apply(.hoverExited)
+    case .expanded(false):
+      scheduleCollapse()
+    case .closed, .expanded(true):
+      break
+    }
   }
 
   /// Widest island needed for every catalogued activity, clamped to the current screen.
@@ -286,16 +325,16 @@ final class NotchViewModel: ObservableObject {
     withAnimation(Motion.gated(opening ? Motion.opening : Motion.closing)) {
       state = next
     }
-    // Closing resets the size tiers. The selection state lives in ExpandedContainerView and dies
-    // with it, so the next open lands on the default tab — leaving a tall tier behind would draw a
-    // 250pt island around 190pt content until the new view corrected it. Set with no animation:
-    // nothing reads expandedHeight while the island is closed, so the change is invisible.
+    // Closing resets the size tiers and explicit selection, matching the old view-local selection
+    // behavior. Leaving a tall tier behind would draw a 250pt island around 190pt content until
+    // the new view corrected it. Set with no animation because none of these values draw closed.
     if !next.isExpanded, expandedHeight != Metrics.expandedSize.height {
       expandedHeight = Metrics.expandedSize.height
     }
     if !next.isExpanded, expandedWidth != Metrics.expandedSize.width {
       expandedWidth = Metrics.expandedSize.width
     }
+    if !next.isExpanded, selectedActivityID != nil { selectedActivityID = nil }
     // hover-region may have changed shape; re-evaluate containment so exit fires correctly
     wasInside = region(hoverRegion, contains: lastMouseLocation)
   }

@@ -8,6 +8,19 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(T3CredentialStore.service, "dev.islet")
   }
 
+  func testAppTransportConfigurationScopesHTTPToLocalNetworking() throws {
+    let appTransportSecurity = try XCTUnwrap(
+      Bundle.main.infoDictionary?["NSAppTransportSecurity"] as? [String: Any])
+
+    XCTAssertNotEqual(appTransportSecurity["NSAllowsArbitraryLoads"] as? Bool, true)
+    XCTAssertEqual(appTransportSecurity["NSAllowsLocalNetworking"] as? Bool, true)
+    XCTAssertTrue(
+      (appTransportSecurity["NSExceptionDomains"] as? [String: Any] ?? [:]).isEmpty)
+    XCTAssertTrue(
+      (Bundle.main.infoDictionary?[T3TransportPolicy.approvedOriginsInfoKey] as? [String] ?? [])
+        .isEmpty)
+  }
+
   func testCredentialMigrationPreservesCanonicalValuesAndImportsMissingLegacyValues() {
     let merged = T3CredentialStore.merging(
       current: ["shared": "current", "current-only": "current-token"],
@@ -38,6 +51,101 @@ final class T3CodeTests: XCTestCase {
   func testRejectsInsecureRemotePairingByDefault() {
     XCTAssertThrowsError(
       try T3PairingTarget.parse("http://mini.example.com:3773/pair#token=once"))
+  }
+
+  func testUserApprovalCannotBypassTheBuildTransportPolicy() throws {
+    let policy = T3TransportPolicy(infoDictionary: [:])
+
+    XCTAssertThrowsError(
+      try T3PairingTarget.parse(
+        "http://mini.example.com:3773/pair#token=once",
+        allowInsecureRemoteHTTP: true,
+        transportPolicy: policy)
+    ) { error in
+      guard case T3ClientError.unapprovedInsecureRemoteHTTP = error else {
+        return XCTFail("Expected unapprovedInsecureRemoteHTTP, got \(error)")
+      }
+    }
+  }
+
+  func testReviewedBuildPolicyCannotBypassUserApproval() {
+    let policy = Self.transportPolicy(
+      origins: ["http://mini.example.com:3773/"],
+      exceptionDomains: [
+        "mini.example.com": ["NSExceptionAllowsInsecureHTTPLoads": true]
+      ])
+
+    XCTAssertThrowsError(
+      try T3Endpoint(
+        URL(string: "http://mini.example.com:3773/")!,
+        allowInsecureRemoteHTTP: false,
+        transportPolicy: policy)
+    ) { error in
+      guard case T3ClientError.insecureRemoteHTTP = error else {
+        return XCTFail("Expected insecureRemoteHTTP, got \(error)")
+      }
+    }
+  }
+
+  func testRemoteHTTPRequiresMatchingReviewedOriginAndATSException() throws {
+    let policy = Self.transportPolicy(
+      origins: ["http://mini.example.com:3773/"],
+      exceptionDomains: [
+        "mini.example.com": ["NSExceptionAllowsInsecureHTTPLoads": true]
+      ])
+
+    let endpoint = try T3Endpoint(
+      URL(string: "http://mini.example.com:3773/pair?ignored=yes")!,
+      allowInsecureRemoteHTTP: true,
+      transportPolicy: policy)
+    XCTAssertEqual(endpoint.baseURL.absoluteString, "http://mini.example.com:3773/")
+    XCTAssertFalse(
+      policy.permitsInsecureRemoteHTTP(URL(string: "http://mini.example.com:4888/")!))
+    XCTAssertFalse(
+      policy.permitsInsecureRemoteHTTP(URL(string: "http://child.mini.example.com:3773/")!))
+  }
+
+  func testRemoteHTTPApprovalWithoutAnATSExceptionIsIgnored() {
+    let policy = Self.transportPolicy(
+      origins: ["http://mini.example.com:3773/"], exceptionDomains: [:])
+
+    XCTAssertFalse(
+      policy.permitsInsecureRemoteHTTP(URL(string: "http://mini.example.com:3773/")!))
+  }
+
+  func testBroadATSSubdomainExceptionCannotApproveRemoteHTTP() {
+    let policy = Self.transportPolicy(
+      origins: ["http://mini.example.com:3773/"],
+      exceptionDomains: [
+        "mini.example.com": [
+          "NSExceptionAllowsInsecureHTTPLoads": true,
+          "NSIncludesSubdomains": true,
+        ]
+      ])
+
+    XCTAssertFalse(
+      policy.permitsInsecureRemoteHTTP(URL(string: "http://mini.example.com:3773/")!))
+  }
+
+  func testLoopbackHTTPNeedsNoRemoteException() throws {
+    let policy = T3TransportPolicy(infoDictionary: [:])
+
+    XCTAssertNoThrow(
+      try T3Endpoint(
+        URL(string: "http://127.0.0.1:3773/")!, transportPolicy: policy))
+    XCTAssertNoThrow(
+      try T3Endpoint(URL(string: "http://[::1]:3773/")!, transportPolicy: policy))
+    XCTAssertFalse(
+      policy.requiresHTTPSMigration(URL(string: "http://localhost:3773/")!))
+  }
+
+  func testSavedUnapprovedRemoteHTTPRequiresHTTPSMigration() {
+    let policy = T3TransportPolicy(infoDictionary: [:])
+
+    XCTAssertTrue(
+      policy.requiresHTTPSMigration(URL(string: "http://mini.example.com:3773/")!))
+    XCTAssertFalse(
+      policy.requiresHTTPSMigration(URL(string: "https://mini.example.com:3773/")!))
   }
 
   func testAgentDerivationIsProviderNeutralAndPrioritizesQuestions() throws {
@@ -227,6 +335,20 @@ final class T3CodeTests: XCTestCase {
     }
   }
 
+  func testT3RedirectPolicyRejectsCrossOriginAndTransportDowngrade() throws {
+    let response = try XCTUnwrap(
+      HTTPURLResponse(
+        url: URL(string: "https://mini.example.com/oauth/token")!, statusCode: 307,
+        httpVersion: "HTTP/1.1", headerFields: nil))
+    var crossOrigin = URLRequest(url: URL(string: "https://attacker.example/capture")!)
+    crossOrigin.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
+    var downgrade = URLRequest(url: URL(string: "http://mini.example.com/capture")!)
+    downgrade.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
+
+    XCTAssertNil(T3RedirectPolicy.requestToFollow(crossOrigin, from: response))
+    XCTAssertNil(T3RedirectPolicy.requestToFollow(downgrade, from: response))
+  }
+
   func testFutureDatedFailedAgentIsRejected() {
     let now = Date(timeIntervalSince1970: 1_788_000_000)
     let shell = Self.shell(
@@ -294,6 +416,86 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(T3CodeActivity.upserting(snapshot, into: current), current)
   }
 
+  func testVisibleEnvironmentsIncludeHealthyEmptyAndUnhealthyConfiguredRemotes() {
+    let profiles = [
+      T3EnvironmentProfile(id: "healthy", label: "Healthy", baseURL: "https://healthy.example"),
+      T3EnvironmentProfile(id: "offline", label: "Offline", baseURL: "https://offline.example"),
+      T3EnvironmentProfile(
+        id: "reconnecting", label: "Reconnecting", baseURL: "https://reconnecting.example"),
+      T3EnvironmentProfile(id: "unpaired", label: "Unpaired", baseURL: "https://unpaired.example"),
+      T3EnvironmentProfile(
+        id: "credentials", label: "Credential", baseURL: "https://credentials.example"),
+      T3EnvironmentProfile(id: "pending", label: "Pending", baseURL: "https://pending.example"),
+      T3EnvironmentProfile(
+        id: "disabled", label: "Disabled", baseURL: "https://disabled.example", enabled: false),
+    ]
+    let snapshots = [
+      T3EnvironmentSnapshot(
+        id: T3CodeActivity.remoteSnapshotID(
+          environmentID: "healthy", baseURL: "https://healthy.example"),
+        label: "Healthy", baseURL: "https://healthy.example", isLocal: false,
+        platform: nil, serverVersion: nil, state: .connected, agents: []),
+      T3EnvironmentSnapshot(
+        id: T3CodeActivity.remoteSnapshotID(
+          environmentID: "offline", baseURL: "https://offline.example"),
+        label: "Offline", baseURL: "https://offline.example", isLocal: false,
+        platform: nil, serverVersion: nil, state: .offline("No route"), agents: []),
+      T3EnvironmentSnapshot(
+        id: T3CodeActivity.remoteSnapshotID(
+          environmentID: "reconnecting", baseURL: "https://reconnecting.example"),
+        label: "Reconnecting", baseURL: "https://reconnecting.example", isLocal: false,
+        platform: nil, serverVersion: nil, state: .reconnecting("No route"), agents: []),
+      T3EnvironmentSnapshot(
+        id: T3CodeActivity.remoteSnapshotID(
+          environmentID: "unpaired", baseURL: "https://unpaired.example"),
+        label: "Unpaired", baseURL: "https://unpaired.example", isLocal: false,
+        platform: nil, serverVersion: nil, state: .needsPairing, agents: []),
+      T3EnvironmentSnapshot(
+        id: T3CodeActivity.remoteSnapshotID(
+          environmentID: "credentials", baseURL: "https://credentials.example"),
+        label: "Credential", baseURL: "https://credentials.example", isLocal: false,
+        platform: nil, serverVersion: nil,
+        state: .credentialError("Keychain unavailable"), agents: []),
+    ]
+
+    let visible = T3CodeActivity.visibleEnvironments(snapshots: snapshots, profiles: profiles)
+
+    XCTAssertEqual(
+      visible.map(\.label),
+      ["Credential", "Healthy", "Offline", "Pending", "Reconnecting", "Unpaired"])
+    let states = Dictionary(uniqueKeysWithValues: visible.map { ($0.label, $0.state) })
+    XCTAssertEqual(states["Healthy"], .connected)
+    XCTAssertTrue(visible.first(where: { $0.label == "Healthy" })?.agents.isEmpty == true)
+    XCTAssertEqual(states["Offline"], .offline("No route"))
+    XCTAssertEqual(states["Pending"], .connecting)
+    XCTAssertEqual(states["Reconnecting"], .reconnecting("No route"))
+    XCTAssertEqual(states["Unpaired"], .needsPairing)
+    XCTAssertEqual(states["Credential"], .credentialError("Keychain unavailable"))
+  }
+
+  func testEnvironmentActionsMatchConnectionStateAndMachineType() {
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(for: .needsPairing, isLocal: true), [.pair])
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(for: .needsPairing, isLocal: false), [.pair, .disable])
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(for: .offline("No route"), isLocal: false),
+      [.retry, .disable])
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(for: .reconnecting("No route"), isLocal: true),
+      [.retry])
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(
+        for: .credentialError("Keychain unavailable"), isLocal: false),
+      [.openSettings, .disable])
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(for: .connected, isLocal: true), [])
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(for: .connected, isLocal: false), [.disable])
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(for: .connecting, isLocal: false), [.disable])
+  }
+
   func testLocalAndRemoteEnvironmentIdentityCannotCollide() {
     XCTAssertEqual(T3CodeActivity.localSnapshotID("same"), "local|same")
     XCTAssertEqual(
@@ -338,6 +540,16 @@ final class T3CodeTests: XCTestCase {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [T3TestURLProtocol.self]
     return URLSession(configuration: configuration)
+  }
+
+  private static func transportPolicy(
+    origins: [String],
+    exceptionDomains: [String: [String: Any]]
+  ) -> T3TransportPolicy {
+    T3TransportPolicy(infoDictionary: [
+      T3TransportPolicy.approvedOriginsInfoKey: origins,
+      "NSAppTransportSecurity": ["NSExceptionDomains": exceptionDomains],
+    ])
   }
 
   private static func shell(

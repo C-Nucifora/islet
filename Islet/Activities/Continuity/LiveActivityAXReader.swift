@@ -1,6 +1,54 @@
 import AppKit
 import ApplicationServices
 
+enum LiveActivityAXCompatibilityError: Error, Equatable {
+  case unexpectedCFType(attribute: String, expected: CFTypeID, actual: CFTypeID)
+  case unexpectedAXValueType(attribute: String, expected: UInt32, actual: UInt32)
+  case unreadableAXValue(attribute: String, type: UInt32)
+}
+
+enum LiveActivityAXConversion {
+  static func element(from value: AnyObject, attribute: String)
+    throws(LiveActivityAXCompatibilityError) -> AXUIElement
+  {
+    let actualType = CFGetTypeID(value)
+    guard actualType == AXUIElementGetTypeID() else {
+      throw LiveActivityAXCompatibilityError.unexpectedCFType(
+        attribute: attribute, expected: AXUIElementGetTypeID(), actual: actualType)
+    }
+
+    // Swift rejects `as? AXUIElement` because Core Foundation references appear castable from any
+    // object. The type-ID check above is the runtime check that makes this downcast valid.
+    return unsafeDowncast(value, to: AXUIElement.self)
+  }
+
+  static func rect(from value: AnyObject, attribute: String)
+    throws(LiveActivityAXCompatibilityError) -> CGRect
+  {
+    let actualType = CFGetTypeID(value)
+    guard actualType == AXValueGetTypeID() else {
+      throw LiveActivityAXCompatibilityError.unexpectedCFType(
+        attribute: attribute, expected: AXValueGetTypeID(), actual: actualType)
+    }
+
+    // As with AXUIElement above, Swift cannot express this Core Foundation check as `as?`.
+    let axValue = unsafeDowncast(value, to: AXValue.self)
+    let valueType = AXValueGetType(axValue)
+    guard valueType == .cgRect else {
+      throw LiveActivityAXCompatibilityError.unexpectedAXValueType(
+        attribute: attribute, expected: AXValueType.cgRect.rawValue,
+        actual: valueType.rawValue)
+    }
+
+    var rect = CGRect.zero
+    guard AXValueGetValue(axValue, .cgRect, &rect) else {
+      throw LiveActivityAXCompatibilityError.unreadableAXValue(
+        attribute: attribute, type: valueType.rawValue)
+    }
+    return rect
+  }
+}
+
 /// Reads iPhone Live Activities out of ControlCenter's menu bar over the Accessibility API.
 ///
 /// This is the second design for this feature. The first read the activities directly from
@@ -37,23 +85,25 @@ final class LiveActivityAXReader {
 
   /// Current Live Activities, or `nil` when ControlCenter could not be reached at all — which is a
   /// different state from "reached it, found none" and gets a different sentence in the UI.
-  func read() -> [MenuBarLiveActivity]? {
+  func read() throws(LiveActivityAXCompatibilityError) -> [MenuBarLiveActivity]? {
     guard isTrusted, let pid = controlCenter?.processIdentifier else { return nil }
     let app = AXUIElementCreateApplication(pid)
-    guard let extrasValue = copy(app, "AXExtrasMenuBar"),
-      CFGetTypeID(extrasValue) == AXUIElementGetTypeID()
-    else { return nil }
-    let extras = extrasValue as! AXUIElement
+    guard let extrasValue = copy(app, "AXExtrasMenuBar") else { return nil }
+    let extras = try LiveActivityAXConversion.element(
+      from: extrasValue, attribute: "AXExtrasMenuBar")
     let items = (copy(extras, kAXChildrenAttribute as String) as? [AXUIElement]) ?? []
-    return items.compactMap { item -> MenuBarLiveActivity? in
+    var activities: [MenuBarLiveActivity] = []
+    for item in items {
       guard let identifier = copy(item, kAXIdentifierAttribute as String) as? String,
         LiveActivityIdentifier.parse(identifier) != nil
-      else { return nil }
-      return MenuBarLiveActivity(
-        axIdentifier: identifier,
-        appName: copy(item, kAXDescriptionAttribute as String) as? String,
-        minX: frame(item).minX)
+      else { continue }
+      activities.append(
+        MenuBarLiveActivity(
+          axIdentifier: identifier,
+          appName: copy(item, kAXDescriptionAttribute as String) as? String,
+          minX: try frame(item).minX))
     }
+    return activities
   }
 
   /// Starts watching for changes. `onChange` fires on the main actor, already coalesced.
@@ -145,11 +195,8 @@ final class LiveActivityAXReader {
     return value as AnyObject?
   }
 
-  private func frame(_ element: AXUIElement) -> CGRect {
-    guard let value = copy(element, "AXFrame"), CFGetTypeID(value) == AXValueGetTypeID()
-    else { return .zero }
-    var rect = CGRect.zero
-    AXValueGetValue(value as! AXValue, .cgRect, &rect)
-    return rect
+  private func frame(_ element: AXUIElement) throws(LiveActivityAXCompatibilityError) -> CGRect {
+    guard let value = copy(element, "AXFrame") else { return .zero }
+    return try LiveActivityAXConversion.rect(from: value, attribute: "AXFrame")
   }
 }

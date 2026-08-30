@@ -47,6 +47,9 @@ clients.
 Set a unique `requestID` on every command. Islet echoes it on decoded responses, allowing clients
 to correlate results if they reuse a connection. Clients that omit it should send only one command
 at a time. Rejections include a stable `errorCode` for automation and a human-readable `error`.
+Pulse validates an optional `symbol` against the SF Symbols available on the host. An empty,
+unknown, or unavailable symbol is replaced with Pulse's `waveform.path.ecg` fallback. The command
+still succeeds and includes a field-specific `warning` in its response.
 The socket rejects unknown JSON fields so a misspelled protocol key cannot fail silently.
 
 ## Delivery profiles and payload-free history
