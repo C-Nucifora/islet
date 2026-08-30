@@ -102,68 +102,111 @@ struct IdleDashboardView: View {
       ) {
         Task { await reminders.recoverAccess() }
       }
-    } else if reminders.loadState == .loading {
-      ProgressView().controlSize(.small).accessibilityLabel("Loading reminders")
-    } else if case .failed(let message) = reminders.loadState {
-      HStack(spacing: 5) {
-        Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(2)
-        Button("Retry") { Task { await reminders.reload() } }
-          .buttonStyle(.link).font(.caption2)
-      }
-    } else if reminders.reminders.isEmpty {
-      emptyRow("All clear")
     } else {
-      ScrollView(.vertical, showsIndicators: false) {
-        VStack(alignment: .leading, spacing: 6) {
-          if let error = reminders.lastActionError {
-            HStack(spacing: 5) {
-              Text(error).font(.caption2).foregroundStyle(.orange).lineLimit(1)
-              Button("Dismiss") { reminders.dismissActionError() }
-                .buttonStyle(.link).font(.caption2)
-            }
+      VStack(alignment: .leading, spacing: 6) {
+        HStack {
+          Spacer()
+          Button {
+            ReminderEditorWindow.shared.presentEditor(provider: reminders, item: nil)
+          } label: {
+            Label("New reminder", systemImage: "plus")
           }
-          ForEach(reminders.reminders) { item in
-            HStack(spacing: 6) {
-              Button {
-                withAnimation(Motion.gated(.snappy)) { reminders.complete(item) }
-              } label: {
-                // Circle tinted with the reminder list's colour (like Reminders.app).
-                Image(systemName: "circle")
-                  .foregroundStyle(Color(isletHex: item.listColorHex) ?? .secondary)
-                  .font(.caption)
-              }
-              .buttonStyle(.plain)
-              .accessibilityLabel("Complete \(item.title)")
-              VStack(alignment: .leading, spacing: 0) {
-                Text(item.title).font(.caption).lineLimit(1)
-                if let due = item.dueDate {
-                  reminderDueText(item, due: due)
-                    .font(.caption2).monospacedDigit()
-                    .foregroundStyle(
-                      RemindersLogic.isOverdue(item, now: Date())
-                        ? .red : .secondary)
-                }
-              }
-              Spacer(minLength: 0)
-              Menu {
-                ForEach(RemindersLogic.SnoozePreset.allCases, id: \.self) { preset in
-                  Button(preset.title) {
-                    _ = reminders.snooze(item, preset: preset)
+          .labelStyle(.iconOnly)
+          .buttonStyle(.plain)
+          .keyboardShortcut("n", modifiers: .command)
+          .accessibilityLabel("New reminder")
+          .disabled(reminders.availableLists.isEmpty)
+        }
+        if let error = reminders.lastActionError {
+          HStack(spacing: 5) {
+            Text(error).font(.caption2).foregroundStyle(.orange).lineLimit(2)
+            Button("Dismiss") { reminders.dismissActionError() }
+              .buttonStyle(.link).font(.caption2)
+          }
+        }
+        if let undo = reminders.completionUndo {
+          HStack(spacing: 5) {
+            Text("Completed \(undo.title)").font(.caption2).lineLimit(1)
+            Button("Undo") { reminders.undoLastCompletion() }
+              .buttonStyle(.link).font(.caption2)
+              .keyboardShortcut("z", modifiers: .command)
+              .accessibilityLabel("Undo completing \(undo.title)")
+          }
+        }
+        if reminders.loadState == .loading {
+          ProgressView().controlSize(.small).accessibilityLabel("Loading reminders")
+        } else if case .failed(let message) = reminders.loadState {
+          HStack(spacing: 5) {
+            Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(2)
+            Button("Retry") { Task { await reminders.reload() } }
+              .buttonStyle(.link).font(.caption2)
+          }
+        } else if reminders.reminders.isEmpty {
+          emptyRow("All clear")
+        } else {
+          ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 6) {
+              ForEach(reminders.reminders) { item in
+                HStack(spacing: 6) {
+                  Button {
+                    withAnimation(Motion.gated(.snappy)) { reminders.complete(item) }
+                  } label: {
+                    // Circle tinted with the reminder list's colour (like Reminders.app).
+                    Image(systemName: "circle")
+                      .foregroundStyle(Color(isletHex: item.listColorHex) ?? .secondary)
+                      .font(.caption)
                   }
+                  .buttonStyle(.plain)
+                  .accessibilityLabel("Complete \(item.title)")
+                  VStack(alignment: .leading, spacing: 0) {
+                    Text(item.title).font(.caption).lineLimit(1)
+                    if let due = item.dueDate {
+                      reminderDueText(item, due: due)
+                        .font(.caption2).monospacedDigit()
+                        .foregroundStyle(
+                          RemindersLogic.isOverdue(item, now: Date())
+                            ? .red : .secondary)
+                    }
+                  }
+                  Spacer(minLength: 0)
+                  reminderActions(item)
                 }
-              } label: {
-                Image(systemName: "clock.arrow.circlepath")
-                  .font(.caption2).foregroundStyle(.secondary)
               }
-              .menuStyle(.borderlessButton)
-              .menuIndicator(.hidden)
-              .fixedSize()
-              .accessibilityLabel("Snooze \(item.title)")
             }
           }
         }
       }
     }
+  }
+
+  private func reminderActions(_ item: ReminderItem) -> some View {
+    Menu {
+      Section("Snooze") {
+        ForEach(RemindersLogic.SnoozePreset.allCases, id: \.self) { preset in
+          Button(preset.title) { _ = reminders.snooze(item, preset: preset) }
+        }
+        Button("Choose Date and Time…") {
+          ReminderEditorWindow.shared.presentSnooze(provider: reminders, item: item)
+        }
+      }
+      Button("Edit…") {
+        ReminderEditorWindow.shared.presentEditor(provider: reminders, item: item)
+      }
+      if reminders.availableLists.count > 1 {
+        Menu("Move to List") {
+          ForEach(reminders.availableLists.filter { $0.id != item.listID }) { list in
+            Button(list.title) { _ = reminders.move(item, toListWithID: list.id) }
+          }
+        }
+      }
+    } label: {
+      Image(systemName: "ellipsis.circle")
+        .font(.caption2).foregroundStyle(.secondary)
+    }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .fixedSize()
+    .accessibilityLabel("Actions for \(item.title)")
   }
 
   // MARK: - Fallbacks

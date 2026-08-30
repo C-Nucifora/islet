@@ -64,6 +64,10 @@ struct ReminderReloadState {
     optimisticCompletionIDs.insert(id)
   }
 
+  mutating func restoreCompleted(_ id: String) {
+    optimisticCompletionIDs.remove(id)
+  }
+
   mutating func finish(_ items: [ReminderItem], generation completedGeneration: Int)
     -> [ReminderItem]?
   {
