@@ -2715,6 +2715,9 @@ private struct PulseHistoryRow: View {
           if let source = entry.source {
             Text(source).font(.caption.monospaced()).foregroundStyle(.secondary)
           }
+          if let providerIdentifier = entry.providerIdentifier {
+            Text(providerIdentifier).font(.caption.monospaced()).foregroundStyle(.tertiary)
+          }
         }
         Text(metadata).font(.caption2).foregroundStyle(.tertiary)
       }

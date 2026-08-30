@@ -86,10 +86,21 @@ struct PulsePayload: Codable, Equatable, Sendable {
 }
 
 struct PulseItem: Equatable, Identifiable, Sendable {
+  struct ID: Equatable, Hashable, Sendable {
+    let normalizedSource: String
+    let providerIdentifier: String
+
+    init(source: String, providerIdentifier: String) throws {
+      normalizedSource = try PulseItem.normalizedSourceKey(source)
+      self.providerIdentifier = try PulseItem.normalizedIdentifier(providerIdentifier)
+    }
+  }
+
   static let maximumIdentifierLength = 128
   static let maximumActionURLLength = 2_048
 
-  var id: String
+  let id: ID
+  var providerIdentifier: String
   var source: String
   var title: String
   var subtitle: String?
@@ -112,8 +123,10 @@ struct PulseItem: Equatable, Identifiable, Sendable {
     staleTimeout: TimeInterval = PulseStalenessPolicy.defaultTimeout,
     symbolAvailability: (String) -> Bool? = PulseSymbolValidator.platformAvailability
   ) throws {
-    id = try Self.clean(payload.id, field: "id", limit: Self.maximumIdentifierLength)
+    providerIdentifier = try Self.clean(
+      payload.id, field: "id", limit: Self.maximumIdentifierLength)
     source = try Self.clean(payload.source, field: "source", limit: 80)
+    id = try ID(source: source, providerIdentifier: providerIdentifier)
     title = try Self.clean(payload.title, field: "title", limit: 180)
     if let raw = payload.subtitle?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
       guard raw.count <= 240 else { throw PulseValidationError.tooLong("subtitle", 240) }
@@ -182,6 +195,10 @@ struct PulseItem: Equatable, Identifiable, Sendable {
 
   static func normalizedSource(_ value: String) throws -> String {
     try clean(value, field: "source", limit: 80)
+  }
+
+  static func normalizedSourceKey(_ value: String) throws -> String {
+    try normalizedSource(value).lowercased()
   }
 
   private static func clean(_ value: String, field: String, limit: Int) throws -> String {
@@ -377,14 +394,16 @@ enum PulseHistoryResult: String, Sendable {
   }
 }
 
-/// A deliberately payload-free audit record. Payload IDs, titles, subtitles, action labels/URLs,
-/// tokens, and error text are never copied into history. The routing source and state metadata are
-/// retained for provider health. The list is memory-only and disappears when Islet quits.
+/// A bounded audit record. A validated provider-local identifier is retained so equal identifiers
+/// from different sources remain distinguishable. Titles, subtitles, action labels/URLs, tokens,
+/// unvalidated identifiers, and error text are never copied into history. The list is memory-only
+/// and disappears when Islet quits.
 struct PulseHistoryEntry: Identifiable, Equatable, Sendable {
   let id: UUID
   let date: Date
   let operation: PulseOperation
   let source: String?
+  let providerIdentifier: String?
   let state: PulseState?
   let priority: PulsePriority?
   let result: PulseHistoryResult
@@ -496,7 +515,8 @@ struct PulseCommand: Codable, Sendable {
   /// against the response instead of relying on response order.
   var requestID: String? = nil
   /// Optional source guard for `end`. Older clients may omit it, but providers should include it
-  /// so an accidental identifier collision cannot end another source's item.
+  /// to select the provider namespace. An unscoped end is rejected when more than one source owns
+  /// the identifier.
   var source: String? = nil
 }
 
@@ -508,6 +528,7 @@ enum PulseErrorCode: String, Codable, Sendable {
   case sourceRevoked
   case identifierConflict
   case sourceMismatch
+  case ambiguousIdentifier
   case messageTooLarge
   case commandLimitExceeded
   case rateLimited
