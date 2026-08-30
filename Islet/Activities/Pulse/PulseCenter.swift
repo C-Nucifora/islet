@@ -514,6 +514,20 @@ final class PulseCenter: ObservableObject {
       generation: result.generation, errorMessage: result.errorMessage)
   }
 
+  func removeItems(forSource source: String, now suppliedNow: Date? = nil) {
+    let now = suppliedNow ?? clock.now
+    let key = sourceKey(source)
+    guard !key.isEmpty else { return }
+    let removed = storedItems.filter { sourceKey($0.source) == key }
+    guard !removed.isEmpty else { return }
+    storedItems.removeAll { sourceKey($0.source) == key }
+    for item in removed {
+      record(operation: .end, item: item, result: .dismissed, date: now)
+    }
+    refreshVisibleItems()
+    scheduleDeadline()
+  }
+
   func policy(for source: String) -> PulseSourcePolicy {
     sourcePolicies[sourceKey(source)] ?? .allowed
   }
