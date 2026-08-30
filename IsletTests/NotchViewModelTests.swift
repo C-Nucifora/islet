@@ -649,6 +649,39 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(vm.expandedWidth, Metrics.expandedSize.width)
   }
 
+  func testHomeDispositionSurvivesTabAndCollapseRoundTrips() {
+    let vm = makeVM(mode: .clickToPin)
+    let now = Date(timeIntervalSinceReferenceDate: 1_000_000)
+    let item = HomeAttentionItem(
+      id: "reminder:current", stableID: "reminder", source: .reminders,
+      title: "Send notes", detail: nil, symbol: "checklist", accentHex: nil,
+      state: "Due", priority: .urgent, rankingReason: "It is due now", dueAt: now,
+      expiresAt: nil, progress: nil, primaryAction: nil, allowsDismiss: true,
+      allowsSnooze: true)
+
+    vm.reconcileHomeAttention(with: [item])
+    vm.snoozeHomeAttention(item, until: now + 3_600)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    vm.selectActivity("calendar")
+    vm.selectActivity(nil)
+    vm.reconcileHomeAttention(with: [item])
+    XCTAssertTrue(vm.visibleHomeAttentionItems([item], now: now).isEmpty)
+
+    vm.handleMouseDown(CGPoint(x: 100, y: 500))
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    vm.reconcileHomeAttention(with: [item])
+    XCTAssertTrue(vm.visibleHomeAttentionItems([item], now: now + 3_599).isEmpty)
+    XCTAssertEqual(vm.visibleHomeAttentionItems([item], now: now + 3_600), [item])
+
+    vm.dismissHomeAttention(item)
+    vm.selectActivity("timer")
+    vm.selectActivity(nil)
+    vm.handleMouseDown(CGPoint(x: 100, y: 500))
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    vm.reconcileHomeAttention(with: [item])
+    XCTAssertTrue(vm.visibleHomeAttentionItems([item], now: now + 7_200).isEmpty)
+  }
+
   func testMouseMonitorTopBandCoversTallIslandButNotTheDesktop() {
     let frame = CGRect(x: 0, y: 0, width: 1728, height: 1117)
     XCTAssertTrue(
