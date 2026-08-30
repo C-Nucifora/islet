@@ -35,9 +35,11 @@ struct T3ConnectAccountPresentation: Equatable {
   init(
     state: T3ConnectAccountState,
     lastLinkError: String?,
-    lastCleanupError: String?
+    lastCleanupError: String?,
+    monitoringEnabled: Bool = true
   ) {
     let stateError: String?
+    let canRetryCleanup: Bool
     switch state {
     case .signedOut:
       statusText = "Not linked"
@@ -47,6 +49,7 @@ struct T3ConnectAccountPresentation: Equatable {
       isBusy = false
       actions = [.init(kind: .link, title: "Link T3 Connect account")]
       stateError = nil
+      canRetryCleanup = true
     case .linking(let previous):
       statusText = previous == nil ? "Linking account" : "Relinking account"
       detailText =
@@ -58,17 +61,21 @@ struct T3ConnectAccountPresentation: Equatable {
       isBusy = true
       actions = [.init(kind: .cancel, title: "Cancel")]
       stateError = nil
+      canRetryCleanup = false
     case .linked(let account, let sync):
       statusText = "Linked"
       detailText =
-        sync == nil
-        ? "Waiting for the first environment sync."
-        : "T3 Connect is monitoring your available environments."
+        !monitoringEnabled
+        ? "Monitoring is off. Your linked account remains saved."
+        : sync == nil
+          ? "Waiting for the first environment sync."
+          : "T3 Connect is monitoring your available environments."
       identity = Self.normalizedIdentity(account.displayIdentity)
       lastSync = sync
       isBusy = false
       actions = [.init(kind: .signOut, title: "Sign out", isDestructive: true)]
       stateError = nil
+      canRetryCleanup = false
     case .needsSignIn(let account, let error):
       statusText = "Sign-in required"
       detailText = "Link the account again to restore T3 Connect access."
@@ -80,9 +87,13 @@ struct T3ConnectAccountPresentation: Equatable {
           .init(kind: .link, title: "Link again")
         ] + (account == nil ? [] : [.init(kind: .signOut, title: "Sign out", isDestructive: true)])
       stateError = error
+      canRetryCleanup = false
     case .unavailable(let account, let error):
       statusText = "T3 Connect unavailable"
-      detailText = "Your last known environments stay visible while T3 Connect is unavailable."
+      detailText =
+        monitoringEnabled
+        ? "Your last known environments stay visible while T3 Connect is unavailable."
+        : "Monitoring is off. Your linked account remains saved."
       identity = Self.normalizedIdentity(account.displayIdentity)
       lastSync = nil
       isBusy = false
@@ -91,16 +102,18 @@ struct T3ConnectAccountPresentation: Equatable {
         .init(kind: .signOut, title: "Sign out", isDestructive: true),
       ]
       stateError = error
+      canRetryCleanup = false
     }
 
     var errors: [String] = []
-    for error in [stateError, lastLinkError, lastCleanupError].compactMap({ $0 })
+    let cleanupError = canRetryCleanup ? lastCleanupError : nil
+    for error in [stateError, lastLinkError, cleanupError].compactMap({ $0 })
     where !error.isEmpty && !errors.contains(error) {
       errors.append(error)
     }
     errorMessages = errors
 
-    if lastCleanupError != nil {
+    if cleanupError != nil {
       actions += [.init(kind: .retryCleanup, title: "Retry cleanup")]
     }
   }
@@ -149,6 +162,18 @@ struct T3EnvironmentRowPresentation: Equatable {
       sourceText = "Manually paired"
       controls = [.enable, .remove]
     }
+  }
+
+  init(
+    manualLabel: String,
+    profileEnabled: Bool,
+    monitoringEnabled: Bool,
+    state: T3ConnectionState?
+  ) {
+    self.init(
+      label: manualLabel,
+      source: .manual,
+      stateText: monitoringEnabled && profileEnabled ? (state?.label ?? "Connecting") : "Off")
   }
 }
 
@@ -402,7 +427,8 @@ struct T3SettingsSection: View {
     T3ConnectAccountPresentation(
       state: coordinator.state,
       lastLinkError: coordinator.lastLinkError,
-      lastCleanupError: coordinator.lastCleanupError)
+      lastCleanupError: coordinator.lastCleanupError,
+      monitoringEnabled: enabled)
   }
 
   private var agentsSection: some View {
@@ -597,8 +623,8 @@ struct T3SettingsSection: View {
       let state = activity.manualConnectionState(
         environmentID: profile.id, baseURL: profile.baseURL)
       let row = T3EnvironmentRowPresentation(
-        label: profile.label, source: .manual,
-        stateText: profile.enabled ? (state?.label ?? "Connecting") : "Off")
+        manualLabel: profile.label, profileEnabled: profile.enabled,
+        monitoringEnabled: enabled, state: state)
       HStack {
         Toggle(
           isOn: Binding(
@@ -612,7 +638,8 @@ struct T3SettingsSection: View {
         }
         Spacer()
         Text(row.stateText)
-          .font(.caption).foregroundStyle(connectionColor(profile.enabled ? state : nil))
+          .font(.caption)
+          .foregroundStyle(connectionColor(enabled && profile.enabled ? state : nil))
         Button(role: .destructive) {
           pendingRemoval = profile
         } label: {

@@ -27,6 +27,8 @@ protocol T3RelayServing: Sendable {
 extension T3RelayClient: T3RelayServing {}
 
 protocol T3DPoPResetting: Sendable {
+  func activate() async
+  func deactivate() async
   func reset() async
 }
 
@@ -242,11 +244,13 @@ final class T3ConnectCoordinator: ObservableObject {
     scheduleInventory(initialDelay: nil)
   }
 
-  private func scheduleInventory(initialDelay: TimeInterval?) {
+  private func scheduleInventory(
+    initialDelay: TimeInterval?, restartRetainedCloudTasks: Bool = true
+  ) {
     guard inventoryTask == nil, let account = activeAccount, canRunAccountWork, !signingOut else {
       return
     }
-    startRetainedCloudTasks(account: account)
+    if restartRetainedCloudTasks { startRetainedCloudTasks(account: account) }
     let taskID = UUID()
     let capturedGeneration = generation
     let task = Task { [weak self] in
@@ -259,6 +263,7 @@ final class T3ConnectCoordinator: ObservableObject {
   }
 
   func stopInventory(preserveInventory: Bool) {
+    if remotePollingAllowed { generation &+= 1 }
     remotePollingAllowed = false
     cancelInventoryTask()
     cancelCloudTasks()
@@ -272,13 +277,14 @@ final class T3ConnectCoordinator: ObservableObject {
     guard remotePollingAllowed, linkAttemptID == nil else { return }
     cancelInventoryTask()
     cancelCloudTasks()
-    startInventory()
+    scheduleInventory(initialDelay: nil, restartRetainedCloudTasks: false)
   }
 
   func authorization(
     for environment: T3ConnectEnvironment
   ) async throws -> T3ConnectEnvironmentAuthorization {
     let capturedGeneration = generation
+    guard canRunAccountWork else { throw T3ConnectCoordinatorError.staleOperation }
     guard let account = activeAccount else { throw T3ConnectCoordinatorError.notLinked }
     guard environments.contains(environment) else {
       throw T3ConnectCoordinatorError.staleOperation
@@ -323,16 +329,18 @@ final class T3ConnectCoordinator: ObservableObject {
     lastCleanupError = nil
     lastLinkError = nil
 
+    await signerResetter.deactivate()
+    await relay.clearCaches()
     await listener?.cancel()
     _ = try? await commitTask?.value
-    await signerResetter.reset()
-    await relay.clearCaches()
     do {
       try await session.signOut()
     } catch {
+      await signerResetter.reset()
       lastCleanupError = error.localizedDescription
       throw error
     }
+    await signerResetter.reset()
   }
 
   private func performLink(
@@ -378,12 +386,15 @@ final class T3ConnectCoordinator: ObservableObject {
       cancelCloudTasks()
       await relay.clearCaches()
       try requireLink(attemptID, phase: .committing)
+      await signerResetter.activate()
+      try requireLink(attemptID, phase: .committing)
 
       let account = T3ConnectAccount(record: candidate)
       activeAccount = account
       cloudCandidates = []
       environments = candidateInventory
       state = .linked(account, lastSync: now())
+      lastCleanupError = nil
       reconcileCloudTasks(candidateInventory, account: account)
       finishLink(attemptID: attemptID)
       if remotePollingAllowed { scheduleInventory(initialDelay: 60) }
@@ -446,6 +457,13 @@ final class T3ConnectCoordinator: ObservableObject {
           taskID: taskID, capturedGeneration: capturedGeneration,
           grantID: account.grantID, record: record)
         let listed = try await relay.listEnvironments(accountToken: record.accessToken)
+        try requireCurrentInventory(
+          taskID: taskID, capturedGeneration: capturedGeneration,
+          grantID: account.grantID, record: record)
+        for environmentID in authorizationInvalidationIDs(for: listed) {
+          await relay.invalidateAuthorization(
+            environmentID: environmentID, grantID: account.grantID)
+        }
         try requireCurrentInventory(
           taskID: taskID, capturedGeneration: capturedGeneration,
           grantID: account.grantID, record: record)
@@ -531,6 +549,15 @@ final class T3ConnectCoordinator: ObservableObject {
       }
       cloudTasks[environment.environmentID] = CloudTask(
         id: taskID, environment: environment, task: task)
+    }
+  }
+
+  private func authorizationInvalidationIDs(
+    for listed: [T3ConnectEnvironment]
+  ) -> [String] {
+    let listedByID = Dictionary(uniqueKeysWithValues: listed.map { ($0.environmentID, $0) })
+    return environments.compactMap { current in
+      listedByID[current.environmentID] == current ? nil : current.environmentID
     }
   }
 
@@ -659,6 +686,7 @@ final class T3ConnectCoordinator: ObservableObject {
         state: .offline(reason), agents: [])
     }
     state = .needsSignIn(account, reason)
+    await signerResetter.deactivate()
     await relay.clearCaches()
   }
 
@@ -706,11 +734,13 @@ final class T3ConnectCoordinator: ObservableObject {
   }
 
   private func isCurrent(_ capturedGeneration: UInt64, grantID: UUID) -> Bool {
-    capturedGeneration == generation && activeAccount?.grantID == grantID && !signingOut
+    canRunAccountWork && capturedGeneration == generation && activeAccount?.grantID == grantID
+      && !signingOut
   }
 
   private var canRunAccountWork: Bool {
-    switch state {
+    guard remotePollingAllowed else { return false }
+    return switch state {
     case .linked, .unavailable:
       true
     case .signedOut, .linking, .needsSignIn:

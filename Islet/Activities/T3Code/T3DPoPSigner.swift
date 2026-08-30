@@ -170,6 +170,7 @@ enum T3DPoPSignerError: Error, Equatable {
   case invalidPublicKey
   case invalidURL
   case invalidTimestamp
+  case inactive
   case reset
 }
 
@@ -180,6 +181,7 @@ actor T3DPoPSigner: T3DPoPProofProviding {
   private let onKeyLoadWaiterQueued: @Sendable () -> Void
   private var cachedKey: P256.Signing.PrivateKey?
   private var generation: UInt64 = 0
+  private var isActive = true
   private var loadingGenerations: Set<UInt64> = []
   private var keyLoadWaiters: [UInt64: [KeyLoadContinuation]] = [:]
 
@@ -196,12 +198,49 @@ actor T3DPoPSigner: T3DPoPProofProviding {
   }
 
   func keyThumbprint() async throws -> String {
-    let key = try await privateKey()
+    try await keyThumbprint(expectedGeneration: generation)
+  }
+
+  func proofLease() async throws -> any T3DPoPProofProviding {
+    try Task.checkCancellation()
+    guard isActive else { throw T3DPoPSignerError.inactive }
+    return T3DPoPSignerLease(signer: self, generation: generation)
+  }
+
+  func activate() async {
+    generation &+= 1
+    isActive = true
+    cachedKey = nil
+  }
+
+  func deactivate() async {
+    generation &+= 1
+    isActive = false
+    cachedKey = nil
+  }
+
+  func reset() async {
+    generation &+= 1
+    cachedKey = nil
+  }
+
+  fileprivate func keyThumbprint(expectedGeneration: UInt64) async throws -> String {
+    let key = try await privateKey(expectedGeneration: expectedGeneration)
     return try publicJWK(for: key).thumbprint()
   }
 
   func proof(method: String, url: URL, accessToken: String?) async throws -> String {
-    let key = try await privateKey()
+    try await proof(
+      method: method, url: url, accessToken: accessToken, expectedGeneration: generation)
+  }
+
+  fileprivate func proof(
+    method: String,
+    url: URL,
+    accessToken: String?,
+    expectedGeneration: UInt64
+  ) async throws -> String {
+    let key = try await privateKey(expectedGeneration: expectedGeneration)
     let header = Header(jwk: try publicJWK(for: key))
     let payload = try Payload(
       htm: method.uppercased(),
@@ -220,20 +259,20 @@ actor T3DPoPSigner: T3DPoPProofProviding {
     return "\(signingInput).\(signature.rawRepresentation.base64URLString)"
   }
 
-  func reset() async {
-    generation &+= 1
-    cachedKey = nil
-  }
-
-  private func privateKey() async throws -> P256.Signing.PrivateKey {
+  private func privateKey(expectedGeneration: UInt64) async throws -> P256.Signing.PrivateKey {
+    try Task.checkCancellation()
+    guard isActive else { throw T3DPoPSignerError.inactive }
+    guard expectedGeneration == generation else { throw T3DPoPSignerError.reset }
     if let cachedKey { return cachedKey }
 
-    let capturedGeneration = generation
+    let capturedGeneration = expectedGeneration
     if loadingGenerations.contains(capturedGeneration) {
       let key = try await withCheckedThrowingContinuation { continuation in
         keyLoadWaiters[capturedGeneration, default: []].append(continuation)
         onKeyLoadWaiterQueued()
       }
+      try Task.checkCancellation()
+      guard isActive else { throw T3DPoPSignerError.inactive }
       guard capturedGeneration == generation else { throw T3DPoPSignerError.reset }
       return key
     }
@@ -241,6 +280,8 @@ actor T3DPoPSigner: T3DPoPProofProviding {
     loadingGenerations.insert(capturedGeneration)
     do {
       let key = try await loadPrivateKey(generation: capturedGeneration)
+      try Task.checkCancellation()
+      guard isActive else { throw T3DPoPSignerError.inactive }
       guard capturedGeneration == generation else { throw T3DPoPSignerError.reset }
       cachedKey = key
       finishKeyLoad(generation: capturedGeneration, result: .success(key))
@@ -255,6 +296,8 @@ actor T3DPoPSigner: T3DPoPProofProviding {
     -> P256.Signing.PrivateKey
   {
     let storedKey = try await store.loadProofKey()
+    try Task.checkCancellation()
+    guard isActive else { throw T3DPoPSignerError.inactive }
     guard capturedGeneration == generation else { throw T3DPoPSignerError.reset }
 
     let key: P256.Signing.PrivateKey
@@ -268,9 +311,12 @@ actor T3DPoPSigner: T3DPoPProofProviding {
     } else {
       key = P256.Signing.PrivateKey()
       try await store.replaceProofKey(key.rawRepresentation)
+      try Task.checkCancellation()
+      guard isActive else { throw T3DPoPSignerError.inactive }
       guard capturedGeneration == generation else { throw T3DPoPSignerError.reset }
     }
 
+    guard isActive else { throw T3DPoPSignerError.inactive }
     guard capturedGeneration == generation else { throw T3DPoPSignerError.reset }
     return key
   }
@@ -338,6 +384,20 @@ actor T3DPoPSigner: T3DPoPProofProviding {
   private typealias KeyLoadContinuation = CheckedContinuation<
     P256.Signing.PrivateKey, any Error
   >
+}
+
+private struct T3DPoPSignerLease: T3DPoPProofProviding {
+  let signer: T3DPoPSigner
+  let generation: UInt64
+
+  func proof(method: String, url: URL, accessToken: String?) async throws -> String {
+    try await signer.proof(
+      method: method, url: url, accessToken: accessToken, expectedGeneration: generation)
+  }
+
+  func keyThumbprint() async throws -> String {
+    try await signer.keyThumbprint(expectedGeneration: generation)
+  }
 }
 
 extension Data {

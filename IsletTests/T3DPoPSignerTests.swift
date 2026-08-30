@@ -259,6 +259,40 @@ final class T3DPoPSignerTests: XCTestCase {
     }
   }
 
+  func testDeactivationRevokesLeasesAndBlocksNewLeasesUntilActivation() async throws {
+    let secureStore = T3DPoPSignerSecureStore()
+    let signer = makeSigner(store: secureStore)
+    let staleLease = try await signer.proofLease()
+
+    await signer.deactivate()
+
+    do {
+      _ = try await staleLease.proof(
+        method: "GET", url: URL(string: "https://example.com/agents")!, accessToken: "token")
+      XCTFail("Expected the retained lease to be revoked")
+    } catch T3DPoPSignerError.inactive {
+    }
+    do {
+      _ = try await signer.proofLease()
+      XCTFail("Expected proof leasing to remain disabled")
+    } catch T3DPoPSignerError.inactive {
+    }
+    let replacementsWhileInactive = await secureStore.replacementPayloads()
+    XCTAssertTrue(replacementsWhileInactive.isEmpty)
+
+    await signer.activate()
+    let currentLease = try await signer.proofLease()
+    _ = try await currentLease.proof(
+      method: "GET", url: URL(string: "https://example.com/agents")!, accessToken: "token")
+    do {
+      _ = try await staleLease.keyThumbprint()
+      XCTFail("Expected activation to leave the old lease revoked")
+    } catch T3DPoPSignerError.reset {
+    }
+    let replacementsAfterActivation = await secureStore.replacementPayloads()
+    XCTAssertEqual(replacementsAfterActivation.count, 1)
+  }
+
   func testSignOutCannotLetSuspendedProofKeyLoadRestoreDeletedKey() async throws {
     let secureStore = T3DPoPSignerSecureStore(
       proofKey: fixedPrivateKey, suspendFirstProofKeyRead: true)

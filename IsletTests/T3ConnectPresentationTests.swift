@@ -134,6 +134,34 @@ final class T3ConnectPresentationTests: XCTestCase {
       ])
   }
 
+  func testCleanupRetryIsNotExposedForANewlyLinkedAccount() {
+    let presentation = T3ConnectAccountPresentation(
+      state: .linked(account(identity: "ada@example.com"), lastSync: nil),
+      lastLinkError: nil,
+      lastCleanupError: "Old cleanup failed.")
+
+    XCTAssertTrue(presentation.errorMessages.isEmpty)
+    XCTAssertEqual(
+      presentation.actions,
+      [.init(kind: .signOut, title: "Sign out", isDestructive: true)])
+  }
+
+  func testLinkedAndUnavailableCopyDoesNotClaimMonitoringWhileDisabled() {
+    let linked = T3ConnectAccountPresentation(
+      state: .linked(account(identity: "ada@example.com"), lastSync: nil),
+      lastLinkError: nil,
+      lastCleanupError: nil,
+      monitoringEnabled: false)
+    let unavailable = T3ConnectAccountPresentation(
+      state: .unavailable(account(identity: "ada@example.com"), "Relay timed out."),
+      lastLinkError: nil,
+      lastCleanupError: nil,
+      monitoringEnabled: false)
+
+    XCTAssertEqual(linked.detailText, "Monitoring is off. Your linked account remains saved.")
+    XCTAssertEqual(unavailable.detailText, "Monitoring is off. Your linked account remains saved.")
+  }
+
   func testRepeatedStateErrorIsShownOnce() {
     let presentation = T3ConnectAccountPresentation(
       state: .needsSignIn(nil, "Access was revoked."),
@@ -188,6 +216,20 @@ final class T3ConnectPresentationTests: XCTestCase {
       XCTAssertEqual(row.controls, item.controls)
       XCTAssertEqual(row.accessibilityLabel, "Studio, \(item.sourceText), Offline")
     }
+  }
+
+  func testManualEnvironmentStatusRespectsTheGlobalMonitorToggle() {
+    let globallyDisabled = T3EnvironmentRowPresentation(
+      manualLabel: "Studio", profileEnabled: true, monitoringEnabled: false, state: nil)
+    let profileDisabled = T3EnvironmentRowPresentation(
+      manualLabel: "Studio", profileEnabled: false, monitoringEnabled: true,
+      state: .connected)
+    let connecting = T3EnvironmentRowPresentation(
+      manualLabel: "Studio", profileEnabled: true, monitoringEnabled: true, state: nil)
+
+    XCTAssertEqual(globallyDisabled.stateText, "Off")
+    XCTAssertEqual(profileDisabled.stateText, "Off")
+    XCTAssertEqual(connecting.stateText, "Connecting")
   }
 
   private func account(identity: String?) -> T3ConnectAccount {

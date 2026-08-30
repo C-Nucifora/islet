@@ -117,7 +117,9 @@ actor T3RelayClient {
     let selector = EnvironmentSelector(
       grantID: grantID, environmentID: validatedEnvironment.environmentID)
     let invalidation = environmentInvalidations[selector, default: 0]
-    let thumbprint = try await signer.keyThumbprint()
+    let proofSigner = try await signer.proofLease()
+    try requireCurrent(capturedGeneration, selector: selector, invalidation: invalidation)
+    let thumbprint = try await proofSigner.keyThumbprint()
     try requireCurrent(capturedGeneration, selector: selector, invalidation: invalidation)
     guard Self.boundedString(thumbprint) != nil else {
       throw T3ClientError.invalidResponse
@@ -148,6 +150,7 @@ actor T3RelayClient {
         environment: validatedEnvironment,
         accountToken: accountToken,
         grantID: grantID,
+        signer: proofSigner,
         thumbprint: thumbprint,
         capturedGeneration: capturedGeneration,
         selector: selector,
@@ -194,13 +197,14 @@ actor T3RelayClient {
     environment: T3ConnectEnvironment,
     accountToken: String,
     grantID: UUID,
+    signer: any T3DPoPProofProviding,
     thumbprint: String,
     capturedGeneration: UInt64,
     selector: EnvironmentSelector,
     invalidation: UInt64
   ) async throws -> T3ConnectEnvironmentAuthorization {
     var relayAuthorization = try await relayToken(
-      accountToken: accountToken, grantID: grantID, thumbprint: thumbprint,
+      accountToken: accountToken, grantID: grantID, signer: signer, thumbprint: thumbprint,
       capturedGeneration: capturedGeneration)
     try requireCurrent(capturedGeneration, selector: selector, invalidation: invalidation)
 
@@ -208,17 +212,17 @@ actor T3RelayClient {
     do {
       connected = try await connect(
         environmentID: environment.environmentID, relayToken: relayAuthorization.accessToken,
-        thumbprint: thumbprint)
+        signer: signer, thumbprint: thumbprint)
     } catch T3ClientError.unauthorized {
       let relayKey = relayCacheKey(grantID: grantID, thumbprint: thumbprint)
       invalidateRelayToken(relayKey, matching: relayAuthorization.id)
       relayAuthorization = try await relayToken(
-        accountToken: accountToken, grantID: grantID, thumbprint: thumbprint,
+        accountToken: accountToken, grantID: grantID, signer: signer, thumbprint: thumbprint,
         capturedGeneration: capturedGeneration)
       try requireCurrent(capturedGeneration, selector: selector, invalidation: invalidation)
       connected = try await connect(
         environmentID: environment.environmentID, relayToken: relayAuthorization.accessToken,
-        thumbprint: thumbprint)
+        signer: signer, thumbprint: thumbprint)
     }
     try requireCurrent(capturedGeneration, selector: selector, invalidation: invalidation)
     guard connected.environmentID == environment.environmentID else {
@@ -266,6 +270,7 @@ actor T3RelayClient {
   private func relayToken(
     accountToken: String,
     grantID: UUID,
+    signer: any T3DPoPProofProviding,
     thumbprint: String,
     capturedGeneration: UInt64
   ) async throws -> RelayToken {
@@ -287,7 +292,7 @@ actor T3RelayClient {
     let taskID = UUID()
     let task = Task { [self] in
       try await mintRelayToken(
-        accountToken: accountToken, capturedGeneration: capturedGeneration)
+        accountToken: accountToken, signer: signer, capturedGeneration: capturedGeneration)
     }
     relayTasks[key] = PendingRelayTask(id: taskID, task: task, waiterIDs: [])
     let token = try await waitForRelayTask(
@@ -301,6 +306,7 @@ actor T3RelayClient {
 
   private func mintRelayToken(
     accountToken: String,
+    signer: any T3DPoPProofProviding,
     capturedGeneration: UInt64
   ) async throws -> RelayToken {
     guard let relayOrigin, let relayResource,
@@ -352,6 +358,7 @@ actor T3RelayClient {
   private func connect(
     environmentID: String,
     relayToken: String,
+    signer: any T3DPoPProofProviding,
     thumbprint: String
   ) async throws -> ConnectedEnvironment {
     guard let relayOrigin,

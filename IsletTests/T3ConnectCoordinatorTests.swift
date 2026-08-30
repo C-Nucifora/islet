@@ -117,6 +117,8 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     XCTAssertEqual(
       fixture.coordinator.state,
       .linked(T3ConnectAccount(record: candidate), lastSync: now))
+    let activations = await fixture.signer.activationCallCount()
+    XCTAssertEqual(activations, 1)
   }
 
   func testCancelDuringSuspendedListenerStartAlwaysClosesListener() async {
@@ -315,8 +317,12 @@ final class T3ConnectCoordinatorTests: XCTestCase {
 
     let signOutTask = Task { try await fixture.coordinator.signOut() }
     while fixture.coordinator.state != .signedOut { await Task.yield() }
-    let resetsWhileCommitSuspended = await fixture.signer.resetCallCount()
-    XCTAssertEqual(resetsWhileCommitSuspended, 0)
+    for _ in 0..<1_000 {
+      if await fixture.signer.deactivationCallCount() > 0 { break }
+      await Task.yield()
+    }
+    let deactivationsWhileCommitSuspended = await fixture.signer.deactivationCallCount()
+    XCTAssertEqual(deactivationsWhileCommitSuspended, 1)
 
     await commitGate.resume()
     try await signOutTask.value
@@ -441,6 +447,8 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     XCTAssertTrue(fixture.coordinator.environments.isEmpty)
     let clearCalls = await relay.clearCallCount()
     XCTAssertEqual(clearCalls, 1)
+    let deactivations = await fixture.signer.deactivationCallCount()
+    XCTAssertEqual(deactivations, 1)
   }
 
   func testCloudRefreshRejectionMovesAccountToNeedsSignInImmediately() async throws {
@@ -465,6 +473,28 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     XCTAssertEqual(displayedAccount, T3ConnectAccount(record: account))
     let clearCalls = await relay.clearCallCount()
     XCTAssertEqual(clearCalls, 1)
+  }
+
+  func testPublicAuthorizationRejectsNewWorkAfterReauthenticationIsRequired() async throws {
+    let account = try record(
+      grantID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
+    let retained = environment(id: "retained")
+    let session = T3CoordinatorSessionFake(storedRecord: account)
+    await session.setValidOutcomes([.success([]), .reauthenticationRequired])
+    let relay = T3CoordinatorRelayFake(listOutcomes: [.success([retained])])
+    let fixture = makeFixture(session: session, relay: relay)
+    await fixture.coordinator.loadAccount()
+    fixture.coordinator.startInventory()
+    await relay.waitForClearCalls(1)
+    let callsBefore = await relay.authorizationCallCount("retained")
+
+    do {
+      _ = try await fixture.coordinator.authorization(for: retained)
+      XCTFail("Expected needs-sign-in state to reject authorization")
+    } catch T3ConnectCoordinatorError.staleOperation {
+    }
+    let callsAfter = await relay.authorizationCallCount("retained")
+    XCTAssertEqual(callsAfter, callsBefore)
   }
 
   func testRemotePolicyStopCancelsWorkButRetainsInventoryAndSnapshots() async throws {
@@ -583,7 +613,7 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     XCTAssertEqual(shellCalls, 0)
   }
 
-  func testSignOutCleanupOrderIsSignerRelayOAuthThenProofKey() async throws {
+  func testSignOutRevokesSignerBeforeCleanupAndResetsItAfterDeletion() async throws {
     let events = T3CoordinatorEventRecorder()
     let old = try record(grantID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
     let session = T3CoordinatorSessionFake(storedRecord: old, events: events)
@@ -597,8 +627,31 @@ final class T3ConnectCoordinatorTests: XCTestCase {
 
     XCTAssertEqual(
       events.values(),
-      ["signer.reset", "relay.clear", "session.signOut", "oauth.delete", "proof.delete"])
+      [
+        "signer.deactivate", "relay.clear", "session.signOut", "oauth.delete", "proof.delete",
+        "signer.reset",
+      ])
     XCTAssertEqual(fixture.coordinator.state, .signedOut)
+  }
+
+  func testSuccessfulLinkClearsAnOldCleanupFailure() async throws {
+    let old = try record(grantID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
+    let candidate = try record(
+      grantID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!)
+    let session = T3CoordinatorSessionFake(
+      storedRecord: old, exchangeRecord: candidate, signOutOutcome: .failure)
+    let relay = T3CoordinatorRelayFake(listOutcomes: [.success([])])
+    let fixture = makeFixture(session: session, relay: relay)
+    await fixture.coordinator.loadAccount()
+    _ = try? await fixture.coordinator.signOut()
+    XCTAssertNotNil(fixture.coordinator.lastCleanupError)
+
+    await fixture.coordinator.link()
+
+    XCTAssertEqual(
+      fixture.coordinator.state,
+      .linked(T3ConnectAccount(record: candidate), lastSync: now))
+    XCTAssertNil(fixture.coordinator.lastCleanupError)
   }
 
   func testUnauthorizedCloudRequestRemintsOnlyTheRejectedEnvironmentOnce() async throws {
@@ -680,6 +733,8 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     XCTAssertEqual(
       fixture.coordinator.cloudCandidates.map(\.baseURL),
       ["https://new.example.test/"])
+    let invalidations = await relay.invalidatedEnvironmentIDs()
+    XCTAssertEqual(invalidations, ["same"])
   }
 
   func testRemovedEnvironmentRejectsItsOldMonitorsLateSnapshot() async throws {
@@ -704,19 +759,44 @@ final class T3ConnectCoordinatorTests: XCTestCase {
 
     XCTAssertTrue(fixture.coordinator.environments.isEmpty)
     XCTAssertTrue(fixture.coordinator.cloudCandidates.isEmpty)
+    let invalidations = await relay.invalidatedEnvironmentIDs()
+    XCTAssertEqual(invalidations, ["removed"])
+  }
+
+  func testPublicAuthorizationRejectsRetainedInventoryWhileRemotePollingIsDisabled() async throws {
+    let candidate = try record(
+      grantID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!)
+    let retained = environment(id: "retained")
+    let session = T3CoordinatorSessionFake(exchangeRecord: candidate)
+    let relay = T3CoordinatorRelayFake(listOutcomes: [.success([retained])])
+    let fixture = makeFixture(session: session, relay: relay)
+    await fixture.coordinator.link()
+
+    do {
+      _ = try await fixture.coordinator.authorization(for: retained)
+      XCTFail("Expected remote policy to reject authorization")
+    } catch T3ConnectCoordinatorError.staleOperation {
+    }
+    let authorizationCalls = await relay.authorizationCallCount("retained")
+    XCTAssertEqual(authorizationCalls, 0)
   }
 
   func testPublicAuthorizationRejectsEnvironmentRemovedWhileMintIsSuspended() async throws {
     let candidate = try record(
       grantID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!)
     let removed = environment(id: "removed")
+    let cloudGate = T3CoordinatorGate()
     let authorizationGate = T3CoordinatorGate()
     let session = T3CoordinatorSessionFake(exchangeRecord: candidate)
     let relay = T3CoordinatorRelayFake(
-      listOutcomes: [.success([removed])],
-      authorizationGates: ["removed": [authorizationGate]])
+      listOutcomes: [.success([removed]), .success([removed])],
+      authorizationGates: ["removed": [cloudGate, authorizationGate]])
     let fixture = makeFixture(session: session, relay: relay)
     await fixture.coordinator.link()
+    fixture.coordinator.startInventory()
+    await cloudGate.waitUntilEntered()
+    await cloudGate.resume()
+    await relay.waitForAuthorizationReturns(environmentID: "removed", count: 1)
 
     let authorizationTask = Task { () -> (any Error)? in
       do {
@@ -1116,6 +1196,7 @@ private actor T3CoordinatorSessionFake: T3ConnectSessionServing {
   private let exchangeRecord: T3OAuthRecord?
   private let commitOutcome: T3CoordinatorOutcome
   private let commitGate: T3CoordinatorGate?
+  private let signOutOutcome: T3CoordinatorOutcome
   private let events: T3CoordinatorEventRecorder?
   private var commitCalls = 0
   private var commitInProgress = false
@@ -1128,6 +1209,7 @@ private actor T3CoordinatorSessionFake: T3ConnectSessionServing {
     exchangeRecord: T3OAuthRecord? = nil,
     commitOutcome: T3CoordinatorOutcome = .success,
     commitGate: T3CoordinatorGate? = nil,
+    signOutOutcome: T3CoordinatorOutcome = .success,
     events: T3CoordinatorEventRecorder? = nil
   ) {
     record = storedRecord
@@ -1136,6 +1218,7 @@ private actor T3CoordinatorSessionFake: T3ConnectSessionServing {
     self.exchangeRecord = exchangeRecord
     self.commitOutcome = commitOutcome
     self.commitGate = commitGate
+    self.signOutOutcome = signOutOutcome
     self.events = events
   }
 
@@ -1183,6 +1266,7 @@ private actor T3CoordinatorSessionFake: T3ConnectSessionServing {
 
   func signOut() async throws {
     events?.append("session.signOut")
+    if signOutOutcome == .failure { throw T3CoordinatorTestError.failed }
     events?.append("oauth.delete")
     events?.append("proof.delete")
     record = nil
@@ -1363,15 +1447,29 @@ private actor T3CoordinatorListenerFake: T3OAuthLoopbackListening {
 
 private actor T3CoordinatorSignerFake: T3DPoPResetting {
   private let events: T3CoordinatorEventRecorder
+  private var activationCalls = 0
+  private var deactivationCalls = 0
   private var resetCalls = 0
 
   init(events: T3CoordinatorEventRecorder) { self.events = events }
+
+  func activate() async {
+    activationCalls += 1
+    events.append("signer.activate")
+  }
+
+  func deactivate() async {
+    deactivationCalls += 1
+    events.append("signer.deactivate")
+  }
 
   func reset() async {
     resetCalls += 1
     events.append("signer.reset")
   }
 
+  func activationCallCount() -> Int { activationCalls }
+  func deactivationCallCount() -> Int { deactivationCalls }
   func resetCallCount() -> Int { resetCalls }
 }
 

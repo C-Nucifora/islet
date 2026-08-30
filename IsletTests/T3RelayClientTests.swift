@@ -419,6 +419,31 @@ final class T3RelayClientTests: XCTestCase {
       ])
   }
 
+  func testReturnedEnvironmentAuthorizationUsesARevocableSignerLease() async throws {
+    let recorder = T3RelayHTTPRecorder(responses: Self.authorizationResponses())
+    let secureStore = T3RelaySignerSecureStore(proofKey: Data((1...32).map(UInt8.init)))
+    let signer = T3DPoPSigner(
+      store: T3ConnectCredentialStore(store: secureStore),
+      now: { Date(timeIntervalSince1970: 1_800_000_000) },
+      makeJTI: { UUID().uuidString })
+    let client = makeClient(recorder: recorder, signer: signer)
+    let authorization = try await client.authorize(
+      environment: Self.environment(), accountToken: "account", grantID: grantID)
+    guard case .dpop(_, let retainedSigner) = authorization.authorization else {
+      return XCTFail("Expected DPoP authorization")
+    }
+
+    await signer.reset()
+
+    do {
+      _ = try await retainedSigner.proof(
+        method: "GET", url: URL(string: "https://env-one.t3-relay-unit.test/api/shell")!,
+        accessToken: "environment-token")
+      XCTFail("Expected the retained authorization signer to be revoked")
+    } catch T3DPoPSignerError.reset {
+    }
+  }
+
   func testManagedPreflightAndBootstrapExchangeNeverReplayResponseCookies() async throws {
     let recorder = T3RelayHTTPRecorder(responses: [
       .relayToken(), .connect(),
