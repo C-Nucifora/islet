@@ -90,6 +90,9 @@ struct IdleDashboardView: View {
         }
       }
     }
+    .onChange(of: allItems.map(\.id), initial: true) { _, _ in
+      disposition.reconcile(with: allItems)
+    }
   }
 
   private func sourceItems(now: Date) -> [HomeAttentionItem] {
@@ -97,10 +100,11 @@ struct IdleDashboardView: View {
       calendarEvents: calendarEnabled ? calendar.events : [],
       reminders: remindersEnabled ? reminders.reminders : [],
       timer: timerSnapshot,
-      t3Agents: t3CodeEnabled ? t3Code.agents : [],
-      pulseItems: pulseEnabled ? pulse.items : [],
-      battery: batteryEnabled ? battery.currentState : nil,
+      t3Agents: t3Code.agents,
+      pulseItems: pulse.items,
+      battery: battery.currentState,
       pendingTransfers: shelf.pendingImportCount,
+      disabledActivities: disabledActivities,
       now: now)
     items += serviceIssues
     return HomeAttentionRanking.ranked(items, now: now)
@@ -177,6 +181,9 @@ struct IdleDashboardView: View {
       onOpenActivity(id)
     case .openURL(let url):
       NSWorkspace.shared.open(url)
+    case .openMeetingLink(let link):
+      guard !link.trust.requiresConfirmation else { return }
+      NSWorkspace.shared.open(link.url)
     case .completeReminder(let id):
       guard let item = reminders.reminders.first(where: { $0.id == id }) else { return }
       reminders.complete(item)
@@ -217,6 +224,7 @@ private struct HomeAttentionRow: View {
   let action: (HomeAttentionAction) -> Void
   let dismiss: (HomeAttentionItem) -> Void
   let snooze: (HomeAttentionItem) -> Void
+  @State private var meetingLinkConfirmationPresented = false
 
   var body: some View {
     HStack(spacing: 8) {
@@ -251,16 +259,27 @@ private struct HomeAttentionRow: View {
       }
       Spacer(minLength: 3)
       if let primaryAction = item.primaryAction {
-        Button {
-          action(primaryAction)
-        } label: {
-          Image(systemName: primaryAction.symbol)
-            .font(.caption2)
-            .frame(width: 22, height: 22)
+        if case .openMeetingLink(let link) = primaryAction.kind {
+          Button {
+            performPrimaryAction(primaryAction)
+          } label: {
+            primaryActionLabel(primaryAction)
+          }
+          .buttonStyle(.plain)
+          .help(primaryAction.title)
+          .accessibilityHidden(true)
+          .calendarMeetingLinkConfirmation(
+            link: link, isPresented: $meetingLinkConfirmationPresented)
+        } else {
+          Button {
+            performPrimaryAction(primaryAction)
+          } label: {
+            primaryActionLabel(primaryAction)
+          }
+          .buttonStyle(.plain)
+          .help(primaryAction.title)
+          .accessibilityHidden(true)
         }
-        .buttonStyle(.plain)
-        .help(primaryAction.title)
-        .accessibilityHidden(true)
       }
       if item.allowsSnooze || item.allowsDismiss {
         Menu {
@@ -290,7 +309,7 @@ private struct HomeAttentionRow: View {
     .accessibilityHint(rankExplanation)
     .accessibilityActions {
       if let primaryAction = item.primaryAction {
-        Button(primaryAction.title) { action(primaryAction) }
+        Button(primaryAction.title) { performPrimaryAction(primaryAction) }
       }
       if item.allowsSnooze {
         Button("Snooze for 1 hour") { snooze(item) }
@@ -298,6 +317,22 @@ private struct HomeAttentionRow: View {
       if item.allowsDismiss {
         Button("Dismiss") { dismiss(item) }
       }
+    }
+  }
+
+  private func primaryActionLabel(_ action: HomeAttentionAction) -> some View {
+    Image(systemName: action.symbol)
+      .font(.caption2)
+      .frame(width: 22, height: 22)
+  }
+
+  private func performPrimaryAction(_ primaryAction: HomeAttentionAction) {
+    if case .openMeetingLink(let link) = primaryAction.kind {
+      CalendarMeetingLinkPresentation.activate(link) {
+        meetingLinkConfirmationPresented = true
+      }
+    } else {
+      action(primaryAction)
     }
   }
 

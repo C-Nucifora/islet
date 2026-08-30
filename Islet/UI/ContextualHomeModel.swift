@@ -32,6 +32,17 @@ enum HomeAttentionSource: String, CaseIterable, Sendable {
     case .transfer: 6
     }
   }
+
+  fileprivate var gatedActivityID: String? {
+    switch self {
+    case .timer: "timer"
+    case .t3Code: "t3Code"
+    case .pulse: "pulse"
+    case .battery: "battery"
+    case .transfer: "shelf"
+    case .calendar, .reminders: nil
+    }
+  }
 }
 
 enum HomeAttentionPriority: Int, Comparable, Sendable {
@@ -58,6 +69,7 @@ struct HomeAttentionAction: Equatable, Sendable {
   enum Kind: Equatable, Sendable {
     case openActivity(String)
     case openURL(URL)
+    case openMeetingLink(CalendarMeetingLink)
     case completeReminder(String)
     case toggleTimer
     case dismissTimer
@@ -128,7 +140,22 @@ enum HomeAttentionRanking {
     if let itemDue = item.dueAt, let nextDue = next.dueAt, itemDue != nextDue {
       return "\(item.rankingReason). Ranked above \(next.source.title) because it is due sooner."
     }
-    return "\(item.rankingReason). Equal-priority items keep a stable source and title order."
+    if item.dueAt != nil, next.dueAt == nil {
+      return "\(item.rankingReason). Ranked above \(next.source.title) because it has a deadline."
+    }
+    if item.source.tieBreakRank != next.source.tieBreakRank {
+      return
+        "\(item.rankingReason). Equal-priority items use a stable source order, which places \(item.source.title) before \(next.source.title)."
+    }
+    if item.stableID != next.stableID {
+      return
+        "\(item.rankingReason). Equal-priority \(item.source.title) items use their stable item identifier."
+    }
+    if item.id != next.id {
+      return
+        "\(item.rankingReason). Equal-priority occurrences use their occurrence identifier as the final tie-break."
+    }
+    return "\(item.rankingReason). This item has the same ranking keys as the next item."
   }
 
   private static func comesBefore(_ lhs: HomeAttentionItem, _ rhs: HomeAttentionItem) -> Bool {
@@ -180,6 +207,12 @@ struct HomeAttentionDisposition: Equatable, Sendable {
     snoozedUntil[item.id] = until
   }
 
+  mutating func reconcile(with items: [HomeAttentionItem]) {
+    let liveOccurrenceIDs = Set(items.map(\.id))
+    dismissedOccurrenceIDs.formIntersection(liveOccurrenceIDs)
+    snoozedUntil = snoozedUntil.filter { liveOccurrenceIDs.contains($0.key) }
+  }
+
   func visible(_ items: [HomeAttentionItem], now: Date) -> [HomeAttentionItem] {
     HomeAttentionRanking.ranked(
       items.filter { item in
@@ -194,7 +227,7 @@ enum HomeAttentionBuilder {
   static func items(
     calendarEvents: [AgendaEvent], reminders: [ReminderItem], timer: HomeTimerSnapshot?,
     t3Agents: [T3AgentSnapshot], pulseItems: [PulseItem], battery: BatteryState?,
-    pendingTransfers: Int, now: Date
+    pendingTransfers: Int, disabledActivities: [String] = [], now: Date
   ) -> [HomeAttentionItem] {
     var result: [HomeAttentionItem] = []
     result += calendarEvents.compactMap { calendarItem($0, now: now) }
@@ -204,7 +237,13 @@ enum HomeAttentionBuilder {
     result += pulseItems.map(pulseItem)
     if let batteryItem = batteryItem(battery) { result.append(batteryItem) }
     if pendingTransfers > 0 { result.append(transferItem(count: pendingTransfers)) }
-    return HomeAttentionRanking.ranked(result, now: now)
+    let disabled = Set(disabledActivities)
+    return HomeAttentionRanking.ranked(
+      result.filter { item in
+        guard let activityID = item.source.gatedActivityID else { return true }
+        return !disabled.contains(activityID)
+      },
+      now: now)
   }
 
   static func serviceIssue(
@@ -247,8 +286,8 @@ enum HomeAttentionBuilder {
       reason = "This is the next scheduled work"
     }
     let action =
-      event.joinURL.map {
-        HomeAttentionAction(title: "Join", symbol: "video.fill", kind: .openURL($0))
+      event.joinURL.flatMap(CalendarMeetingLinkPolicy.candidate).map {
+        HomeAttentionAction(title: "Join", symbol: "video.fill", kind: .openMeetingLink($0))
       }
       ?? HomeAttentionAction(
         title: "Open Calendar", symbol: "calendar", kind: .openActivity("calendar"))
@@ -262,7 +301,7 @@ enum HomeAttentionBuilder {
 
   private static func reminderItem(_ reminder: ReminderItem, now: Date) -> HomeAttentionItem {
     let overdue = RemindersLogic.isOverdue(reminder, now: now)
-    let dueToday = reminder.dueDate.map { Calendar.current.isDateInToday($0) } ?? false
+    let dueToday = reminder.dueDate.map { Calendar.current.isDate($0, inSameDayAs: now) } ?? false
     let priority: HomeAttentionPriority = overdue ? .urgent : (dueToday ? .high : .normal)
     let state = overdue ? "Overdue" : (dueToday ? "Due today" : "Incomplete")
     let reason =
