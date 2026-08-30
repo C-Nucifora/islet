@@ -4,6 +4,39 @@ import XCTest
 
 @MainActor
 final class TimerCompletionNotificationTests: XCTestCase {
+  func testNotificationActivationRestoresCompletionAfterTimerHasCleared() {
+    let persistence = NotificationTimerPersistenceBox()
+    let timer = TimerActivity(
+      persistenceStore: persistence.store,
+      completionNotifier: TimerCompletionNotifierStub())
+    timer.start(300, label: "Focus")
+    timer.cancel()
+
+    timer.presentCompletionFromNotification(title: "Focus done")
+
+    XCTAssertTrue(timer.finished)
+    XCTAssertTrue(timer.isActive)
+    XCTAssertEqual(timer.label, "Focus")
+    XCTAssertEqual(timer.total, 300)
+    XCTAssertEqual(timer.remainingNow, 0)
+  }
+
+  func testNotificationActivationDoesNotReplaceANewerRunningTimer() {
+    let persistence = NotificationTimerPersistenceBox()
+    let timer = TimerActivity(
+      persistenceStore: persistence.store,
+      completionNotifier: TimerCompletionNotifierStub())
+    timer.start(600, label: "Current")
+    let currentDeadline = timer.endDate
+
+    timer.presentCompletionFromNotification(title: "Older done")
+
+    XCTAssertTrue(timer.isRunning)
+    XCTAssertFalse(timer.finished)
+    XCTAssertEqual(timer.label, "Current")
+    XCTAssertEqual(timer.endDate, currentDeadline)
+  }
+
   func testVisibleCompletionDoesNotDeliverANotification() {
     let client = NotificationClientStub(status: .allowed)
     let coordinator = TimerCompletionNotificationCoordinator(
@@ -86,6 +119,30 @@ final class TimerCompletionNotificationTests: XCTestCase {
     XCTAssertEqual(client.authorizationRequests, 1)
     XCTAssertEqual(fallbackCount, 1)
     XCTAssertTrue(client.alerts.isEmpty)
+  }
+}
+
+@MainActor
+private final class TimerCompletionNotifierStub: TimerCompletionNotifying {
+  func prepareForTimerStart(onUnavailable: @escaping @MainActor () -> Void) {}
+
+  func notifyTimerFinished(
+    completionID: UUID, title: String, body: String,
+    onUnavailable: @escaping @MainActor () -> Void
+  ) {}
+}
+
+@MainActor
+private final class NotificationTimerPersistenceBox {
+  var sessionData: Data?
+  var presetData: Data?
+
+  var store: TimerPersistenceStore {
+    TimerPersistenceStore(
+      readSessionData: { [weak self] in self?.sessionData },
+      writeSessionData: { [weak self] in self?.sessionData = $0 },
+      readPresetData: { [weak self] in self?.presetData },
+      writePresetData: { [weak self] in self?.presetData = $0 })
   }
 }
 
