@@ -17,12 +17,12 @@ final class PulseIntentTests: XCTestCase {
     XCTAssertEqual(
       shortcuts.documentationLinks.map(\.url.absoluteString),
       [
-        "https://raw.githubusercontent.com/C-Nucifora/islet/main/Integrations/Pulse/shortcuts/01-transient-event.shortcut",
-        "https://raw.githubusercontent.com/C-Nucifora/islet/main/Integrations/Pulse/shortcuts/02-progress-task.shortcut",
-        "https://raw.githubusercontent.com/C-Nucifora/islet/main/Integrations/Pulse/shortcuts/03-failed-task.shortcut",
-        "https://raw.githubusercontent.com/C-Nucifora/islet/main/Integrations/Pulse/shortcuts/04-guarded-completion.shortcut",
-        "https://raw.githubusercontent.com/C-Nucifora/islet/main/Integrations/Pulse/shortcuts/05-focus-profile.shortcut",
-        "https://raw.githubusercontent.com/C-Nucifora/islet/main/Integrations/Pulse/shortcuts/06-focus-timer.shortcut",
+        "https://github.com/C-Nucifora/islet/releases/latest/download/01-transient-event.shortcut",
+        "https://github.com/C-Nucifora/islet/releases/latest/download/02-progress-task.shortcut",
+        "https://github.com/C-Nucifora/islet/releases/latest/download/03-failed-task.shortcut",
+        "https://github.com/C-Nucifora/islet/releases/latest/download/04-guarded-completion.shortcut",
+        "https://github.com/C-Nucifora/islet/releases/latest/download/05-focus-profile.shortcut",
+        "https://github.com/C-Nucifora/islet/releases/latest/download/06-focus-timer.shortcut",
       ])
     XCTAssertTrue(shortcuts.capabilities.contains(.events))
     XCTAssertTrue(shortcuts.capabilities.contains(.progress))

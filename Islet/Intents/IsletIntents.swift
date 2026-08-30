@@ -164,13 +164,17 @@ struct UpdatePulseProgressIntent: AppIntent {
   @Parameter(title: "State", default: .progress)
   var activityState: PulseIntentState
 
+  @Parameter(title: "Expiry Seconds", default: 300, inclusiveRange: (30, 86_400))
+  var expirySeconds: Int
+
   @MainActor
   func perform() async throws -> some IntentResult & ProvidesDialog {
     let payload = PulsePayload(
       id: identifier, source: "shortcuts", title: activityTitle, subtitle: details,
       symbol: "chart.bar.fill", accentHex: "#64D2FF", progress: progress,
       state: activityState.pulseValue,
-      priority: activityPriority.pulseValue, expiresAt: nil, actions: nil)
+      priority: activityPriority.pulseValue,
+      expiresAt: Date().addingTimeInterval(TimeInterval(expirySeconds)), actions: nil)
     let response = PulseCenter.shared.applyIfEnabled(
       PulseCommand(token: "", operation: .update, activity: payload, id: nil))
     guard response.ok else { throw PulseIntentError.rejected(response.error ?? "Unknown error") }
