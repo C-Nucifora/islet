@@ -8,6 +8,8 @@ final class MediaWatcher: @unchecked Sendable {
   private let queue = DispatchQueue(label: "dev.islet.mediawatcher")
   private let queueKey = DispatchSpecificKey<Void>()
   private var process: Process?
+  private var snapshotProcess: Process?
+  private var snapshotLaunchWorkItem: DispatchWorkItem?
   private var pipe: Pipe?
   private var restartTask: Task<Void, Never>?
   private var failureCount = 0
@@ -16,6 +18,7 @@ final class MediaWatcher: @unchecked Sendable {
   /// "Upgrade path — fork the MediaRemote adapter for true per-source media" section needs.
   private var lastStates: [SourceID: PlaybackState] = [:]
   private var currentSource: SourceID?
+  private var streamHasEmittedRecord = false
   private var buffer = Data()  // guarded by `queue`
   private var isRunning = false
   /// Human-readable adapter status for the Settings window.
@@ -55,6 +58,7 @@ final class MediaWatcher: @unchecked Sendable {
       buffer.removeAll(keepingCapacity: false)
       lastStates.removeAll()
       currentSource = nil
+      streamHasEmittedRecord = false
       failureCount = 0
       onStatus?("Stopped")
     }
@@ -70,25 +74,35 @@ final class MediaWatcher: @unchecked Sendable {
 
   /// Detaches handlers and drops the current process/pipe. Must run on `queue`.
   private func cleanup(terminate: Bool) {
+    snapshotLaunchWorkItem?.cancel()
+    snapshotLaunchWorkItem = nil
     pipe?.fileHandleForReading.readabilityHandler = nil
     process?.terminationHandler = nil
+    snapshotProcess?.terminationHandler = nil
     if terminate, let process, process.isRunning {
-      process.terminate()
-      // `applicationWillTerminate` has only a short synchronous window. Give cooperative adapters
-      // a moment to exit, then guarantee that a wedged helper cannot be orphaned under launchd.
-      let deadline = Date().addingTimeInterval(0.25)
-      while process.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
-      if process.isRunning {
-        Darwin.kill(process.processIdentifier, SIGKILL)
-        process.waitUntilExit()
-      }
+      terminateProcess(process)
     }
+    if let snapshotProcess, snapshotProcess.isRunning { terminateProcess(snapshotProcess) }
     process = nil
+    snapshotProcess = nil
     pipe = nil
+  }
+
+  private func terminateProcess(_ process: Process) {
+    process.terminate()
+    // `applicationWillTerminate` has only a short synchronous window. Give cooperative adapters
+    // a moment to exit, then guarantee that a wedged helper cannot be orphaned under launchd.
+    let deadline = Date().addingTimeInterval(0.25)
+    while process.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+    if process.isRunning {
+      Darwin.kill(process.processIdentifier, SIGKILL)
+      process.waitUntilExit()
+    }
   }
 
   private func launch() {
     cleanup(terminate: true)  // never leave a stale process/handler around before respawning
+    streamHasEmittedRecord = false
     guard
       let script = Bundle.main.url(forResource: "mediaremote-adapter", withExtension: "pl"),
       let frameworks = Bundle.main.privateFrameworksPath
@@ -123,9 +137,59 @@ final class MediaWatcher: @unchecked Sendable {
       pipe = pp
       Log.media.info("Adapter started (pid \(p.processIdentifier))")
       onStatus?("Streaming")
+      scheduleInitialSnapshot(script: script, frameworks: frameworks)
     } catch {
       Log.media.error("Adapter launch failed: \(error)")
       processDied()
+    }
+  }
+
+  /// The stream normally publishes the current track as its first full record. A notification can
+  /// race that initial record during relaunch, leaving Islet with only a diff it cannot apply. The
+  /// one-shot query supplies a fallback without replacing a newer record from the live stream.
+  private func scheduleInitialSnapshot(script: URL, frameworks: String) {
+    let workItem = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.snapshotLaunchWorkItem = nil
+      guard self.isRunning,
+        Self.shouldAcceptInitialSnapshot(
+          streamHasEmittedRecord: self.streamHasEmittedRecord, currentSource: self.currentSource)
+      else { return }
+      self.requestInitialSnapshot(script: script, frameworks: frameworks)
+    }
+    snapshotLaunchWorkItem = workItem
+    queue.asyncAfter(deadline: .now() + 0.25, execute: workItem)
+  }
+
+  private func requestInitialSnapshot(script: URL, frameworks: String) {
+    let snapshot = Process()
+    snapshot.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+    snapshot.arguments = [
+      script.path, frameworks + "/MediaRemoteAdapter.framework", "get", "--no-artwork",
+    ]
+    let output = Pipe()
+    snapshot.standardOutput = output
+    snapshot.standardError = FileHandle.nullDevice
+    snapshot.terminationHandler = { [weak self] process in
+      let data = output.fileHandleForReading.readDataToEndOfFile()
+      self?.queue.async { [weak self] in
+        guard let self, self.snapshotProcess === process else { return }
+        self.snapshotProcess = nil
+        guard self.isRunning,
+          Self.shouldAcceptInitialSnapshot(
+            streamHasEmittedRecord: self.streamHasEmittedRecord, currentSource: self.currentSource),
+          process.terminationStatus == 0,
+          let line = String(data: data, encoding: .utf8)
+        else { return }
+        self.accept(AdapterParser.parseSnapshot(line: line))
+      }
+    }
+    snapshotProcess = snapshot
+    do {
+      try snapshot.run()
+    } catch {
+      snapshotProcess = nil
+      Log.media.error("Initial media snapshot failed: \(error)")
     }
   }
 
@@ -173,9 +237,20 @@ final class MediaWatcher: @unchecked Sendable {
 
   private func handle(line: String) {
     let base = currentSource.flatMap { lastStates[$0] }
-    for update in Self.expand(
-      AdapterParser.parse(line: line, current: base), current: currentSource)
-    {
+    let parsed = AdapterParser.parse(line: line, current: base)
+    guard parsed != .ignored else { return }
+    streamHasEmittedRecord = true
+    accept(parsed)
+  }
+
+  static func shouldAcceptInitialSnapshot(
+    streamHasEmittedRecord: Bool, currentSource: SourceID?
+  ) -> Bool {
+    !streamHasEmittedRecord && currentSource == nil
+  }
+
+  private func accept(_ parsed: AdapterUpdate) {
+    for update in Self.expand(parsed, current: currentSource) {
       switch update {
       case .ignored:
         continue

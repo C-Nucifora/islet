@@ -255,7 +255,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .diagnostics:
       pageContent + [
         "Diagnostics", "Bundle identifier", "Version", "Energy mode", "Copy diagnostics",
-        "Open logs folder", "Quit Islet", "Integration health", "Media adapter",
+        "Open logs folder", "Restart Islet", "Quit Islet", "Integration health", "Media adapter",
         "T3 Code credentials", "Pulse", "Media-key HUD", "signing support status", "About",
         "GitHub contributors C-Nucifora nedlane",
       ]
@@ -1391,6 +1391,7 @@ struct SettingsView: View {
             NSWorkspace.shared.open(
               URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Logs"))
           }
+          Button("Restart Islet") { AppRelauncher.restart() }
           Button("Quit Islet") { NSApplication.shared.terminate(nil) }
         }
       }

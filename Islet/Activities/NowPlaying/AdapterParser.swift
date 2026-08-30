@@ -21,7 +21,21 @@ enum AdapterParser {
       let payload = obj["payload"] as? [String: Any]
     else { return .ignored }
 
-    let isDiff = obj["diff"] as? Bool ?? false
+    return parse(payload: payload, isDiff: obj["diff"] as? Bool ?? false, current: current)
+  }
+
+  /// The adapter's one-shot `get` command returns the payload without the stream envelope. Islet
+  /// uses it once at startup to recover a track that was already playing before the stream began.
+  static func parseSnapshot(line: String) -> AdapterUpdate {
+    guard let data = line.data(using: .utf8),
+      let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return .ignored }
+    return parse(payload: payload, isDiff: false, current: nil)
+  }
+
+  private static func parse(
+    payload: [String: Any], isDiff: Bool, current: PlaybackState?
+  ) -> AdapterUpdate {
     var state: PlaybackState
     if isDiff {
       guard let current else { return .ignored }

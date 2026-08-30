@@ -76,6 +76,25 @@ final class AdapterParserTests: XCTestCase {
     XCTAssertEqual(AdapterParser.parse(line: "not json", current: nil), .ignored)
   }
 
+  func testOneShotSnapshotParsesCurrentTrack() {
+    let line =
+      #"{"title":"Already Playing","bundleIdentifier":"com.spotify.client","processIdentifier":42,"playing":true}"#
+    guard case .nowPlaying(let key, let state) = AdapterParser.parseSnapshot(line: line)
+    else { return XCTFail("expected nowPlaying snapshot") }
+    XCTAssertEqual(key.bundleIdentifier, "com.spotify.client")
+    XCTAssertEqual(key.pid, 42)
+    XCTAssertEqual(state.title, "Already Playing")
+    XCTAssertTrue(state.isPlaying)
+  }
+
+  func testEmptyOneShotSnapshotMeansIdle() {
+    XCTAssertEqual(AdapterParser.parseSnapshot(line: "{}"), .idle)
+  }
+
+  func testMalformedOneShotSnapshotIsIgnored() {
+    XCTAssertEqual(AdapterParser.parseSnapshot(line: "not json"), .ignored)
+  }
+
   func testSourceKeyResolvesParentAsDisplayIdentity() throws {
     let lines = try fixtureLines()
     guard case .nowPlaying(let key, _) = AdapterParser.parse(line: lines[1], current: nil)
