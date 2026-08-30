@@ -29,6 +29,30 @@ struct USBDeviceRegistryEntry {
   let productName: String?
   let vendorName: String?
   let deviceSpeed: Int?
+  /// The negotiated bit rate exposed by the USB host stack, in bits per second.
+  let linkSpeed: Int?
+  /// The USB host connection-speed ID exposed by the matching property.
+  let usbSpeed: Int?
+
+  init(
+    registryEntryID: UInt64?,
+    servicePath: String?,
+    locationID: UInt32?,
+    productName: String?,
+    vendorName: String?,
+    deviceSpeed: Int?,
+    linkSpeed: Int? = nil,
+    usbSpeed: Int? = nil
+  ) {
+    self.registryEntryID = registryEntryID
+    self.servicePath = servicePath
+    self.locationID = locationID
+    self.productName = productName
+    self.vendorName = vendorName
+    self.deviceSpeed = deviceSpeed
+    self.linkSpeed = linkSpeed
+    self.usbSpeed = usbSpeed
+  }
 }
 
 enum PortDeviceIdentity {
@@ -124,7 +148,7 @@ enum PortsReader {
       id: id,
       name: name ?? "USB Device",
       vendor: entry.vendorName,
-      speed: speedString(entry.deviceSpeed),
+      speed: speedString(for: entry),
       locationID: entry.locationID)
   }
 
@@ -132,20 +156,63 @@ enum PortsReader {
     USBDeviceRegistryEntry(
       registryEntryID: registryEntryID(service),
       servicePath: registryPath(service),
-      locationID: intProp(service, "locationID").map { UInt32(truncatingIfNeeded: $0) },
-      productName: strProp(service, "USB Product Name"),
-      vendorName: strProp(service, "USB Vendor Name"),
-      deviceSpeed: intProp(service, "Device Speed"))
+      locationID: intProp(service, kUSBHostPropertyLocationID).map {
+        UInt32(truncatingIfNeeded: $0)
+      },
+      productName: strProp(service, kUSBProductString),
+      vendorName: strProp(service, kUSBVendorString),
+      deviceSpeed: intProp(service, kUSBDevicePropertySpeed),
+      linkSpeed: intProp(service, kUSBHostPropertyLinkSpeed),
+      usbSpeed: intProp(service, kUSBHostMatchingPropertySpeed))
   }
 
-  private static func speedString(_ speed: Int?) -> String? {
+  private static func speedString(for entry: USBDeviceRegistryEntry) -> String? {
+    if let linkSpeed = entry.linkSpeed {
+      return linkSpeedString(linkSpeed)
+    }
+    if let usbSpeed = entry.usbSpeed {
+      return usbSpeedString(usbSpeed)
+    }
+    return deviceSpeedString(entry.deviceSpeed)
+  }
+
+  private static func linkSpeedString(_ speed: Int) -> String {
+    switch UInt64(bitPattern: Int64(speed)) {
+    case UInt64(kIOUSBLinkSpeedLow): "1.5 Mbps"
+    case UInt64(kIOUSBLinkSpeedFull): "12 Mbps"
+    case UInt64(kIOUSBLinkSpeedHigh): "480 Mbps"
+    case UInt64(kIOUSBLinkSpeed5Gbps): "5 Gbps"
+    case UInt64(kIOUSBLinkSpeed10Gbps): "10 Gbps"
+    case UInt64(kIOUSBLinkSpeed20Gbps): "20 Gbps"
+    case UInt64(kIOUSBLinkSpeed40Gbps): "40 Gbps"
+    case UInt64(kIOUSBLinkSpeed80Gbps): "80 Gbps"
+    default: "Unknown (\(speed))"
+    }
+  }
+
+  private static func usbSpeedString(_ speed: Int) -> String {
     switch speed {
-    case 0: "1.5 Mbps"
-    case 1: "12 Mbps"
-    case 2: "480 Mbps"
-    case 3: "5 Gbps"
-    case 4: "10 Gbps"
-    case 5: "20 Gbps"
+    case Int(kIOUSBHostConnectionSpeedNone.rawValue): "Unknown (\(speed))"
+    case Int(kIOUSBHostConnectionSpeedFull.rawValue): "12 Mbps"
+    case Int(kIOUSBHostConnectionSpeedLow.rawValue): "1.5 Mbps"
+    case Int(kIOUSBHostConnectionSpeedHigh.rawValue): "480 Mbps"
+    case Int(kIOUSBHostConnectionSpeedSuper.rawValue): "5 Gbps"
+    case Int(kIOUSBHostConnectionSpeedSuperPlus.rawValue): "10 Gbps"
+    case Int(kIOUSBHostConnectionSpeedSuperPlusBy2.rawValue): "20 Gbps"
+    case Int(kIOUSBHostConnectionSpeedOther.rawValue): "Unknown (\(speed))"
+    default: "Unknown (\(speed))"
+    }
+  }
+
+  private static func deviceSpeedString(_ speed: Int?) -> String? {
+    switch speed {
+    case Int(kUSBDeviceSpeedLow): "1.5 Mbps"
+    case Int(kUSBDeviceSpeedFull): "12 Mbps"
+    case Int(kUSBDeviceSpeedHigh): "480 Mbps"
+    case Int(kUSBDeviceSpeedSuper): "5 Gbps"
+    case Int(kUSBDeviceSpeedSuperPlus): "10 Gbps"
+    case Int(kUSBDeviceSpeedSuperPlusBy2): "20 Gbps"
+    case let speed?: "Unknown (\(speed))"
     default: nil
     }
   }

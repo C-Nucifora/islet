@@ -53,6 +53,32 @@ final class PortDeviceTests: XCTestCase {
           productName: "Keyboard", vendorName: nil, deviceSpeed: nil)))
   }
 
+  func testLegacyUSBRegistrySpeedIsMapped() throws {
+    let device = try XCTUnwrap(PortsReader.device(from: USBDeviceFixtures.legacyUSB))
+
+    XCTAssertEqual(device.speed, "480 Mbps")
+  }
+
+  func testNegotiatedLinkSpeedTakesPriorityOverUSBMarketingSpeed() throws {
+    let device = try XCTUnwrap(PortsReader.device(from: USBDeviceFixtures.usb20Gbps))
+
+    XCTAssertEqual(device.speed, "20 Gbps")
+  }
+
+  func testNegotiatedUSB4LinkSpeedsAreMapped() throws {
+    let forty = try XCTUnwrap(PortsReader.device(from: USBDeviceFixtures.usb40Gbps))
+    let eighty = try XCTUnwrap(PortsReader.device(from: USBDeviceFixtures.usb80Gbps))
+
+    XCTAssertEqual(forty.speed, "40 Gbps")
+    XCTAssertEqual(eighty.speed, "80 Gbps")
+  }
+
+  func testUnknownLinkSpeedHasAnExplicitLabel() throws {
+    let device = try XCTUnwrap(PortsReader.device(from: USBDeviceFixtures.unknownSpeed))
+
+    XCTAssertEqual(device.speed, "Unknown (123456789)")
+  }
+
   func testFailedReadRetainsLastValidSnapshotDuringGracePeriod() {
     var now = Date(timeIntervalSince1970: 1_000)
     var results: [PortEnumerationResult] = [
@@ -216,6 +242,51 @@ private enum USBDeviceFixtures {
     productName: "USB Keyboard",
     vendorName: nil,
     deviceSpeed: nil)
+
+  static let legacyUSB = USBDeviceRegistryEntry(
+    registryEntryID: 0x401,
+    servicePath: "/AppleUSBXHCI/Port@14600000/Device@1",
+    locationID: nil,
+    productName: "USB Keyboard",
+    vendorName: "Example",
+    deviceSpeed: Int(kUSBDeviceSpeedHigh))
+
+  static let usb20Gbps = USBDeviceRegistryEntry(
+    registryEntryID: 0x402,
+    servicePath: "/AppleUSBXHCI/Port@14700000/Device@1",
+    locationID: nil,
+    productName: "USB4 40Gbps device",
+    vendorName: "Example",
+    deviceSpeed: Int(kUSBDeviceSpeedSuper),
+    linkSpeed: Int(kIOUSBLinkSpeed20Gbps),
+    usbSpeed: Int(kIOUSBHostConnectionSpeedSuperPlus.rawValue))
+
+  static let usb40Gbps = USBDeviceRegistryEntry(
+    registryEntryID: 0x403,
+    servicePath: "/AppleUSBXHCI/Port@14800000/Device@1",
+    locationID: nil,
+    productName: "USB4 40Gbps device",
+    vendorName: "Example",
+    deviceSpeed: nil,
+    linkSpeed: Int(kIOUSBLinkSpeed40Gbps))
+
+  static let usb80Gbps = USBDeviceRegistryEntry(
+    registryEntryID: 0x404,
+    servicePath: "/AppleUSBXHCI/Port@14900000/Device@1",
+    locationID: nil,
+    productName: "USB4 80Gbps device",
+    vendorName: "Example",
+    deviceSpeed: nil,
+    linkSpeed: Int(kIOUSBLinkSpeed80Gbps))
+
+  static let unknownSpeed = USBDeviceRegistryEntry(
+    registryEntryID: 0x405,
+    servicePath: "/AppleUSBXHCI/Port@14A00000/Device@1",
+    locationID: nil,
+    productName: "Future USB device",
+    vendorName: "Example",
+    deviceSpeed: nil,
+    linkSpeed: 123_456_789)
 
   static let monitorDevice = PortDevice(
     id: "registry:0000000000000401|path:/AppleUSBXHCI/Port@14500000/Device@1",
