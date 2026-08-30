@@ -81,6 +81,15 @@ final class SettingsTransferTests: XCTestCase {
     }
   }
 
+  func testAllDisplaysToggleTransfersAsOneGlobalBoolean() throws {
+    let data = try document(settings: ["showOnAllDisplays": true])
+    let preview = try SettingsTransfer.preview(data: data, current: defaultSnapshot)
+
+    XCTAssertTrue(preview.result.showOnAllDisplays)
+    XCTAssertEqual(preview.importedSettingCount, 1)
+    XCTAssertEqual(preview.changes.map(\.key), ["showOnAllDisplays"])
+  }
+
   func testCorruptAndTypeInvalidFilesFailBeforeProducingAPreview() throws {
     XCTAssertThrowsError(
       try SettingsTransfer.preview(data: Data("not json".utf8), current: defaultSnapshot))

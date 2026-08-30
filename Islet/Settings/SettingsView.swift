@@ -183,7 +183,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "Startup", "Launch Islet at login", "Login item status", "Run setup again",
         "Displays", "Show Islet on every display", "Preferred display",
         "Hide Islet while an app is fullscreen",
-        "screen multiple monitors external dock clamshell closed lid reconnect",
+        "screen multiple monitors external dock clamshell closed lid reconnect pointer active app quick actions shelf",
       ]
     case .updates:
       pageContent + [
@@ -1061,6 +1061,12 @@ struct SettingsView: View {
           "Automatic uses the built-in display, then the main display. A disconnected preference returns when that display reconnects."
         )
         .font(.caption).foregroundStyle(.secondary)
+        if showOnAllDisplays {
+          Text(
+            "Show Islet and Open File Shelf target the display under the pointer, then the frontmost app's display, your preference, and the main display."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
       }
     }
     .formStyle(.grouped)
