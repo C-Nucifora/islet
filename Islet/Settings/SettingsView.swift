@@ -245,7 +245,10 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       ]
     case .permissions:
       pageContent + [
-        "Screen recording", "Hide Islet from screen recordings", "Calendar access",
+        "Screen recording", "Hide Islet from screen recordings", "Request capture exclusion",
+        "Capture exclusion", "Unsupported", "Unverified",
+        "screenshots recordings shared screens ScreenCaptureKit QuickTime conferencing",
+        "Calendar access",
         "Reminders access", "Accessibility access", "Request access", "Open System Settings",
         "Nearby devices and networks", "Location for Wi-Fi names", "Open Location Settings",
         "Bluetooth devices", "Open Bluetooth Privacy Settings", "Local network",
@@ -1139,8 +1142,12 @@ struct SettingsView: View {
   private var permissionsForm: some View {
     Form {
       Section("Screen recording") {
-        Toggle("Hide Islet from screen recordings", isOn: $hideFromRecording)
-        Text("This hides Islet's panels from capture. It does not stop enabled activities.")
+        let policy = ScreenCaptureExclusionPolicy.current
+        Toggle("Request capture exclusion", isOn: $hideFromRecording)
+        PermissionStatusRow(
+          title: "Capture exclusion", icon: "rectangle.dashed.badge.record",
+          status: policy.status.summary, color: screenCaptureStatusColor)
+        Text(policy.status.detail)
           .font(.caption).foregroundStyle(.secondary)
       }
       Section("Calendar") {
@@ -1434,6 +1441,14 @@ struct SettingsView: View {
   private var reminderStatusText: String { permissions.diagnostics.reminders.summary }
   private var eventStatusColor: Color { authorizationColor(permissions.diagnostics.calendar) }
   private var reminderStatusColor: Color { authorizationColor(permissions.diagnostics.reminders) }
+
+  private var screenCaptureStatusColor: Color {
+    switch ScreenCaptureExclusionPolicy.current.status {
+    case .active: .green
+    case .unsupported: .red
+    case .unverified: .orange
+    }
+  }
 
   private var continuityStatusText: String {
     switch continuity.availability {
