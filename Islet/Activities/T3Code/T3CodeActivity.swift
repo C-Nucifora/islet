@@ -13,6 +13,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   @Published private(set) var environments: [T3EnvironmentSnapshot] = []
   @Published private(set) var lastCredentialError: String?
   private(set) var activationDate: Date?
+  let connectCoordinator: T3ConnectCoordinator
 
   private let localEndpointProvider: @Sendable () async -> T3Endpoint?
   private let onLocalDiscoveryCompleted: @Sendable () -> Void
@@ -29,10 +30,12 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     localEndpointProvider: @escaping @Sendable () async -> T3Endpoint? = {
       await T3LocalDiscovery.endpoint()
     },
-    onLocalDiscoveryCompleted: @escaping @Sendable () -> Void = {}
+    onLocalDiscoveryCompleted: @escaping @Sendable () -> Void = {},
+    connectCoordinator: T3ConnectCoordinator? = nil
   ) {
     self.localEndpointProvider = localEndpointProvider
     self.onLocalDiscoveryCompleted = onLocalDiscoveryCompleted
+    self.connectCoordinator = connectCoordinator ?? .production()
   }
 
   var agents: [T3AgentSnapshot] {
@@ -80,13 +83,20 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.setSystemSuspended(false) }
       .store(in: &workspaceCancellables)
-    restartMonitors()
+    connectCoordinator.$cloudCandidates
+      .removeDuplicates()
+      .sink { [weak self] candidates in
+        self?.replaceCandidates(from: .connect, with: candidates)
+      }
+      .store(in: &cancellables)
+    restartMonitors(clearSnapshots: false)
   }
 
   func stop() {
     guard isMonitoring else { return }
     isMonitoring = false
     cancelMonitorTasks()
+    connectCoordinator.stopInventory(preserveInventory: true)
     cancellables.removeAll()
     workspaceCancellables.removeAll()
     // A session-resign notification may have been the last event before the feature was disabled.
@@ -98,7 +108,12 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     activationDate = nil
   }
 
-  func reconnect() { restartMonitors() }
+  func loadConnectAccount() async { await connectCoordinator.loadAccount() }
+
+  func reconnect() {
+    restartMonitors(clearSnapshots: false)
+    connectCoordinator.refreshNow()
+  }
 
   func addRemote(pairingLink: String, allowInsecureHTTP: Bool = false) async throws {
     let target = try T3PairingTarget.parse(
@@ -225,12 +240,16 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   func restartMonitors(clearSnapshots: Bool = true) {
     cancelMonitorTasks()
     if clearSnapshots {
-      environmentCandidates.removeAll()
-      environments.removeAll()
-      activationDate = nil
+      let next = environmentCandidates.filter { $0.source == .connect }
+      if next != environmentCandidates {
+        environmentCandidates = next
+        publishResolvedCandidates()
+      }
     }
-    guard isMonitoring, !isSystemSuspended else { return }
-
+    guard isMonitoring, Defaults[.t3CodeEnabled], !isSystemSuspended else {
+      connectCoordinator.stopInventory(preserveInventory: true)
+      return
+    }
     monitorTasks["local"] = Task { [weak self] in await self?.monitorLocal() }
     // Remote polling is optional work and can keep radios awake. Leave the last snapshot visible
     // in Low Power Mode and reconnect when normal power policy resumes.
@@ -242,6 +261,9 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
           await self?.monitorRemote(profile)
         }
       }
+      connectCoordinator.startInventory()
+    } else {
+      connectCoordinator.stopInventory(preserveInventory: true)
     }
   }
 
@@ -250,7 +272,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     monitorTasks.removeAll()
   }
 
-  private func setSystemSuspended(_ suspended: Bool) {
+  func setSystemSuspended(_ suspended: Bool) {
     guard suspended != isSystemSuspended else { return }
     isSystemSuspended = suspended
     restartMonitors(clearSnapshots: false)
@@ -502,7 +524,15 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   }
 
   func removeCandidates(from source: T3EnvironmentSource) {
-    let next = Self.removingCandidates(from: environmentCandidates, source: source)
+    replaceCandidates(from: source, with: [])
+  }
+
+  func replaceCandidates(
+    from source: T3EnvironmentSource,
+    with replacements: [T3EnvironmentSnapshot]
+  ) {
+    let next = Self.replacingCandidates(
+      from: environmentCandidates, source: source, with: replacements)
     guard next != environmentCandidates else { return }
     environmentCandidates = next
     publishResolvedCandidates()
@@ -537,6 +567,14 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     from current: [T3EnvironmentSnapshot], source: T3EnvironmentSource
   ) -> [T3EnvironmentSnapshot] {
     current.filter { $0.source != source }
+  }
+
+  nonisolated static func replacingCandidates(
+    from current: [T3EnvironmentSnapshot],
+    source: T3EnvironmentSource,
+    with replacements: [T3EnvironmentSnapshot]
+  ) -> [T3EnvironmentSnapshot] {
+    current.filter { $0.source != source } + replacements.filter { $0.source == source }
   }
 
   nonisolated static func pollInterval(

@@ -634,6 +634,23 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(remaining, [local, manual])
   }
 
+  func testReplacingConnectCandidatesIsAtomicAndPreservesLocalAndManualCandidates() {
+    let local = Self.environmentSnapshot(
+      id: "local|local", logicalEnvironmentID: "local", source: .local)
+    let oldConnect = Self.environmentSnapshot(
+      id: "connect|old", logicalEnvironmentID: "old", source: .connect)
+    let manual = Self.environmentSnapshot(
+      id: "remote|manual|https://mini.example.com/", logicalEnvironmentID: "manual",
+      source: .manual)
+    let replacement = Self.environmentSnapshot(
+      id: "connect|new", logicalEnvironmentID: "new", source: .connect)
+
+    let updated = T3CodeActivity.replacingCandidates(
+      from: [local, oldConnect, manual], source: .connect, with: [replacement])
+
+    XCTAssertEqual(updated, [local, manual, replacement])
+  }
+
   func testConnectedSnapshotDerivesAgentIDsFromLogicalEnvironmentID() throws {
     let now = Date(timeIntervalSince1970: 1_788_000_000)
     let descriptor = T3EnvironmentDescriptor(
