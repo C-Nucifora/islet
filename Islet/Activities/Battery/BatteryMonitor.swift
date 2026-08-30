@@ -64,11 +64,19 @@ final class BatteryMonitor: ObservableObject {
   init(
     state: BatteryState? = nil,
     metrics: BatteryMetrics? = nil,
-    peripherals: [PeripheralBattery] = []
+    peripherals: [PeripheralBattery] = [],
+    cpuPowerSamplingService: CPUPowerSamplingService = .shared,
+    energyPolicy: @escaping () -> EnergyPolicy = {
+      EnergyPolicy(
+        mode: Defaults[.energyMode],
+        systemLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
+    }
   ) {
     self.state = state
     self.metrics = metrics
     self.peripherals = peripherals
+    self.cpuPowerSamplingService = cpuPowerSamplingService
+    energyPolicyProvider = energyPolicy
   }
 
   private let powerSourceRegistration = PowerSourceRunLoopRegistration(
@@ -86,6 +94,8 @@ final class BatteryMonitor: ObservableObject {
   private var lastStableRead: Date?
   private var generation = 0
   private var stateGracePeriod = BatteryStateGracePeriod()
+  private let cpuPowerSamplingService: CPUPowerSamplingService
+  private let energyPolicyProvider: () -> EnergyPolicy
 
   /// Temperature/power/charger change continuously, so refresh at a human-readable cadence while
   /// a battery view is on screen and slowly otherwise. Charge-source callbacks remain immediate.
@@ -132,7 +142,7 @@ final class BatteryMonitor: ObservableObject {
     guard isRunning else { return }
     isRunning = false
     generation += 1
-    CPUPowerSamplingService.shared.setNeeded(false, for: .battery)
+    cpuPowerSamplingService.setDemand(nil, for: .battery)
     samplingTask?.cancel()
     samplingTask = nil
     isSampling = false
@@ -227,9 +237,7 @@ final class BatteryMonitor: ObservableObject {
   }
 
   private var energyPolicy: EnergyPolicy {
-    EnergyPolicy(
-      mode: Defaults[.energyMode],
-      systemLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
+    energyPolicyProvider()
   }
 
   private func energyPolicyDidChange() {
@@ -240,8 +248,11 @@ final class BatteryMonitor: ObservableObject {
   }
 
   private func updateCPUPowerSampling() {
-    CPUPowerSamplingService.shared.setConstrained(energyPolicy.isConstrained)
-    CPUPowerSamplingService.shared.setNeeded(isRunning && fastMetrics, for: .battery)
+    let policy = energyPolicy
+    cpuPowerSamplingService.setConstrained(policy.isConstrained)
+    cpuPowerSamplingService.setDemand(
+      isRunning && fastMetrics ? policy.batteryInterval(viewIsLive: true) : nil,
+      for: .battery)
   }
 
   private func apply(_ snapshot: BatteryReadSnapshot, includeStable: Bool) {

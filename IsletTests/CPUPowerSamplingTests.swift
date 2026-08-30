@@ -192,6 +192,24 @@ final class CPUPowerSamplingTests: XCTestCase {
     XCTAssertEqual(service.cachedReading(), .fresh(watts: 3))
   }
 
+  func testRequestedCadenceKeepsAReadingFreshUntilTheFollowingSampleWindow() {
+    let clock = LockedValue<TimeInterval>(0)
+    let store = CPUPowerReadingStore(now: { clock.read() }, staleAfter: 5)
+    let service = CPUPowerSamplingService(
+      dependencies: CPUPowerSamplingDependencies(
+        now: { clock.read() }, sleep: { _ in }, sample: { nil }),
+      store: store)
+    store.record(watts: 3, at: 0)
+
+    service.setDemand(12, for: .battery)
+    clock.update { $0 = 24 }
+    XCTAssertEqual(service.cachedReading(), .fresh(watts: 3))
+
+    clock.update { $0 = 24.001 }
+    XCTAssertEqual(service.cachedReading(), .stale(watts: 3))
+    service.setDemand(nil, for: .battery)
+  }
+
   func testReadingStoreKeepsLastValidSample() {
     let clock = LockedValue<TimeInterval>(20)
     let store = CPUPowerReadingStore(now: { clock.read() }, staleAfter: 5)
@@ -213,25 +231,84 @@ final class CPUPowerSamplingTests: XCTestCase {
     XCTAssertEqual(service.cachedReading(), .unavailable)
   }
 
+  func testBatteryDemandUsesItsRequestedRefreshCadence() async {
+    let probe = SampleProbe(values: [4])
+    let sleeper = TestSleeper()
+    let service = makeService(probe: probe, sleeper: sleeper)
+
+    service.setDemand(12, for: .battery)
+    await waitUntil("the Battery cadence sleep") { sleeper.intervals.count == 1 }
+
+    XCTAssertEqual(sleeper.intervals, [12])
+    service.setDemand(nil, for: .battery)
+    await waitUntil("the Battery cadence sleep to cancel") { sleeper.cancellationCount == 1 }
+  }
+
+  func testBatteryMonitorRequestsItsActiveRefreshCadence() async {
+    let probe = SampleProbe(values: [4])
+    let sleeper = TestSleeper()
+    let clock = LockedValue<TimeInterval>(0)
+    let store = CPUPowerReadingStore(now: { clock.read() }, staleAfter: 5)
+    let service = CPUPowerSamplingService(
+      dependencies: CPUPowerSamplingDependencies(
+        now: { clock.read() },
+        sleep: { try await sleeper.sleep(for: $0) },
+        sample: { await probe.sample() }),
+      store: store)
+    let monitor = BatteryMonitor(
+      cpuPowerSamplingService: service,
+      energyPolicy: { EnergyPolicy(mode: .automatic, systemLowPowerMode: false) })
+
+    monitor.start()
+    monitor.liveGate.retain()
+    defer {
+      monitor.liveGate.release()
+      monitor.stop()
+    }
+    await waitUntil("the Battery monitor CPU-power demand") { sleeper.intervals.count == 1 }
+
+    XCTAssertEqual(sleeper.intervals, [12])
+  }
+
+  func testSystemMonitorDoesNotRequestUnusedCPUPowerSampling() async {
+    let probe = SampleProbe(values: [9])
+    let sleeper = TestSleeper()
+    let service = makeService(probe: probe, sleeper: sleeper)
+    let monitor = SystemMetricsMonitor(
+      now: { Date(timeIntervalSinceReferenceDate: 0) },
+      cpuPowerSamplingService: service)
+
+    monitor.start()
+    monitor.liveGate.retain()
+    defer {
+      monitor.liveGate.release()
+      monitor.stop()
+    }
+    for _ in 0..<100 { await Task.yield() }
+
+    XCTAssertEqual(probe.callCount, 0)
+    XCTAssertTrue(sleeper.intervals.isEmpty)
+  }
+
   func testBatteryAndSystemConsumersShareOneSamplingLoop() async {
     let probe = SampleProbe(values: [8])
     let sleeper = TestSleeper()
     let service = makeService(probe: probe, sleeper: sleeper)
 
-    service.setNeeded(true, for: .battery)
+    service.setDemand(CPUPowerSamplingService.normalInterval, for: .battery)
     await waitUntil("the first CPU-power sample") { sleeper.intervals.count == 1 }
-    service.setNeeded(true, for: .system)
+    service.setDemand(CPUPowerSamplingService.normalInterval, for: .system)
     for _ in 0..<10 { await Task.yield() }
 
     XCTAssertEqual(probe.callCount, 1)
     XCTAssertEqual(probe.maximumActiveCount, 1)
     XCTAssertEqual(service.cachedReading(), .fresh(watts: 8))
 
-    service.setNeeded(false, for: .battery)
+    service.setDemand(nil, for: .battery)
     for _ in 0..<10 { await Task.yield() }
     XCTAssertEqual(sleeper.cancellationCount, 0)
 
-    service.setNeeded(false, for: .system)
+    service.setDemand(nil, for: .system)
     await waitUntil("the shared loop to cancel") { sleeper.cancellationCount == 1 }
   }
 
@@ -240,7 +317,7 @@ final class CPUPowerSamplingTests: XCTestCase {
     let sleeper = TestSleeper()
     let service = makeService(probe: probe, sleeper: sleeper)
 
-    service.setNeeded(true, for: .battery)
+    service.setDemand(CPUPowerSamplingService.normalInterval, for: .battery)
     await waitUntil("the normal cadence") { sleeper.intervals.count == 1 }
     XCTAssertEqual(sleeper.intervals, [CPUPowerSamplingService.normalInterval])
 
@@ -259,7 +336,7 @@ final class CPUPowerSamplingTests: XCTestCase {
     XCTAssertEqual(probe.callCount, 3)
     XCTAssertEqual(probe.maximumActiveCount, 1)
 
-    service.setNeeded(false, for: .battery)
+    service.setDemand(nil, for: .battery)
     await waitUntil("the constrained loop to cancel") { sleeper.cancellationCount == 2 }
   }
 
@@ -277,11 +354,11 @@ final class CPUPowerSamplingTests: XCTestCase {
         }),
       store: store)
 
-    service.setNeeded(true, for: .battery)
+    service.setDemand(CPUPowerSamplingService.normalInterval, for: .battery)
     await waitUntil("the post-sample sleep") { sleeper.intervals.count == 1 }
     XCTAssertEqual(sleeper.intervals[0], 0.75, accuracy: 0.000_001)
 
-    service.setNeeded(false, for: .battery)
+    service.setDemand(nil, for: .battery)
     await waitUntil("the cadence sleep to cancel") { sleeper.cancellationCount == 1 }
   }
 
@@ -290,13 +367,13 @@ final class CPUPowerSamplingTests: XCTestCase {
     let sleeper = TestSleeper()
     let service = makeService(probe: probe, sleeper: sleeper)
 
-    service.setNeeded(true, for: .battery)
+    service.setDemand(CPUPowerSamplingService.normalInterval, for: .battery)
     await waitUntil("the first cadence sleep") { sleeper.intervals.count == 1 }
     sleeper.resumeNext()
     await waitUntil("the failed sample") { sleeper.intervals.count == 2 }
 
     XCTAssertEqual(service.cachedReading(), .fresh(watts: 5))
-    service.setNeeded(false, for: .battery)
+    service.setDemand(nil, for: .battery)
     await waitUntil("the loop to cancel") { sleeper.cancellationCount == 1 }
   }
 
@@ -310,15 +387,15 @@ final class CPUPowerSamplingTests: XCTestCase {
         sample: { await probe.sample() }),
       store: store)
 
-    service.setNeeded(true, for: .battery)
+    service.setDemand(CPUPowerSamplingService.normalInterval, for: .battery)
     await waitUntil("the blocking sample to start") { probe.callCount == 1 }
-    service.setNeeded(false, for: .battery)
-    service.setNeeded(true, for: .system)
+    service.setDemand(nil, for: .battery)
+    service.setDemand(CPUPowerSamplingService.normalInterval, for: .system)
     await waitUntil("the first sample cancellation") { probe.cancellationCount == 1 }
     await waitUntil("the replacement sample") { probe.callCount == 2 }
 
     XCTAssertEqual(probe.maximumActiveCount, 1)
-    service.setNeeded(false, for: .system)
+    service.setDemand(nil, for: .system)
     await waitUntil("the replacement cancellation") { probe.cancellationCount == 2 }
   }
 

@@ -104,7 +104,7 @@ final class CPUPowerSamplingService {
 
   private let dependencies: CPUPowerSamplingDependencies
   private let store: CPUPowerReadingStore
-  private var consumers: Set<CPUPowerConsumer> = []
+  private var demands: [CPUPowerConsumer: TimeInterval] = [:]
   private var constrained = false
   private var phase = Phase.idle
   private var loopTask: Task<Void, Never>?
@@ -117,20 +117,21 @@ final class CPUPowerSamplingService {
     self.store = store
   }
 
-  func setNeeded(_ needed: Bool, for consumer: CPUPowerConsumer) {
-    if needed {
-      consumers.insert(consumer)
+  func setDemand(_ interval: TimeInterval?, for consumer: CPUPowerConsumer) {
+    let previousInterval = samplingInterval
+    if let interval, interval.isFinite, interval > 0 {
+      demands[consumer] = interval
     } else {
-      consumers.remove(consumer)
+      demands.removeValue(forKey: consumer)
     }
-    reconcileLoop(restartSleepingLoop: false)
+    updateFreshnessWindow()
+    reconcileLoop(restartSleepingLoop: samplingInterval != previousInterval)
   }
 
   func setConstrained(_ constrained: Bool) {
     guard constrained != self.constrained else { return }
     self.constrained = constrained
-    store.setStaleAfter(
-      constrained ? Self.constrainedStaleAfter : Self.normalStaleAfter)
+    updateFreshnessWindow()
     reconcileLoop(restartSleepingLoop: true)
   }
 
@@ -139,7 +140,7 @@ final class CPUPowerSamplingService {
   }
 
   private func reconcileLoop(restartSleepingLoop: Bool) {
-    guard !consumers.isEmpty else {
+    guard !demands.isEmpty else {
       loopTask?.cancel()
       return
     }
@@ -153,25 +154,25 @@ final class CPUPowerSamplingService {
   }
 
   private func startLoop() {
-    guard loopTask == nil, !consumers.isEmpty else { return }
+    guard loopTask == nil, !demands.isEmpty else { return }
     loopTask = Task { [weak self] in
       await self?.runLoop()
     }
   }
 
   private func runLoop() async {
-    while !Task.isCancelled, !consumers.isEmpty {
+    while !Task.isCancelled, !demands.isEmpty {
       phase = .sampling
       let sampleStarted = dependencies.now()
       let watts = await dependencies.sample()
-      guard !Task.isCancelled, !consumers.isEmpty else { break }
+      guard !Task.isCancelled, !demands.isEmpty else { break }
       if let watts, watts.isFinite, watts >= 0 {
         store.record(watts: watts, at: dependencies.now())
       }
 
       phase = .sleeping
       do {
-        let interval = constrained ? Self.constrainedInterval : Self.normalInterval
+        let interval = samplingInterval ?? Self.normalInterval
         let measuredElapsed = dependencies.now() - sampleStarted
         let elapsed = measuredElapsed.isFinite ? max(measuredElapsed, 0) : 0
         try await dependencies.sleep(max(interval - elapsed, 0))
@@ -182,7 +183,18 @@ final class CPUPowerSamplingService {
 
     phase = .idle
     loopTask = nil
-    if !consumers.isEmpty { startLoop() }
+    if !demands.isEmpty { startLoop() }
+  }
+
+  private var samplingInterval: TimeInterval? {
+    guard let requested = demands.values.min() else { return nil }
+    return constrained ? max(requested, Self.constrainedInterval) : requested
+  }
+
+  private func updateFreshnessWindow() {
+    let baseline = constrained ? Self.constrainedStaleAfter : Self.normalStaleAfter
+    let cadenceWindow = samplingInterval.map { $0 * 2 } ?? 0
+    store.setStaleAfter(max(baseline, cadenceWindow))
   }
 }
 
