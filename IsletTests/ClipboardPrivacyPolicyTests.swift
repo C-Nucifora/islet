@@ -587,8 +587,9 @@ final class ClipboardPrivacyPolicyTests: XCTestCase {
     provider.release()
 
     let copySucceeded = await copyTask.value
-    XCTAssertTrue(copySucceeded)
-    XCTAssertEqual(pasteboard.string(forType: .string), "history")
+    XCTAssertFalse(copySucceeded)
+    XCTAssertNil(pasteboard.string(forType: .string))
+    XCTAssertEqual(pasteboard.data(forType: blockedType), Data([1, 2, 3]))
     XCTAssertTrue(model.items.isEmpty)
   }
 
