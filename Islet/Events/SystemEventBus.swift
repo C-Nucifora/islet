@@ -8,9 +8,9 @@ import Foundation
 /// enable/disable, so the Settings section and the Debug menu both generate from `SourceCatalog`
 /// rather than being hand-maintained alongside it.
 ///
-/// Delivery goes through the existing `SneakQueue` untouched. The bus's own contribution is the
-/// burst coalescer: one physical action (docking) can fire six sources at once, and the queue is
-/// strictly FIFO with a 2s dwell.
+/// Delivery goes through `SneakQueue`, which prioritizes queued alerts and applies a bounded
+/// fairness turn for ambient work. The bus's own contribution is the burst coalescer: one physical
+/// action (docking) can fire six sources at once.
 @MainActor
 final class SystemEventBus: ObservableObject {
   static let shared = SystemEventBus(queue: SneakQueue.shared)

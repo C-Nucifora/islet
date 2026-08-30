@@ -91,7 +91,32 @@ struct ShelfView: View {
         }
       }
 
-      if let error = model.lastError {
+      if model.isStorageAvailable {
+        HStack(spacing: 4) {
+          Image(systemName: "externaldrive")
+          Text(model.storageUsageText)
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(model.storageUsageAccessibilityText)
+      }
+
+      if let storageFailure = model.storageFailure {
+        HStack(spacing: 5) {
+          Image(systemName: "externaldrive.badge.exclamationmark")
+          Text(storageFailure.message).lineLimit(2)
+          Spacer(minLength: 0)
+          Button("Retry") { model.retryStorage() }.buttonStyle(.link)
+          if model.canRevealStorageLocation {
+            Button("Reveal") { model.revealStorageLocation() }.buttonStyle(.link)
+          }
+        }
+        .font(.caption2)
+        .foregroundStyle(.orange)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Shelf storage unavailable. \(storageFailure.message)")
+      } else if let error = model.lastError {
         HStack(spacing: 5) {
           Image(systemName: "exclamationmark.triangle.fill")
           Text(error).lineLimit(1)
@@ -103,7 +128,7 @@ struct ShelfView: View {
         .accessibilityElement(children: .combine)
       }
 
-      if model.items.isEmpty {
+      if model.isStorageAvailable, model.items.isEmpty {
         RoundedRectangle(cornerRadius: 10)
           .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [5]))
           .foregroundStyle(.secondary)
@@ -117,7 +142,7 @@ struct ShelfView: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
         ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: 10) {
+          LazyHStack(spacing: 10) {
             ForEach(model.items) { item in
               ShelfItemView(item: item, model: model)
             }
@@ -186,7 +211,11 @@ struct ShelfItemView: View {
       Text(item.name).font(.system(size: 9)).lineLimit(1).frame(width: 60)
     }
     .onHover { hovering = $0 }
-    .onAppear { updateThumbnail() }
+    .onAppear {
+      model.setThumbnailVisibility(for: item, isVisible: true)
+      updateThumbnail()
+    }
+    .onDisappear { model.setThumbnailVisibility(for: item, isVisible: false) }
     .onChange(of: item.thumbnail) { _, _ in updateThumbnail() }
     .accessibilityElement(children: .contain)
     .contextMenu {

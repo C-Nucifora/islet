@@ -10,8 +10,6 @@ struct ExpandedContainerView: View {
   @ObservedObject private var center = ActivityCenter.shared
   @ObservedObject private var shelf = ShelfModel.shared
   @Environment(\.appTheme) private var appTheme
-  /// nil selection means the dashboard ("Home"); otherwise an activity id.
-  @State private var selection: String? = nil
   private static let homeTab = "\u{0000}home"  // sentinel id for the dashboard chip
 
   /// Tabs shown, left to right: Home, then active activities and persistent utility surfaces.
@@ -47,7 +45,7 @@ struct ExpandedContainerView: View {
     {
       return "shelf"
     }
-    if let selection, ids.contains(selection) { return selection }
+    if let selection = vm.selectedActivityID, ids.contains(selection) { return selection }
     // Default to a prominent active activity (running timer or media player); else the dashboard.
     if let primary = center.primaryActivity, primary.id == "timer" || primary.id == "nowPlaying" {
       return primary.id
@@ -86,11 +84,11 @@ struct ExpandedContainerView: View {
       vm.setExpandedHeight(selectedHeight)
     }
     .onChange(of: shelf.isDropPresentationActive, initial: true) { _, active in
-      if active { selection = "shelf" }
+      if active { vm.selectActivity("shelf") }
     }
     .onChange(of: shelf.presentationRequest, initial: true) { _, request in
       guard let request else { return }
-      selection = "shelf"
+      vm.selectActivity("shelf")
       Task { @MainActor in shelf.consumePresentationRequest(request) }
     }
     .onChange(of: tabs.map(\.id), initial: true) { _, ids in
@@ -129,7 +127,7 @@ struct ExpandedContainerView: View {
           Menu {
             ForEach(overflowTabs, id: \.id) { tab in
               Button {
-                selection = tab.id
+                vm.selectActivity(tab.id)
               } label: {
                 Label(ActivityCatalog.name(for: tab.id), systemImage: tab.icon)
               }
@@ -177,7 +175,7 @@ struct ExpandedContainerView: View {
   private func tabButton(_ tab: (id: String, icon: String)) -> some View {
     let selected = tab.id == effectiveSelection
     return Button {
-      selection = tab.id
+      vm.selectActivity(tab.id)
     } label: {
       Image(systemName: tab.icon)
         .font(.caption)

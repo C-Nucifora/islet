@@ -22,9 +22,11 @@ enum SystemEventTier: Int, CaseIterable, Codable, Sendable {
   }
 }
 
-/// Ordering hint for the queue. Nothing consumes it yet — `SneakQueue` is strictly FIFO — but a
-/// low-battery warning queueing behind a track change is a real defect, and the ordering fix wants
-/// this field to already be populated at every call site when it lands.
+/// Scheduling priority for queued compact-island events.
+///
+/// `SneakLogic` dequeues higher urgency before lower urgency while preserving FIFO order within an
+/// urgency level. It gives an ambient event one turn after three consecutive alerts so alert storms
+/// cannot leave ambient updates queued forever. A displayed sneak is never interrupted.
 enum SystemEventUrgency: Int, Comparable, Sendable {
   case ambient = 0
   case normal = 1

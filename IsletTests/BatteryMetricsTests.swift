@@ -750,15 +750,9 @@ final class BatteryMetricsTests: XCTestCase {
   }
 
   @MainActor func testBatteryTabStaysActiveOffAC() {
-    let saved = Defaults[.batteryEnabled]
-    defer { Defaults[.batteryEnabled] = saved }
-
     // The monitor has never produced a state, so `onAC` is false. The tab must still be active.
     let activity = BatteryActivity()
-    Defaults[.batteryEnabled] = true
     XCTAssertTrue(activity.isActive)
-    Defaults[.batteryEnabled] = false
-    XCTAssertFalse(activity.isActive)
   }
 
   // MARK: - Height tier

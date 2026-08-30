@@ -87,9 +87,35 @@ enum LegacyInstallMigrator {
     let legacyDomains = LegacyInstallIdentifiers.applicationDomains.compactMap {
       defaults.persistentDomain(forName: $0)
     }
-    let importedPreferenceCount = try migratePreferences(
-      defaults: defaults, currentBundleIdentifier: currentBundleIdentifier,
-      legacyDomains: legacyDomains)
+    // Startup can create these two canonical keys before first-run setup offers to import another
+    // installation. They are provisional, not user choices, so they must not outrank the imported
+    // visibility list. Restore them if verification fails.
+    let replacesProvisionalEnablement =
+      defaults.integer(forKey: onboardingVersionKey) < OnboardingState.currentVersion
+      && defaults.object(forKey: ActivityEnablement.migrationVersionKey) != nil
+    let provisionalDisabled = defaults.object(forKey: ActivityEnablement.disabledActivitiesKey)
+    let provisionalVersion = defaults.object(forKey: ActivityEnablement.migrationVersionKey)
+    if replacesProvisionalEnablement {
+      defaults.removeObject(forKey: ActivityEnablement.disabledActivitiesKey)
+      defaults.removeObject(forKey: ActivityEnablement.migrationVersionKey)
+    }
+
+    let importedPreferenceCount: Int
+    do {
+      importedPreferenceCount = try migratePreferences(
+        defaults: defaults, currentBundleIdentifier: currentBundleIdentifier,
+        legacyDomains: legacyDomains)
+    } catch {
+      if replacesProvisionalEnablement {
+        if let provisionalDisabled {
+          defaults.set(provisionalDisabled, forKey: ActivityEnablement.disabledActivitiesKey)
+        }
+        if let provisionalVersion {
+          defaults.set(provisionalVersion, forKey: ActivityEnablement.migrationVersionKey)
+        }
+      }
+      throw error
+    }
 
     let importedCredentialCount = try T3CredentialStore.migrateLegacyVaults()
 
@@ -118,9 +144,11 @@ enum OnboardingPreferences {
   static func disabledActivities(
     preserving existing: [String], selected: Set<String>
   ) -> [String] {
-    let unknown = existing.filter { !knownActivityIDs.contains($0) }
-    let disabledKnown = ActivityCatalog.defaultOrder.filter { !selected.contains($0) }
-    return unknown + disabledKnown
+    ActivityCatalog.defaultOrder.reduce(existing.filter { !knownActivityIDs.contains($0) }) {
+      disabled, activityID in
+      ActivityEnablement.updating(
+        disabled, activityID: activityID, enabled: selected.contains(activityID))
+    }
   }
 
   @MainActor
@@ -129,32 +157,13 @@ enum OnboardingPreferences {
   ) {
     Defaults[.disabledActivities] = disabledActivities(
       preserving: Defaults[.disabledActivities], selected: selectedActivities)
-    Defaults[.batteryEnabled] = selectedActivities.contains("battery")
-    Defaults[.calendarEnabled] = selectedActivities.contains("calendar")
-    Defaults[.clipboardEnabled] = selectedActivities.contains("clipboard")
-    Defaults[.portsEnabled] = selectedActivities.contains("ports")
-    Defaults[.systemEnabled] = selectedActivities.contains("system")
-    Defaults[.continuityEnabled] = selectedActivities.contains("continuity")
-    Defaults[.t3CodeEnabled] = selectedActivities.contains("t3Code")
-    Defaults[.pulseEnabled] = selectedActivities.contains("pulse")
     Defaults[.remindersEnabled] = remindersEnabled
     SystemEventBus.shared.setEnabled(bluetoothEventsEnabled, for: "bluetooth")
   }
 
   @MainActor
   static func isActivityEnabled(_ id: String) -> Bool {
-    guard !Defaults[.disabledActivities].contains(id) else { return false }
-    switch id {
-    case "battery": return Defaults[.batteryEnabled]
-    case "calendar": return Defaults[.calendarEnabled]
-    case "clipboard": return Defaults[.clipboardEnabled]
-    case "ports": return Defaults[.portsEnabled]
-    case "system": return Defaults[.systemEnabled]
-    case "continuity": return Defaults[.continuityEnabled]
-    case "t3Code": return Defaults[.t3CodeEnabled]
-    case "pulse": return Defaults[.pulseEnabled]
-    default: return true
-    }
+    ActivityEnablement.isEnabled(id)
   }
 }
 
@@ -584,6 +593,9 @@ private struct OnboardingView: View {
     legacyMigrationState = .migrating
     do {
       let result = try LegacyInstallMigrator.migrate()
+      // Startup may already have migrated this bundle before the user chose to import another
+      // installation. Fold the just-imported legacy flags into the canonical list once more.
+      ActivityEnablement.migrateLegacyPreferencesIfNeeded(force: true)
       selectedActivities = Set(
         ActivityCatalog.defaultOrder.filter { OnboardingPreferences.isActivityEnabled($0) })
       remindersEnabled = Defaults[.remindersEnabled]
