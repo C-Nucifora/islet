@@ -33,14 +33,18 @@ base name in Islet. Chrome's cancellation states send `end`; other interruptions
 event. Completed and failed events use Pulse's default eight-second expiry.
 
 The native host reads the Pulse token for each command through the shared client. It never returns
-the token to Chrome or writes it anywhere. Progress searches happen every two seconds. The provider
-publishes changed values immediately and refreshes unchanged active items every 30 seconds. Active
-items expire after 90 seconds if Chrome or the provider stops unexpectedly. Pulse rate-limit
+the token to Chrome or writes it anywhere. Progress searches happen every two seconds while a
+download is active; the extension does not poll while idle. Browser startup and download events
+wake the worker and run through one serialized state queue. The provider keeps a terminal download
+ID in extension storage until the native host acknowledges it, then removes the ID. It publishes
+changed values immediately and refreshes unchanged active items every 30 seconds. Active items
+expire after 90 seconds if Chrome or the provider stops unexpectedly. The native host closes ten
+seconds after the last transfer ends, after the default terminal event expires. Pulse rate-limit
 responses use bounded exponential backoff.
 
 ## Test
 
 ```sh
-node --test tests/test_provider_core.js
+node --test tests/test_*.js
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```

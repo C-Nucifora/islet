@@ -87,7 +87,7 @@ jobs:
 
       - name: Test out-of-process Pulse providers
         run: |
-          node --test Integrations/Pulse/providers/chrome-downloads/tests/test_provider_core.js
+          node --test Integrations/Pulse/providers/chrome-downloads/tests/test_*.js
           /usr/bin/python3 -m unittest discover \
             -s Integrations/Pulse/providers/common/tests -p 'test_*.py'
           /usr/bin/python3 -m unittest discover \

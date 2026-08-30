@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
+from urllib import error, request
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "pulse_client.py"
@@ -44,6 +46,31 @@ class PulseTokenTests(unittest.TestCase):
             (support / "pulse-token").chmod(0o600)
             with self.assertRaises(pulse_client.PulseError):
                 pulse_client.PulseClient(support)._read_token()
+
+
+class RevealServerTests(unittest.TestCase):
+    def test_oldest_action_is_evicted_at_capacity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = [root / f"item-{index}" for index in range(3)]
+            for path in paths:
+                path.write_text("test", encoding="utf-8")
+            reveal = pulse_client.RevealServer(maximum_actions=2)
+            try:
+                actions = [
+                    reveal.action(path, f"reveal-{index}")
+                    for index, path in enumerate(paths)
+                ]
+                self.assertTrue(all(action is not None for action in actions))
+                with self.assertRaises(error.HTTPError) as evicted:
+                    request.urlopen(actions[0]["url"], timeout=2)
+                self.assertEqual(evicted.exception.code, 404)
+                with mock.patch.object(pulse_client.subprocess, "Popen") as launch:
+                    with request.urlopen(actions[-1]["url"], timeout=2) as response:
+                        self.assertEqual(response.status, 204)
+                    launch.assert_called_once()
+            finally:
+                reveal.close()
 
 
 if __name__ == "__main__":

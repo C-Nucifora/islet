@@ -132,7 +132,8 @@ Reveal actions use an ephemeral loopback URL because Pulse deliberately rejects 
 The provider maps the random URL to an existing path in memory. The HTTP handler binds to
 `127.0.0.1`, returns no file content, and asks Finder to reveal the mapped file. rclone reveal
 actions are optional and require an explicit local root. Paths outside that root and inaccessible
-files get no action.
+files get no action. Each provider process retains at most 128 reveal mappings and evicts the oldest
+mapping when it reaches that limit.
 
 ## Adding another transfer provider
 

@@ -20,6 +20,7 @@ from uuid import uuid4
 SOURCE_LIMIT = 80
 ID_LIMIT = 128
 MAX_RESPONSE_BYTES = 64 * 1024
+MAX_REVEAL_ACTIONS = 128
 
 
 class PulseError(RuntimeError):
@@ -126,8 +127,9 @@ class PulseClient:
 class _RevealHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self) -> None:
+    def __init__(self, maximum_actions: int) -> None:
         super().__init__(("127.0.0.1", 0), _RevealHandler)
+        self.maximum_actions = maximum_actions
         self.paths: dict[str, Path] = {}
         self.action_tokens: dict[str, str] = {}
         self.paths_lock = threading.Lock()
@@ -161,8 +163,8 @@ class _RevealHandler(BaseHTTPRequestHandler):
 class RevealServer:
     """Loopback-only HTTP bridge for Pulse's HTTP(S)-only action contract."""
 
-    def __init__(self) -> None:
-        self._server = _RevealHTTPServer()
+    def __init__(self, maximum_actions: int = MAX_REVEAL_ACTIONS) -> None:
+        self._server = _RevealHTTPServer(maximum_actions)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 
@@ -173,11 +175,15 @@ class RevealServer:
             return None
         token = secrets.token_urlsafe(24)
         with self._server.paths_lock:
-            previous = self._server.action_tokens.get(action_id)
+            previous = self._server.action_tokens.pop(action_id, None)
             if previous:
                 self._server.paths.pop(previous, None)
             self._server.action_tokens[action_id] = token
             self._server.paths[token] = resolved
+            while len(self._server.action_tokens) > self._server.maximum_actions:
+                oldest_action = next(iter(self._server.action_tokens))
+                oldest_token = self._server.action_tokens.pop(oldest_action)
+                self._server.paths.pop(oldest_token, None)
         port = self._server.server_address[1]
         return {
             "id": action_id,

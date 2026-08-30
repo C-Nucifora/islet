@@ -1,0 +1,431 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+
+const providerCore = require("../provider-core.js");
+const workerSource = fs.readFileSync(path.join(__dirname, "..", "service-worker.js"), "utf8");
+const profileID = "12345678-1234-4123-8123-123456789abc";
+
+function download(id, state = "in_progress", bytesReceived = 25) {
+  return {
+    id,
+    filename: `/Users/test/Downloads/${id}.zip`,
+    bytesReceived,
+    totalBytes: 100,
+    state,
+    paused: false,
+    error: state === "interrupted" ? "NETWORK_FAILED" : "",
+    exists: true,
+  };
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+class FakeEvent {
+  constructor() {
+    this.listeners = new Set();
+  }
+
+  addListener(listener) {
+    this.listeners.add(listener);
+  }
+
+  removeListener(listener) {
+    this.listeners.delete(listener);
+  }
+
+  async emit(...arguments_) {
+    await Promise.all(Array.from(this.listeners, (listener) => listener(...arguments_)));
+  }
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function createHarness({
+  state = { enabled: true, profileID, knownIDs: [] },
+  storageGate = null,
+  search = async () => [],
+  autoAcknowledge = true,
+  autoDisconnectEvent = true,
+} = {}) {
+  const events = {
+    created: new FakeEvent(),
+    changed: new FakeEvent(),
+    erased: new FakeEvent(),
+    startup: new FakeEvent(),
+    storageChanged: new FakeEvent(),
+  };
+  const writes = [];
+  const searches = [];
+  const messages = [];
+  const ports = [];
+  const intervals = new Map();
+  const timeouts = new Map();
+  let searchHandler = search;
+  let shouldAcknowledge = autoAcknowledge;
+  let nextTimerID = 1;
+  let nextRequestID = 1;
+
+  const storage = {
+    async get(keys) {
+      if (storageGate) await storageGate.promise;
+      const names = Array.isArray(keys) ? keys : [keys];
+      return Object.fromEntries(
+        names.filter((name) => Object.hasOwn(state, name)).map((name) => [name, clone(state[name])])
+      );
+    },
+    async set(changes) {
+      Object.assign(state, clone(changes));
+      writes.push(clone(changes));
+    },
+  };
+
+  function connectNative() {
+    const onMessage = new FakeEvent();
+    const onDisconnect = new FakeEvent();
+    const port = {
+      onMessage,
+      onDisconnect,
+      disconnected: false,
+      postMessage(command) {
+        messages.push(clone(command));
+        if (shouldAcknowledge) {
+          queueMicrotask(() => {
+            void onMessage.emit({ ok: true, requestID: command.requestID });
+          });
+        }
+      },
+      disconnect() {
+        if (port.disconnected) return;
+        port.disconnected = true;
+        if (autoDisconnectEvent) queueMicrotask(() => void onDisconnect.emit());
+      },
+    };
+    ports.push(port);
+    return port;
+  }
+
+  const context = {
+    IsletChromeDownloads: providerCore,
+    chrome: {
+      downloads: {
+        onCreated: events.created,
+        onChanged: events.changed,
+        onErased: events.erased,
+        async search(query) {
+          searches.push(clone(query));
+          return clone(await searchHandler(query));
+        },
+      },
+      runtime: {
+        onStartup: events.startup,
+        connectNative,
+      },
+      storage: {
+        local: storage,
+        onChanged: events.storageChanged,
+      },
+    },
+    clearInterval(identifier) {
+      intervals.delete(identifier);
+    },
+    clearTimeout(identifier) {
+      timeouts.delete(identifier);
+    },
+    console,
+    crypto: {
+      randomUUID() {
+        return `00000000-0000-4000-8000-${String(nextRequestID++).padStart(12, "0")}`;
+      },
+    },
+    importScripts() {},
+    queueMicrotask,
+    setInterval(callback, milliseconds) {
+      const identifier = nextTimerID++;
+      intervals.set(identifier, { callback, milliseconds });
+      return identifier;
+    },
+    setTimeout(callback, milliseconds) {
+      const identifier = nextTimerID++;
+      timeouts.set(identifier, { callback, milliseconds });
+      return identifier;
+    },
+  };
+
+  vm.runInNewContext(workerSource, context, { filename: "service-worker.js" });
+
+  async function settle() {
+    for (let iteration = 0; iteration < 4; iteration += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+
+  return {
+    events,
+    intervals,
+    messages,
+    ports,
+    searches,
+    state,
+    timeouts,
+    writes,
+    clearMessages() {
+      messages.length = 0;
+    },
+    fireIntervals() {
+      return Array.from(intervals.values(), ({ callback }) => callback());
+    },
+    fireTimeouts() {
+      const callbacks = Array.from(timeouts.values(), ({ callback }) => callback);
+      timeouts.clear();
+      return callbacks.map((callback) => callback());
+    },
+    setAutoAcknowledge(value) {
+      shouldAcknowledge = value;
+    },
+    async setEnabled(value) {
+      const oldValue = state.enabled;
+      state.enabled = value;
+      await events.storageChanged.emit({ enabled: { oldValue, newValue: value } }, "local");
+      await settle();
+    },
+    setSearch(handler) {
+      searchHandler = handler;
+    },
+    settle,
+  };
+}
+
+test("browser startup wakes and reconciles current downloads", async () => {
+  const harness = createHarness();
+  await harness.settle();
+  harness.clearMessages();
+  harness.setSearch(async (query) => (query.state === "in_progress" ? [download(1)] : []));
+
+  await harness.events.startup.emit();
+  await harness.settle();
+
+  assert.equal(harness.messages.length, 1);
+  assert.equal(harness.messages[0].kind, "upsert");
+  assert.equal(harness.messages[0].item.id, 1);
+});
+
+test("created event waits for cold-start initialization", async () => {
+  const storageGate = deferred();
+  const harness = createHarness({ storageGate });
+
+  const event = harness.events.created.emit(download(2));
+  storageGate.resolve();
+  await event;
+  await harness.settle();
+
+  assert.equal(harness.messages.length, 1);
+  assert.equal(harness.messages[0].kind, "upsert");
+  assert.equal(harness.messages[0].item.id, 2);
+});
+
+test("changed event waits for cold-start initialization", async () => {
+  const storageGate = deferred();
+  const harness = createHarness({
+    storageGate,
+    search: async (query) => (query.id === 3 ? [download(3, "complete", 100)] : []),
+  });
+
+  const event = harness.events.changed.emit({ id: 3, state: { current: "complete" } });
+  storageGate.resolve();
+  await event;
+  await harness.settle();
+
+  assert.equal(harness.messages.length, 1);
+  assert.equal(harness.messages[0].kind, "upsert");
+  assert.equal(harness.messages[0].item.state, "complete");
+});
+
+test("erased event waits for cold-start initialization", async () => {
+  const storageGate = deferred();
+  const harness = createHarness({ storageGate });
+
+  const event = harness.events.erased.emit(4);
+  storageGate.resolve();
+  await event;
+  await harness.settle();
+
+  assert.equal(harness.messages.length, 1);
+  assert.equal(harness.messages[0].kind, "end");
+  assert.equal(harness.messages[0].id, 4);
+});
+
+test("disable remains final when a progress reconciliation is in flight", async () => {
+  const pollResult = deferred();
+  const harness = createHarness();
+  await harness.settle();
+  await harness.events.created.emit(download(5));
+  await harness.settle();
+  harness.clearMessages();
+  harness.setSearch(async (query) => {
+    if (query.state === "in_progress") return pollResult.promise;
+    return [];
+  });
+
+  const polls = harness.fireIntervals();
+  await Promise.resolve();
+  const disable = harness.setEnabled(false);
+  pollResult.resolve([download(5, "in_progress", 75)]);
+  await Promise.all([...polls.filter(Boolean), disable]);
+  await harness.settle();
+
+  assert.deepEqual(harness.state.knownIDs, []);
+  assert.equal(harness.messages.at(-1).kind, "disable");
+  assert.equal(harness.messages.filter((command) => command.kind === "upsert").length, 1);
+});
+
+test("quick disable then enable restores download observation", async () => {
+  const harness = createHarness();
+  await harness.settle();
+
+  const disable = harness.setEnabled(false);
+  const enable = harness.setEnabled(true);
+  await Promise.all([disable, enable]);
+  harness.clearMessages();
+  await harness.events.created.emit(download(6));
+  await harness.settle();
+
+  assert.equal(harness.state.enabled, true);
+  assert.equal(harness.events.created.listeners.size, 1);
+  assert.equal(harness.messages.length, 1);
+  assert.equal(harness.messages[0].item.id, 6);
+});
+
+test("unacknowledged terminal command survives a worker restart", async () => {
+  const sharedState = { enabled: true, profileID, knownIDs: [] };
+  const first = createHarness({ state: sharedState });
+  await first.settle();
+  await first.events.created.emit(download(7));
+  await first.settle();
+  first.setAutoAcknowledge(false);
+  first.setSearch(async (query) => (query.id === 7 ? [download(7, "complete", 100)] : []));
+
+  await first.events.changed.emit({ id: 7, state: { current: "complete" } });
+  await first.settle();
+
+  assert.deepEqual(sharedState.knownIDs, [7]);
+
+  const second = createHarness({
+    state: sharedState,
+    search: async (query) => (query.id === 7 ? [download(7, "complete", 100)] : []),
+  });
+  await second.settle();
+
+  assert.equal(second.messages.length, 1);
+  assert.equal(second.messages[0].kind, "upsert");
+  assert.equal(second.messages[0].item.state, "complete");
+});
+
+test("polling exists only while a download is active", async () => {
+  const harness = createHarness();
+  await harness.settle();
+  assert.equal(harness.intervals.size, 0);
+
+  await harness.events.created.emit(download(8));
+  await harness.settle();
+  assert.equal(harness.intervals.size, 1);
+
+  harness.setSearch(async (query) => (query.id === 8 ? [download(8, "complete", 100)] : []));
+  await harness.events.changed.emit({ id: 8, state: { current: "complete" } });
+  await harness.settle();
+  assert.equal(harness.intervals.size, 0);
+});
+
+test("native host connection closes after a bounded idle grace period", async () => {
+  const harness = createHarness();
+  await harness.settle();
+  await harness.events.created.emit(download(9));
+  await harness.settle();
+  harness.setSearch(async (query) => (query.id === 9 ? [download(9, "complete", 100)] : []));
+
+  await harness.events.changed.emit({ id: 9, state: { current: "complete" } });
+  await harness.settle();
+
+  assert.equal(harness.ports.length, 1);
+  assert.equal(harness.ports[0].disconnected, false);
+  assert.equal(harness.timeouts.size, 1);
+  harness.fireTimeouts();
+  await harness.settle();
+  assert.equal(harness.ports[0].disconnected, true);
+});
+
+test("late disconnect from the disabled host cannot replace the re-enabled host", async () => {
+  const harness = createHarness({ autoDisconnectEvent: false });
+  await harness.settle();
+  await harness.events.created.emit(download(10));
+  await harness.settle();
+  const oldPort = harness.ports[0];
+
+  const disable = harness.setEnabled(false);
+  const enable = harness.setEnabled(true);
+  await Promise.all([disable, enable]);
+  await harness.events.created.emit(download(11));
+  await harness.settle();
+  assert.equal(harness.ports.length, 2);
+
+  await oldPort.onDisconnect.emit();
+  harness.setSearch(async (query) => (query.id === 11 ? [download(11, "in_progress", 50)] : []));
+  await harness.events.changed.emit({ id: 11 });
+  await harness.settle();
+
+  assert.equal(harness.ports.length, 2);
+});
+
+test("rejected terminal command releases the native host for restart recovery", async () => {
+  const harness = createHarness();
+  await harness.settle();
+  await harness.events.created.emit(download(12));
+  await harness.settle();
+  harness.setAutoAcknowledge(false);
+  harness.setSearch(async (query) =>
+    query.id === 12 ? [download(12, "interrupted", 50)] : []
+  );
+
+  await harness.events.changed.emit({ id: 12, state: { current: "interrupted" } });
+  await harness.settle();
+  const port = harness.ports[0];
+  const terminal = harness.messages.at(-1);
+  await port.onMessage.emit({ ok: false, requestID: terminal.requestID });
+  await harness.settle();
+
+  assert.deepEqual(harness.state.knownIDs, [12]);
+  assert.equal(port.disconnected, true);
+});
+
+test("terminal state supersedes in-flight progress after the stale acknowledgement", async () => {
+  const harness = createHarness({ autoAcknowledge: false });
+  await harness.settle();
+  await harness.events.created.emit(download(13));
+  await harness.settle();
+  const progress = harness.messages[0];
+  harness.setSearch(async (query) =>
+    query.id === 13 ? [download(13, "complete", 100)] : []
+  );
+
+  await harness.events.changed.emit({ id: 13, state: { current: "complete" } });
+  await harness.settle();
+  assert.equal(harness.messages.length, 1);
+  await harness.ports[0].onMessage.emit({ ok: true, requestID: progress.requestID });
+  await harness.settle();
+
+  assert.equal(harness.ports[0].disconnected, false);
+  assert.equal(harness.messages.length, 2);
+  assert.equal(harness.messages[1].item.state, "complete");
+});
