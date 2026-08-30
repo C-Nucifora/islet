@@ -1399,6 +1399,7 @@ struct SettingsView: View {
         PermissionStatusRow(
           title: "Media adapter", icon: "music.note", status: nowPlaying.adapterStatus,
           color: nowPlaying.adapterStatus.localizedCaseInsensitiveContains("error")
+            || nowPlaying.adapterStatus.localizedCaseInsensitiveContains("timeout")
             ? .orange : .green)
         PermissionStatusRow(
           title: "T3 Code credentials", icon: "key.fill",
@@ -1546,6 +1547,7 @@ struct SettingsView: View {
   private func copyDiagnostics() {
     let text =
       permissions.diagnostics.text
+      + "\nMedia adapter: \(nowPlaying.adapterStatus)"
       + "\nHUD event tap: \(hud.eventTapStatus.summary)"
       + "\nPulse: \(pulseServer.isRunning ? "Running" : "Stopped")"
       + "\nPulse items: \(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
