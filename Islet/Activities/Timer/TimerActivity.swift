@@ -18,12 +18,19 @@ final class TimerActivity: NotchActivity, ObservableObject {
   @Published private(set) var label: String?  // e.g. "Focus" / "Break"
   private var pausedRemaining: TimeInterval?
   private var completionTask: Task<Void, Never>?
+  @Published private(set) var notificationFallbackMessage: String?
   private(set) var lastDuration: TimeInterval?
   private(set) var lastLabel: String?
   private let persistenceStore: TimerPersistenceStore
+  private let completionNotifier: any TimerCompletionNotifying
+  private var completionID = UUID()
 
-  init(persistenceStore: TimerPersistenceStore = .defaults, now: Date = Date()) {
+  init(
+    persistenceStore: TimerPersistenceStore = .defaults, now: Date = Date(),
+    completionNotifier: any TimerCompletionNotifying = TimerCompletionNotifications.shared
+  ) {
     self.persistenceStore = persistenceStore
+    self.completionNotifier = completionNotifier
     restore(now: now)
   }
 
@@ -51,6 +58,11 @@ final class TimerActivity: NotchActivity, ObservableObject {
   func start(_ duration: TimeInterval, label: String? = nil) {
     guard let duration = TimerLogic.validatedDuration(duration) else { return }
     let now = Date()
+    completionID = UUID()
+    notificationFallbackMessage = nil
+    completionNotifier.prepareForTimerStart { [weak self] in
+      self?.notificationFallbackMessage = TimerActivity.notificationFallbackMessage
+    }
     total = duration
     let cleanLabel = label?.trimmingCharacters(in: .whitespacesAndNewlines)
     self.label = cleanLabel?.isEmpty == true ? nil : cleanLabel
@@ -128,6 +140,7 @@ final class TimerActivity: NotchActivity, ObservableObject {
     label = nil
     pausedRemaining = nil
     activationDate = nil
+    notificationFallbackMessage = nil
     persistenceStore.writeSessionData(nil)
   }
 
@@ -204,13 +217,19 @@ final class TimerActivity: NotchActivity, ObservableObject {
     finished = true
     persistenceStore.writeSessionData(nil)
     if playEffects {
+      let title = "\(label ?? "Timer") done"
       Haptics.perform(.levelChange)
       NSSound(named: NSSound.Name("Glass"))?.play()
       SystemEventBus.shared.emit(
         SystemEvent(
-          sourceID: "timer", icon: "timer", title: "\(label ?? "Timer") done",
+          sourceID: "timer", icon: "timer", title: title,
           accentHex: EventAccent.warning, motion: .chargeComplete, urgency: .alert, duration: 4,
-          announcement: "\(label ?? "Timer") done"))
+          announcement: title))
+      completionNotifier.notifyTimerFinished(
+        completionID: completionID, title: title, body: "Your timer finished."
+      ) { [weak self] in
+        self?.notificationFallbackMessage = TimerActivity.notificationFallbackMessage
+      }
     }
     // Auto-clear the finished state after a few seconds.
     completionTask = Task { [weak self] in
@@ -225,6 +244,9 @@ final class TimerActivity: NotchActivity, ObservableObject {
   var compactLeading: AnyView { AnyView(TimerRingView(activity: self, lineWidth: 2)) }
   var compactTrailing: AnyView { AnyView(TimerCountdownText(activity: self)) }
   var expandedView: AnyView { AnyView(TimerExpandedView(activity: self)) }
+
+  private static let notificationFallbackMessage =
+    "Timer notifications are off. Islet will still play its completion sound and show Done in the island."
 }
 
 /// A thin progress ring driven live off the activity, ticking only while running.
@@ -323,6 +345,12 @@ struct TimerExpandedView: View {
           }
           Text(activity.isPaused ? "Paused" : "Running")
             .font(.caption2).foregroundStyle(.secondary)
+          if let message = activity.notificationFallbackMessage {
+            Text(message)
+              .font(.caption2)
+              .foregroundStyle(.orange)
+              .multilineTextAlignment(.center)
+          }
         }
       }
     }

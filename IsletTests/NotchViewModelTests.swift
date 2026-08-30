@@ -153,6 +153,16 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertNil(vm.selectedActivityID)
   }
 
+  func testProgrammaticOpenShowsTheRequestedActivity() {
+    let vm = makeVM(mode: .clickToPin)
+
+    vm.open(activityID: "timer")
+
+    XCTAssertEqual(vm.state, .expanded(pinned: true))
+    XCTAssertEqual(vm.selectedActivityID, "timer")
+    XCTAssertTrue(vm.isPresenting(activityID: "timer"))
+  }
+
   func testRestoredPeekUsesPeekGeometryAndClosesWhenPointerIsOutside() {
     let vm = NotchViewModel(
       geometry: makeVM().geometry, modeOverride: .hover,

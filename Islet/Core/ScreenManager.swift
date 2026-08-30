@@ -182,6 +182,7 @@ final class ScreenManager {
   private var fullscreenTimer: AnyCancellable?
   private var fullscreenTransitionRefreshes: Set<AnyCancellable> = []
   private var fullscreenTransitionRevision = FullscreenTransitionRevision()
+  private var pendingOpenedActivityID: String?
   /// Last-known notch measurements per display, so a transient empty aux-area read can't downgrade
   /// a built-in screen to the 200pt fallback for the rest of the session.
   private var stickiness = NotchStickiness()
@@ -192,6 +193,35 @@ final class ScreenManager {
       return inst.viewModel
     }
     return instances.values.first?.viewModel
+  }
+
+  /// A completion is already visible only when Islet is frontmost and a visible expanded panel is
+  /// showing the timer. A compact countdown or a hidden fullscreen panel is not enough context to
+  /// suppress the macOS notification.
+  var isTimerCompletionVisible: Bool {
+    NSApp.isActive
+      && instances.values.contains {
+        $0.panel.isVisible && $0.viewModel.isPresenting(activityID: "timer")
+      }
+  }
+
+  func openCompletedTimer() {
+    open(activityID: "timer")
+  }
+
+  private func open(activityID: String) {
+    guard
+      let instance = instances.values.first(where: { $0.panel.isVisible }) ?? instances.values.first
+    else {
+      // A notification response can arrive while a cold launch is still building its panels.
+      // Preserve the intent and replay it after `rebuild()` has created the first island.
+      pendingOpenedActivityID = activityID
+      return
+    }
+    pendingOpenedActivityID = nil
+    instance.panel.orderFrontRegardless()
+    instance.viewModel.open(activityID: activityID)
+    instance.updateMousePassthrough()
   }
 
   func start() {
@@ -351,6 +381,7 @@ final class ScreenManager {
     }
     Log.shell.info("Built \(self.instances.count) notch panel(s)")
     applyFullscreenVisibility()
+    if let pendingOpenedActivityID { open(activityID: pendingOpenedActivityID) }
   }
 
   /// Re-pushes every panel's reserved frame after a display, Space or app activation change.

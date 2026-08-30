@@ -96,6 +96,19 @@ final class NotchViewModel: ObservableObject {
     if selectedActivityID != id { selectedActivityID = id }
   }
 
+  /// Selects an activity and opens the island if needed. Notification activation uses this rather
+  /// than synthetic mouse events, so the completed timer is shown on the same display deterministically.
+  func open(activityID: String) {
+    selectActivity(activityID)
+    if !state.isExpanded { apply(.clickedNotch) }
+  }
+
+  func isPresenting(activityID: String) -> Bool {
+    guard state.isExpanded else { return false }
+    if selectedActivityID == activityID { return true }
+    return selectedActivityID == nil && ActivityCenter.shared.primaryActivity?.id == activityID
+  }
+
   /// Resumes hover bookkeeping after ScreenManager restores an expanded presentation. Without
   /// this, an unpinned panel rebuilt while the pointer is already outside would never start its
   /// normal collapse timer because the new model has not observed an exit event.
