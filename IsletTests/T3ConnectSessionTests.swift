@@ -413,10 +413,16 @@ final class T3ConnectSessionTests: XCTestCase {
 
     let persistedRecord = try await secureStore.oauthRecord()
     let deletedAccounts = await secureStore.deletedAccounts()
+    let oauthReplacements = await secureStore.replacementPayloads(
+      account: T3ConnectCredentialStore.oauthAccount)
     XCTAssertNil(persistedRecord)
+    XCTAssertEqual(oauthReplacements.count, 2)
+    XCTAssertEqual(
+      oauthReplacements.last,
+      Data(#"{"type":"t3-connect-sign-out-pending","version":1}"#.utf8))
     XCTAssertEqual(
       deletedAccounts,
-      [T3ConnectCredentialStore.oauthAccount, T3ConnectCredentialStore.dpopKeyAccount])
+      [T3ConnectCredentialStore.dpopKeyAccount, T3ConnectCredentialStore.oauthAccount])
   }
 
   func testSignOutInvalidatesAStoredRecordLoadSuspendedBeforeSessionResume() async throws {
@@ -762,6 +768,7 @@ private actor T3SessionSecureRecordStore: T3SecureRecordStore {
   private var oauthReplacementWaiter: CheckedContinuation<Void, Never>?
   private var oauthReplacementContinuation: CheckedContinuation<Void, Never>?
   private var deletions: [String] = []
+  private var replacements: [(account: String, data: Data)] = []
 
   init(records: [String: Data] = [:], suspendOAuthReplacement: Bool = false) {
     self.records = records
@@ -782,6 +789,7 @@ private actor T3SessionSecureRecordStore: T3SecureRecordStore {
         oauthReplacementContinuation = continuation
       }
     }
+    replacements.append((account, data))
     records[account] = data
   }
 
@@ -796,6 +804,10 @@ private actor T3SessionSecureRecordStore: T3SecureRecordStore {
   }
 
   func deletedAccounts() -> [String] { deletions }
+
+  func replacementPayloads(account: String) -> [Data] {
+    replacements.compactMap { $0.account == account ? $0.data : nil }
+  }
 
   func waitForOAuthReplacement() async {
     if oauthReplacementStarted { return }

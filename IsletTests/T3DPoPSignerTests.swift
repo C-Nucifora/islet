@@ -302,7 +302,7 @@ final class T3DPoPSignerTests: XCTestCase {
     await secureStore.waitForFirstProofKeyRead()
 
     let signOut = Task { try await credentials.signOut() }
-    await secureStore.waitForOAuthDeletion()
+    await secureStore.waitForOAuthTombstone()
     await secureStore.resumeFirstProofKeyRead()
     try await signOut.value
     _ = try? await staleLoad.value
@@ -320,7 +320,7 @@ final class T3DPoPSignerTests: XCTestCase {
     await secureStore.waitForFirstProofKeyReplacement()
 
     let signOut = Task { try await credentials.signOut() }
-    await secureStore.waitForOAuthDeletion()
+    await secureStore.waitForOAuthTombstone()
     await secureStore.resumeFirstProofKeyReplacement()
     try await signOut.value
     _ = try? await staleGeneration.value
@@ -413,8 +413,8 @@ private actor T3DPoPSignerSecureStore: T3SecureRecordStore {
   private var firstProofKeyReplacementStarted = false
   private var firstProofKeyReplacementWaiter: CheckedContinuation<Void, Never>?
   private var firstProofKeyReplacementContinuation: CheckedContinuation<Void, Never>?
-  private var oauthDeletionStarted = false
-  private var oauthDeletionWaiter: CheckedContinuation<Void, Never>?
+  private var oauthTombstoneWritten = false
+  private var oauthTombstoneWaiter: CheckedContinuation<Void, Never>?
   private var replacements: [Data] = []
 
   init(
@@ -444,6 +444,11 @@ private actor T3DPoPSignerSecureStore: T3SecureRecordStore {
   }
 
   func replace(_ data: Data, service: String, account: String, label: String) async throws {
+    if account == T3ConnectCredentialStore.oauthAccount {
+      oauthTombstoneWritten = true
+      oauthTombstoneWaiter?.resume()
+      oauthTombstoneWaiter = nil
+    }
     if account == T3ConnectCredentialStore.dpopKeyAccount {
       proofKeyReplacementCount += 1
       if suspendFirstProofKeyReplacement, proofKeyReplacementCount == 1 {
@@ -460,11 +465,6 @@ private actor T3DPoPSignerSecureStore: T3SecureRecordStore {
   }
 
   func delete(service: String, account: String) async throws {
-    if account == T3ConnectCredentialStore.oauthAccount {
-      oauthDeletionStarted = true
-      oauthDeletionWaiter?.resume()
-      oauthDeletionWaiter = nil
-    }
     records.removeValue(forKey: account)
   }
 
@@ -493,10 +493,10 @@ private actor T3DPoPSignerSecureStore: T3SecureRecordStore {
     firstProofKeyReplacementContinuation = nil
   }
 
-  func waitForOAuthDeletion() async {
-    if oauthDeletionStarted { return }
+  func waitForOAuthTombstone() async {
+    if oauthTombstoneWritten { return }
     await withCheckedContinuation { continuation in
-      oauthDeletionWaiter = continuation
+      oauthTombstoneWaiter = continuation
     }
   }
 

@@ -161,7 +161,7 @@ final class T3ConnectCredentialTests: XCTestCase {
     XCTAssertEqual(loaded, expired)
   }
 
-  func testSignOutDeletesOAuthBeforeProofKey() async throws {
+  func testSignOutTombstonesOAuthBeforeDeletingProofKeyAndMarker() async throws {
     let store = T3FakeSecureRecordStore(records: [
       T3ConnectCredentialStore.oauthAccount: Data("oauth".utf8),
       T3ConnectCredentialStore.dpopKeyAccount: Data("proof".utf8),
@@ -170,10 +170,14 @@ final class T3ConnectCredentialTests: XCTestCase {
 
     try await credentials.signOut()
 
-    let deletedAccounts = await store.deletedAccounts()
+    let operations = await store.operations()
     XCTAssertEqual(
-      deletedAccounts,
-      [T3ConnectCredentialStore.oauthAccount, T3ConnectCredentialStore.dpopKeyAccount])
+      operations,
+      [
+        .replace(T3ConnectCredentialStore.oauthAccount),
+        .delete(T3ConnectCredentialStore.dpopKeyAccount),
+        .delete(T3ConnectCredentialStore.oauthAccount),
+      ])
   }
 
   func testAlreadyCanceledCallerStillCompletesOwnedSignOutCleanup() async throws {
@@ -199,7 +203,7 @@ final class T3ConnectCredentialTests: XCTestCase {
     let storedProofKey = await store.storedData(account: T3ConnectCredentialStore.dpopKeyAccount)
     XCTAssertEqual(
       deletedAccounts,
-      [T3ConnectCredentialStore.oauthAccount, T3ConnectCredentialStore.dpopKeyAccount])
+      [T3ConnectCredentialStore.dpopKeyAccount, T3ConnectCredentialStore.oauthAccount])
     XCTAssertNil(storedOAuth)
     XCTAssertNil(storedProofKey)
 
@@ -230,20 +234,22 @@ final class T3ConnectCredentialTests: XCTestCase {
     let deletedAccounts = await store.deletedAccounts()
     XCTAssertEqual(
       deletedAccounts,
-      [T3ConnectCredentialStore.oauthAccount, T3ConnectCredentialStore.dpopKeyAccount])
+      [T3ConnectCredentialStore.dpopKeyAccount, T3ConnectCredentialStore.oauthAccount])
     let cachedRecord = try await credentials.loadOAuthRecord()
     let cachedProofKey = try await credentials.loadProofKey()
     XCTAssertNil(cachedRecord)
     XCTAssertNil(cachedProofKey)
   }
 
-  func testSignOutContinuesAfterOAuthDeletionFailsAndKeepsCachesTruthful() async throws {
+  func testFailedFinalTombstoneDeletionRemainsRetryableAcrossRelaunch() async throws {
     let record = try persistedRecord(accessToken: "retained-access")
     let proofKey = Data("proof-key".utf8)
+    let manual = Data("manual-pairing-vault".utf8)
     let store = T3FakeSecureRecordStore(
       records: [
         T3ConnectCredentialStore.oauthAccount: try JSONEncoder().encode(record),
         T3ConnectCredentialStore.dpopKeyAccount: proofKey,
+        "read-only-environment-tokens-v1": manual,
       ],
       deletionFailures: [T3ConnectCredentialStore.oauthAccount])
     let credentials = T3ConnectCredentialStore(store: store)
@@ -263,23 +269,34 @@ final class T3ConnectCredentialTests: XCTestCase {
     let cachedProofKey = try await credentials.loadProofKey()
     XCTAssertEqual(
       deletedAccounts,
-      [T3ConnectCredentialStore.oauthAccount, T3ConnectCredentialStore.dpopKeyAccount])
-    XCTAssertEqual(cachedRecord, record)
+      [T3ConnectCredentialStore.dpopKeyAccount, T3ConnectCredentialStore.oauthAccount])
+    XCTAssertNil(cachedRecord)
     XCTAssertNil(cachedProofKey)
+    let pendingCleanup = await store.storedData(account: T3ConnectCredentialStore.oauthAccount)
+    XCTAssertNotNil(pendingCleanup)
     let relaunched = T3ConnectCredentialStore(store: store)
     let relaunchedRecord = try await relaunched.loadOAuthRecord()
     let relaunchedProofKey = try await relaunched.loadProofKey()
-    XCTAssertEqual(relaunchedRecord, record)
+    XCTAssertNil(relaunchedRecord)
     XCTAssertNil(relaunchedProofKey)
+    try await relaunched.signOut()
+    let finalOAuth = await store.storedData(account: T3ConnectCredentialStore.oauthAccount)
+    let finalProofKey = await store.storedData(account: T3ConnectCredentialStore.dpopKeyAccount)
+    let retainedManual = await store.storedData(account: "read-only-environment-tokens-v1")
+    XCTAssertNil(finalOAuth)
+    XCTAssertNil(finalProofKey)
+    XCTAssertEqual(retainedManual, manual)
   }
 
-  func testSignOutReturnsProofDeletionFailureAfterRemovingOAuth() async throws {
+  func testFailedProofDeletionLeavesTombstoneForRelaunchCleanup() async throws {
     let record = try persistedRecord(accessToken: "removed-access")
     let proofKey = Data("retained-proof-key".utf8)
+    let manual = Data("manual-pairing-vault".utf8)
     let store = T3FakeSecureRecordStore(
       records: [
         T3ConnectCredentialStore.oauthAccount: try JSONEncoder().encode(record),
         T3ConnectCredentialStore.dpopKeyAccount: proofKey,
+        "read-only-environment-tokens-v1": manual,
       ],
       deletionFailures: [T3ConnectCredentialStore.dpopKeyAccount])
     let credentials = T3ConnectCredentialStore(store: store)
@@ -299,14 +316,54 @@ final class T3ConnectCredentialTests: XCTestCase {
     let cachedProofKey = try await credentials.loadProofKey()
     XCTAssertEqual(
       deletedAccounts,
-      [T3ConnectCredentialStore.oauthAccount, T3ConnectCredentialStore.dpopKeyAccount])
+      [T3ConnectCredentialStore.dpopKeyAccount])
     XCTAssertNil(cachedRecord)
     XCTAssertEqual(cachedProofKey, proofKey)
+    let pendingCleanup = await store.storedData(account: T3ConnectCredentialStore.oauthAccount)
+    XCTAssertNotNil(pendingCleanup)
     let relaunched = T3ConnectCredentialStore(store: store)
     let relaunchedRecord = try await relaunched.loadOAuthRecord()
     let relaunchedProofKey = try await relaunched.loadProofKey()
     XCTAssertNil(relaunchedRecord)
     XCTAssertEqual(relaunchedProofKey, proofKey)
+    try await relaunched.signOut()
+    let finalOAuth = await store.storedData(account: T3ConnectCredentialStore.oauthAccount)
+    let finalProofKey = await store.storedData(account: T3ConnectCredentialStore.dpopKeyAccount)
+    let retainedManual = await store.storedData(account: "read-only-environment-tokens-v1")
+    XCTAssertNil(finalOAuth)
+    XCTAssertNil(finalProofKey)
+    XCTAssertEqual(retainedManual, manual)
+  }
+
+  func testFailedTombstoneWritePreservesBothConnectCredentials() async throws {
+    let record = try persistedRecord(accessToken: "retained-access")
+    let encodedRecord = try JSONEncoder().encode(record)
+    let proofKey = Data("retained-proof-key".utf8)
+    let store = T3FakeSecureRecordStore(records: [
+      T3ConnectCredentialStore.oauthAccount: encodedRecord,
+      T3ConnectCredentialStore.dpopKeyAccount: proofKey,
+    ])
+    let credentials = T3ConnectCredentialStore(store: store)
+    _ = try await credentials.loadOAuthRecord()
+    _ = try await credentials.loadProofKey()
+    await store.failNextReplacement()
+
+    do {
+      try await credentials.signOut()
+      XCTFail("Expected the cleanup tombstone write to fail")
+    } catch T3FakeSecureRecordStore.Failure.replace {
+    }
+
+    let storedOAuth = await store.storedData(account: T3ConnectCredentialStore.oauthAccount)
+    let storedProofKey = await store.storedData(account: T3ConnectCredentialStore.dpopKeyAccount)
+    let deletedAccounts = await store.deletedAccounts()
+    let cachedRecord = try await credentials.loadOAuthRecord()
+    let cachedProofKey = try await credentials.loadProofKey()
+    XCTAssertEqual(storedOAuth, encodedRecord)
+    XCTAssertEqual(storedProofKey, proofKey)
+    XCTAssertEqual(deletedAccounts, [])
+    XCTAssertEqual(cachedRecord, record)
+    XCTAssertEqual(cachedProofKey, proofKey)
   }
 
   func testCanceledProofKeyReplacementAdmittedDuringSignOutCannotResurrectKey() async throws {
@@ -335,7 +392,7 @@ final class T3ConnectCredentialTests: XCTestCase {
     let replacements = await store.replacedAccounts()
     let storedProofKey = await store.storedData(account: T3ConnectCredentialStore.dpopKeyAccount)
     let cachedProofKey = try await credentials.loadProofKey()
-    XCTAssertEqual(replacements, [])
+    XCTAssertEqual(replacements, [T3ConnectCredentialStore.oauthAccount])
     XCTAssertNil(storedProofKey)
     XCTAssertNil(cachedProofKey)
 
@@ -367,7 +424,7 @@ final class T3ConnectCredentialTests: XCTestCase {
     let replacements = await store.replacedAccounts()
     let storedProofKey = await store.storedData(account: T3ConnectCredentialStore.dpopKeyAccount)
     let cachedProofKey = try await credentials.loadProofKey()
-    XCTAssertEqual(replacements, [])
+    XCTAssertEqual(replacements, [T3ConnectCredentialStore.oauthAccount])
     XCTAssertNil(storedProofKey)
     XCTAssertNil(cachedProofKey)
   }
@@ -405,12 +462,18 @@ private actor T3FakeSecureRecordStore: T3SecureRecordStore {
     case delete(String)
   }
 
+  enum Operation: Equatable {
+    case replace(String)
+    case delete(String)
+  }
+
   private var records: [String: Data]
   private let suspendOAuthDeletion: Bool
   private var deletionFailures: Set<String>
   private var failReplacement = false
   private var deletions: [String] = []
   private var replacements: [String] = []
+  private var recordedOperations: [Operation] = []
   private var oauthDeletionStarted = false
   private var oauthDeletionWaiter: CheckedContinuation<Void, Never>?
   private var oauthDeletionContinuation: CheckedContinuation<Void, Never>?
@@ -433,11 +496,13 @@ private actor T3FakeSecureRecordStore: T3SecureRecordStore {
       failReplacement = false
       throw Failure.replace
     }
+    recordedOperations.append(.replace(account))
     replacements.append(account)
     records[account] = data
   }
 
   func delete(service: String, account: String) async throws {
+    recordedOperations.append(.delete(account))
     deletions.append(account)
     if account == T3ConnectCredentialStore.oauthAccount, suspendOAuthDeletion {
       oauthDeletionStarted = true
@@ -477,6 +542,10 @@ private actor T3FakeSecureRecordStore: T3SecureRecordStore {
 
   func replacedAccounts() -> [String] {
     replacements
+  }
+
+  func operations() -> [Operation] {
+    recordedOperations
   }
 }
 

@@ -11,7 +11,9 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   let preferredExpandedHeight = Metrics.tallExpandedHeight
 
   @Published private(set) var environments: [T3EnvironmentSnapshot] = []
+  @Published private(set) var hasLocalObservation = false
   @Published private(set) var lastCredentialError: String?
+  @Published private(set) var remotePollingActive = false
   @Published private var manualConnectionStates: [String: T3ConnectionState] = [:]
   private(set) var activationDate: Date?
   let connectCoordinator: T3ConnectCoordinator
@@ -40,10 +42,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   }
 
   var agents: [T3AgentSnapshot] {
-    environments.flatMap(\.agents).sorted {
-      if $0.phase.rank != $1.phase.rank { return $0.phase.rank < $1.phase.rank }
-      return $0.updatedAt > $1.updatedAt
-    }
+    Self.currentAgents(in: environments, remotePollingActive: remotePollingActive)
   }
 
   var isActive: Bool { !agents.isEmpty }
@@ -85,7 +84,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       .sink { [weak self] _ in self?.setSystemSuspended(false) }
       .store(in: &workspaceCancellables)
     connectCoordinator.$cloudCandidates
-      .removeDuplicates()
+      // An equal payload after resume is still a freshness signal: the activity may have locally
+      // marked its retained copy as connecting while remote polling was paused.
       .sink { [weak self] candidates in
         self?.replaceCandidates(from: .connect, with: candidates)
       }
@@ -98,6 +98,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     isMonitoring = false
     cancelMonitorTasks()
     connectCoordinator.stopInventory(preserveInventory: true)
+    remotePollingActive = false
     cancellables.removeAll()
     workspaceCancellables.removeAll()
     // A session-resign notification may have been the last event before the feature was disabled.
@@ -105,6 +106,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     // there would be no new didBecomeActive notification to wake the restarted monitor.
     isSystemSuspended = false
     environmentCandidates = []
+    hasLocalObservation = false
     publishManualConnectionStates()
     environments = []
     activationDate = nil
@@ -241,15 +243,18 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
 
   func restartMonitors(clearSnapshots: Bool = true) {
     cancelMonitorTasks()
+    var nextCandidates = environmentCandidates
     if clearSnapshots {
-      let next = environmentCandidates.filter { $0.source == .connect }
-      if next != environmentCandidates {
-        environmentCandidates = next
-        publishManualConnectionStates()
-        publishResolvedCandidates()
-      }
+      nextCandidates = nextCandidates.filter { $0.source == .connect }
+    }
+    nextCandidates = Self.markingRemoteCandidatesAwaitingRefresh(nextCandidates)
+    if nextCandidates != environmentCandidates {
+      environmentCandidates = nextCandidates
+      publishManualConnectionStates()
+      publishResolvedCandidates()
     }
     guard isMonitoring, ActivityEnablement.isEnabled("t3Code"), !isSystemSuspended else {
+      remotePollingActive = false
       connectCoordinator.stopInventory(preserveInventory: true)
       return
     }
@@ -257,6 +262,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     // Remote polling is optional work and can keep radios awake. Leave the last snapshot visible
     // in Low Power Mode and reconnect when normal power policy resumes.
     if energyPolicy.allowsRemotePolling {
+      remotePollingActive = true
       for profile in Self.enabledRemoteProfiles(Defaults[.t3RemoteEnvironments]) {
         // Namespace the key: an imported/corrupt remote id of "local" must not overwrite the only
         // handle capable of cancelling the local monitor.
@@ -266,6 +272,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       }
       connectCoordinator.startInventory()
     } else {
+      remotePollingActive = false
       connectCoordinator.stopInventory(preserveInventory: true)
     }
   }
@@ -305,8 +312,10 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         try? await Task.sleep(for: .seconds(Self.jitter(delay)))
         continue
       }
+      var discoveredDescriptor: T3EnvironmentDescriptor?
       do {
         let descriptor = try await T3Client(endpoint: endpoint, token: nil).fetchDescriptor()
+        discoveredDescriptor = descriptor
         let credentialID = Self.localCredentialID(
           environmentID: descriptor.environmentId, baseURL: endpoint.baseURL.absoluteString)
         guard let token = try T3CredentialStore.load(credentialID: credentialID) else {
@@ -332,7 +341,14 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       } catch T3ClientError.unauthorized {
         guard !Task.isCancelled else { return }
         failures += 1
-        if let descriptor = try? await T3Client(endpoint: endpoint, token: nil).fetchDescriptor() {
+        let credentialDescriptor: T3EnvironmentDescriptor?
+        if let discoveredDescriptor {
+          credentialDescriptor = discoveredDescriptor
+        } else {
+          credentialDescriptor = try? await T3Client(endpoint: endpoint, token: nil)
+            .fetchDescriptor()
+        }
+        if let descriptor = credentialDescriptor {
           do {
             try T3CredentialStore.delete(
               credentialID: Self.localCredentialID(
@@ -350,23 +366,17 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         updateCredentialError(error, for: "local")
         failures += 1
         upsert(
-          T3EnvironmentSnapshot(
-            id: Self.provisionalLocalSnapshotID,
-            logicalEnvironmentID: Self.provisionalLocalSnapshotID, source: .local,
-            label: "This Mac", baseURL: endpoint.baseURL.absoluteString, platform: nil,
-            serverVersion: nil,
-            state: .credentialError(error.localizedDescription), agents: []))
+          Self.localFailureSnapshot(
+            descriptor: discoveredDescriptor, endpoint: endpoint,
+            state: .credentialError(error.localizedDescription)))
       } catch {
         guard !Task.isCancelled else { return }
         updateCredentialError(error, for: "local")
         failures += 1
         upsert(
-          T3EnvironmentSnapshot(
-            id: Self.provisionalLocalSnapshotID,
-            logicalEnvironmentID: Self.provisionalLocalSnapshotID, source: .local,
-            label: "This Mac", baseURL: endpoint.baseURL.absoluteString, platform: nil,
-            serverVersion: nil,
-            state: .offline(error.localizedDescription), agents: []))
+          Self.localFailureSnapshot(
+            descriptor: discoveredDescriptor, endpoint: endpoint,
+            state: .offline(error.localizedDescription)))
       }
       let delay = Self.reconnectDelay(failureCount: failures, remote: false)
       try? await Task.sleep(for: .seconds(Self.jitter(delay)))
@@ -502,6 +512,26 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       agents: agents)
   }
 
+  nonisolated static func localFailureSnapshot(
+    descriptor: T3EnvironmentDescriptor?,
+    endpoint: T3Endpoint,
+    state: T3ConnectionState
+  ) -> T3EnvironmentSnapshot {
+    let environmentID = descriptor?.environmentId ?? provisionalLocalSnapshotID
+    let platform = [descriptor?.platform?.os, descriptor?.platform?.arch]
+      .compactMap { $0 }.joined(separator: " · ")
+    let label = descriptor.map { $0.label.isEmpty ? "This Mac" : $0.label } ?? "This Mac"
+    return T3EnvironmentSnapshot(
+      id: descriptor == nil ? provisionalLocalSnapshotID : localSnapshotID(environmentID),
+      logicalEnvironmentID: environmentID, source: .local,
+      label: label,
+      baseURL: endpoint.baseURL.absoluteString,
+      platform: platform.isEmpty ? nil : platform,
+      serverVersion: descriptor?.serverVersion,
+      state: state,
+      agents: [])
+  }
+
   private func snapshot(
     _ profile: T3EnvironmentProfile,
     descriptor: T3EnvironmentDescriptor?,
@@ -560,6 +590,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   }
 
   private func publishResolvedCandidates() {
+    let localWasObserved = environmentCandidates.contains { $0.source == .local }
+    if localWasObserved != hasLocalObservation { hasLocalObservation = localWasObserved }
     let next = T3EnvironmentResolver.resolve(environmentCandidates)
     guard next != environments else { return }
     environments = next
@@ -603,6 +635,40 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   ) -> TimeInterval {
     EnergyPolicy(mode: energyMode, systemLowPowerMode: lowPowerMode)
       .t3PollInterval(busy: busy, expanded: expanded)
+  }
+
+  nonisolated static func currentAgents(
+    in snapshots: [T3EnvironmentSnapshot], remotePollingActive: Bool
+  ) -> [T3AgentSnapshot] {
+    snapshots
+      .filter { $0.source == .local || remotePollingActive }
+      .flatMap(\.agents)
+      .sorted {
+        if $0.phase.rank != $1.phase.rank { return $0.phase.rank < $1.phase.rank }
+        return $0.updatedAt > $1.updatedAt
+      }
+  }
+
+  nonisolated static func connectedEnvironmentCount(
+    in snapshots: [T3EnvironmentSnapshot], remotePollingActive: Bool
+  ) -> Int {
+    snapshots.count {
+      $0.state == .connected && ($0.source == .local || remotePollingActive)
+    }
+  }
+
+  nonisolated static func markingRemoteCandidatesAwaitingRefresh(
+    _ candidates: [T3EnvironmentSnapshot]
+  ) -> [T3EnvironmentSnapshot] {
+    candidates.map { candidate in
+      guard candidate.source != .local else { return candidate }
+      return T3EnvironmentSnapshot(
+        id: candidate.id, logicalEnvironmentID: candidate.logicalEnvironmentID,
+        source: candidate.source, label: candidate.label, baseURL: candidate.baseURL,
+        platform: candidate.platform, serverVersion: candidate.serverVersion,
+        state: candidate.state == .connected ? .connecting : candidate.state,
+        agents: [])
+    }
   }
 
   /// Defaults can be hand-edited or carried across versions. Preserve first occurrence order but

@@ -71,16 +71,23 @@ final class T3ConnectPresentationTests: XCTestCase {
     XCTAssertNil(presentation.identity)
   }
 
-  func testNeedsSignInWithoutAnAccountOffersRelinkingOnly() {
+  func testNeedsSignInWithoutReadableAccountOffersExplicitCleanup() {
     let presentation = T3ConnectAccountPresentation(
       state: .needsSignIn(nil, "The refresh token expired."),
       lastLinkError: nil,
       lastCleanupError: nil)
 
     XCTAssertEqual(presentation.statusText, "Sign-in required")
-    XCTAssertEqual(presentation.detailText, "Link the account again to restore T3 Connect access.")
+    XCTAssertEqual(
+      presentation.detailText,
+      "Remove the unreadable saved credentials before linking an account again.")
     XCTAssertEqual(presentation.errorMessages, ["The refresh token expired."])
-    XCTAssertEqual(presentation.actions, [.init(kind: .link, title: "Link again")])
+    XCTAssertEqual(
+      presentation.actions,
+      [
+        .init(kind: .retryLoad, title: "Try loading again"),
+        .init(kind: .signOut, title: "Clean up saved credentials", isDestructive: true),
+      ])
   }
 
   func testNeedsSignInWithAnAccountCanRelinkOrSignOut() {
@@ -117,7 +124,7 @@ final class T3ConnectPresentationTests: XCTestCase {
       ])
   }
 
-  func testLinkAndCleanupErrorsStayVisibleAndCleanupCanBeRetried() {
+  func testCleanupFailureMustBeRetriedBeforeLinking() {
     let presentation = T3ConnectAccountPresentation(
       state: .signedOut,
       lastLinkError: "The browser callback expired.",
@@ -128,10 +135,7 @@ final class T3ConnectPresentationTests: XCTestCase {
       ["The browser callback expired.", "Keychain cleanup failed."])
     XCTAssertEqual(
       presentation.actions,
-      [
-        .init(kind: .link, title: "Link T3 Connect account"),
-        .init(kind: .retryCleanup, title: "Retry cleanup"),
-      ])
+      [.init(kind: .retryCleanup, title: "Retry cleanup")])
   }
 
   func testCleanupRetryIsNotExposedForANewlyLinkedAccount() {
@@ -160,6 +164,25 @@ final class T3ConnectPresentationTests: XCTestCase {
 
     XCTAssertEqual(linked.detailText, "Monitoring is off. Your linked account remains saved.")
     XCTAssertEqual(unavailable.detailText, "Monitoring is off. Your linked account remains saved.")
+  }
+
+  func testLinkedAndUnavailableCopyExplainsEnergyPausedCloudPolling() {
+    let linked = T3ConnectAccountPresentation(
+      state: .linked(account(identity: "ada@example.com"), lastSync: Date()),
+      lastLinkError: nil,
+      lastCleanupError: nil,
+      monitoringEnabled: true,
+      remotePollingActive: false)
+    let unavailable = T3ConnectAccountPresentation(
+      state: .unavailable(account(identity: "ada@example.com"), "Relay timed out."),
+      lastLinkError: nil,
+      lastCleanupError: nil,
+      monitoringEnabled: true,
+      remotePollingActive: false)
+
+    let paused = "Cloud polling is paused by Energy mode. Your linked account remains saved."
+    XCTAssertEqual(linked.detailText, paused)
+    XCTAssertEqual(unavailable.detailText, paused)
   }
 
   func testRepeatedStateErrorIsShownOnce() {
@@ -230,6 +253,23 @@ final class T3ConnectPresentationTests: XCTestCase {
     XCTAssertEqual(globallyDisabled.stateText, "Off")
     XCTAssertEqual(profileDisabled.stateText, "Off")
     XCTAssertEqual(connecting.stateText, "Connecting")
+  }
+
+  func testPausedRemotePollingDoesNotPresentRetainedSnapshotsAsLive() {
+    let local = T3EnvironmentRowPresentation(
+      snapshot: environment(source: .local, state: .connected), remotePollingActive: false)
+    let connect = T3EnvironmentRowPresentation(
+      snapshot: environment(source: .connect, state: .connected), remotePollingActive: false)
+    let manual = T3EnvironmentRowPresentation(
+      manualLabel: "Studio", profileEnabled: true, monitoringEnabled: true,
+      remotePollingActive: false, state: .connected)
+
+    XCTAssertEqual(local.stateText, "Connected")
+    XCTAssertFalse(local.isPaused)
+    XCTAssertEqual(connect.stateText, "Paused")
+    XCTAssertTrue(connect.isPaused)
+    XCTAssertEqual(manual.stateText, "Paused")
+    XCTAssertTrue(manual.isPaused)
   }
 
   private func account(identity: String?) -> T3ConnectAccount {

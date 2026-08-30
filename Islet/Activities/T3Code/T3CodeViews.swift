@@ -7,6 +7,7 @@ struct T3ConnectAccountPresentation: Equatable {
       case link
       case cancel
       case retry
+      case retryLoad
       case signOut
       case retryCleanup
     }
@@ -36,7 +37,8 @@ struct T3ConnectAccountPresentation: Equatable {
     state: T3ConnectAccountState,
     lastLinkError: String?,
     lastCleanupError: String?,
-    monitoringEnabled: Bool = true
+    monitoringEnabled: Bool = true,
+    remotePollingActive: Bool = true
   ) {
     let stateError: String?
     let canRetryCleanup: Bool
@@ -67,9 +69,11 @@ struct T3ConnectAccountPresentation: Equatable {
       detailText =
         !monitoringEnabled
         ? "Monitoring is off. Your linked account remains saved."
-        : sync == nil
-          ? "Waiting for the first environment sync."
-          : "T3 Connect is monitoring your available environments."
+        : !remotePollingActive
+          ? "Cloud polling is paused by Energy mode. Your linked account remains saved."
+          : sync == nil
+            ? "Waiting for the first environment sync."
+            : "T3 Connect is monitoring your available environments."
       identity = Self.normalizedIdentity(account.displayIdentity)
       lastSync = sync
       isBusy = false
@@ -78,22 +82,33 @@ struct T3ConnectAccountPresentation: Equatable {
       canRetryCleanup = false
     case .needsSignIn(let account, let error):
       statusText = "Sign-in required"
-      detailText = "Link the account again to restore T3 Connect access."
+      detailText =
+        account == nil
+        ? "Remove the unreadable saved credentials before linking an account again."
+        : "Link the account again to restore T3 Connect access."
       identity = Self.normalizedIdentity(account?.displayIdentity)
       lastSync = nil
       isBusy = false
       actions =
-        [
-          .init(kind: .link, title: "Link again")
-        ] + (account == nil ? [] : [.init(kind: .signOut, title: "Sign out", isDestructive: true)])
+        account == nil
+        ? [
+          .init(kind: .retryLoad, title: "Try loading again"),
+          .init(kind: .signOut, title: "Clean up saved credentials", isDestructive: true),
+        ]
+        : [
+          .init(kind: .link, title: "Link again"),
+          .init(kind: .signOut, title: "Sign out", isDestructive: true),
+        ]
       stateError = error
       canRetryCleanup = false
     case .unavailable(let account, let error):
       statusText = "T3 Connect unavailable"
       detailText =
-        monitoringEnabled
-        ? "Your last known environments stay visible while T3 Connect is unavailable."
-        : "Monitoring is off. Your linked account remains saved."
+        !monitoringEnabled
+        ? "Monitoring is off. Your linked account remains saved."
+        : !remotePollingActive
+          ? "Cloud polling is paused by Energy mode. Your linked account remains saved."
+          : "Your last known environments stay visible while T3 Connect is unavailable."
       identity = Self.normalizedIdentity(account.displayIdentity)
       lastSync = nil
       isBusy = false
@@ -114,7 +129,7 @@ struct T3ConnectAccountPresentation: Equatable {
     errorMessages = errors
 
     if cleanupError != nil {
-      actions += [.init(kind: .retryCleanup, title: "Retry cleanup")]
+      actions = [.init(kind: .retryCleanup, title: "Retry cleanup")]
     }
   }
 
@@ -137,17 +152,27 @@ struct T3EnvironmentRowPresentation: Equatable {
   let systemImage: String
   let sourceText: String
   let stateText: String
+  let isPaused: Bool
   let controls: [Control]
 
   var accessibilityLabel: String { "\(label), \(sourceText), \(stateText)" }
 
-  init(snapshot: T3EnvironmentSnapshot) {
-    self.init(label: snapshot.label, source: snapshot.source, stateText: snapshot.state.label)
+  init(snapshot: T3EnvironmentSnapshot, remotePollingActive: Bool = true) {
+    let isPaused = snapshot.source != .local && !remotePollingActive
+    self.init(
+      label: snapshot.label, source: snapshot.source,
+      stateText: isPaused ? "Paused" : snapshot.state.label, isPaused: isPaused)
   }
 
-  init(label: String, source: T3EnvironmentSource, stateText: String) {
+  init(
+    label: String,
+    source: T3EnvironmentSource,
+    stateText: String,
+    isPaused: Bool = false
+  ) {
     self.label = label
     self.stateText = stateText
+    self.isPaused = isPaused
     switch source {
     case .local:
       systemImage = "laptopcomputer"
@@ -168,12 +193,17 @@ struct T3EnvironmentRowPresentation: Equatable {
     manualLabel: String,
     profileEnabled: Bool,
     monitoringEnabled: Bool,
+    remotePollingActive: Bool = true,
     state: T3ConnectionState?
   ) {
+    let isPaused = monitoringEnabled && profileEnabled && !remotePollingActive
     self.init(
       label: manualLabel,
       source: .manual,
-      stateText: monitoringEnabled && profileEnabled ? (state?.label ?? "Connecting") : "Off")
+      stateText: !monitoringEnabled || !profileEnabled
+        ? "Off"
+        : isPaused ? "Paused" : (state?.label ?? "Connecting"),
+      isPaused: isPaused)
   }
 }
 
@@ -250,7 +280,8 @@ struct T3CodeExpandedView: View {
   }
 
   private var connectionSummary: String {
-    let connected = visibleEnvironments.filter { $0.state == .connected }.count
+    let connected = T3CodeActivity.connectedEnvironmentCount(
+      in: visibleEnvironments, remotePollingActive: activity.remotePollingActive)
     return connected == 0
       ? "Open T3 Code, link T3 Connect, or add a machine in Settings."
       : "Connected to \(connected) machine\(connected == 1 ? "" : "s")"
@@ -261,7 +292,9 @@ struct T3CodeExpandedView: View {
   }
 
   private func environmentGroup(_ environment: T3EnvironmentSnapshot) -> some View {
-    let row = T3EnvironmentRowPresentation(snapshot: environment)
+    let row = T3EnvironmentRowPresentation(
+      snapshot: environment, remotePollingActive: activity.remotePollingActive)
+    let displayedAgents = row.isPaused ? [] : environment.agents
     return VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 5) {
         Image(systemName: row.systemImage)
@@ -273,20 +306,20 @@ struct T3CodeExpandedView: View {
       .accessibilityElement(children: .combine)
       .accessibilityLabel(row.accessibilityLabel)
 
-      if environment.agents.isEmpty {
+      if displayedAgents.isEmpty {
         HStack(spacing: 5) {
-          Text(environment.state.label).font(.caption2).foregroundStyle(
-            connectionColor(environment.state))
-          if let detail = environment.state.detail {
+          Text(row.stateText).font(.caption2).foregroundStyle(
+            row.isPaused ? .secondary : connectionColor(environment.state))
+          if !row.isPaused, let detail = environment.state.detail {
             Text(detail).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
           }
           Spacer(minLength: 0)
-          environmentActions(for: environment)
+          if !row.isPaused { environmentActions(for: environment) }
         }
         .padding(.vertical, 4).padding(.horizontal, 7)
         .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.06)))
       } else {
-        ForEach(environment.agents) { agent in
+        ForEach(displayedAgents) { agent in
           T3AgentRow(agent: agent)
         }
       }
@@ -428,7 +461,8 @@ struct T3SettingsSection: View {
       state: coordinator.state,
       lastLinkError: coordinator.lastLinkError,
       lastCleanupError: coordinator.lastCleanupError,
-      monitoringEnabled: isActivityEnabled)
+      monitoringEnabled: isActivityEnabled,
+      remotePollingActive: activity.remotePollingActive)
   }
 
   private var agentsSection: some View {
@@ -607,7 +641,7 @@ struct T3SettingsSection: View {
   @ViewBuilder private var machineRows: some View {
     if let local = activity.environments.first(where: { $0.source == .local }) {
       environmentRow(local)
-    } else {
+    } else if !activity.hasLocalObservation {
       LabeledContent {
         Text(isActivityEnabled ? "Discovering…" : "Off").foregroundStyle(.secondary)
       } label: {
@@ -624,7 +658,8 @@ struct T3SettingsSection: View {
         environmentID: profile.id, baseURL: profile.baseURL)
       let row = T3EnvironmentRowPresentation(
         manualLabel: profile.label, profileEnabled: profile.enabled,
-        monitoringEnabled: isActivityEnabled, state: state)
+        monitoringEnabled: isActivityEnabled, remotePollingActive: activity.remotePollingActive,
+        state: state)
       HStack {
         Toggle(
           isOn: Binding(
@@ -639,7 +674,10 @@ struct T3SettingsSection: View {
         Spacer()
         Text(row.stateText)
           .font(.caption)
-          .foregroundStyle(connectionColor(isActivityEnabled && profile.enabled ? state : nil))
+          .foregroundStyle(
+            row.isPaused
+              ? .secondary
+              : connectionColor(isActivityEnabled && profile.enabled ? state : nil))
         Button(role: .destructive) {
           pendingRemoval = profile
         } label: {
@@ -651,9 +689,11 @@ struct T3SettingsSection: View {
   }
 
   private func environmentRow(_ snapshot: T3EnvironmentSnapshot) -> some View {
-    let row = T3EnvironmentRowPresentation(snapshot: snapshot)
+    let row = T3EnvironmentRowPresentation(
+      snapshot: snapshot, remotePollingActive: activity.remotePollingActive)
     return LabeledContent {
-      Text(snapshot.state.label).font(.caption).foregroundStyle(connectionColor(snapshot.state))
+      Text(row.stateText).font(.caption).foregroundStyle(
+        row.isPaused ? .secondary : connectionColor(snapshot.state))
     } label: {
       VStack(alignment: .leading, spacing: 2) {
         Label(row.label, systemImage: row.systemImage)
@@ -711,7 +751,7 @@ struct T3SettingsSection: View {
     }
     .disabled(
       (pendingAccountAction != nil && action.kind != .cancel)
-        || (action.kind == .retry && !isActivityEnabled))
+        || (action.kind == .retry && (!isActivityEnabled || !activity.remotePollingActive)))
   }
 
   private func performAccountAction(_ action: T3ConnectAccountPresentation.Action.Kind) {
@@ -731,6 +771,13 @@ struct T3SettingsSection: View {
       pendingAccountAction = .retry
       activity.reconnect()
       pendingAccountAction = nil
+    case .retryLoad:
+      guard pendingAccountAction == nil else { return }
+      pendingAccountAction = .retryLoad
+      Task { @MainActor in
+        await coordinator.loadAccount()
+        pendingAccountAction = nil
+      }
     case .signOut:
       confirmingSignOut = true
     case .retryCleanup:

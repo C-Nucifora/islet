@@ -88,6 +88,8 @@ actor T3ConnectCredentialStore {
   static let service = "dev.islet"
   static let oauthAccount = "t3-connect-oauth-v1"
   static let dpopKeyAccount = "t3-connect-dpop-p256-v1"
+  private static let signOutPendingRecord = Data(
+    #"{"type":"t3-connect-sign-out-pending","version":1}"#.utf8)
 
   private let store: any T3SecureRecordStore
   private let onSignOutWaiterQueued: @Sendable () -> Void
@@ -125,6 +127,10 @@ actor T3ConnectCredentialStore {
     }
     guard capturedGeneration == generation else {
       throw T3ConnectCredentialStoreError.staleOperation
+    }
+    if data == Self.signOutPendingRecord {
+      oauthCache = .loaded(nil)
+      return nil
     }
     guard let record = try? JSONDecoder().decode(T3OAuthRecord.self, from: data) else {
       throw T3ConnectCredentialStoreError.invalidRecord
@@ -183,7 +189,7 @@ actor T3ConnectCredentialStore {
 
     let cleanupTask = Task { [self] in await performSignOutCleanup() }
     let result = await cleanupTask.value
-    if result.deletedOAuth { oauthCache = .loaded(nil) }
+    if result.tombstonedOAuth { oauthCache = .loaded(nil) }
     if result.deletedProofKey { proofKeyCache = .loaded(nil) }
     finishSignOut()
     if let firstError = result.firstError { throw firstError }
@@ -194,17 +200,28 @@ actor T3ConnectCredentialStore {
     var result = SignOutCleanupResult()
     do {
       try await withStoreLock(.oauth) {
-        try await store.delete(service: Self.service, account: Self.oauthAccount)
+        try await store.replace(
+          Self.signOutPendingRecord, service: Self.service, account: Self.oauthAccount,
+          label: "Islet T3 Connect cleanup")
       }
-      result.deletedOAuth = true
+      result.tombstonedOAuth = true
     } catch {
       result.firstError = error
+      return result
     }
     do {
       try await withStoreLock(.proofKey) {
         try await store.delete(service: Self.service, account: Self.dpopKeyAccount)
       }
       result.deletedProofKey = true
+    } catch {
+      if result.firstError == nil { result.firstError = error }
+      return result
+    }
+    do {
+      try await withStoreLock(.oauth) {
+        try await store.delete(service: Self.service, account: Self.oauthAccount)
+      }
     } catch {
       if result.firstError == nil { result.firstError = error }
     }
@@ -292,7 +309,7 @@ actor T3ConnectCredentialStore {
   }
 
   private struct SignOutCleanupResult: Sendable {
-    var deletedOAuth = false
+    var tombstonedOAuth = false
     var deletedProofKey = false
     var firstError: (any Error)?
   }

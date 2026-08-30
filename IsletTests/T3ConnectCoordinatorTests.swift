@@ -24,6 +24,124 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     XCTAssertEqual(listCalls, 0)
   }
 
+  func testRetryingAccountLoadStartsInventoryWhenRemotePollingIsAlreadyEnabled() async throws {
+    let stored = try record(grantID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
+    let session = T3CoordinatorSessionFake(storedRecord: stored, loadOutcome: .failure)
+    let relay = T3CoordinatorRelayFake(listOutcomes: [.success([])])
+    let fixture = makeFixture(session: session, relay: relay)
+
+    fixture.coordinator.startInventory()
+    await fixture.coordinator.loadAccount()
+
+    guard case .needsSignIn(nil, _) = fixture.coordinator.state else {
+      return XCTFail("Expected the transient account-load failure to remain visible")
+    }
+    XCTAssertFalse(fixture.coordinator.hasScheduledInventory)
+
+    await session.setLoadOutcome(.success)
+    await fixture.coordinator.loadAccount()
+    await fixture.sleeper.waitForSleep(interval: 60, count: 1)
+
+    XCTAssertTrue(fixture.coordinator.hasScheduledInventory)
+    let listCalls = await relay.listCallCount()
+    XCTAssertEqual(listCalls, 1)
+    XCTAssertEqual(
+      fixture.coordinator.state,
+      .linked(T3ConnectAccount(record: stored), lastSync: now))
+  }
+
+  func testLoadWithoutSavedAccountCleansOrphanedConnectCredentials() async {
+    let events = T3CoordinatorEventRecorder()
+    let session = T3CoordinatorSessionFake(events: events)
+    let relay = T3CoordinatorRelayFake(events: events)
+    let fixture = makeFixture(session: session, relay: relay, events: events)
+
+    await fixture.coordinator.loadAccount()
+
+    XCTAssertEqual(fixture.coordinator.state, .signedOut)
+    XCTAssertNil(fixture.coordinator.lastCleanupError)
+    let values = events.values()
+    XCTAssertTrue(values.contains("relay.clear"))
+    XCTAssertEqual(
+      values.filter { $0 != "relay.clear" },
+      [
+        "signer.deactivate", "session.signOut", "oauth.tombstone", "proof.delete",
+        "oauth.delete", "signer.reset",
+      ])
+  }
+
+  func testLoadWithoutSavedAccountSurfacesOrphanCleanupFailureForRetry() async {
+    let events = T3CoordinatorEventRecorder()
+    let session = T3CoordinatorSessionFake(signOutOutcome: .failure, events: events)
+    let relay = T3CoordinatorRelayFake(events: events)
+    let fixture = makeFixture(session: session, relay: relay, events: events)
+
+    await fixture.coordinator.loadAccount()
+
+    XCTAssertEqual(fixture.coordinator.state, .signedOut)
+    XCTAssertFalse(fixture.coordinator.lastCleanupError?.isEmpty ?? true)
+    let resets = await fixture.signer.resetCallCount()
+    XCTAssertEqual(resets, 1)
+
+    await fixture.coordinator.link()
+
+    XCTAssertFalse(events.values().contains("listener.start"))
+    XCTAssertEqual(fixture.coordinator.state, .signedOut)
+  }
+
+  func testLinkWaitsForStartupAccountLoadAndCleanup() async throws {
+    let candidate = try record(
+      grantID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!)
+    let loadGate = T3CoordinatorGate()
+    let callbackGate = T3CoordinatorGate()
+    let events = T3CoordinatorEventRecorder()
+    let session = T3CoordinatorSessionFake(
+      loadGate: loadGate, exchangeRecord: candidate, events: events)
+    let relay = T3CoordinatorRelayFake(listOutcomes: [.success([])], events: events)
+    let listener = T3CoordinatorListenerFake(
+      result: .authorizationCode("browser-code"), events: events, waitGate: callbackGate)
+    let fixture = makeFixture(
+      session: session, relay: relay, listener: listener, events: events)
+
+    let loadTask = Task { await fixture.coordinator.loadAccount() }
+    await loadGate.waitUntilEntered()
+    let linkTask = Task { await fixture.coordinator.link() }
+    for _ in 0..<10 { await Task.yield() }
+
+    XCTAssertFalse(events.values().contains("listener.start"))
+
+    await loadGate.resume()
+    await loadTask.value
+    await callbackGate.waitUntilEntered()
+    let cleanupFinished = try XCTUnwrap(events.values().firstIndex(of: "proof.delete"))
+    let listenerStarted = try XCTUnwrap(events.values().firstIndex(of: "listener.start"))
+    XCTAssertLessThan(cleanupFinished, listenerStarted)
+
+    await callbackGate.resume()
+    await linkTask.value
+  }
+
+  func testLinkRunsStartupAccountLoadAndCleanupWhenItWinsTheRace() async throws {
+    let candidate = try record(
+      grantID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!)
+    let events = T3CoordinatorEventRecorder()
+    let session = T3CoordinatorSessionFake(exchangeRecord: candidate, events: events)
+    let relay = T3CoordinatorRelayFake(listOutcomes: [.success([])], events: events)
+    let listener = T3CoordinatorListenerFake(
+      result: .authorizationCode("browser-code"), events: events)
+    let fixture = makeFixture(
+      session: session, relay: relay, listener: listener, events: events)
+
+    await fixture.coordinator.link()
+
+    let cleanupFinished = try XCTUnwrap(events.values().firstIndex(of: "proof.delete"))
+    let listenerStarted = try XCTUnwrap(events.values().firstIndex(of: "listener.start"))
+    XCTAssertLessThan(cleanupFinished, listenerStarted)
+    XCTAssertEqual(
+      fixture.coordinator.state,
+      .linked(T3ConnectAccount(record: candidate), lastSync: now))
+  }
+
   func testSignOutSuppressesAStoredAccountLoadThatReturnsLate() async throws {
     let old = try record(grantID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
     let loadGate = T3CoordinatorGate()
@@ -40,7 +158,7 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     XCTAssertEqual(fixture.coordinator.state, .signedOut)
   }
 
-  func testFailedLinkRestoresStoredAccountLoadedWhileAttemptIsActive() async throws {
+  func testRelinkUsesStoredAccountAfterWaitingForAccountLoad() async throws {
     let old = try record(grantID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
     let loadGate = T3CoordinatorGate()
     let callbackGate = T3CoordinatorGate()
@@ -55,9 +173,11 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     let loadTask = Task { await fixture.coordinator.loadAccount() }
     await loadGate.waitUntilEntered()
     let linkTask = Task { await fixture.coordinator.link() }
-    await callbackGate.waitUntilEntered()
+    for _ in 0..<10 { await Task.yield() }
+    XCTAssertFalse(events.values().contains("listener.start"))
     await loadGate.resume()
     await loadTask.value
+    await callbackGate.waitUntilEntered()
 
     XCTAssertEqual(
       fixture.coordinator.state,
@@ -71,7 +191,7 @@ final class T3ConnectCoordinatorTests: XCTestCase {
       .linked(T3ConnectAccount(record: old), lastSync: nil))
   }
 
-  func testFailedLinkRestoresAccountLoadErrorReceivedWhileAttemptIsActive() async {
+  func testLinkDoesNotBypassAnAccountLoadError() async {
     let loadGate = T3CoordinatorGate()
     let callbackGate = T3CoordinatorGate()
     let events = T3CoordinatorEventRecorder()
@@ -85,16 +205,17 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     let loadTask = Task { await fixture.coordinator.loadAccount() }
     await loadGate.waitUntilEntered()
     let linkTask = Task { await fixture.coordinator.link() }
-    await callbackGate.waitUntilEntered()
+    for _ in 0..<10 { await Task.yield() }
+    XCTAssertFalse(events.values().contains("listener.start"))
     await loadGate.resume()
     await loadTask.value
-    await callbackGate.resume()
     await linkTask.value
 
     guard case .needsSignIn(nil, let message) = fixture.coordinator.state else {
       return XCTFail("Expected the account-load error to remain the link rollback state")
     }
     XCTAssertFalse(message.isEmpty)
+    XCTAssertFalse(events.values().contains("listener.start"))
   }
 
   func testLinkStartsListenerBeforeOpeningBrowser() async throws {
@@ -111,9 +232,11 @@ final class T3ConnectCoordinatorTests: XCTestCase {
 
     await fixture.coordinator.link()
 
-    XCTAssertEqual(
-      Array(events.values().prefix(3)),
-      ["listener.start", "browser.open", "listener.wait"])
+    let listenerStarted = try XCTUnwrap(events.values().firstIndex(of: "listener.start"))
+    let browserOpened = try XCTUnwrap(events.values().firstIndex(of: "browser.open"))
+    let listenerWaited = try XCTUnwrap(events.values().firstIndex(of: "listener.wait"))
+    XCTAssertLessThan(listenerStarted, browserOpened)
+    XCTAssertLessThan(browserOpened, listenerWaited)
     XCTAssertEqual(
       fixture.coordinator.state,
       .linked(T3ConnectAccount(record: candidate), lastSync: now))
@@ -215,6 +338,87 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(shellCalls, 1)
   }
 
+  func testRelinkKeepsOldAccountCloudMonitorRunningWhileWaitingForBrowser() async throws {
+    let old = try record(grantID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
+    let oldEnvironment = environment(id: "old")
+    let callbackGate = T3CoordinatorGate()
+    let cloudCycles = T3CoordinatorSignal()
+    let events = T3CoordinatorEventRecorder()
+    let session = T3CoordinatorSessionFake(storedRecord: old)
+    let relay = T3CoordinatorRelayFake(
+      listOutcomes: [.success([oldEnvironment]), .success([oldEnvironment])])
+    let listener = T3CoordinatorListenerFake(
+      result: .denied("access_denied"), events: events, waitGate: callbackGate)
+    let fixture = makeFixture(
+      session: session, relay: relay, listener: listener, events: events,
+      onCloudCycleCompleted: { _ in cloudCycles.signal() })
+    await fixture.coordinator.loadAccount()
+    fixture.coordinator.startInventory()
+    await cloudCycles.wait(for: 1)
+    await fixture.sleeper.waitForSleep(interval: 10, count: 1)
+
+    let linkTask = Task { await fixture.coordinator.link() }
+    await callbackGate.waitUntilEntered()
+    await fixture.sleeper.resumeFirst(interval: 10)
+    await cloudCycles.wait(for: 2)
+
+    let shellCalls = await fixture.shells.callCount(environmentID: "old")
+    XCTAssertEqual(shellCalls, 2)
+    XCTAssertEqual(
+      fixture.coordinator.state,
+      .linking(previous: T3ConnectAccount(record: old)))
+
+    await callbackGate.resume()
+    await linkTask.value
+    await fixture.sleeper.waitForSleep(interval: 60, count: 2)
+    await fixture.sleeper.resumeFirst(interval: 10)
+    await cloudCycles.wait(for: 3)
+
+    let resumedShellCalls = await fixture.shells.callCount(environmentID: "old")
+    XCTAssertEqual(resumedShellCalls, 3)
+    XCTAssertEqual(fixture.coordinator.activeCloudMonitorEnvironmentIDs, ["old"])
+  }
+
+  func testOldAccountReauthenticationDuringRelinkKeepsCancelVisibleAndRejectsRollback() async throws
+  {
+    let old = try record(grantID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
+    let oldEnvironment = environment(id: "old")
+    let callbackGate = T3CoordinatorGate()
+    let cloudCycles = T3CoordinatorSignal()
+    let events = T3CoordinatorEventRecorder()
+    let session = T3CoordinatorSessionFake(storedRecord: old)
+    let relay = T3CoordinatorRelayFake(
+      listOutcomes: [.success([oldEnvironment])], events: events)
+    let listener = T3CoordinatorListenerFake(
+      result: .denied("access_denied"), events: events, waitGate: callbackGate)
+    let fixture = makeFixture(
+      session: session, relay: relay, listener: listener, events: events,
+      onCloudCycleCompleted: { _ in cloudCycles.signal() })
+    await fixture.coordinator.loadAccount()
+    fixture.coordinator.startInventory()
+    await cloudCycles.wait(for: 1)
+    await fixture.sleeper.waitForSleep(interval: 10, count: 1)
+
+    let linkTask = Task { await fixture.coordinator.link() }
+    await callbackGate.waitUntilEntered()
+    await session.setValidOutcomes([.reauthenticationRequired])
+    await fixture.sleeper.resumeFirst(interval: 10)
+    await relay.waitForClearCalls(1)
+
+    XCTAssertEqual(
+      fixture.coordinator.state,
+      .linking(previous: T3ConnectAccount(record: old)))
+    XCTAssertTrue(fixture.coordinator.activeCloudMonitorEnvironmentIDs.isEmpty)
+
+    await callbackGate.resume()
+    await linkTask.value
+
+    let reason = T3ConnectSessionError.reauthenticationRequired.localizedDescription
+    XCTAssertEqual(
+      fixture.coordinator.state,
+      .needsSignIn(T3ConnectAccount(record: old), reason))
+  }
+
   func testCommitFailureRestoresOldAccountWithoutClearingOldRelayWork() async throws {
     let old = try record(grantID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
     let candidate = try record(
@@ -304,33 +508,37 @@ final class T3ConnectCoordinatorTests: XCTestCase {
       .linked(T3ConnectAccount(record: candidate), lastSync: now))
   }
 
-  func testSignOutWaitsForStartedCommitBeforeDeletingStoredAccount() async throws {
+  func testSignOutWritesCleanupMarkerBeforeWaitingForStartedCommit() async throws {
+    let old = try record(grantID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
     let candidate = try record(
       grantID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!)
     let commitGate = T3CoordinatorGate()
+    let events = T3CoordinatorEventRecorder()
     let session = T3CoordinatorSessionFake(
-      exchangeRecord: candidate, commitOutcome: .success, commitGate: commitGate)
-    let relay = T3CoordinatorRelayFake(listOutcomes: [.success([])])
-    let fixture = makeFixture(session: session, relay: relay)
+      storedRecord: old, exchangeRecord: candidate, commitOutcome: .success,
+      commitGate: commitGate, events: events)
+    let relay = T3CoordinatorRelayFake(listOutcomes: [.success([])], events: events)
+    let fixture = makeFixture(session: session, relay: relay, events: events)
+    await fixture.coordinator.loadAccount()
     let linkTask = Task { await fixture.coordinator.link() }
     await commitGate.waitUntilEntered()
 
     let signOutTask = Task { try await fixture.coordinator.signOut() }
-    while fixture.coordinator.state != .signedOut { await Task.yield() }
-    for _ in 0..<1_000 {
-      if await fixture.signer.deactivationCallCount() > 0 { break }
-      await Task.yield()
-    }
-    let deactivationsWhileCommitSuspended = await fixture.signer.deactivationCallCount()
-    XCTAssertEqual(deactivationsWhileCommitSuspended, 1)
+    let tombstonedBeforeCommitFinished = await events.wait(
+      for: "oauth.tombstone", timeout: .seconds(1))
 
     await commitGate.resume()
     try await signOutTask.value
     await linkTask.value
 
+    XCTAssertTrue(tombstonedBeforeCommitFinished)
     let storedAccount = await session.storedAccount()
     XCTAssertNil(storedAccount)
     XCTAssertEqual(fixture.coordinator.state, .signedOut)
+    let cleanupEvents = events.values().filter {
+      ["oauth.tombstone", "proof.delete", "oauth.delete"].contains($0)
+    }
+    XCTAssertEqual(cleanupEvents, ["oauth.tombstone", "proof.delete", "oauth.delete"])
   }
 
   func testInventoryFailureKeepsLastGoodInventoryAndMonitorTasks() async throws {
@@ -627,16 +835,18 @@ final class T3ConnectCoordinatorTests: XCTestCase {
 
     try await fixture.coordinator.signOut()
 
+    let values = events.values()
+    XCTAssertTrue(values.contains("relay.clear"))
     XCTAssertEqual(
-      events.values(),
+      values.filter { $0 != "relay.clear" },
       [
-        "signer.deactivate", "relay.clear", "session.signOut", "oauth.delete", "proof.delete",
-        "signer.reset",
+        "signer.deactivate", "session.signOut", "oauth.tombstone", "proof.delete",
+        "oauth.delete", "signer.reset",
       ])
     XCTAssertEqual(fixture.coordinator.state, .signedOut)
   }
 
-  func testSuccessfulLinkClearsAnOldCleanupFailure() async throws {
+  func testSuccessfulCleanupRetryAllowsLinkAndClearsTheOldFailure() async throws {
     let old = try record(grantID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
     let candidate = try record(
       grantID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!)
@@ -648,6 +858,11 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     _ = try? await fixture.coordinator.signOut()
     XCTAssertNotNil(fixture.coordinator.lastCleanupError)
 
+    await fixture.coordinator.link()
+    XCTAssertEqual(fixture.coordinator.state, .signedOut)
+
+    await session.setSignOutOutcome(.success)
+    try await fixture.coordinator.signOut()
     await fixture.coordinator.link()
 
     XCTAssertEqual(
@@ -709,18 +924,24 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     let old = environment(id: "same", origin: "https://old.example.test")
     let replacement = environment(id: "same", origin: "https://new.example.test")
     let oldGate = T3CoordinatorGate()
+    let retainedOldGate = T3CoordinatorGate()
+    let replacementListGate = T3CoordinatorGate()
     let replacementGate = T3CoordinatorGate()
     let session = T3CoordinatorSessionFake(storedRecord: account)
     let relay = T3CoordinatorRelayFake(
-      listOutcomes: [.success([old]), .success([replacement])])
+      listOutcomes: [.success([old]), .success([replacement])],
+      listGates: [2: replacementListGate])
     let shells = T3CoordinatorShellFake()
-    await shells.setGates([oldGate, replacementGate], environmentID: "same")
+    await shells.setGates([oldGate, retainedOldGate, replacementGate], environmentID: "same")
     let fixture = makeFixture(session: session, relay: relay, shells: shells)
     await fixture.coordinator.loadAccount()
     fixture.coordinator.startInventory()
     await oldGate.waitUntilEntered()
 
     fixture.coordinator.refreshNow()
+    await replacementListGate.waitUntilEntered()
+    await retainedOldGate.waitUntilEntered()
+    await replacementListGate.resume()
     await replacementGate.waitUntilEntered()
     XCTAssertEqual(
       fixture.coordinator.cloudCandidates.map(\.baseURL),
@@ -729,7 +950,8 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     await replacementGate.resume()
     await fixture.sleeper.waitForSleep(interval: 10, count: 1)
     await oldGate.resume()
-    await shells.waitForReturns(environmentID: "same", count: 2)
+    await retainedOldGate.resume()
+    await shells.waitForReturns(environmentID: "same", count: 3)
 
     XCTAssertEqual(fixture.coordinator.environments, [replacement])
     XCTAssertEqual(
@@ -1002,11 +1224,19 @@ final class T3ConnectCoordinatorTests: XCTestCase {
     activity.restartMonitors(clearSnapshots: false)
     XCTAssertFalse(fixture.coordinator.hasScheduledInventory)
     XCTAssertEqual(activity.environments.filter { $0.source == .connect }.count, 1)
+    XCTAssertEqual(
+      activity.environments.first(where: { $0.source == .connect })?.state,
+      .connecting)
+    XCTAssertFalse(activity.remotePollingActive)
 
     Defaults[.energyMode] = .live
     activity.restartMonitors(clearSnapshots: false)
     await fixture.sleeper.waitForSleep(interval: 60, count: 3)
     await fixture.sleeper.waitForSleep(interval: 10, count: 3)
+    XCTAssertEqual(
+      activity.environments.first(where: { $0.source == .connect })?.state,
+      .connected)
+    XCTAssertTrue(activity.remotePollingActive)
 
     activity.reconnect()
     await fixture.sleeper.waitForSleep(interval: 60, count: 4)
@@ -1137,6 +1367,16 @@ private final class T3CoordinatorEventRecorder: @unchecked Sendable {
     defer { lock.unlock() }
     return storage
   }
+
+  func wait(for value: String, timeout: Duration) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while clock.now < deadline {
+      if values().contains(value) { return true }
+      try? await Task.sleep(for: .milliseconds(10))
+    }
+    return values().contains(value)
+  }
 }
 
 private final class T3CoordinatorSignal: @unchecked Sendable {
@@ -1194,14 +1434,15 @@ private actor T3CoordinatorGate {
 private actor T3CoordinatorSessionFake: T3ConnectSessionServing {
   private var record: T3OAuthRecord?
   private let loadGate: T3CoordinatorGate?
-  private let loadOutcome: T3CoordinatorOutcome
+  private var loadOutcome: T3CoordinatorOutcome
   private let exchangeRecord: T3OAuthRecord?
   private let commitOutcome: T3CoordinatorOutcome
   private let commitGate: T3CoordinatorGate?
-  private let signOutOutcome: T3CoordinatorOutcome
+  private var signOutOutcome: T3CoordinatorOutcome
   private let events: T3CoordinatorEventRecorder?
   private var commitCalls = 0
   private var commitInProgress = false
+  private var generation: UInt64 = 0
   private var validOutcomes: [T3CoordinatorListOutcome] = []
 
   init(
@@ -1258,23 +1499,30 @@ private actor T3CoordinatorSessionFake: T3ConnectSessionServing {
 
   func commit(_ candidate: T3OAuthRecord) async throws {
     commitCalls += 1
+    generation &+= 1
+    let capturedGeneration = generation
     commitInProgress = true
     defer { commitInProgress = false }
     events?.append("session.commit")
     if let commitGate { await commitGate.suspend() }
+    guard capturedGeneration == generation else { throw T3ConnectSessionError.staleOperation }
     if commitOutcome == .failure { throw T3CoordinatorTestError.failed }
     record = candidate
   }
 
   func signOut() async throws {
+    generation &+= 1
     events?.append("session.signOut")
     if signOutOutcome == .failure { throw T3CoordinatorTestError.failed }
-    events?.append("oauth.delete")
+    events?.append("oauth.tombstone")
     events?.append("proof.delete")
+    events?.append("oauth.delete")
     record = nil
   }
 
   func setValidOutcomes(_ outcomes: [T3CoordinatorListOutcome]) { validOutcomes = outcomes }
+  func setLoadOutcome(_ outcome: T3CoordinatorOutcome) { loadOutcome = outcome }
+  func setSignOutOutcome(_ outcome: T3CoordinatorOutcome) { signOutOutcome = outcome }
   func commitCallCount() -> Int { commitCalls }
   func storedAccount() -> T3ConnectAccount? { record.map(T3ConnectAccount.init(record:)) }
 }

@@ -100,7 +100,9 @@ final class T3ConnectCoordinator: ObservableObject {
 
   private var activeAccount: T3ConnectAccount?
   private var generation: UInt64 = 0
+  private var accountLoadAttempted = false
   private var loadingAccount = false
+  private var accountLoadWaiters: [CheckedContinuation<Void, Never>] = []
   private var remotePollingAllowed = false
   private var linkTask: Task<Void, Never>?
   private var linkCommitTask: Task<Void, any Error>?
@@ -177,13 +179,14 @@ final class T3ConnectCoordinator: ObservableObject {
 
   func loadAccount() async {
     guard activeAccount == nil, linkTask == nil, !loadingAccount, !signingOut else { return }
+    accountLoadAttempted = true
     loadingAccount = true
-    defer { loadingAccount = false }
+    defer { finishAccountLoad() }
     let capturedGeneration = generation
     do {
       guard let account = try await session.loadStoredAccount() else {
         if capturedGeneration == generation, linkTask == nil, !signingOut {
-          state = .signedOut
+          try? await signOut()
         }
         return
       }
@@ -195,6 +198,7 @@ final class T3ConnectCoordinator: ObservableObject {
         state = .linking(previous: account)
       } else {
         state = loadedState
+        if remotePollingAllowed { scheduleInventory(initialDelay: nil) }
       }
     } catch {
       guard capturedGeneration == generation, !signingOut else { return }
@@ -208,7 +212,13 @@ final class T3ConnectCoordinator: ObservableObject {
   }
 
   func link() async {
-    guard linkTask == nil, !signingOut else { return }
+    if !accountLoadAttempted {
+      await loadAccount()
+    } else if loadingAccount {
+      await waitForAccountLoadCompletion()
+    }
+    guard !Task.isCancelled, linkTask == nil, !signingOut, lastCleanupError == nil else { return }
+    if case .needsSignIn(nil, _) = state { return }
     lastLinkError = nil
     let attemptID = UUID()
     linkAttemptID = attemptID
@@ -245,7 +255,9 @@ final class T3ConnectCoordinator: ObservableObject {
   }
 
   private func scheduleInventory(initialDelay: TimeInterval?) {
-    guard inventoryTask == nil, let account = activeAccount, canRunAccountWork, !signingOut else {
+    guard inventoryTask == nil, linkAttemptID == nil, let account = activeAccount,
+      canRunAccountWork, !signingOut
+    else {
       return
     }
     startRetainedCloudTasks(account: account)
@@ -328,12 +340,12 @@ final class T3ConnectCoordinator: ObservableObject {
     lastLinkError = nil
 
     await signerResetter.deactivate()
+    let sessionSignOutTask = Task { [session] in try await session.signOut() }
     await relay.clearCaches()
     await listener?.cancel()
+    let sessionSignOutResult = await sessionSignOutTask.result
     _ = try? await commitTask?.value
-    do {
-      try await session.signOut()
-    } catch {
+    if case .failure(let error) = sessionSignOutResult {
       await signerResetter.reset()
       lastCleanupError = error.localizedDescription
       throw error
@@ -415,6 +427,18 @@ final class T3ConnectCoordinator: ObservableObject {
     linkPreviousState = nil
     linkCommitTask = nil
     activeListener = nil
+  }
+
+  private func waitForAccountLoadCompletion() async {
+    guard loadingAccount else { return }
+    await withCheckedContinuation { accountLoadWaiters.append($0) }
+  }
+
+  private func finishAccountLoad() {
+    loadingAccount = false
+    let waiters = accountLoadWaiters
+    accountLoadWaiters.removeAll()
+    for waiter in waiters { waiter.resume() }
   }
 
   private func restoreLinkPresentation() {
@@ -672,6 +696,7 @@ final class T3ConnectCoordinator: ObservableObject {
     capturedGeneration: UInt64
   ) async {
     guard isCurrent(capturedGeneration, grantID: account.grantID) else { return }
+    let relinkIsWaiting = linkAttemptID != nil && linkPhase == .waiting
     generation &+= 1
     cancelInventoryTask()
     cancelCloudTasks()
@@ -683,7 +708,13 @@ final class T3ConnectCoordinator: ObservableObject {
         platform: snapshot.platform, serverVersion: snapshot.serverVersion,
         state: .offline(reason), agents: [])
     }
-    state = .needsSignIn(account, reason)
+    let rejectedState = T3ConnectAccountState.needsSignIn(account, reason)
+    if relinkIsWaiting {
+      linkPreviousState = rejectedState
+      state = .linking(previous: account)
+    } else {
+      state = rejectedState
+    }
     await signerResetter.deactivate()
     await relay.clearCaches()
   }
@@ -741,7 +772,9 @@ final class T3ConnectCoordinator: ObservableObject {
     return switch state {
     case .linked, .unavailable:
       true
-    case .signedOut, .linking, .needsSignIn:
+    case .linking(let previous):
+      linkPhase == .waiting && previous?.grantID == activeAccount?.grantID
+    case .signedOut, .needsSignIn:
       false
     }
   }

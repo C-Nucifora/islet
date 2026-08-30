@@ -498,6 +498,55 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(states["Credential"], .credentialError("Keychain unavailable"))
   }
 
+  func testPausedRemotePollingExcludesRetainedRemoteActivityFromLiveCounts() {
+    let localAgent = Self.agentSnapshot(environmentID: "local", threadID: "local-thread")
+    let connectAgent = Self.agentSnapshot(environmentID: "connect", threadID: "connect-thread")
+    let snapshots = [
+      T3EnvironmentSnapshot(
+        id: "local|local", logicalEnvironmentID: "local", source: .local,
+        label: "This Mac", baseURL: "http://127.0.0.1:3773/", platform: nil,
+        serverVersion: "1", state: .connected, agents: [localAgent]),
+      T3EnvironmentSnapshot(
+        id: "connect|connect", logicalEnvironmentID: "connect", source: .connect,
+        label: "Cloud", baseURL: "https://cloud.example/", platform: nil,
+        serverVersion: "1", state: .connected, agents: [connectAgent]),
+    ]
+
+    XCTAssertEqual(
+      T3CodeActivity.currentAgents(in: snapshots, remotePollingActive: false), [localAgent])
+    XCTAssertEqual(
+      T3CodeActivity.connectedEnvironmentCount(in: snapshots, remotePollingActive: false), 1)
+    XCTAssertEqual(
+      T3CodeActivity.currentAgents(in: snapshots, remotePollingActive: true).map(\.id).sorted(),
+      [localAgent.id, connectAgent.id].sorted())
+    XCTAssertEqual(
+      T3CodeActivity.connectedEnvironmentCount(in: snapshots, remotePollingActive: true), 2)
+  }
+
+  func testPausedRemoteCandidateCannotHideADegradedLocalOrReenterLiveCountsOnResume() {
+    let connectAgent = Self.agentSnapshot(environmentID: "shared", threadID: "connect-thread")
+    let local = Self.environmentSnapshot(
+      id: "local|shared", logicalEnvironmentID: "shared", source: .local,
+      state: .offline("Local unavailable"))
+    let connect = T3EnvironmentSnapshot(
+      id: "connect|shared", logicalEnvironmentID: "shared", source: .connect,
+      label: "Cloud", baseURL: "https://cloud.example/", platform: nil,
+      serverVersion: "1", state: .connected, agents: [connectAgent])
+
+    let awaitingRefresh = T3CodeActivity.markingRemoteCandidatesAwaitingRefresh([local, connect])
+
+    XCTAssertEqual(T3EnvironmentResolver.resolve(awaitingRefresh), [local])
+    let retainedConnect = awaitingRefresh.first { $0.source == .connect }
+    XCTAssertEqual(retainedConnect?.state, .connecting)
+    XCTAssertTrue(retainedConnect?.agents.isEmpty == true)
+    XCTAssertTrue(
+      T3CodeActivity.currentAgents(in: awaitingRefresh, remotePollingActive: true).isEmpty)
+    XCTAssertEqual(
+      T3CodeActivity.connectedEnvironmentCount(
+        in: awaitingRefresh, remotePollingActive: true),
+      0)
+  }
+
   func testVisibleEnvironmentsIncludesConnectSourcesWithoutDuplicatingManualFailover() {
     let connect = Self.environmentSnapshot(
       id: "connect|shared", logicalEnvironmentID: "shared", source: .connect)
@@ -755,6 +804,31 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(snapshot.agents.map(\.id), ["studio:thread"])
   }
 
+  func testIdentifiedLocalFailureFallsBackToConnectWithoutCreatingASecondRow() throws {
+    let descriptor = T3EnvironmentDescriptor(
+      environmentId: "shared", label: "Studio",
+      platform: T3EnvironmentDescriptor.Platform(os: "macOS", arch: "arm64"),
+      serverVersion: "1")
+    let endpoint = try T3Endpoint(URL(string: "http://127.0.0.1:3773")!)
+    let local = T3CodeActivity.localFailureSnapshot(
+      descriptor: descriptor, endpoint: endpoint, state: .offline("Timed out"))
+    let connect = Self.environmentSnapshot(
+      id: "connect|shared", logicalEnvironmentID: "shared", source: .connect)
+
+    let candidates = T3CodeActivity.upserting(
+      connect, into: T3CodeActivity.upserting(local, into: []))
+    let visible = T3EnvironmentResolver.resolve(candidates)
+    let activity = T3CodeActivity()
+    activity.upsert(local)
+    activity.replaceCandidates(from: .connect, with: [connect])
+
+    XCTAssertEqual(local.id, "local|shared")
+    XCTAssertEqual(local.logicalEnvironmentID, "shared")
+    XCTAssertEqual(visible, [connect])
+    XCTAssertEqual(activity.environments, [connect])
+    XCTAssertTrue(activity.hasLocalObservation)
+  }
+
   func testLocalAndRemoteEnvironmentIdentityCannotCollide() {
     XCTAssertEqual(T3CodeActivity.localSnapshotID("same"), "local|same")
     XCTAssertEqual(T3CodeActivity.connectSnapshotID("same"), "connect|same")
@@ -849,6 +923,17 @@ final class T3CodeTests: XCTestCase {
       id: id, logicalEnvironmentID: logicalEnvironmentID, source: source, label: id,
       baseURL: "https://mini.example.com/", platform: nil, serverVersion: "1", state: state,
       agents: [])
+  }
+
+  private static func agentSnapshot(
+    environmentID: String,
+    threadID: String
+  ) -> T3AgentSnapshot {
+    T3AgentSnapshot(
+      logicalEnvironmentID: environmentID, threadID: threadID, title: threadID,
+      project: "Project", providerInstance: "provider", model: "model", branch: nil,
+      phase: .working, planStep: nil, completedPlanSteps: nil, totalPlanSteps: nil,
+      updatedAt: Date(timeIntervalSince1970: 1_788_000_000))
   }
 }
 
