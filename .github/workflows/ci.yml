@@ -55,7 +55,7 @@ jobs:
           swift --version
           xcodegen --version
           test "$(xcbeautify --version)" = "3.2.1"
-          test "$(actionlint -version)" = "1.7.12"
+          test "$(actionlint -version | head -n 1)" = "1.7.12"
 
       - name: Verify MediaRemoteAdapter provenance
         run: |
