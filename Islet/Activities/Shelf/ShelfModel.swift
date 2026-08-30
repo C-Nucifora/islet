@@ -94,6 +94,12 @@ struct ShelfItem: Identifiable, Equatable, Sendable {
   var thumbnail: Data?  // PNG; Sendable-friendly so it can cross the QL callback boundary
 }
 
+/// The metadata that invalidates a thumbnail when an item changes on disk.
+struct ShelfThumbnailMetadata: Hashable, Sendable {
+  let modificationDate: Date?
+  let fileSize: Int?
+}
+
 enum ShelfStorageFailure: Equatable, Sendable {
   case initialization
   case listing
@@ -121,6 +127,7 @@ enum ShelfStorageFailure: Equatable, Sendable {
 final class ShelfModel: ObservableObject {
   static let shared = ShelfModel()
   nonisolated static let maximumItemCount = 100
+  nonisolated static let maximumConcurrentThumbnailRequests = 2
 
   private struct ImportBatch {
     let urls: [URL]
@@ -132,6 +139,18 @@ final class ShelfModel: ObservableObject {
     var isStaged: Bool
   }
 
+  private struct ThumbnailCacheKey: Hashable, Sendable {
+    let url: URL
+    let metadata: ShelfThumbnailMetadata
+  }
+
+  private struct ThumbnailWork: Sendable {
+    let id: UUID
+    let url: URL
+    let cacheKey: ThumbnailCacheKey
+    let token: UInt
+  }
+
   typealias CopyItem = @Sendable (URL, URL) async -> Result<Void, Error>
   typealias MoveItem = @Sendable (URL, URL) async -> Result<Void, Error>
   typealias CreateDirectory = @Sendable (URL) -> Result<Void, Error>
@@ -139,6 +158,8 @@ final class ShelfModel: ObservableObject {
   typealias RemoveItem = @Sendable (URL) -> Result<Void, Error>
   typealias MeasureItem = @Sendable (URL) async -> Result<Int64, Error>
   typealias MeasureAvailableCapacity = @Sendable (URL) async -> Result<Int64, Error>
+  typealias ThumbnailMetadata = @Sendable (URL) -> ShelfThumbnailMetadata?
+  typealias GenerateThumbnail = @Sendable (URL) async -> Data?
 
   @Published private(set) var items: [ShelfItem] = []
   @Published private(set) var lastError: String?
@@ -158,12 +179,21 @@ final class ShelfModel: ObservableObject {
   private let removeItem: RemoveItem
   private let measureItem: MeasureItem
   private let measureAvailableCapacity: MeasureAvailableCapacity
+  private let thumbnailMetadata: ThumbnailMetadata
+  private let generateThumbnailData: GenerateThumbnail
   private var itemUsageBytes: [URL: Int64] = [:]
   private var reservedImports: [URL: StorageReservation] = [:]
   private var importQueue: [ImportBatch] = []
   private var importWorker: Task<Void, Never>?
   private var importGeneration: UInt = 0
   private var usageMutationGeneration: UInt = 0
+  private var visibleThumbnailIDs: Set<UUID> = []
+  private var queuedThumbnailWork: [ThumbnailWork] = []
+  private var activeThumbnailWork: [UUID: ThumbnailWork] = [:]
+  private var thumbnailTasks: [UUID: Task<Void, Never>] = [:]
+  private var thumbnailCache: [ThumbnailCacheKey: Data] = [:]
+  private var cancelledThumbnailTokens: Set<UInt> = []
+  private var thumbnailWorkToken: UInt = 0
   private(set) var isClearing = false
 
   init(
@@ -175,6 +205,8 @@ final class ShelfModel: ObservableObject {
     removeItem: RemoveItem? = nil,
     measureItem: MeasureItem? = nil,
     measureAvailableCapacity: MeasureAvailableCapacity? = nil,
+    thumbnailMetadata: ThumbnailMetadata? = nil,
+    generateThumbnailData: GenerateThumbnail? = nil,
     storagePolicy: ShelfStoragePolicy = .standard
   ) {
     let base =
@@ -232,6 +264,17 @@ final class ShelfModel: ObservableObject {
           ShelfFileMeasurements.availableCapacity(at: directory)
         }.value
       }
+    self.thumbnailMetadata =
+      thumbnailMetadata
+      ?? { url in
+        guard
+          let values = try? url.resourceValues(
+            forKeys: [.contentModificationDateKey, .fileSizeKey])
+        else { return nil }
+        return ShelfThumbnailMetadata(
+          modificationDate: values.contentModificationDate, fileSize: values.fileSize)
+      }
+    self.generateThumbnailData = generateThumbnailData ?? Self.thumbnailData(for:)
     self.storagePolicy = storagePolicy
     dir = base
     refreshStorage()
@@ -302,10 +345,12 @@ final class ShelfModel: ObservableObject {
   }
 
   private func setItems(from found: [URL]) {
+    cancelAllThumbnailWork()
     items = found.filter { !isStagingURL($0) }
       .sorted { modDate($0) < modDate($1) }
       .map { ShelfItem(id: UUID(), url: $0, name: $0.lastPathComponent, thumbnail: nil) }
-    for item in items { generateThumbnail(id: item.id, url: item.url) }
+    let retainedURLs = Set(items.map(\.url))
+    thumbnailCache = thumbnailCache.filter { retainedURLs.contains($0.key.url) }
     usageMutationGeneration &+= 1
     itemUsageBytes = [:]
     currentUsageBytes = nil
@@ -363,7 +408,9 @@ final class ShelfModel: ObservableObject {
   }
 
   private func setStorageFailure(_ failure: ShelfStorageFailure, error: Error) {
+    cancelAllThumbnailWork()
     items = []
+    thumbnailCache.removeAll()
     usageMutationGeneration &+= 1
     itemUsageBytes = [:]
     currentUsageBytes = nil
@@ -530,7 +577,6 @@ final class ShelfModel: ObservableObject {
         usageMutationGeneration &+= 1
         itemUsageBytes[dest] = stagedBytes
         currentUsageBytes = ShelfLogic.totalBytes(itemUsageBytes.values)
-        generateThumbnail(id: item.id, url: item.url)
         return (item, nil, nil)
       case .failure(let error):
         removeStagingItem(staging)
@@ -633,6 +679,7 @@ final class ShelfModel: ObservableObject {
     }.value
     switch result {
     case .success:
+      cancelThumbnailWork(for: item.id, removingCachedThumbnailFor: item.url)
       items.removeAll { $0.id == item.id }
       didRemoveStoredItem(at: item.url)
       lastError = nil
@@ -640,6 +687,7 @@ final class ShelfModel: ObservableObject {
     case .failure(let error as CocoaError) where error.code == .fileNoSuchFile:
       // Finder or another process may already have removed the persistent copy. The requested
       // final state is still achieved, so do not strand a ghost tile on the Shelf.
+      cancelThumbnailWork(for: item.id, removingCachedThumbnailFor: item.url)
       items.removeAll { $0.id == item.id }
       didRemoveStoredItem(at: item.url)
       lastError = nil
@@ -656,12 +704,17 @@ final class ShelfModel: ObservableObject {
     defer { isClearing = false }
     await cancelPendingImports()
     let current = items
+    let previouslyVisibleThumbnailIDs = visibleThumbnailIDs
+    for item in current {
+      cancelThumbnailWork(for: item.id, removingCachedThumbnailFor: item.url)
+    }
     let originalIDs = Set(current.map(\.id))
+    let removeStoredItem = removeItem
     let removedIDs: Set<UUID> = await Task.detached(priority: .utility) {
       var removed: Set<UUID> = []
       for item in current {
         do {
-          try FileManager.default.removeItem(at: item.url)
+          try removeStoredItem(item.url).get()
           removed.insert(item.id)
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
           // Finder or a concurrent single-item removal already achieved Clear's requested state.
@@ -673,6 +726,12 @@ final class ShelfModel: ObservableObject {
       return removed
     }.value
     items.removeAll { removedIDs.contains($0.id) }
+    // A failed deletion leaves its tile in place. Restore any visible request that Clear cancelled;
+    // SwiftUI does not call `onAppear` again for a view whose identity never changed.
+    for item in items where previouslyVisibleThumbnailIDs.contains(item.id) {
+      visibleThumbnailIDs.insert(item.id)
+      requestThumbnail(for: item)
+    }
     usageMutationGeneration &+= 1
     for item in current where removedIDs.contains(item.id) {
       itemUsageBytes.removeValue(forKey: item.url)
@@ -755,18 +814,120 @@ final class ShelfModel: ObservableObject {
     items[idx].thumbnail = data
   }
 
-  private func generateThumbnail(id: UUID, url: URL) {
-    // Uses the async API so we never pass a non-Sendable QL representation across an actor hop.
-    Task {
-      let request = QLThumbnailGenerator.Request(
-        fileAt: url, size: CGSize(width: 120, height: 120), scale: 2,
-        representationTypes: .all)
-      guard
-        let rep = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request),
-        let data = Self.pngData(from: rep.cgImage)
-      else { return }
-      await MainActor.run { [weak self] in self?.setThumbnail(data, id: id) }
+  /// Called by an item tile as it enters or leaves the horizontal viewport. There is deliberately
+  /// no eager work on Shelf launch: `LazyHStack` asks for the visible tiles first.
+  func setThumbnailVisibility(for item: ShelfItem, isVisible: Bool) {
+    if !isVisible {
+      visibleThumbnailIDs.remove(item.id)
+      cancelThumbnailWork(for: item.id)
+      return
     }
+    guard let currentItem = items.first(where: { $0.id == item.id && $0.url == item.url }) else {
+      return
+    }
+    visibleThumbnailIDs.insert(item.id)
+    requestThumbnail(for: currentItem)
+  }
+
+  private func requestThumbnail(for item: ShelfItem) {
+    guard visibleThumbnailIDs.contains(item.id), let metadata = thumbnailMetadata(item.url) else {
+      return
+    }
+    let cacheKey = ThumbnailCacheKey(url: item.url, metadata: metadata)
+    if let data = thumbnailCache[cacheKey] {
+      setThumbnail(data, id: item.id)
+      return
+    }
+    if queuedThumbnailWork.contains(where: { $0.id == item.id && $0.cacheKey == cacheKey }) {
+      return
+    }
+    if let activeWork = activeThumbnailWork[item.id], activeWork.cacheKey == cacheKey,
+      !cancelledThumbnailTokens.contains(activeWork.token)
+    {
+      return
+    }
+
+    // A fresh request supersedes a queued or in-flight result for the same tile. The cancelled
+    // task remains counted until Quick Look returns, so cancellation cannot exceed the cap.
+    cancelThumbnailWork(for: item.id)
+    thumbnailWorkToken &+= 1
+    queuedThumbnailWork.append(
+      ThumbnailWork(id: item.id, url: item.url, cacheKey: cacheKey, token: thumbnailWorkToken))
+    startThumbnailWorkIfPossible()
+  }
+
+  private func startThumbnailWorkIfPossible() {
+    while activeThumbnailWork.count < Self.maximumConcurrentThumbnailRequests,
+      let nextIndex = queuedThumbnailWork.firstIndex(where: { activeThumbnailWork[$0.id] == nil })
+    {
+      let work = queuedThumbnailWork.remove(at: nextIndex)
+      guard visibleThumbnailIDs.contains(work.id),
+        items.contains(where: { $0.id == work.id && $0.url == work.url })
+      else { continue }
+      activeThumbnailWork[work.id] = work
+      thumbnailTasks[work.id] = Task { [weak self] in
+        guard let self else { return }
+        let data = await self.generateThumbnailData(work.url)
+        guard !Task.isCancelled else {
+          self.finishThumbnailWork(work, data: nil)
+          return
+        }
+        self.finishThumbnailWork(work, data: data)
+      }
+    }
+  }
+
+  private func finishThumbnailWork(_ work: ThumbnailWork, data: Data?) {
+    guard activeThumbnailWork[work.id]?.token == work.token else { return }
+    let wasCancelled = cancelledThumbnailTokens.remove(work.token) != nil
+    activeThumbnailWork.removeValue(forKey: work.id)
+    thumbnailTasks.removeValue(forKey: work.id)
+    defer { startThumbnailWorkIfPossible() }
+    guard !wasCancelled,
+      visibleThumbnailIDs.contains(work.id),
+      items.contains(where: { $0.id == work.id && $0.url == work.url }),
+      thumbnailMetadata(work.url) == work.cacheKey.metadata,
+      let data
+    else { return }
+
+    // Keep one version per URL. This bounds the in-memory cache to the Shelf item limit while
+    // invalidating an entry as soon as modification metadata changes.
+    thumbnailCache = thumbnailCache.filter { $0.key.url != work.url || $0.key == work.cacheKey }
+    thumbnailCache[work.cacheKey] = data
+    setThumbnail(data, id: work.id)
+  }
+
+  private func cancelThumbnailWork(
+    for id: UUID, removingCachedThumbnailFor url: URL? = nil
+  ) {
+    queuedThumbnailWork.removeAll { $0.id == id }
+    if let work = activeThumbnailWork[id] { cancelledThumbnailTokens.insert(work.token) }
+    thumbnailTasks[id]?.cancel()
+    if let url {
+      visibleThumbnailIDs.remove(id)
+      thumbnailCache = thumbnailCache.filter { $0.key.url != url }
+    }
+  }
+
+  private func cancelAllThumbnailWork() {
+    visibleThumbnailIDs.removeAll()
+    queuedThumbnailWork.removeAll()
+    for (id, task) in thumbnailTasks {
+      if let work = activeThumbnailWork[id] { cancelledThumbnailTokens.insert(work.token) }
+      task.cancel()
+    }
+  }
+
+  private static func thumbnailData(for url: URL) async -> Data? {
+    // Uses the async API so we never pass a non-Sendable QL representation across an actor hop.
+    let request = QLThumbnailGenerator.Request(
+      fileAt: url, size: CGSize(width: 120, height: 120), scale: 2,
+      representationTypes: .all)
+    guard
+      let rep = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request),
+      !Task.isCancelled
+    else { return nil }
+    return pngData(from: rep.cgImage)
   }
 
   private static func pngData(from cgImage: CGImage) -> Data? {

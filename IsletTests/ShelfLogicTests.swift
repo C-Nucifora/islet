@@ -75,6 +75,72 @@ final class ShelfLogicTests: XCTestCase {
     }
   }
 
+  private actor ThumbnailGeneratorProbe {
+    private var requestedURLs: [URL] = []
+    private var activeCount = 0
+    private var maximumActiveCount = 0
+    private var cancellationURLs: [URL] = []
+    private var continuations: [CheckedContinuation<Data?, Never>] = []
+
+    func generate(_ url: URL) async -> Data? {
+      requestedURLs.append(url)
+      activeCount += 1
+      maximumActiveCount = max(maximumActiveCount, activeCount)
+      let data = await withTaskCancellationHandler(
+        operation: {
+          await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+          }
+        },
+        onCancel: {
+          Task { await self.recordCancellation(of: url) }
+        })
+      activeCount -= 1
+      return data
+    }
+
+    func requestCount() -> Int { requestedURLs.count }
+    func requests() -> [URL] { requestedURLs }
+    func maximumActiveRequests() -> Int { maximumActiveCount }
+    func cancellationCount() -> Int { cancellationURLs.count }
+
+    func releaseNext(with data: Data? = Data([1])) {
+      guard !continuations.isEmpty else { return }
+      continuations.removeFirst().resume(returning: data)
+    }
+
+    func releaseAll() {
+      let waiting = continuations
+      continuations.removeAll()
+      for continuation in waiting { continuation.resume(returning: Data([1])) }
+    }
+
+    private func recordCancellation(of url: URL) {
+      cancellationURLs.append(url)
+    }
+  }
+
+  private final class ThumbnailMetadataStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [URL: ShelfThumbnailMetadata]
+
+    init(_ values: [URL: ShelfThumbnailMetadata]) {
+      self.values = values
+    }
+
+    func metadata(for url: URL) -> ShelfThumbnailMetadata? {
+      lock.lock()
+      defer { lock.unlock() }
+      return values[url]
+    }
+
+    func set(_ metadata: ShelfThumbnailMetadata, for url: URL) {
+      lock.lock()
+      values[url] = metadata
+      lock.unlock()
+    }
+  }
+
   func testShelfHasBoundedCapacity() {
     XCTAssertEqual(ShelfModel.maximumItemCount, 100)
     XCTAssertTrue(ShelfLogic.hasCapacity(currentCount: 99, pendingCount: 0, maximum: 100))
@@ -86,6 +152,223 @@ final class ShelfLogicTests: XCTestCase {
     XCTAssertFalse(ShelfLogic.hasCapacity(currentCount: -1, pendingCount: 0, maximum: 100))
     XCTAssertFalse(ShelfLogic.hasCapacity(currentCount: 0, pendingCount: -1, maximum: 100))
     XCTAssertFalse(ShelfLogic.hasCapacity(currentCount: 0, pendingCount: 0, maximum: 0))
+  }
+
+  @MainActor
+  func testVisibleShelfItemsLoadFirstWithBoundedThumbnailConcurrency() async {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let first = shelf.appendingPathComponent("first.pdf")
+    let second = shelf.appendingPathComponent("second.pdf")
+    let third = shelf.appendingPathComponent("third.pdf")
+    let metadata = ThumbnailMetadataStore(
+      [first, second, third].reduce(into: [:]) { values, url in
+        values[url] = ShelfThumbnailMetadata(modificationDate: .now, fileSize: 1)
+      })
+    let renderer = ThumbnailGeneratorProbe()
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([first, second, third]) },
+      measureItem: { _ in .success(0) },
+      thumbnailMetadata: metadata.metadata,
+      generateThumbnailData: renderer.generate)
+
+    let itemsByURL = Dictionary(uniqueKeysWithValues: model.items.map { ($0.url, $0) })
+    model.setThumbnailVisibility(for: itemsByURL[first]!, isVisible: true)
+    model.setThumbnailVisibility(for: itemsByURL[second]!, isVisible: true)
+    model.setThumbnailVisibility(for: itemsByURL[third]!, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+
+    let initialRequests = await renderer.requests()
+    let initialMaximum = await renderer.maximumActiveRequests()
+    XCTAssertEqual(initialRequests, [first, second])
+    XCTAssertEqual(initialMaximum, 2)
+    await renderer.releaseNext()
+    for _ in 0..<100 where await renderer.requestCount() < 3 { await Task.yield() }
+    let allRequests = await renderer.requests()
+    let maximum = await renderer.maximumActiveRequests()
+    XCTAssertEqual(allRequests, [first, second, third])
+    XCTAssertEqual(maximum, ShelfModel.maximumConcurrentThumbnailRequests)
+    await renderer.releaseAll()
+  }
+
+  @MainActor
+  func testThumbnailCacheUsesModificationMetadataAsItsVersion() async {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let stored = shelf.appendingPathComponent("cached.pdf")
+    let originalDate = Date.now
+    let originalMetadata = ShelfThumbnailMetadata(modificationDate: originalDate, fileSize: 1)
+    let metadata = ThumbnailMetadataStore([stored: originalMetadata])
+    let renderer = ThumbnailGeneratorProbe()
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([stored]) },
+      measureItem: { _ in .success(0) },
+      thumbnailMetadata: metadata.metadata,
+      generateThumbnailData: renderer.generate)
+    guard let item = model.items.first else {
+      XCTFail("Expected the stored Shelf item")
+      return
+    }
+
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 1 { await Task.yield() }
+    await renderer.releaseNext()
+    for _ in 0..<100 where model.items.first?.thumbnail == nil { await Task.yield() }
+    XCTAssertNotNil(model.items.first?.thumbnail)
+
+    model.setThumbnailVisibility(for: item, isVisible: false)
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    for _ in 0..<10 { await Task.yield() }
+    let cachedRequestCount = await renderer.requestCount()
+    XCTAssertEqual(cachedRequestCount, 1)
+
+    model.setThumbnailVisibility(for: item, isVisible: false)
+    metadata.set(
+      ShelfThumbnailMetadata(
+        modificationDate: originalDate.addingTimeInterval(1), fileSize: 1),
+      for: stored)
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+    let refreshedRequestCount = await renderer.requestCount()
+    XCTAssertEqual(refreshedRequestCount, 2)
+    await renderer.releaseAll()
+  }
+
+  @MainActor
+  func testThumbnailResultIsDiscardedWhenItsFileMetadataBecomesStale() async {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let stored = shelf.appendingPathComponent("changing.pdf")
+    let originalDate = Date.now
+    let metadata = ThumbnailMetadataStore(
+      [stored: ShelfThumbnailMetadata(modificationDate: originalDate, fileSize: 1)])
+    let renderer = ThumbnailGeneratorProbe()
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([stored]) },
+      measureItem: { _ in .success(0) },
+      thumbnailMetadata: metadata.metadata,
+      generateThumbnailData: renderer.generate)
+    guard let item = model.items.first else {
+      XCTFail("Expected the stored Shelf item")
+      return
+    }
+
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 1 { await Task.yield() }
+    metadata.set(
+      ShelfThumbnailMetadata(modificationDate: originalDate.addingTimeInterval(1), fileSize: 1),
+      for: stored)
+    await renderer.releaseNext()
+    for _ in 0..<100 { await Task.yield() }
+    XCTAssertNil(model.items.first?.thumbnail)
+
+    model.setThumbnailVisibility(for: item, isVisible: false)
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+    let requestCount = await renderer.requestCount()
+    XCTAssertEqual(requestCount, 2)
+    await renderer.releaseAll()
+  }
+
+  @MainActor
+  func testOffscreenThumbnailCancellationDoesNotStrandAReappearingItem() async {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let stored = shelf.appendingPathComponent("reappearing.pdf")
+    let metadata = ThumbnailMetadataStore(
+      [stored: ShelfThumbnailMetadata(modificationDate: .now, fileSize: 1)])
+    let renderer = ThumbnailGeneratorProbe()
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([stored]) },
+      measureItem: { _ in .success(0) },
+      thumbnailMetadata: metadata.metadata,
+      generateThumbnailData: renderer.generate)
+    guard let item = model.items.first else {
+      XCTFail("Expected the stored Shelf item")
+      return
+    }
+
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 1 { await Task.yield() }
+    model.setThumbnailVisibility(for: item, isVisible: false)
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    await renderer.releaseNext()
+    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+    await renderer.releaseNext()
+    for _ in 0..<100 where model.items.first?.thumbnail == nil { await Task.yield() }
+
+    XCTAssertNotNil(model.items.first?.thumbnail)
+  }
+
+  @MainActor
+  func testRemovingOrClearingVisibleItemsCancelsTheirThumbnailRequests() async {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let first = shelf.appendingPathComponent("remove.pdf")
+    let second = shelf.appendingPathComponent("clear.pdf")
+    let metadata = ThumbnailMetadataStore(
+      [first, second].reduce(into: [:]) { values, url in
+        values[url] = ShelfThumbnailMetadata(modificationDate: .now, fileSize: 1)
+      })
+    let renderer = ThumbnailGeneratorProbe()
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([first, second]) },
+      measureItem: { _ in .success(0) },
+      thumbnailMetadata: metadata.metadata,
+      generateThumbnailData: renderer.generate)
+    let itemsByURL = Dictionary(uniqueKeysWithValues: model.items.map { ($0.url, $0) })
+    model.setThumbnailVisibility(for: itemsByURL[first]!, isVisible: true)
+    model.setThumbnailVisibility(for: itemsByURL[second]!, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+
+    await model.remove(itemsByURL[first]!)
+    await model.clear()
+    for _ in 0..<100 where await renderer.cancellationCount() < 2 { await Task.yield() }
+
+    let cancellationCount = await renderer.cancellationCount()
+    XCTAssertEqual(cancellationCount, 2)
+    XCTAssertTrue(model.items.isEmpty)
+    await renderer.releaseAll()
+  }
+
+  @MainActor
+  func testFailedClearRestartsThumbnailWorkForTheVisibleRetainedItem() async {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let retained = shelf.appendingPathComponent("retained.pdf")
+    let metadata = ThumbnailMetadataStore(
+      [retained: ShelfThumbnailMetadata(modificationDate: .now, fileSize: 1)])
+    let renderer = ThumbnailGeneratorProbe()
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([retained]) },
+      removeItem: { _ in .failure(CopyFailure.expected) },
+      measureItem: { _ in .success(0) },
+      thumbnailMetadata: metadata.metadata,
+      generateThumbnailData: renderer.generate)
+    guard let item = model.items.first else {
+      XCTFail("Expected the stored Shelf item")
+      return
+    }
+
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 1 { await Task.yield() }
+    await model.clear()
+    for _ in 0..<100 where await renderer.cancellationCount() < 1 { await Task.yield() }
+
+    await renderer.releaseNext()
+    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+    await renderer.releaseNext(with: Data([9]))
+    for _ in 0..<100 where model.items.first?.thumbnail == nil { await Task.yield() }
+
+    XCTAssertEqual(model.items.map(\.id), [item.id])
+    XCTAssertEqual(model.items.first?.thumbnail, Data([9]))
+    XCTAssertEqual(model.lastError, "Some Shelf items couldn’t be removed.")
   }
 
   func testStorageBudgetAcceptsExactByteAndFreeSpaceBoundaries() {
