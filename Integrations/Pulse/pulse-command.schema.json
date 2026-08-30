@@ -25,13 +25,26 @@
       "maxLength": 128,
       "description": "Optional correlation identifier echoed unchanged in the response."
     },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Optional monotonic ordering value scoped to source and activity id."
+    },
     "activity": { "$ref": "#/$defs/activity" }
   },
   "allOf": [
     {
       "if": { "properties": { "operation": { "const": "end" } }, "required": ["operation"] },
-      "then": { "required": ["id"] },
-      "else": { "required": ["activity"] }
+      "then": { "properties": { "id": true }, "required": ["id"] },
+      "else": { "properties": { "activity": true }, "required": ["activity"] }
+    },
+    {
+      "if": {
+        "properties": { "operation": { "const": "end" }, "revision": true },
+        "required": ["operation", "revision"]
+      },
+      "then": { "properties": { "source": true }, "required": ["source"] }
     }
   ],
   "$defs": {
@@ -96,7 +109,10 @@
             "messageTooLarge",
             "commandLimitExceeded",
             "rateLimited",
-            "capacityExceeded"
+            "capacityExceeded",
+            "staleRevision",
+            "revisionRequired",
+            "generationEnded"
           ]
         },
         "requestID": { "type": "string" }
