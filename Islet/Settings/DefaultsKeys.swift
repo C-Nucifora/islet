@@ -306,6 +306,7 @@ extension Defaults.Keys {
   static let pulseSourcePolicies = Key<[String: String]>("pulseSourcePolicies", default: [:])
   static let pulseStaleTimeout = Key<Double>(
     "pulseStaleTimeout", default: PulseStalenessPolicy.defaultTimeout)
+  static let pulseRevisionStateData = Key<Data?>("pulseRevisionStateData")
   static let t3RemoteEnvironments = Key<[T3EnvironmentProfile]>(
     "t3RemoteEnvironments", default: [])
   static let timerSessionData = Key<Data?>("timerSessionData")

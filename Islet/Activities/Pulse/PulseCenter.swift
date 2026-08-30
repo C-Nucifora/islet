@@ -60,15 +60,10 @@ final class PulseSystemDeadlineScheduler: PulseDeadlineScheduling {
 
 @MainActor
 final class PulseCenter: ObservableObject {
-  static let shared = PulseCenter()
+  static let shared = PulseCenter(revisionStore: .defaults)
   static let maximumItems = 100
   static let maximumHistoryEntries = 200
   static let maximumRevisionRecords = 2_048
-
-  private struct RevisionRecord {
-    var revision: UInt64
-    var ended: Bool
-  }
 
   private enum OrderingError: LocalizedError {
     case stale
@@ -117,7 +112,8 @@ final class PulseCenter: ObservableObject {
   }
   private let symbolAvailability: (String) -> Bool?
   private var storedItems: [PulseItem] = []
-  private var revisionRecords: [PulseItem.ID: RevisionRecord] = [:]
+  private var revisionRecords: [PulseItem.ID: PulseRevisionRecord]
+  private let revisionStore: PulseRevisionPersistenceStore?
   private var deadlineTask: PulseDeadlineTask?
   private let clock: any PulseClock
   private let deadlineScheduler: any PulseDeadlineScheduling
@@ -128,6 +124,7 @@ final class PulseCenter: ObservableObject {
     staleRetention: TimeInterval = PulseStalenessPolicy.defaultRetention,
     clock: (any PulseClock)? = nil,
     scheduler: (any PulseDeadlineScheduling)? = nil,
+    revisionStore: PulseRevisionPersistenceStore? = nil,
     symbolAvailability: @escaping (String) -> Bool? = PulseSymbolValidator.platformAvailability,
     deliveryProfileKey: Defaults.Key<PulseDeliveryProfile> = .pulseDeliveryProfile,
     sourcePoliciesKey: Defaults.Key<[String: String]> = .pulseSourcePolicies
@@ -138,6 +135,12 @@ final class PulseCenter: ObservableObject {
     stalenessPolicy = PulseStalenessPolicy(
       timeout: staleTimeout, retention: staleRetention)
     self.symbolAvailability = symbolAvailability
+    self.revisionStore = revisionStore
+    revisionRecords =
+      revisionStore.map {
+        PulseRevisionPersistence.restore(
+          from: $0, now: resolvedClock.now, maximumRecords: Self.maximumRevisionRecords)
+      } ?? [:]
     self.deliveryProfileKey = deliveryProfileKey
     self.sourcePoliciesKey = sourcePoliciesKey
     deliveryProfile = Defaults[deliveryProfileKey]
@@ -192,11 +195,12 @@ final class PulseCenter: ObservableObject {
         }
         let incomingID = try PulseItem.ID(
           source: payload.source, providerIdentifier: payload.id)
+        try validateRevision(
+          command.revision, for: incomingID, operation: command.operation, now: now)
         let previous = storedItems.first { $0.id == incomingID }
         let item = try PulseItem(
           payload: payload, now: now, previous: previous,
           staleTimeout: stalenessPolicy.timeout, symbolAvailability: symbolAvailability)
-        try validateRevision(command.revision, for: incomingID, operation: command.operation)
         guard policy(for: item.source) != .revoked else {
           record(operation: command.operation, item: nil, result: .rejected, date: now)
           return .failure(
@@ -210,7 +214,7 @@ final class PulseCenter: ObservableObject {
             "activity was evicted because Pulse is at capacity", code: .capacityExceeded,
             requestID: command.requestID)
         }
-        acceptRevision(command.revision, for: incomingID, ended: false)
+        acceptRevision(command.revision, for: incomingID, ended: false, now: now)
         record(
           operation: command.operation, item: item,
           result: visible ? (previous == nil ? .shown : .updated) : .suppressed, date: now)
@@ -254,12 +258,12 @@ final class PulseCenter: ObservableObject {
           targetID = item?.id
         }
         if let targetID {
-          try validateRevision(command.revision, for: targetID, operation: .end)
+          try validateRevision(command.revision, for: targetID, operation: .end, now: now)
           if let item {
             storedItems.removeAll { $0.id == item.id }
             record(operation: .end, item: item, result: .ended, date: now)
           }
-          acceptRevision(command.revision, for: targetID, ended: true)
+          acceptRevision(command.revision, for: targetID, ended: true, now: now)
         }
         refreshVisibleItems()
         scheduleDeadline()
@@ -344,9 +348,10 @@ final class PulseCenter: ObservableObject {
   func clearHistory() { history.removeAll() }
 
   private func validateRevision(
-    _ revision: UInt64?, for id: PulseItem.ID, operation: PulseOperation
+    _ revision: UInt64?, for id: PulseItem.ID, operation: PulseOperation, now: Date
   ) throws {
     try PulseRevision.validate(revision)
+    pruneRevisionRecords(now: now)
     guard let record = revisionRecords[id] else {
       if revision != nil, revisionRecords.count >= Self.maximumRevisionRecords {
         throw OrderingError.capacity
@@ -358,9 +363,27 @@ final class PulseCenter: ObservableObject {
     if record.ended, operation == .update { throw OrderingError.generationEnded }
   }
 
-  private func acceptRevision(_ revision: UInt64?, for id: PulseItem.ID, ended: Bool) {
+  private func acceptRevision(
+    _ revision: UInt64?, for id: PulseItem.ID, ended: Bool, now: Date
+  ) {
     guard let revision else { return }
-    revisionRecords[id] = RevisionRecord(revision: revision, ended: ended)
+    revisionRecords[id] = PulseRevisionRecord(
+      id: id, revision: revision, ended: ended, acceptedAt: now)
+    persistRevisionRecords()
+  }
+
+  private func pruneRevisionRecords(now: Date) {
+    let activeIDs = Set(storedItems.map(\.id))
+    let originalCount = revisionRecords.count
+    revisionRecords = revisionRecords.filter { id, record in
+      activeIDs.contains(id) || !PulseRevisionPersistence.isExpired(record, now: now)
+    }
+    if revisionRecords.count != originalCount { persistRevisionRecords() }
+  }
+
+  private func persistRevisionRecords() {
+    guard let revisionStore else { return }
+    PulseRevisionPersistence.save(revisionRecords, to: revisionStore)
   }
 
   func policy(for source: String) -> PulseSourcePolicy {

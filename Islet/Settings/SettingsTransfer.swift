@@ -218,7 +218,8 @@ enum SettingsTransfer {
     "clipboardPausedUntil",
     "commandPaletteRecentResultIDs", "commandPaletteShortcut", "contextManualOverride",
     "contextRules", "continuityEnabled", "hiddenCalendarIDs",
-    "onboardingVersion", "portsEnabled", "pulseEnabled", "systemEnabled", "t3CodeEnabled",
+    "onboardingVersion", "portsEnabled", "pulseEnabled", "pulseRevisionStateData",
+    "systemEnabled", "t3CodeEnabled",
     "t3RemoteEnvironments",
   ]
 

@@ -103,22 +103,23 @@ metadata unchanged. This makes the final state independent of the order in which
 Islet.
 
 Once an identity sends a revision, later commands for that identity must include one. Omitting it
-returns `revisionRequired`. An ordered `end` records a session tombstone even when no item is active,
+returns `revisionRequired`. An ordered `end` records a retained tombstone even when no item is active,
 so it must include `source`. After `end`, a higher `update` returns `generationEnded`; use a higher
 `show` or `event` to start the next lifecycle. Delayed commands from the old lifecycle remain below
-the tombstone and cannot reopen it. Revision tracking is capped at 2,048 identities per Islet
-process. A new ordered identity returns `capacityExceeded` after that limit, while identities already
-being tracked continue to work.
+the tombstone and cannot reopen it. Islet restores revision high-water marks and tombstones before it
+accepts commands after a restart. Providers should still keep their counter and resend current state
+after reconnecting.
 
-Revision state is memory-only. Restarting Islet clears active items, tombstones, and high-water
-marks. The first command after a restart establishes a new baseline, even if its number is lower
-than a revision accepted by the previous process. Providers that need ordering across an Islet
-restart must keep their counter and resend current state after reconnecting.
+Revision tracking is capped at 2,048 identities. A new ordered identity returns `capacityExceeded`
+after that limit, while identities already being tracked continue to work. Inactive revision records
+expire 30 days after their last accepted command, which prevents abandoned identities from consuming
+the bound forever. The persisted record contains only normalized source, provider-local ID, revision,
+ended state, and acceptance time. It excludes bearer tokens and presentation payloads and is not part
+of settings exports.
 
-Disabling and re-enabling Pulse, or using Dismiss all, clears items but keeps revision records for
-the current process. Stale requests still fail after Pulse starts again. A higher update may restore
-locally dismissed work, but an activity closed by ordered `end` still requires a higher `show` or
-`event`.
+Disabling and re-enabling Pulse, or using Dismiss all, clears items but keeps revision records. Stale
+requests still fail after Pulse starts again or Islet relaunches. A higher update may restore locally
+dismissed work, but an activity closed by ordered `end` still requires a higher `show` or `event`.
 
 Legacy providers may omit `revision`. They retain arrival-order upserts and idempotent unscoped
 ends until that identity first uses an ordered command. This compatibility mode cannot protect
