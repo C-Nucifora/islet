@@ -13,6 +13,25 @@ final class T3OAuthLoopbackTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(port, 34_338)
   }
 
+  func testSystemAssignedPortAcceptsCallbackOnReportedPort() async throws {
+    let listener = T3OAuthLoopbackListener(port: 0, timeout: .seconds(2))
+    defer { Task { await listener.cancel() } }
+    try await listener.start(state: "expected-state")
+    let reportedPort = await listener.boundPort
+    let selectedPort = try XCTUnwrap(reportedPort)
+    XCTAssertNotEqual(selectedPort, 0)
+    let resultTask = Task { try await listener.waitForCallback() }
+
+    let response = try await send(
+      "GET /callback?state=expected-state&code=assigned-port-code HTTP/1.1\r\n"
+        + "Host: 127.0.0.1\r\n\r\n",
+      port: selectedPort)
+    let result = try await resultTask.value
+
+    XCTAssertTrue(response.hasPrefix("HTTP/1.1 200"))
+    XCTAssertEqual(result, .authorizationCode("assigned-port-code"))
+  }
+
   func testExactCallbackReturnsTheCodeWithoutEchoingIt() async throws {
     let fixture = try await LoopbackFixture()
     defer { Task { await fixture.listener.cancel() } }
@@ -140,10 +159,7 @@ final class T3OAuthLoopbackTests: XCTestCase, @unchecked Sendable {
   }
 
   func testTimeoutStopsTheListener() async throws {
-    let reservation = try LoopbackPortReservation()
-    let port = reservation.port
-    reservation.release()
-    let listener = T3OAuthLoopbackListener(port: port, timeout: .milliseconds(40))
+    let listener = T3OAuthLoopbackListener(port: 0, timeout: .milliseconds(40))
     try await listener.start(state: "expected-state")
 
     do {
@@ -325,15 +341,18 @@ private struct LoopbackFixture {
     onResponseCompletionHandled: @escaping @Sendable () -> Void = {},
     onWaitForCallbackEntered: @escaping @Sendable () -> Void = {}
   ) async throws {
-    let reservation = try LoopbackPortReservation()
-    port = reservation.port
-    reservation.release()
-    listener = T3OAuthLoopbackListener(
-      port: port, timeout: .seconds(2),
+    let listener = T3OAuthLoopbackListener(
+      port: 0, timeout: .seconds(2),
       responseCompletionGate: responseCompletionGate,
       onResponseCompletionHandled: onResponseCompletionHandled,
       onWaitForCallbackEntered: onWaitForCallbackEntered)
     try await listener.start(state: "expected-state")
+    guard let port = await listener.boundPort else {
+      await listener.cancel()
+      throw T3OAuthLoopbackError.invalidLocalEndpoint
+    }
+    self.listener = listener
+    self.port = port
   }
 }
 

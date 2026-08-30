@@ -44,6 +44,7 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
   private nonisolated static let loopbackHost = NWEndpoint.Host("127.0.0.1")
 
   let configuredPort: UInt16
+  private(set) var boundPort: UInt16?
 
   private let timeout: Duration
   private let responseCompletionGate: @Sendable () async -> Void
@@ -164,10 +165,13 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
     guard self.listener === listener else { return }
     switch state {
     case .ready:
-      guard listener.port?.rawValue == configuredPort else {
+      guard let boundPort = listener.port?.rawValue, boundPort != 0,
+        configuredPort == 0 || boundPort == configuredPort
+      else {
         finish(throwing: T3OAuthLoopbackError.invalidLocalEndpoint)
         return
       }
+      self.boundPort = boundPort
       ready = true
       let continuation = startContinuation
       startContinuation = nil
@@ -207,8 +211,8 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
     guard connections[id] === connection else { return }
     switch state {
     case .ready:
-      guard let localEndpoint = connection.currentPath?.localEndpoint,
-        Self.isIPv4Loopback(localEndpoint, port: configuredPort)
+      guard let boundPort, let localEndpoint = connection.currentPath?.localEndpoint,
+        Self.isIPv4Loopback(localEndpoint, port: boundPort)
       else {
         connection.cancel()
         connections[id] = nil
@@ -375,6 +379,7 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
   private func cleanup() {
     ready = false
     completing = true
+    boundPort = nil
     timeoutTask?.cancel()
     timeoutTask = nil
     storedCallbackState = nil
