@@ -231,9 +231,9 @@ struct T3TokenExchange: Decodable, Sendable {
 struct T3Client: Sendable {
   let endpoint: T3Endpoint
   let authorization: T3Authorization
-  let session: URLSession
+  let session: URLSession?
 
-  init(endpoint: T3Endpoint, token: String?, session: URLSession = .shared) {
+  init(endpoint: T3Endpoint, token: String?, session: URLSession? = nil) {
     self.endpoint = endpoint
     authorization = token.map(T3Authorization.bearer) ?? .none
     self.session = session
@@ -242,7 +242,7 @@ struct T3Client: Sendable {
   init(
     endpoint: T3Endpoint,
     authorization: T3Authorization,
-    session: URLSession = .shared
+    session: URLSession? = nil
   ) {
     self.endpoint = endpoint
     self.authorization = authorization

@@ -98,6 +98,13 @@ final class T3HTTPTransportTests: XCTestCase {
       recorder.snapshot().authorizationHeaders, ["DPoP access-token", "DPoP access-token"])
   }
 
+  func testClientWithoutInjectedSessionLeavesSessionChoiceToTransport() throws {
+    let endpoint = try T3Endpoint(URL(string: "https://shell.t3-unit.test")!)
+    let client = T3Client(endpoint: endpoint, token: nil)
+
+    XCTAssertNil(client.session)
+  }
+
   private static func session(recorder: T3HTTPTransportRecorder) -> URLSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [T3HTTPTransportURLProtocol.self]
