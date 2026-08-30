@@ -203,7 +203,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "iPhone Live Activities", "Show iPhone Live Activities", "Availability", "Detected now",
         "Keep iPhone in the activity switcher when idle",
         "Announce when a Live Activity starts or ends", "Request Accessibility access",
-        "Open Accessibility Settings", "Control Centre remote app names",
+        "Open Accessibility Settings", "Retry Continuity", "Control Centre remote app names",
       ]
     case .systemMetrics:
       pageContent + [
@@ -256,7 +256,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       pageContent + [
         "Diagnostics", "Bundle identifier", "Version", "Energy mode", "Copy diagnostics",
         "Open logs folder", "Restart Islet", "Quit Islet", "Integration health", "Media adapter",
-        "T3 Code credentials", "Pulse", "Media-key HUD", "signing support status", "About",
+        "T3 Code credentials", "Pulse", "Media-key HUD", "Continuity reader",
+        "Last successful read", "Retry Continuity", "signing support status", "About",
         "GitHub contributors C-Nucifora nedlane",
       ]
     case .reset:
@@ -1075,6 +1076,12 @@ struct SettingsView: View {
           LabeledContent("Detected now") {
             Text("\(continuity.cards.count)").monospacedDigit().foregroundStyle(.secondary)
           }
+          LabeledContent("Last successful read") {
+            Text(continuityLastSuccessfulReadText).foregroundStyle(.secondary)
+          }
+          if let detail = continuity.lastCompatibilityError?.diagnosticSummary {
+            Text(detail).font(.caption).foregroundStyle(.orange)
+          }
           Toggle("Keep iPhone in the activity switcher when idle", isOn: $continuityAlwaysVisible)
           Toggle("Announce when a Live Activity starts or ends", isOn: $continuitySneaks)
           if continuity.availability == .needsAccessibility {
@@ -1082,6 +1089,10 @@ struct SettingsView: View {
               Button("Request Accessibility access") { AccessibilityPermission.prompt() }
               Button("Open Accessibility Settings") { permissions.open(.accessibility) }
             }
+          } else if continuity.availability == .controlCenterUnavailable
+            || continuity.availability == .incompatibleSchema
+          {
+            Button("Retry Continuity") { continuity.retry() }
           }
         }
       }
@@ -1397,6 +1408,26 @@ struct SettingsView: View {
       }
       Section("Integration health") {
         PermissionStatusRow(
+          title: "Continuity reader", icon: "iphone.gen3",
+          status: continuityStatusText, color: continuityStatusColor)
+        LabeledContent("Continuity last successful read") {
+          Text(continuityLastSuccessfulReadText).foregroundStyle(.secondary)
+        }
+        if let detail = continuity.lastCompatibilityError?.diagnosticSummary {
+          Text(detail).font(.caption).foregroundStyle(.orange)
+        }
+        if continuity.availability == .needsAccessibility {
+          HStack {
+            Button("Request Accessibility access") { AccessibilityPermission.prompt() }
+            Button("Open Accessibility Settings") { permissions.open(.accessibility) }
+            Button("Retry Continuity") { continuity.retry() }
+          }
+        } else if continuity.availability == .controlCenterUnavailable
+          || continuity.availability == .incompatibleSchema
+        {
+          Button("Retry Continuity") { continuity.retry() }
+        }
+        PermissionStatusRow(
           title: "Media adapter", icon: "music.note", status: nowPlaying.adapterStatus,
           color: nowPlaying.adapterStatus.localizedCaseInsensitiveContains("error")
             ? .orange : .green)
@@ -1459,7 +1490,8 @@ struct SettingsView: View {
   private var continuityStatusText: String {
     switch continuity.availability {
     case .needsAccessibility: "Needs Accessibility"
-    case .unsupported: "Unavailable"
+    case .controlCenterUnavailable: "Control Centre unavailable"
+    case .incompatibleSchema: "Unsupported AX layout"
     case .systemDisabled: "Off in macOS"
     case .waiting: "Waiting"
     case .active: "Active"
@@ -1471,8 +1503,13 @@ struct SettingsView: View {
     case .active: .green
     case .waiting: .secondary
     case .needsAccessibility, .systemDisabled: .orange
-    case .unsupported: .red
+    case .controlCenterUnavailable, .incompatibleSchema: .red
     }
+  }
+
+  private var continuityLastSuccessfulReadText: String {
+    guard let date = continuity.lastSuccessfulRead else { return "Never" }
+    return date.formatted(date: .abbreviated, time: .standard)
   }
 
   private func authorizationColor(_ status: EventKitPermissionState) -> Color {
@@ -1547,6 +1584,9 @@ struct SettingsView: View {
     let text =
       permissions.diagnostics.text
       + "\nHUD event tap: \(hud.eventTapStatus.summary)"
+      + "\nContinuity: \(continuityStatusText)"
+      + "\nContinuity last successful read: \(continuity.lastSuccessfulRead?.formatted(.iso8601) ?? "Never")"
+      + "\nContinuity compatibility error: \(continuity.lastCompatibilityError?.diagnosticSummary ?? "None recorded")"
       + "\nPulse: \(pulseServer.isRunning ? "Running" : "Stopped")"
       + "\nPulse items: \(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
     NSPasteboard.general.clearContents()

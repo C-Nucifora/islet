@@ -8,6 +8,59 @@ private func item(_ identifier: String, name: String? = "Example", minX: CGFloat
   MenuBarLiveActivity(axIdentifier: identifier, appName: name, minX: minX)
 }
 
+private final class LiveActivityAXFixtureNode {
+  var attributes: [String: LiveActivityAXFixtureValue]
+
+  init(_ attributes: [String: LiveActivityAXFixtureValue] = [:]) {
+    self.attributes = attributes
+  }
+}
+
+private enum LiveActivityAXFixtureValue {
+  case element(LiveActivityAXFixtureNode)
+  case children([LiveActivityAXFixtureNode])
+  case string(String)
+  case rect(CGRect)
+}
+
+private func fixtureHierarchyReader() -> LiveActivityAXHierarchyReader<LiveActivityAXFixtureNode> {
+  LiveActivityAXHierarchyReader(
+    element: {
+      (node: LiveActivityAXFixtureNode, attribute: String)
+        throws(LiveActivityAXCompatibilityError) -> LiveActivityAXFixtureNode in
+      guard case .element(let value)? = node.attributes[attribute] else {
+        throw LiveActivityAXCompatibilityError.missingAttribute(attribute: attribute)
+      }
+      return value
+    },
+    children: {
+      (node: LiveActivityAXFixtureNode, attribute: String)
+        throws(LiveActivityAXCompatibilityError) -> [LiveActivityAXFixtureNode] in
+      guard case .children(let value)? = node.attributes[attribute] else {
+        throw LiveActivityAXCompatibilityError.missingAttribute(attribute: attribute)
+      }
+      return value
+    },
+    optionalString: {
+      (node: LiveActivityAXFixtureNode, attribute: String)
+        throws(LiveActivityAXCompatibilityError) -> String? in
+      guard let value = node.attributes[attribute] else { return nil }
+      guard case .string(let value) = value else {
+        throw LiveActivityAXCompatibilityError.unexpectedCFType(
+          attribute: attribute, expected: CFStringGetTypeID(), actual: CFBooleanGetTypeID())
+      }
+      return value
+    },
+    rect: {
+      (node: LiveActivityAXFixtureNode, attribute: String)
+        throws(LiveActivityAXCompatibilityError) -> CGRect in
+      guard case .rect(let value)? = node.attributes[attribute] else {
+        throw LiveActivityAXCompatibilityError.missingAttribute(attribute: attribute)
+      }
+      return value
+    })
+}
+
 final class LiveActivityIdentifierTests: XCTestCase {
   /// The identifier is the whole basis of detection: macOS names these items
   /// `<iOS bundle id>.liveActivity`, which both marks them and names the app.
@@ -117,32 +170,37 @@ final class LiveActivityCatalogTests: XCTestCase {
 }
 
 final class ContinuityAvailabilityTests: XCTestCase {
-  func testWithoutAccessibilityNothingElseMatters() {
+  func testPermissionDenialIsReported() {
     XCTAssertEqual(
       .needsAccessibility,
       ContinuityAvailability.resolve(
-        isTrusted: false, controlCenterReachable: true, systemEnabled: true, cardCount: 3))
+        readResult: .permissionDenied, systemEnabled: true, cardCount: 0))
   }
 
-  func testUnreachableControlCentreIsUnsupported() {
+  func testMissingControlCentreIsDistinctFromASchemaChange() {
     XCTAssertEqual(
-      .unsupported,
+      .controlCenterUnavailable,
       ContinuityAvailability.resolve(
-        isTrusted: true, controlCenterReachable: false, systemEnabled: true, cardCount: 0))
+        readResult: .controlCenterUnavailable, systemEnabled: true, cardCount: 0))
+    XCTAssertEqual(
+      .incompatibleSchema,
+      ContinuityAvailability.resolve(
+        readResult: .schemaChanged(.missingAttribute(attribute: "AXExtrasMenuBar")),
+        systemEnabled: true, cardCount: 0))
   }
 
   func testSystemSwitchedOffIsReported() {
     XCTAssertEqual(
       .systemDisabled,
       ContinuityAvailability.resolve(
-        isTrusted: true, controlCenterReachable: true, systemEnabled: false, cardCount: 0))
+        readResult: .success([]), systemEnabled: false, cardCount: 0))
   }
 
   func testEnabledButEmptyIsWaiting() {
     XCTAssertEqual(
       .waiting,
       ContinuityAvailability.resolve(
-        isTrusted: true, controlCenterReachable: true, systemEnabled: true, cardCount: 0))
+        readResult: .success([]), systemEnabled: true, cardCount: 0))
   }
 
   /// Cards in hand beat every settings signal — whatever the preferences claim, something is here.
@@ -150,15 +208,57 @@ final class ContinuityAvailabilityTests: XCTestCase {
     XCTAssertEqual(
       .active,
       ContinuityAvailability.resolve(
-        isTrusted: true, controlCenterReachable: false, systemEnabled: false, cardCount: 1))
+        readResult: .success([item("com.example.app.liveActivity")]), systemEnabled: false,
+        cardCount: 1))
   }
 
   func testEveryStateExplainsItself() {
     for state: ContinuityAvailability in [
-      .needsAccessibility, .unsupported, .systemDisabled, .waiting, .active,
+      .needsAccessibility, .controlCenterUnavailable, .incompatibleSchema, .systemDisabled,
+      .waiting, .active,
     ] {
       XCTAssertFalse(state.explanation.isEmpty)
     }
+  }
+}
+
+final class ContinuityReadDiagnosticsTests: XCTestCase {
+  func testOnlySuccessfulReadsAdvanceTheLastSuccess() {
+    let firstSuccess = Date(timeIntervalSince1970: 100)
+    let laterFailure = Date(timeIntervalSince1970: 200)
+    var diagnostics = ContinuityReadDiagnostics()
+
+    diagnostics.record(.success([]), at: firstSuccess)
+    diagnostics.record(.controlCenterUnavailable, at: laterFailure)
+
+    XCTAssertEqual(diagnostics.lastSuccessfulRead, firstSuccess)
+  }
+
+  func testCompatibilityFailureIsClearedByAKnownHierarchy() {
+    var diagnostics = ContinuityReadDiagnostics()
+    diagnostics.record(
+      .schemaChanged(.missingAttribute(attribute: "AXExtrasMenuBar")), at: Date())
+    XCTAssertEqual(
+      diagnostics.compatibilityError, .missingAttribute(attribute: "AXExtrasMenuBar"))
+
+    diagnostics.record(.success([]), at: Date())
+    XCTAssertNil(diagnostics.compatibilityError)
+  }
+}
+
+final class ContinuityEventBaselineTests: XCTestCase {
+  func testFailureDoesNotTurnAnUnchangedRecoveryIntoANewActivity() {
+    let card = LiveActivityCard(
+      id: "com.example.delivery.liveActivity", bundleIdentifier: "com.example.delivery",
+      appName: "Delivery", symbol: "shippingbox", isRemote: true)
+    var baseline = ContinuityEventBaseline()
+
+    XCTAssertEqual(baseline.reconcile(with: [card], readSucceeded: true).added, [card])
+    XCTAssertTrue(baseline.reconcile(with: [], readSucceeded: false).removed.isEmpty)
+
+    let recovery = baseline.reconcile(with: [card], readSucceeded: true)
+    XCTAssertTrue(recovery.added.isEmpty)
+    XCTAssertTrue(recovery.removed.isEmpty)
   }
 }
 
@@ -192,6 +292,59 @@ final class ControlCenterSettingsTests: XCTestCase {
       ControlCenterLiveActivitySettings.parse(
         remoteEnabled: NSNumber(value: true), stateData: Data([0xFF, 0x01])
       ).remoteEnabled)
+  }
+}
+
+final class LiveActivityAXHierarchyReaderTests: XCTestCase {
+  func testKnownHierarchyReturnsActivities() throws {
+    let clock = LiveActivityAXFixtureNode([
+      "AXIdentifier": .string("com.apple.menuextra.clock")
+    ])
+    let activity = LiveActivityAXFixtureNode([
+      "AXIdentifier": .string("com.example.delivery.liveActivity"),
+      "AXDescription": .string("Delivery"),
+      "AXFrame": .rect(CGRect(x: 420, y: 0, width: 28, height: 24)),
+    ])
+    let extras = LiveActivityAXFixtureNode(["AXChildren": .children([clock, activity])])
+    let application = LiveActivityAXFixtureNode(["AXExtrasMenuBar": .element(extras)])
+
+    XCTAssertEqual(
+      try fixtureHierarchyReader().read(from: application),
+      [item("com.example.delivery.liveActivity", name: "Delivery", minX: 420)])
+  }
+
+  func testKnownHierarchyCanBeGenuinelyEmpty() throws {
+    let clock = LiveActivityAXFixtureNode([
+      "AXIdentifier": .string("com.apple.menuextra.clock")
+    ])
+    let extras = LiveActivityAXFixtureNode(["AXChildren": .children([clock])])
+    let application = LiveActivityAXFixtureNode(["AXExtrasMenuBar": .element(extras)])
+
+    XCTAssertEqual(try fixtureHierarchyReader().read(from: application), [])
+  }
+
+  func testRenamedExtrasMenuBarIsASchemaChange() {
+    let renamed = LiveActivityAXFixtureNode()
+    let application = LiveActivityAXFixtureNode(["AXMenuBarExtras": .element(renamed)])
+
+    XCTAssertThrowsError(try fixtureHierarchyReader().read(from: application)) { error in
+      XCTAssertEqual(
+        error as? LiveActivityAXCompatibilityError,
+        .missingAttribute(attribute: "AXExtrasMenuBar"))
+    }
+  }
+
+  func testItemsWithoutIdentifiersAreASchemaChange() {
+    let unidentifiableItem = LiveActivityAXFixtureNode()
+    let extras = LiveActivityAXFixtureNode([
+      "AXChildren": .children([unidentifiableItem])
+    ])
+    let application = LiveActivityAXFixtureNode(["AXExtrasMenuBar": .element(extras)])
+
+    XCTAssertThrowsError(try fixtureHierarchyReader().read(from: application)) { error in
+      XCTAssertEqual(
+        error as? LiveActivityAXCompatibilityError, .noReadableIdentifiers(childCount: 1))
+    }
   }
 }
 
@@ -254,6 +407,47 @@ final class LiveActivityAXConversionTests: XCTestCase {
     XCTAssertEqual(
       try LiveActivityAXConversion.rect(from: value, attribute: "AXFrame"), input)
   }
+
+  func testConvertsAnArrayAfterCheckingEveryElement() throws {
+    let first = AXUIElementCreateSystemWide()
+    let second = AXUIElementCreateApplication(1)
+
+    let output = try LiveActivityAXConversion.elements(
+      from: [first, second] as NSArray, attribute: "AXChildren")
+
+    XCTAssertEqual(output.count, 2)
+    XCTAssertTrue(CFEqual(first, output[0]))
+    XCTAssertTrue(CFEqual(second, output[1]))
+  }
+
+  func testRejectsANonElementInsideTheChildrenArray() {
+    let values = [AXUIElementCreateSystemWide(), NSString(string: "wrong")] as NSArray
+
+    XCTAssertThrowsError(
+      try LiveActivityAXConversion.elements(from: values, attribute: "AXChildren")
+    ) { error in
+      guard
+        case .unexpectedCFType(let attribute, _, _)? =
+          error as? LiveActivityAXCompatibilityError
+      else {
+        return XCTFail("Unexpected error: \(error)")
+      }
+      XCTAssertEqual(attribute, "AXChildren[1]")
+    }
+  }
+
+  func testRejectsNonStringIdentifier() {
+    let value = NSNumber(value: true)
+
+    XCTAssertThrowsError(
+      try LiveActivityAXConversion.string(from: value, attribute: "AXIdentifier")
+    ) { error in
+      XCTAssertEqual(
+        error as? LiveActivityAXCompatibilityError,
+        .unexpectedCFType(
+          attribute: "AXIdentifier", expected: CFStringGetTypeID(), actual: CFGetTypeID(value)))
+    }
+  }
 }
 
 /// Exercises the real accessibility read against the running ControlCenter.
@@ -270,9 +464,17 @@ final class LiveActivityAXReaderIntegrationTests: XCTestCase {
     guard AccessibilityPermission.isTrusted else {
       throw XCTSkip("Accessibility not granted to the test host")
     }
-    let items = try LiveActivityAXReader.shared.read()
-    let reachable = try XCTUnwrap(
-      items, "ControlCenter is running but exposed no AXExtrasMenuBar — the attribute has moved")
+    let reachable: [MenuBarLiveActivity]
+    switch LiveActivityAXReader.shared.read() {
+    case .success(let items):
+      reachable = items
+    case .permissionDenied:
+      return XCTFail("Accessibility was trusted before the read but denied during it")
+    case .controlCenterUnavailable:
+      return XCTFail("ControlCenter is not running")
+    case .schemaChanged(let error):
+      return XCTFail("ControlCenter's AX hierarchy changed: \(error.diagnosticSummary)")
+    }
 
     // Whatever is running, every item the reader returns must parse; returning something the
     // catalogue then silently drops would mean the filter and the reader disagree.
