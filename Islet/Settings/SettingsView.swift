@@ -125,7 +125,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .systemHUD: "Volume and brightness controls"
     case .eventSources: "Brief alerts for system changes"
     case .t3Code: "Pair T3 Code machines"
-    case .pulse: "Local API, providers and access token"
+    case .pulse: "Local API, providers and credentials"
     case .permissions: "macOS access used by each feature"
     case .diagnostics: "App identity and integration status"
     case .settingsTransfer: "Back up or move portable preferences"
@@ -276,8 +276,9 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       pageContent + [
         "Pulse providers", "Local activity API", "Pulse items", "Authentication",
         "Mark silent work stale after provider timeout",
-        "Shared bearer token", "Quick Actions", "Reveal token folder", "Dismiss visible",
-        "Rotate provider token", "Provider examples", "Allow Mute Revoke Policy",
+        "provider credentials permissions rotation revocation age last use", "Quick Actions",
+        "Reveal credential folder", "Dismiss visible",
+        "Rotate provider credential", "Provider examples", "Allow Mute Revoke Policy",
         "Other sources seen this session", "Pulse history", "Show session history",
         "Keep history after quitting", "Retention period", "Maximum entries", "Export history",
         "History filter", "All Accepted Filtered Rejected", "Clear history",
@@ -471,6 +472,7 @@ struct SettingsView: View {
   @ObservedObject private var reminders = RemindersProvider.shared
   @ObservedObject private var pulse = PulseCenter.shared
   @ObservedObject private var pulseServer = PulseServer.shared
+  @ObservedObject private var pulseCredentials = PulseServer.shared.credentialStore
   @ObservedObject private var permissions = PermissionCenter.shared
   @ObservedObject private var hud = HUDController.shared
   @ObservedObject private var continuity = ContinuityMonitor.shared
@@ -542,8 +544,8 @@ struct SettingsView: View {
   @State private var newClipboardFocusIdentifier = ""
   @State private var clipboardPrivacyError: String?
   @State private var confirmingRestore = false
-  @State private var confirmingPulseTokenRotation = false
-  @State private var pulseTokenRotationResult: String?
+  @State private var showingPulseCredentialEditor = false
+  @State private var pulseCredentialResult: String?
   @State private var showPulseHistory = false
   @State private var pulseHistoryFilter: PulseHistoryFilter = .all
   @State private var settingsImportPreview: SettingsTransferPreview?
@@ -854,26 +856,27 @@ struct SettingsView: View {
         "Resets the theme, notch interaction, haptics, HUD style, player order, activity order and metric styles. It keeps enabled activities, permissions, paired machines and activity data."
       )
     }
-    .confirmationDialog(
-      "Rotate the Pulse provider token?", isPresented: $confirmingPulseTokenRotation,
-      titleVisibility: .visible
-    ) {
-      Button("Rotate token and disconnect providers", role: .destructive) { rotatePulseToken() }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(
-        "Disconnects every provider. Scripts must read the new token before publishing again. Revoking one source is not enough because providers choose their own source name."
-      )
+    .sheet(isPresented: $showingPulseCredentialEditor) {
+      PulseCredentialEditor { name, source, permissions in
+        do {
+          _ = try pulseServer.createProvider(
+            name: name, source: source, permissions: permissions)
+          showingPulseCredentialEditor = false
+          NSWorkspace.shared.open(pulseCredentials.credentialDirectory)
+        } catch {
+          pulseCredentialResult = error.localizedDescription
+        }
+      }
     }
     .alert(
       "Pulse authentication",
       isPresented: Binding(
-        get: { pulseTokenRotationResult != nil },
-        set: { if !$0 { pulseTokenRotationResult = nil } })
+        get: { pulseCredentialResult != nil },
+        set: { if !$0 { pulseCredentialResult = nil } })
     ) {
-      Button("OK") { pulseTokenRotationResult = nil }
+      Button("OK") { pulseCredentialResult = nil }
     } message: {
-      Text(pulseTokenRotationResult ?? "")
+      Text(pulseCredentialResult ?? "")
     }
     .sheet(item: $settingsImportPreview) { preview in
       SettingsImportPreviewSheet(
@@ -1860,7 +1863,10 @@ struct SettingsView: View {
           .monospacedDigit().foregroundStyle(.secondary)
         }
         LabeledContent("Authentication") {
-          Text("Shared bearer token").foregroundStyle(.secondary)
+          Text(
+            "\(pulseCredentials.credentials.filter { !$0.isRevoked }.count) active provider credentials"
+          )
+          .foregroundStyle(.secondary)
         }
         LabeledContent("Mark silent work stale after") {
           Picker("Stale timeout", selection: $pulseStaleTimeout) {
@@ -1881,7 +1887,7 @@ struct SettingsView: View {
         )
         .font(.caption).foregroundStyle(.secondary)
         Text(
-          "Local scripts publish status and web actions over \(pulseServer.listeningAddress ?? "localhost:47717"). A private token authenticates each connection."
+          "Local scripts publish status and web actions over \(pulseServer.listeningAddress ?? "localhost:47717"). Each approved provider has its own source identity and permissions. Credentials stay in user-only files and are never included in diagnostics."
         )
         .font(.caption).foregroundStyle(.secondary)
         if let nextRetryAt = pulseServer.nextRetryAt {
@@ -1892,7 +1898,7 @@ struct SettingsView: View {
           Text(recovery)
             .font(.caption).foregroundStyle(.orange)
           Text(
-            "Tools/islet-pulse.swift reads the active port from the token folder. Set other clients to \(pulseServer.activePort ?? 47_717)."
+            "Tools/islet-pulse.swift discovers the active port from Islet's support folder. Set other clients to \(pulseServer.activePort ?? 47_717)."
           )
           .font(.caption).foregroundStyle(.secondary)
           Button("Retry port 47717") { pulseServer.retryDefaultPort() }
@@ -1905,13 +1911,26 @@ struct SettingsView: View {
         .font(.caption).foregroundStyle(.secondary)
         HStack {
           Button("Quick Actions…") { QuickActionsOpener.open() }
-          Button("Reveal token folder") { NSWorkspace.shared.open(PulsePaths.supportDirectory) }
-            .help("The token is a provider credential. Do not share it.")
+          Button("Add provider…") { showingPulseCredentialEditor = true }
+          Button("Reveal credential folder") {
+            NSWorkspace.shared.open(pulseCredentials.credentialDirectory)
+          }
+          .help("Credential files grant Pulse access. Do not share them.")
           if !pulse.items.isEmpty {
             Button("Dismiss visible") { pulse.dismissVisible() }
           }
-          Button("Rotate provider token…", role: .destructive) {
-            confirmingPulseTokenRotation = true
+        }
+      }
+      Section("Provider credentials") {
+        if pulseCredentials.credentials.isEmpty {
+          ContentUnavailableView(
+            "No approved providers", systemImage: "key.slash",
+            description: Text("Add a provider before a local script can publish to Pulse."))
+        } else {
+          ForEach(pulseCredentials.credentials) { credential in
+            PulseCredentialRow(
+              credential: credential, server: pulseServer,
+              reportError: { pulseCredentialResult = $0 })
           }
         }
       }
@@ -1921,9 +1940,9 @@ struct SettingsView: View {
         )
         .font(.caption).foregroundStyle(.secondary)
         Text(
-          "Allow, Mute and Revoke match a provider's self-reported source name. Rotate the token to revoke access for every client."
+          "These delivery controls affect credential-bound sources. Revoke a provider credential above to remove its access."
         )
-        .font(.caption).foregroundStyle(.orange)
+        .font(.caption).foregroundStyle(.secondary)
         ForEach(pulse.providerStatuses) { status in
           PulseProviderRow(status: status, center: pulse)
         }
@@ -2370,16 +2389,6 @@ struct SettingsView: View {
     }
   }
 
-  private func rotatePulseToken() {
-    do {
-      try pulseServer.rotateToken()
-      pulseTokenRotationResult =
-        "The token was replaced and all provider connections were disconnected. Providers must read the new token before reconnecting."
-    } catch {
-      pulseTokenRotationResult = "The token could not be rotated: \(error.localizedDescription)"
-    }
-  }
-
   private func applyPulseHistoryConfiguration() {
     pulse.configureHistoryPersistence(
       enabled: pulseHistoryPersistenceEnabled,
@@ -2790,6 +2799,183 @@ private struct PulseProviderRow: View {
     Binding(
       get: { center.policy(for: status.descriptor) },
       set: { center.setPolicy($0, for: status.descriptor) })
+  }
+}
+
+private struct PulseCredentialEditor: View {
+  let create: (String, String, Set<PulseCredentialPermission>) -> Void
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var name = ""
+  @State private var source = ""
+  @State private var permissions: Set<PulseCredentialPermission> = [.events]
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section("Provider identity") {
+          TextField("Name", text: $name, prompt: Text("Build watcher"))
+          TextField("Source", text: $source, prompt: Text("build"))
+          Text(
+            "The source becomes part of this credential's identity. Commands cannot publish under another source."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
+        Section("Permissions") {
+          ForEach(PulseCredentialPermission.allCases) { permission in
+            Toggle(isOn: permissionBinding(permission)) {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(permission.title)
+                Text(permission.detail).font(.caption).foregroundStyle(.secondary)
+              }
+            }
+          }
+        }
+      }
+      .formStyle(.grouped)
+      .navigationTitle("Add Pulse provider")
+      .frame(width: 520, height: 510)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel") { dismiss() }
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Add provider") { create(name, source, permissions) }
+            .disabled(
+              name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+      }
+    }
+  }
+
+  private func permissionBinding(_ permission: PulseCredentialPermission) -> Binding<Bool> {
+    Binding(
+      get: { permissions.contains(permission) },
+      set: { allowed in
+        if allowed { permissions.insert(permission) } else { permissions.remove(permission) }
+      })
+  }
+}
+
+private struct PulseCredentialRow: View {
+  let credential: PulseCredentialSummary
+  let server: PulseServer
+  let reportError: (String) -> Void
+
+  @State private var confirmingRotation = false
+  @State private var confirmingRevocation = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack {
+        VStack(alignment: .leading, spacing: 2) {
+          HStack(spacing: 6) {
+            Text(credential.name).font(.body.weight(.medium))
+            if credential.isLegacy {
+              Text("LEGACY").font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+            }
+          }
+          Text(credential.source).font(.caption.monospaced()).foregroundStyle(.secondary)
+        }
+        Spacer()
+        Label(
+          credential.isRevoked ? "Revoked" : "Active",
+          systemImage: credential.isRevoked ? "xmark.shield.fill" : "checkmark.shield.fill"
+        )
+        .font(.caption)
+        .foregroundStyle(credential.isRevoked ? .red : .green)
+      }
+
+      HStack(spacing: 16) {
+        LabeledContent("Credential age") {
+          Text(credential.credentialAgeDate, style: .relative)
+        }
+        LabeledContent("Last use") {
+          if let lastUsedAt = credential.lastUsedAt {
+            Text(lastUsedAt, style: .relative)
+          } else {
+            Text("Never")
+          }
+        }
+      }
+      .font(.caption)
+      .foregroundStyle(.secondary)
+
+      if credential.isLegacy, !credential.isRevoked {
+        Text(
+          "The old token may be held by several scripts. Added permissions apply to every holder. Create separate provider credentials, then revoke this entry."
+        )
+        .font(.caption)
+        .foregroundStyle(.orange)
+      }
+
+      ForEach(PulseCredentialPermission.allCases) { permission in
+        Toggle(permission.title, isOn: permissionBinding(permission))
+          .help(permission.detail)
+          .disabled(credential.isRevoked)
+      }
+      .font(.caption)
+
+      HStack {
+        if let url = server.credentialStore.credentialFileURL(for: credential.id) {
+          Button("Reveal credential") {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+          }
+        }
+        if !credential.isLegacy, !credential.isRevoked {
+          Button("Rotate credential…") { confirmingRotation = true }
+        }
+        if !credential.isRevoked {
+          Button("Revoke…", role: .destructive) { confirmingRevocation = true }
+        }
+      }
+    }
+    .padding(.vertical, 5)
+    .confirmationDialog(
+      "Rotate \(credential.name)'s credential?", isPresented: $confirmingRotation,
+      titleVisibility: .visible
+    ) {
+      Button("Rotate and disconnect provider", role: .destructive) {
+        do {
+          try server.rotateCredential(credential.id)
+        } catch {
+          reportError(error.localizedDescription)
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Other Pulse providers stay connected. This provider must reread its credential file.")
+    }
+    .confirmationDialog(
+      "Revoke \(credential.name)?", isPresented: $confirmingRevocation,
+      titleVisibility: .visible
+    ) {
+      Button("Revoke and disconnect provider", role: .destructive) {
+        do {
+          try server.revokeCredential(credential.id)
+        } catch {
+          reportError(error.localizedDescription)
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("This removes the provider's credential file. Other providers are not affected.")
+    }
+  }
+
+  private func permissionBinding(_ permission: PulseCredentialPermission) -> Binding<Bool> {
+    Binding(
+      get: { credential.permissions.contains(permission) },
+      set: { allowed in
+        var updated = credential.permissions
+        if allowed { updated.insert(permission) } else { updated.remove(permission) }
+        do {
+          try server.setPermissions(updated, for: credential.id)
+        } catch {
+          reportError(error.localizedDescription)
+        }
+      })
   }
 }
 
