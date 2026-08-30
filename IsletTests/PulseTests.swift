@@ -373,6 +373,99 @@ final class PulseTests: XCTestCase {
     XCTAssertTrue(limiter.accepts(10))
   }
 
+  func testProviderRateLimitsDoNotLetOneCredentialStarveAnother() {
+    var limiters = PulseProviderRateLimiters(providerLimit: 2, processLimit: 8, window: 60)
+
+    XCTAssertEqual(limiters.admit(providerID: "build-credential", at: 1_000), .accepted)
+    XCTAssertEqual(limiters.admit(providerID: "build-credential", at: 1_001), .accepted)
+    XCTAssertEqual(
+      limiters.admit(providerID: "build-credential", at: 1_002),
+      .rateLimited(scope: .provider, retryAfter: 58))
+    XCTAssertEqual(limiters.admit(providerID: "tests-credential", at: 1_002), .accepted)
+  }
+
+  func testProviderRateLimitPersistsAcrossConnectionsAndReturnsRetryAfter() {
+    var limiters = PulseProviderRateLimiters(providerLimit: 1, processLimit: 8, window: 60)
+
+    XCTAssertEqual(limiters.admit(providerID: "build-credential", at: 1_000), .accepted)
+    XCTAssertEqual(
+      limiters.admit(providerID: "build-credential", at: 1_001),
+      .rateLimited(scope: .provider, retryAfter: 59))
+    XCTAssertEqual(limiters.admit(providerID: "build-credential", at: 1_060), .accepted)
+  }
+
+  func testProcessCeilingProtectsPulseAfterIndependentProviderChecks() {
+    var limiters = PulseProviderRateLimiters(providerLimit: 2, processLimit: 3, window: 60)
+
+    XCTAssertEqual(limiters.admit(providerID: "build-credential", at: 1_000), .accepted)
+    XCTAssertEqual(limiters.admit(providerID: "build-credential", at: 1_001), .accepted)
+    XCTAssertEqual(limiters.admit(providerID: "tests-credential", at: 1_002), .accepted)
+    XCTAssertEqual(
+      limiters.admit(providerID: "deploy-credential", at: 1_003),
+      .rateLimited(scope: .process, retryAfter: 57))
+  }
+
+  func testProviderRateLimiterCleansExpiredBucketsAndCapsTrackedProviders() {
+    var limiters = PulseProviderRateLimiters(
+      providerLimit: 1, processLimit: 8, window: 60, maximumProviderStates: 2)
+
+    XCTAssertEqual(limiters.admit(providerID: "one", at: 1_000), .accepted)
+    XCTAssertEqual(limiters.admit(providerID: "two", at: 1_001), .accepted)
+    XCTAssertEqual(limiters.trackedProviderCount, 2)
+    XCTAssertEqual(limiters.admit(providerID: "three", at: 1_002), .accepted)
+    XCTAssertEqual(limiters.trackedProviderCount, 2)
+    XCTAssertEqual(limiters.admit(providerID: "fresh", at: 1_063), .accepted)
+    XCTAssertEqual(limiters.trackedProviderCount, 1)
+  }
+
+  func testRateLimitResponseIncludesRetryAfterMetadata() throws {
+    let response = PulseResponse.failure(
+      "provider command rate exceeded", code: .rateLimited, requestID: "request-1",
+      retryAfter: 12)
+    let decoded = try JSONDecoder().decode(PulseResponse.self, from: JSONEncoder().encode(response))
+
+    XCTAssertEqual(decoded.retryAfter, 12)
+    XCTAssertEqual(decoded.requestID, "request-1")
+  }
+
+  func testResponsesFromBeforeRetryMetadataRemainDecodable() throws {
+    let data = Data(
+      #"{"ok":false,"error":"provider command rate exceeded","errorCode":"rateLimited"}"#.utf8)
+    let response = try JSONDecoder().decode(PulseResponse.self, from: data)
+
+    XCTAssertEqual(response.errorCode, .rateLimited)
+    XCTAssertNil(response.retryAfter)
+  }
+
+  func testProviderRateLimiterSerializesConcurrentAdmissions() async {
+    let limiter = await MainActor.run {
+      TestPulseRateLimiters(providerLimit: 5, processLimit: 20, window: 60)
+    }
+    let results = await withTaskGroup(
+      of: PulseRateLimitResult.self,
+      returning: [
+        PulseRateLimitResult
+      ].self
+    ) { group in
+      for _ in 0..<20 {
+        group.addTask {
+          await limiter.admit(providerID: "build-credential", at: 1_000)
+        }
+      }
+      return await group.reduce(into: []) { $0.append($1) }
+    }
+
+    XCTAssertEqual(results.filter { if case .accepted = $0 { true } else { false } }.count, 5)
+    XCTAssertEqual(
+      results.filter {
+        if case .rateLimited(scope: .provider, retryAfter: 60) = $0 {
+          true
+        } else {
+          false
+        }
+      }.count, 15)
+  }
+
   @MainActor
   func testCapacityRejectionDoesNotReportAnImmediatelyEvictedItemAsShown() throws {
     let center = PulseCenter()
@@ -671,5 +764,19 @@ private final class TestPulseDeadlineScheduler: PulseDeadlineScheduling {
       let entry = entries.remove(at: index)
       entry.action()
     }
+  }
+}
+
+@MainActor
+private final class TestPulseRateLimiters {
+  private var limiters: PulseProviderRateLimiters
+
+  init(providerLimit: Int, processLimit: Int, window: TimeInterval) {
+    limiters = PulseProviderRateLimiters(
+      providerLimit: providerLimit, processLimit: processLimit, window: window)
+  }
+
+  func admit(providerID: String, at now: TimeInterval) -> PulseRateLimitResult {
+    limiters.admit(providerID: providerID, at: now)
   }
 }

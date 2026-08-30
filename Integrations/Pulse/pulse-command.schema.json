@@ -80,6 +80,11 @@
         "ok": { "type": "boolean" },
         "id": { "type": "string" },
         "error": { "type": "string" },
+        "retryAfter": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Seconds to wait before retrying a rate-limited command, equivalent to HTTP Retry-After."
+        },
         "errorCode": {
           "enum": [
             "featureDisabled",

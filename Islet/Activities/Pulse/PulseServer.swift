@@ -31,7 +31,7 @@ final class PulseServer: ObservableObject {
   @Published private(set) var isRunning = false
   @Published private(set) var lastError: String?
   let credentialStore: PulseCredentialStore
-  private var rateLimiters: [String: PulseRateLimiter] = [:]
+  private var rateLimiters = PulseProviderRateLimiters()
 
   init(credentialStore: PulseCredentialStore = PulseCredentialStore()) {
     self.credentialStore = credentialStore
@@ -116,14 +116,14 @@ final class PulseServer: ObservableObject {
 
   func rotateCredential(_ id: String) throws {
     try credentialStore.rotate(id)
-    rateLimiters[id] = nil
+    rateLimiters.removeProvider(id)
     disconnectProvider(id)
   }
 
   func revokeCredential(_ id: String) throws {
     let source = credentialStore.credentials.first { $0.id == id }?.source
     try credentialStore.revoke(id)
-    rateLimiters[id] = nil
+    rateLimiters.removeProvider(id)
     if let source { PulseCenter.shared.removeItems(forSource: source) }
     disconnectProvider(id)
   }
@@ -283,16 +283,20 @@ final class PulseServer: ObservableObject {
       }
       authenticatedCredentials[id] = provider.credentialID
       markAuthenticated(id)
-      var limiter = rateLimiters[provider.credentialID] ?? PulseRateLimiter()
-      guard limiter.accepts(ProcessInfo.processInfo.systemUptime) else {
+      switch rateLimiters.admit(
+        providerID: provider.credentialID, at: ProcessInfo.processInfo.systemUptime)
+      {
+      case .accepted:
+        break
+      case .rateLimited(let scope, let retryAfter):
+        let subject = scope == .provider ? "provider" : "Pulse process"
         send(
           .failure(
-            "provider command rate exceeded; retry later", code: .rateLimited,
-            requestID: incoming.requestID),
+            "\(subject) command rate exceeded",
+            code: .rateLimited, requestID: incoming.requestID, retryAfter: retryAfter),
           on: connection)
         return false
       }
-      rateLimiters[provider.credentialID] = limiter
       let (command, _) = try credentialStore.authorize(incoming, as: provider)
       send(PulseCenter.shared.applyIfEnabled(command), on: connection)
       return true

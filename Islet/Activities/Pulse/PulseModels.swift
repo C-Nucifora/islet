@@ -476,39 +476,145 @@ struct PulseResponse: Codable, Equatable, Sendable {
   var error: String?
   var errorCode: PulseErrorCode? = nil
   var requestID: String? = nil
+  /// Whole seconds to wait before retrying a throttled command. This is the local protocol's
+  /// equivalent of HTTP's `Retry-After` response header.
+  var retryAfter: Int? = nil
 
   static func success(id: String? = nil, requestID: String? = nil) -> Self {
     .init(ok: true, id: id, error: nil, requestID: requestID)
   }
 
   static func failure(
-    _ error: String, code: PulseErrorCode = .validationFailed, requestID: String? = nil
+    _ error: String, code: PulseErrorCode = .validationFailed, requestID: String? = nil,
+    retryAfter: Int? = nil
   ) -> Self {
-    .init(ok: false, id: nil, error: error, errorCode: code, requestID: requestID)
+    .init(
+      ok: false, id: nil, error: error, errorCode: code, requestID: requestID,
+      retryAfter: retryAfter)
   }
 }
 
-/// Credential-wide rolling-window protection. The per-connection cap bounds a single socket; this
-/// cap also prevents a noisy provider from resetting its allowance by reconnecting repeatedly.
+/// Rolling-window protection with enough detail for a sender to retry at the right time.
 struct PulseRateLimiter: Sendable {
   let limit: Int
   let window: TimeInterval
   private(set) var acceptedTimes: [TimeInterval] = []
 
   init(limit: Int = 512, window: TimeInterval = 60) {
-    self.limit = limit
-    self.window = window
+    self.limit = max(1, limit)
+    self.window = window.isFinite && window > 0 ? window : 60
   }
 
   mutating func accepts(_ now: TimeInterval) -> Bool {
+    guard retryAfter(at: now) == nil else { return false }
+    acceptedTimes.append(now)
+    return true
+  }
+
+  mutating func retryAfter(at now: TimeInterval) -> Int? {
+    discardExpired(at: now)
+    guard acceptedTimes.count >= limit, let firstAccepted = acceptedTimes.first else { return nil }
+    return max(1, Int(ceil(firstAccepted + window - now)))
+  }
+
+  mutating func discardExpired(at now: TimeInterval) {
     if let last = acceptedTimes.last, now < last {
       acceptedTimes.removeAll(keepingCapacity: true)
+      return
     }
     let cutoff = now - window
     acceptedTimes.removeAll { $0 <= cutoff }
-    guard acceptedTimes.count < limit else { return false }
-    acceptedTimes.append(now)
-    return true
+  }
+
+  var isEmpty: Bool { acceptedTimes.isEmpty }
+}
+
+enum PulseRateLimitScope: Equatable, Sendable {
+  case provider
+  case process
+}
+
+enum PulseRateLimitResult: Equatable, Sendable {
+  case accepted
+  case rateLimited(scope: PulseRateLimitScope, retryAfter: Int)
+}
+
+/// Tracks authenticated provider buckets separately, then applies a bounded process-wide ceiling
+/// after a provider has spare capacity. Empty windows are discarded and the state count is capped,
+/// so provider churn cannot turn this into an unbounded dictionary.
+struct PulseProviderRateLimiters: Sendable {
+  static let defaultProviderLimit = 512
+  static let defaultProcessLimit = 2_048
+  static let defaultWindow: TimeInterval = 60
+  static let defaultMaximumProviderStates = 256
+
+  private struct ProviderState: Sendable {
+    var limiter: PulseRateLimiter
+    var lastAcceptedAt: TimeInterval
+  }
+
+  private let providerLimit: Int
+  private let window: TimeInterval
+  private let maximumProviderStates: Int
+  private var processLimiter: PulseRateLimiter
+  private var providers: [String: ProviderState] = [:]
+
+  init(
+    providerLimit: Int = Self.defaultProviderLimit,
+    processLimit: Int = Self.defaultProcessLimit,
+    window: TimeInterval = Self.defaultWindow,
+    maximumProviderStates: Int = Self.defaultMaximumProviderStates
+  ) {
+    self.providerLimit = max(1, providerLimit)
+    self.window = window.isFinite && window > 0 ? window : Self.defaultWindow
+    self.maximumProviderStates = max(1, maximumProviderStates)
+    processLimiter = PulseRateLimiter(limit: processLimit, window: self.window)
+  }
+
+  var trackedProviderCount: Int { providers.count }
+
+  mutating func admit(providerID: String, at now: TimeInterval) -> PulseRateLimitResult {
+    cleanup(at: now)
+
+    var provider =
+      providers[providerID]
+      ?? ProviderState(
+        limiter: PulseRateLimiter(limit: providerLimit, window: window), lastAcceptedAt: now)
+    if let retryAfter = provider.limiter.retryAfter(at: now) {
+      providers[providerID] = provider
+      return .rateLimited(scope: .provider, retryAfter: retryAfter)
+    }
+    if let retryAfter = processLimiter.retryAfter(at: now) {
+      if providers[providerID] != nil { providers[providerID] = provider }
+      return .rateLimited(scope: .process, retryAfter: retryAfter)
+    }
+
+    if providers[providerID] == nil { makeRoomForProvider() }
+    _ = provider.limiter.accepts(now)
+    provider.lastAcceptedAt = now
+    providers[providerID] = provider
+    _ = processLimiter.accepts(now)
+    return .accepted
+  }
+
+  mutating func removeProvider(_ providerID: String) {
+    providers[providerID] = nil
+  }
+
+  private mutating func cleanup(at now: TimeInterval) {
+    processLimiter.discardExpired(at: now)
+    for providerID in Array(providers.keys) {
+      providers[providerID]?.limiter.discardExpired(at: now)
+    }
+    providers = providers.filter { !$0.value.limiter.isEmpty }
+  }
+
+  private mutating func makeRoomForProvider() {
+    while providers.count >= maximumProviderStates,
+      let oldest = providers.min(by: { $0.value.lastAcceptedAt < $1.value.lastAcceptedAt })?.key
+    {
+      providers[oldest] = nil
+    }
   }
 }
 

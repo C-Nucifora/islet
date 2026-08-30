@@ -348,6 +348,22 @@ final class PulseCredentialTests: XCTestCase {
     }
   }
 
+  @MainActor
+  func testInvalidCredentialCannotChooseAnotherProvidersRateLimitBucket() throws {
+    let fixture = try fixture(permissions: [.events])
+    defer { fixture.remove() }
+    var limiters = PulseProviderRateLimiters(providerLimit: 1, processLimit: 8, window: 60)
+
+    XCTAssertThrowsError(try fixture.store.authenticate("not-a-provider-credential")) { error in
+      XCTAssertEqual(error as? PulseCredentialError, .unauthorized)
+    }
+    XCTAssertEqual(limiters.trackedProviderCount, 0)
+
+    let provider = try fixture.store.authenticate(fixture.token)
+    XCTAssertEqual(limiters.admit(providerID: provider.credentialID, at: 1_000), .accepted)
+    XCTAssertEqual(limiters.trackedProviderCount, 1)
+  }
+
   private struct Fixture {
     let directory: URL
     let store: PulseCredentialStore
