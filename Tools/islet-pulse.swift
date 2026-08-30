@@ -269,20 +269,72 @@ if operation == "end" {
 
 let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
   .appendingPathComponent("Islet", isDirectory: true)
-let tokenURL = support.appendingPathComponent("pulse-token")
-var tokenInfo = stat()
-guard
-  lstat(tokenURL.path, &tokenInfo) == 0,
-  (tokenInfo.st_mode & S_IFMT) == S_IFREG,
-  tokenInfo.st_uid == getuid(),
-  (tokenInfo.st_mode & 0o077) == 0,
-  let token = try? String(contentsOf: tokenURL, encoding: .utf8)
-    .trimmingCharacters(in: .whitespacesAndNewlines),
-  let tokenData = Data(base64Encoded: token), tokenData.count == 32
-else {
+let requestedSource =
+  (command["source"] as? String)
+  ?? ((command["activity"] as? [String: Any])?["source"] as? String)
+let registryURL = support.appendingPathComponent("pulse-providers.json")
+let credentialDirectory = support.appendingPathComponent("pulse-credentials", isDirectory: true)
+
+func secureData(at url: URL, maximumBytes: Int) -> Data? {
+  let descriptor = url.path.withCString {
+    Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+  }
+  guard descriptor >= 0 else { return nil }
+  defer { Darwin.close(descriptor) }
+  var info = stat()
+  guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
+    info.st_uid == getuid(), (info.st_mode & 0o077) == 0
+  else { return nil }
+  var result = Data()
+  var buffer = [UInt8](repeating: 0, count: 4_096)
+  while true {
+    let count = buffer.withUnsafeMutableBytes { bytes in
+      Darwin.read(descriptor, bytes.baseAddress, bytes.count)
+    }
+    if count == 0 { return result }
+    if count < 0 {
+      if errno == EINTR { continue }
+      return nil
+    }
+    guard result.count <= maximumBytes - count else { return nil }
+    result.append(contentsOf: buffer.prefix(count))
+  }
+}
+
+func secureString(at url: URL) -> String? {
+  guard let data = secureData(at: url, maximumBytes: 4_096) else { return nil }
+  return String(decoding: data, as: UTF8.self).trimmingCharacters(
+    in: .whitespacesAndNewlines)
+}
+
+func providerCredential() -> String? {
+  guard let data = secureData(at: registryURL, maximumBytes: 1_048_576),
+    let registry = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+    let providers = registry["credentials"] as? [[String: Any]]
+  else { return nil }
+  let active = providers.filter { $0["revokedAt"] == nil && ($0["isLegacy"] as? Bool) != true }
+  let matches: [[String: Any]]
+  if let requestedSource {
+    matches = active.filter {
+      ($0["source"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        .localizedCaseInsensitiveCompare(
+          requestedSource.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
+    }
+  } else {
+    matches = active.count == 1 ? active : []
+  }
+  guard matches.count == 1, let id = matches[0]["id"] as? String,
+    let uuid = UUID(uuidString: id), uuid.uuidString.lowercased() == id
+  else { return nil }
+  return secureString(at: credentialDirectory.appendingPathComponent("\(id).credential"))
+}
+
+let legacyToken = secureString(at: support.appendingPathComponent("pulse-token"))
+let token = providerCredential() ?? legacyToken
+guard let token else {
   FileHandle.standardError.write(
     Data(
-      "Islet Pulse token is missing, invalid, not owned by this user, or has unsafe permissions.\n"
+      "No active Pulse credential matches this source. Add one in Islet Settings.\n"
         .utf8))
   exit(69)
 }

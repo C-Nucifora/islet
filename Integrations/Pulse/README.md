@@ -5,6 +5,12 @@ loads code into Islet. Islet owns layout, priority, expiry, accessibility, and a
 
 ## Quick start
 
+First add a provider in Islet Settings > Integrations > Pulse. Give it the source used by the
+script and only the permissions it needs. Islet writes a user-only credential file for that
+provider. The reference CLI selects the active credential whose source matches `--source`.
+Use **Reveal credential** on a provider row when another local client needs its exact file path.
+The commands below need Events, Persistent activities, and Progress.
+
 After Islet has started its Pulse server:
 
 ```sh
@@ -15,12 +21,13 @@ swift Tools/islet-pulse.swift event build-1842 "Build succeeded" "All checks pas
 swift Tools/islet-pulse.swift end build-1842 --source build
 ```
 
-The reference tool reads a user-only token from
-`~/Library/Application Support/Islet/pulse-token` and sends one newline-delimited JSON command to
-TCP port `47717` on `127.0.0.1`. The server rejects messages over 64 KiB, invalid tokens, unsafe
+The reference tool reads a user-only provider credential from
+`~/Library/Application Support/Islet/pulse-credentials/` and sends one newline-delimited JSON
+command to TCP port `47717` on `127.0.0.1`. The server rejects messages over 64 KiB, invalid or
+revoked credentials, commands for another source, missing permissions, replays, unsafe
 action URL schemes, more than three actions, and more than 100 simultaneous items.
 The listener accepts at most 16 concurrent clients, each socket is capped at 128 commands, and the
-shared token is capped at 512 accepted commands per rolling minute across reconnects. A
+provider credential is capped at 512 accepted commands per rolling minute across reconnects. A
 rate-limited provider receives a structured `rateLimited` error and should retry with backoff. If
 capacity ordering would immediately evict the submitted item, the provider receives
 `capacityExceeded` instead of a false success.
@@ -53,7 +60,8 @@ every item untouched and returns `ambiguousIdentifier`. A scoped end for the wro
 `sourceMismatch`. Pulse item state and history are session-only, so restarting into this protocol
 expires the old process's global-keyed state instead of attempting an on-disk migration.
 
-Set a unique `requestID` on every command. Islet echoes it on decoded responses, allowing clients
+Set a unique `requestID` on every command. Provider credentials require it and reject a repeated ID
+within a bounded recent window. Islet echoes it on decoded responses, allowing clients
 to correlate results if they reuse a connection. Clients that omit it should send only one command
 at a time. Rejections include a stable `errorCode` for automation and a human-readable `error`.
 The socket rejects unknown JSON fields so a misspelled protocol key cannot fail silently.
@@ -72,13 +80,22 @@ Each gallery provider and previously seen unlisted source has a session routing 
 - Mute accepts and retains state without presenting it; changing back to Allow reveals live work.
 - Revoke removes retained work and rejects future show, update, and event commands from that source.
 
-End remains accepted after revocation so providers can perform idempotent cleanup. Policies are
-local and session-scoped; Pulse never contacts a provider when a policy changes. A source is a
-self-declared routing name under the shared user token, not a cryptographically verified process
-identity. A token holder can bypass a source Revoke by declaring another source, so Revoke is a
-content-routing control, not credential revocation, a sandbox, or a security boundary. Use **Rotate
-provider token** in Settings to atomically replace the shared credential and disconnect every
-provider. Every legitimate provider must then reread the token before reconnecting.
+End remains accepted after a routing Revoke so providers can perform idempotent cleanup. Policies
+are local and session-scoped; Pulse never contacts a provider when a policy changes. Source names
+are bound to provider credentials. A command that declares another source is rejected before it
+reaches activity state.
+
+Credential permissions separately control transient events, persistent show/update/end operations,
+progress fields, and web actions. Settings shows the current credential's age, last use,
+permissions, and revocation state. Rotating or revoking one credential disconnects only that
+provider. Rotation atomically replaces its credential file. Revocation removes that file and keeps
+a metadata-only record in Settings.
+
+On first launch after upgrading, Islet records the old `pulse-token` as a legacy provider bound to
+the source `legacy`. It receives only the Events permission. Islet rewrites legacy commands to that
+source and will not grant persistent activity, progress, or web-action access unless the user
+explicitly changes permissions. Create a provider credential for each script, then revoke the
+legacy entry. This is deliberately narrower than the old shared token.
 
 Islet keeps at most 200 history entries for the current process. Each accepted entry contains time,
 operation, source routing name, provider-local ID, state, priority, and outcome. It never contains
@@ -96,12 +113,14 @@ The machine-readable gallery is in [providers.json](providers.json).
 
 The gallery's capabilities are explanatory protocol boundaries, not access to Islet data:
 
-- Events: transient and state updates.
+- Events: transient eight-second events.
+- Persistent activities: retained show, update, and end operations.
 - Progress: a bounded `0...1` value.
 - Web links: up to three validated HTTP(S) actions.
 
 No provider can load executable code into Islet, read other providers' items, or read history over
-the Pulse socket. Possession of the user-only token grants write-only access to this bounded API.
+the Pulse socket. A credential grants write-only access to its bound source and selected
+permissions.
 
 ## Reference CLI
 
