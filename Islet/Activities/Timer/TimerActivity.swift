@@ -231,12 +231,9 @@ final class TimerActivity: NotchActivity, ObservableObject {
         self?.notificationFallbackMessage = TimerActivity.notificationFallbackMessage
       }
     }
-    // Auto-clear the finished state after a few seconds.
-    completionTask = Task { [weak self] in
-      try? await Task.sleep(for: .seconds(6))
-      guard !Task.isCancelled else { return }
-      self?.cancel()
-    }
+    // A completion is a user-visible state, not a transient effect. Keep it until the user
+    // dismisses it or starts another timer. The TimerActivity outlives rebuilt panel views, so
+    // the completion card remains available while the island is rebuilt or reopened.
   }
 
   // MARK: - Views

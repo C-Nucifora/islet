@@ -86,6 +86,32 @@ final class TimerLogicTests: XCTestCase {
     XCTAssertNil(box.sessionData)
   }
 
+  func testCompletedTimerRemainsActiveUntilDismissed() throws {
+    let activity = try completedActivity()
+
+    XCTAssertTrue(activity.finished)
+    XCTAssertTrue(activity.isActive)
+    XCTAssertFalse(activity.isRunning)
+
+    activity.cancel()
+
+    XCTAssertFalse(activity.finished)
+    XCTAssertFalse(activity.isActive)
+  }
+
+  func testRestartReplacesCompletedTimerWithARunningTimer() throws {
+    let activity = try completedActivity()
+
+    activity.restartLastTimer()
+
+    XCTAssertFalse(activity.finished)
+    XCTAssertTrue(activity.isActive)
+    XCTAssertTrue(activity.isRunning)
+    XCTAssertEqual(activity.total, 60)
+    XCTAssertEqual(activity.label, "Tea")
+    activity.cancel()
+  }
+
   func testCorruptSessionIsRejectedAndCleared() {
     let box = TimerPersistenceBox(sessionData: Data("not json".utf8))
 
@@ -120,6 +146,24 @@ final class TimerLogicTests: XCTestCase {
     XCTAssertEqual(TimerPersistence.restorePreset(from: box.store), preset)
     XCTAssertEqual(box.presetData, encodedPreset)
   }
+
+  private func completedActivity() throws -> TimerActivity {
+    let now = Date(timeIntervalSinceReferenceDate: 30_000)
+    let session = TimerSessionSnapshot(
+      savedAt: now.addingTimeInterval(-120),
+      label: "Tea",
+      duration: 60,
+      deadline: now.addingTimeInterval(-60),
+      isPaused: false,
+      pausedRemaining: nil)
+    let preset = TimerPresetSnapshot(duration: 60, label: "Tea")
+    let box = TimerPersistenceBox(
+      sessionData: try XCTUnwrap(TimerPersistence.encode(session)),
+      presetData: try XCTUnwrap(TimerPersistence.encode(preset)))
+
+    return TimerActivity(
+      persistenceStore: box.store, now: now, completionNotifier: TimerNotifierStub())
+  }
 }
 
 @MainActor
@@ -139,4 +183,14 @@ private final class TimerPersistenceBox {
       readPresetData: { [weak self] in self?.presetData },
       writePresetData: { [weak self] in self?.presetData = $0 })
   }
+}
+
+@MainActor
+private final class TimerNotifierStub: TimerCompletionNotifying {
+  func prepareForTimerStart(onUnavailable: @escaping @MainActor () -> Void) {}
+
+  func notifyTimerFinished(
+    completionID: UUID, title: String, body: String,
+    onUnavailable: @escaping @MainActor () -> Void
+  ) {}
 }
