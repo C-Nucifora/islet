@@ -13,6 +13,17 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 
   var id: Self { self }
 
+  var title: String {
+    switch self {
+    case .general: String(localized: "General")
+    case .activities: String(localized: "Activities")
+    case .notifications: String(localized: "Notifications")
+    case .integrations: String(localized: "Integrations")
+    case .privacy: String(localized: "Privacy")
+    case .advanced: String(localized: "Advanced")
+    }
+  }
+
   init(destination: SettingsDestination) {
     switch destination {
     case .overview, .appearance: self = .general
@@ -57,6 +68,15 @@ private enum SystemMetricPreset: String, CaseIterable, Identifiable {
   case custom = "Custom"
 
   var id: Self { self }
+
+  var title: String {
+    switch self {
+    case .compact: String(localized: "Compact")
+    case .balanced: String(localized: "Balanced")
+    case .detailed: String(localized: "Detailed")
+    case .custom: String(localized: "Custom")
+    }
+  }
 }
 
 enum SettingsDetailPage: String, CaseIterable, Identifiable {
@@ -86,53 +106,53 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
 
   var title: String {
     switch self {
-    case .startupDisplays: "Startup and displays"
-    case .updates: "Updates"
-    case .appearance: "Appearance"
-    case .interaction: "Interaction"
-    case .energy: "Energy"
-    case .contextRules: "Context rules"
-    case .batteryWarnings: "Battery warnings"
-    case .activityOrder: "Activity order"
-    case .calendarReminders: "Calendar and reminders"
-    case .nowPlaying: "Now playing"
-    case .continuity: "iPhone Live Activities"
-    case .systemMetrics: "System metrics"
-    case .clipboard: "Clipboard"
-    case .systemHUD: "System HUD"
-    case .eventSources: "Event sources"
-    case .t3Code: "T3 Code"
-    case .pulse: "Pulse providers"
-    case .permissions: "App permissions"
-    case .diagnostics: "Diagnostics"
-    case .settingsTransfer: "Import and export"
-    case .reset: "Reset"
+    case .startupDisplays: String(localized: "Startup and displays")
+    case .updates: String(localized: "Updates")
+    case .appearance: String(localized: "Appearance")
+    case .interaction: String(localized: "Interaction")
+    case .energy: String(localized: "Energy")
+    case .contextRules: String(localized: "Context rules")
+    case .batteryWarnings: String(localized: "Battery warnings")
+    case .activityOrder: String(localized: "Activity order")
+    case .calendarReminders: String(localized: "Calendar and reminders")
+    case .nowPlaying: String(localized: "Now playing")
+    case .continuity: String(localized: "iPhone Live Activities")
+    case .systemMetrics: String(localized: "System metrics")
+    case .clipboard: String(localized: "Clipboard")
+    case .systemHUD: String(localized: "System HUD")
+    case .eventSources: String(localized: "Event sources")
+    case .t3Code: String(localized: "T3 Code")
+    case .pulse: String(localized: "Pulse providers")
+    case .permissions: String(localized: "App permissions")
+    case .diagnostics: String(localized: "Diagnostics")
+    case .settingsTransfer: String(localized: "Import and export")
+    case .reset: String(localized: "Reset")
     }
   }
 
   var subtitle: String {
     switch self {
-    case .startupDisplays: "Login item and display placement"
-    case .updates: "Signed automatic and manual updates"
-    case .appearance: "Choose the colours used across Islet"
-    case .interaction: "How the notch opens and closes"
-    case .energy: "Refresh rates, sleep and battery protection"
-    case .contextRules: "Adapt Islet to your current context"
-    case .batteryWarnings: "Drain, charger and peripheral alerts"
-    case .activityOrder: "Show, hide and reorder activities"
-    case .calendarReminders: "Agenda, countdown and reminder options"
-    case .nowPlaying: "Choose which active player opens first"
-    case .continuity: "App names from iPhone Live Activities"
-    case .systemMetrics: "Choose metrics and chart styles"
-    case .clipboard: "History, storage and filtering"
-    case .systemHUD: "Volume and brightness controls"
-    case .eventSources: "Brief alerts for system changes"
-    case .t3Code: "Pair T3 Code machines"
-    case .pulse: "Local API, providers and credentials"
-    case .permissions: "macOS access used by each feature"
-    case .diagnostics: "App identity and integration status"
-    case .settingsTransfer: "Back up or move portable preferences"
-    case .reset: "Restore interface defaults"
+    case .startupDisplays: String(localized: "Login item and display placement")
+    case .updates: String(localized: "Signed automatic and manual updates")
+    case .appearance: String(localized: "Choose the colours used across Islet")
+    case .interaction: String(localized: "How the notch opens and closes")
+    case .energy: String(localized: "Refresh rates, sleep and battery protection")
+    case .contextRules: String(localized: "Adapt Islet to your current context")
+    case .batteryWarnings: String(localized: "Drain, charger and peripheral alerts")
+    case .activityOrder: String(localized: "Show, hide and reorder activities")
+    case .calendarReminders: String(localized: "Agenda, countdown and reminder options")
+    case .nowPlaying: String(localized: "Choose which active player opens first")
+    case .continuity: String(localized: "App names from iPhone Live Activities")
+    case .systemMetrics: String(localized: "Choose metrics and chart styles")
+    case .clipboard: String(localized: "History, storage and filtering")
+    case .systemHUD: String(localized: "Volume and brightness controls")
+    case .eventSources: String(localized: "Brief alerts for system changes")
+    case .t3Code: String(localized: "Pair T3 Code machines")
+    case .pulse: String(localized: "Local API, providers and credentials")
+    case .permissions: String(localized: "macOS access used by each feature")
+    case .diagnostics: String(localized: "App identity and integration status")
+    case .settingsTransfer: String(localized: "Back up or move portable preferences")
+    case .reset: String(localized: "Restore interface defaults")
     }
   }
 
@@ -469,6 +489,15 @@ private enum PulseHistoryFilter: String, CaseIterable, Identifiable {
 
   var id: Self { self }
 
+  var title: String {
+    switch self {
+    case .all: String(localized: "All")
+    case .accepted: String(localized: "Accepted")
+    case .filtered: String(localized: "Filtered")
+    case .rejected: String(localized: "Rejected")
+    }
+  }
+
   func includes(_ entry: PulseHistoryEntry) -> Bool {
     switch self {
     case .all: true
@@ -768,7 +797,7 @@ struct SettingsView: View {
     NavigationSplitView {
       List(selection: $selection) {
         ForEach(filteredCategories) { category in
-          Label(category.rawValue, systemImage: category.icon).tag(category)
+          Label(category.title, systemImage: category.icon).tag(category)
         }
         if !filteredDetailPages.isEmpty {
           Section("Settings") {
@@ -804,7 +833,7 @@ struct SettingsView: View {
       Group {
         if let detailPage { detailView(detailPage) } else { categoryView }
       }
-      .navigationTitle(detailPage?.title ?? (selection ?? .general).rawValue)
+      .navigationTitle(detailPage?.title ?? (selection ?? .general).title)
       .toolbar {
         ToolbarItemGroup(placement: .navigation) {
           ControlGroup {
@@ -929,9 +958,10 @@ struct SettingsView: View {
           SettingsTransfer.apply(preview) { SettingsTransferDefaults.apply($0) }
           settingsImportPreview = nil
           settingsTransferNotice = SettingsTransferNotice(
-            title: "Settings imported",
-            message:
-              "Applied \(preview.changes.count) change\(preview.changes.count == 1 ? "" : "s").")
+            title: String(localized: "Settings imported"),
+            message: String(
+              localized: "Applied \(preview.changes.count) setting.",
+              comment: "Number of imported settings that were applied"))
         })
     }
     .alert(item: $settingsTransferNotice) { notice in
@@ -1407,7 +1437,8 @@ struct SettingsView: View {
     Form {
       Section("Calendar") {
         LabeledContent("Activity") {
-          Text(isActivityEnabled("calendar") ? "On" : "Off").foregroundStyle(.secondary)
+          Text(isActivityEnabled("calendar") ? String(localized: "On") : String(localized: "Off"))
+            .foregroundStyle(.secondary)
         }
         Toggle("Read calendar events", isOn: $calendarEnabled)
         Text("Calendar data also supplies the Home agenda when its activity is off.")
@@ -1457,7 +1488,8 @@ struct SettingsView: View {
     Form {
       Section("Visibility") {
         LabeledContent("System activity") {
-          Text(isActivityEnabled("system") ? "On" : "Off").foregroundStyle(.secondary)
+          Text(isActivityEnabled("system") ? String(localized: "On") : String(localized: "Off"))
+            .foregroundStyle(.secondary)
         }
         Text("By default, System appears only during sustained load.")
           .font(.caption).foregroundStyle(.secondary)
@@ -1481,7 +1513,7 @@ struct SettingsView: View {
         Section("Metric presentation") {
           Picker("Presentation", selection: metricPresetBinding) {
             ForEach(SystemMetricPreset.allCases) { preset in
-              Text(preset.rawValue).tag(preset)
+              Text(preset.title).tag(preset)
             }
           }
           DisclosureGroup("Customize individual metrics") {
@@ -1553,7 +1585,7 @@ struct SettingsView: View {
           .font(.caption).foregroundStyle(.secondary)
         if isActivityEnabled("continuity") {
           PermissionStatusRow(
-            title: "Availability", icon: "iphone.gen3",
+            title: String(localized: "Availability"), icon: "iphone.gen3",
             status: continuityStatusText, color: continuityStatusColor)
           Text(continuity.availability.explanation)
             .font(.caption).foregroundStyle(.secondary)
@@ -1588,7 +1620,8 @@ struct SettingsView: View {
     Form {
       Section("Clipboard history") {
         LabeledContent("Activity") {
-          Text(isActivityEnabled("clipboard") ? "On" : "Off").foregroundStyle(.secondary)
+          Text(isActivityEnabled("clipboard") ? String(localized: "On") : String(localized: "Off"))
+            .foregroundStyle(.secondary)
         }
         Text("Turning Clipboard off stops polling and clears its history.")
           .font(.caption).foregroundStyle(.secondary)
@@ -1724,7 +1757,7 @@ struct SettingsView: View {
             }
           }
           PermissionStatusRow(
-            title: "Accessibility", icon: "accessibility",
+            title: String(localized: "Accessibility"), icon: "accessibility",
             status: hud.eventTapStatus.summary,
             color: hud.eventTapStatus == .active ? .green : .orange)
           if !hud.accessibilityTrusted {
@@ -1890,14 +1923,14 @@ struct SettingsView: View {
         let policy = ScreenCaptureExclusionPolicy.current
         Toggle("Request capture exclusion", isOn: $hideFromRecording)
         PermissionStatusRow(
-          title: "Capture exclusion", icon: "rectangle.dashed.badge.record",
+          title: String(localized: "Capture exclusion"), icon: "rectangle.dashed.badge.record",
           status: policy.status.summary, color: screenCaptureStatusColor)
         Text(policy.status.detail)
           .font(.caption).foregroundStyle(.secondary)
       }
       Section("Calendar") {
         PermissionStatusRow(
-          title: "Calendar access", icon: "calendar", status: eventStatusText,
+          title: String(localized: "Calendar access"), icon: "calendar", status: eventStatusText,
           color: eventStatusColor)
         Text("Shows today's agenda, event countdowns and meeting links.").font(.caption)
           .foregroundStyle(.secondary)
@@ -1913,7 +1946,8 @@ struct SettingsView: View {
       }
       Section("Reminders") {
         PermissionStatusRow(
-          title: "Reminders access", icon: "checklist", status: reminderStatusText,
+          title: String(localized: "Reminders access"), icon: "checklist",
+          status: reminderStatusText,
           color: reminderStatusColor)
         Text("Shows and manages reminders from Home.").font(.caption)
           .foregroundStyle(.secondary)
@@ -1929,8 +1963,9 @@ struct SettingsView: View {
       }
       Section("Accessibility") {
         PermissionStatusRow(
-          title: "Accessibility access", icon: "accessibility",
-          status: permissions.diagnostics.accessibilityGranted ? "Allowed" : "Not allowed",
+          title: String(localized: "Accessibility access"), icon: "accessibility",
+          status: permissions.diagnostics.accessibilityGranted
+            ? String(localized: "Allowed") : String(localized: "Not allowed"),
           color: permissions.diagnostics.accessibilityGranted ? .green : .red)
         Text("Reads media keys for Islet's HUD and app names for iPhone Live Activities.")
           .font(.caption).foregroundStyle(.secondary)
@@ -1943,7 +1978,7 @@ struct SettingsView: View {
       }
       Section("Nearby devices and networks") {
         PermissionStatusRow(
-          title: "Location for Wi-Fi names", icon: "location.fill",
+          title: String(localized: "Location for Wi-Fi names"), icon: "location.fill",
           status: permissions.diagnostics.location.summary,
           color: platformPermissionColor(permissions.diagnostics.location))
         Text("Without location access, Wi-Fi notifications still work but omit the network name.")
@@ -1957,12 +1992,13 @@ struct SettingsView: View {
           }
         }
         PermissionStatusRow(
-          title: "Bluetooth devices", icon: "dot.radiowaves.right",
+          title: String(localized: "Bluetooth devices"), icon: "dot.radiowaves.right",
           status: permissions.diagnostics.bluetooth.summary,
           color: platformPermissionColor(permissions.diagnostics.bluetooth))
         Button("Open Bluetooth Privacy Settings") { permissions.open(.bluetooth) }
         PermissionStatusRow(
-          title: "Local network", icon: "network", status: "Managed by macOS",
+          title: String(localized: "Local network"), icon: "network",
+          status: String(localized: "Managed by macOS"),
           color: .secondary)
         Text(
           "macOS asks when Islet first connects to T3 Code on another local Mac. macOS does not report this permission's status."
@@ -1992,9 +2028,10 @@ struct SettingsView: View {
     Form {
       Section("Pulse providers") {
         PermissionStatusRow(
-          title: "Local activity API", icon: "waveform.path.ecg",
+          title: String(localized: "Local activity API"), icon: "waveform.path.ecg",
           status: pulseServer.lastError
-            ?? (pulseServer.listeningAddress.map { "Listening on \($0)" } ?? "Stopped"),
+            ?? (pulseServer.listeningAddress.map { String(localized: "Listening on \($0)") }
+              ?? String(localized: "Stopped")),
           color: pulseServer.lastError == nil ? (pulseServer.isRunning ? .green : .secondary) : .red
         )
         LabeledContent("Pulse items") {
@@ -2169,13 +2206,14 @@ struct SettingsView: View {
         }
         if showPulseHistory {
           Picker("History filter", selection: $pulseHistoryFilter) {
-            ForEach(PulseHistoryFilter.allCases) { filter in Text(filter.rawValue).tag(filter) }
+            ForEach(PulseHistoryFilter.allCases) { filter in Text(filter.title).tag(filter) }
           }
           .pickerStyle(.segmented)
           if filteredPulseHistory.isEmpty {
             Text(
               pulse.history.isEmpty
-                ? "No provider activity recorded." : "No matching history entries."
+                ? String(localized: "No provider activity recorded.")
+                : String(localized: "No matching history entries.")
             )
             .foregroundStyle(.secondary)
           } else {
@@ -2218,7 +2256,7 @@ struct SettingsView: View {
       }
       Section("Integration health") {
         PermissionStatusRow(
-          title: "Continuity reader", icon: "iphone.gen3",
+          title: String(localized: "Continuity reader"), icon: "iphone.gen3",
           status: continuityStatusText, color: continuityStatusColor)
         LabeledContent("Continuity last successful read") {
           Text(continuityLastSuccessfulReadText).foregroundStyle(.secondary)
@@ -2238,7 +2276,8 @@ struct SettingsView: View {
           Button("Retry Continuity") { continuity.retry() }
         }
         PermissionStatusRow(
-          title: "Focus event source", icon: "moon.circle.fill", status: focus.health.summary,
+          title: String(localized: "Focus event source"), icon: "moon.circle.fill",
+          status: focus.health.summary,
           color: focus.health.isFailure ? .orange : focus.health == .stopped ? .secondary : .green)
         if let lastSuccessfulParse = focus.lastSuccessfulParse {
           LabeledContent("Focus last parsed") {
@@ -2253,21 +2292,24 @@ struct SettingsView: View {
         Button("Retry Focus source") { focus.retry() }
           .disabled(focus.health == .stopped)
         PermissionStatusRow(
-          title: "Media adapter", icon: "music.note", status: nowPlaying.adapterStatus,
+          title: String(localized: "Media adapter"), icon: "music.note",
+          status: nowPlaying.adapterStatus,
           color: nowPlaying.adapterStatus.localizedCaseInsensitiveContains("error")
             || nowPlaying.adapterStatus.localizedCaseInsensitiveContains("timeout")
             ? .orange : .green)
         PermissionStatusRow(
-          title: "T3 Code credentials", icon: "key.fill",
-          status: t3Code.lastCredentialError ?? "Available",
+          title: String(localized: "T3 Code credentials"), icon: "key.fill",
+          status: t3Code.lastCredentialError ?? String(localized: "Available"),
           color: t3Code.lastCredentialError == nil ? .green : .orange)
         PermissionStatusRow(
-          title: "Pulse", icon: "waveform.path.ecg",
-          status: pulseServer.lastError ?? (pulseServer.isRunning ? "Listening" : "Stopped"),
+          title: String(localized: "Pulse"), icon: "waveform.path.ecg",
+          status: pulseServer.lastError
+            ?? (pulseServer.isRunning
+              ? String(localized: "Listening") : String(localized: "Stopped")),
           color: pulseServer.lastError == nil ? (pulseServer.isRunning ? .green : .secondary) : .red
         )
         PermissionStatusRow(
-          title: "Media-key HUD", icon: "keyboard",
+          title: String(localized: "Media-key HUD"), icon: "keyboard",
           status: hud.lastControlFailure ?? hud.eventTapStatus.summary,
           color: hud.lastControlFailure == nil
             ? (hud.eventTapStatus == .active ? .green : .secondary) : .orange)
@@ -2501,13 +2543,13 @@ struct SettingsView: View {
   }
 
   private func updateWindowTitle() {
-    SettingsOpener.setTitle(detailPage?.title ?? (selection ?? .general).rawValue)
+    SettingsOpener.setTitle(detailPage?.title ?? (selection ?? .general).title)
   }
 
   private var versionText: String {
     let version =
       Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-      ?? "Development"
+      ?? String(localized: "Development")
     let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
     return build.map { "\(version) (\($0))" } ?? version
   }
@@ -2515,19 +2557,24 @@ struct SettingsView: View {
   private var energyModeDetail: String {
     switch energyMode {
     case .automatic:
-      "Follows macOS Low Power Mode and slows hidden activity automatically."
+      String(localized: "Follows macOS Low Power Mode and slows hidden activity automatically.")
     case .lowEnergy:
-      "Always uses conservative refresh rates and disables optional remote T3 polling."
+      String(
+        localized: "Always uses conservative refresh rates and disables optional remote T3 polling."
+      )
     case .live:
-      "Prioritises fresh metrics and remote status, including while macOS Low Power Mode is on."
+      String(
+        localized:
+          "Prioritises fresh metrics and remote status, including while macOS Low Power Mode is on."
+      )
     }
   }
 
   private var energyModeTitle: String {
     switch energyMode {
-    case .automatic: "Automatic"
-    case .lowEnergy: "Low Energy"
-    case .live: "Live"
+    case .automatic: String(localized: "Automatic")
+    case .lowEnergy: String(localized: "Low Energy")
+    case .live: String(localized: "Live")
     }
   }
 
@@ -2582,11 +2629,14 @@ struct SettingsView: View {
       let count = pulse.history.count
       try pulse.exportHistoryData().write(to: url, options: .atomic)
       settingsTransferNotice = SettingsTransferNotice(
-        title: "Pulse history exported",
-        message: "Saved \(count) metadata entr\(count == 1 ? "y" : "ies").")
+        title: String(localized: "Pulse history exported"),
+        message: count == 1
+          ? String(localized: "Saved 1 metadata entry.")
+          : String(localized: "Saved \(count) metadata entries."))
     } catch {
       settingsTransferNotice = SettingsTransferNotice(
-        title: "Pulse history could not be exported", message: error.localizedDescription)
+        title: String(localized: "Pulse history could not be exported"),
+        message: error.localizedDescription)
     }
   }
 
@@ -2595,19 +2645,21 @@ struct SettingsView: View {
     panel.allowedContentTypes = [.json]
     panel.canCreateDirectories = true
     panel.nameFieldStringValue = "Islet Settings.json"
-    panel.title = "Export Islet settings"
-    panel.prompt = "Export"
+    panel.title = String(localized: "Export Islet settings")
+    panel.prompt = String(localized: "Export")
     guard panel.runModal() == .OK, let url = panel.url else { return }
 
     do {
       let data = try SettingsTransfer.exportData(snapshot: SettingsTransferDefaults.snapshot())
       try data.write(to: url, options: .atomic)
       settingsTransferNotice = SettingsTransferNotice(
-        title: "Settings exported",
-        message: "Saved \(SettingsTransfer.portableKeys.count) portable preferences.")
+        title: String(localized: "Settings exported"),
+        message: String(
+          localized: "Saved \(SettingsTransfer.portableKeys.count) portable preference."))
     } catch {
       settingsTransferNotice = SettingsTransferNotice(
-        title: "Settings could not be exported", message: error.localizedDescription)
+        title: String(localized: "Settings could not be exported"),
+        message: error.localizedDescription)
     }
   }
 
@@ -2616,8 +2668,8 @@ struct SettingsView: View {
     panel.allowedContentTypes = [.json]
     panel.allowsMultipleSelection = false
     panel.canChooseDirectories = false
-    panel.title = "Import Islet settings"
-    panel.prompt = "Preview"
+    panel.title = String(localized: "Import Islet settings")
+    panel.prompt = String(localized: "Preview")
     guard panel.runModal() == .OK, let url = panel.url else { return }
 
     let hasAccess = url.startAccessingSecurityScopedResource()
@@ -2632,7 +2684,8 @@ struct SettingsView: View {
         data: data, current: SettingsTransferDefaults.snapshot())
     } catch {
       settingsTransferNotice = SettingsTransferNotice(
-        title: "Settings could not be imported", message: error.localizedDescription)
+        title: String(localized: "Settings could not be imported"),
+        message: error.localizedDescription)
     }
   }
 

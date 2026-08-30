@@ -340,7 +340,7 @@ struct T3CodeExpandedView: View {
         Label("T3 Code", systemImage: "terminal.fill")
           .font(.caption.weight(.semibold))
         Spacer()
-        Text("\(activity.agents.count) agent\(activity.agents.count == 1 ? "" : "s")")
+        Text(LocalizedText.agentCount(activity.agents.count))
           .font(.caption2).foregroundStyle(.secondary)
       }
 
@@ -382,8 +382,8 @@ struct T3CodeExpandedView: View {
     let connected = T3CodeActivity.connectedEnvironmentCount(
       in: visibleEnvironments, remotePollingActive: activity.remotePollingActive)
     return connected == 0
-      ? "Open T3 Code, link T3 Connect, or add a machine in Settings."
-      : "Connected to \(connected) machine\(connected == 1 ? "" : "s")"
+      ? String(localized: "Open T3 Code, link T3 Connect, or add a machine in Settings.")
+      : String(localized: "Connected to \(connected) machine", comment: "Connected machine count")
   }
 
   private var visibleEnvironments: [T3EnvironmentSnapshot] {
@@ -548,6 +548,7 @@ struct T3SettingsSection: View {
   @State private var pairingForm = T3PairingFormState()
   @FocusState private var focusedField: T3PairingFormField?
   @State private var machineStatusMessage: String?
+  @State private var machineStatusSucceeded: Bool?
   @State private var pendingRemoval: T3EnvironmentProfile?
   @State private var pendingAccountAction: T3ConnectAccountPresentation.Action.Kind?
   @State private var confirmingSignOut = false
@@ -602,9 +603,7 @@ struct T3SettingsSection: View {
       if let machineStatusMessage {
         Text(machineStatusMessage)
           .font(.caption2)
-          .foregroundStyle(
-            machineStatusMessage.hasPrefix("Removed") ? .green : .orange
-          )
+          .foregroundStyle(machineStatusSucceeded == true ? .green : .orange)
           .fixedSize(horizontal: false, vertical: true)
       }
       Button("Reconnect now") { activity.reconnect() }.disabled(!isActivityEnabled)
@@ -730,9 +729,7 @@ struct T3SettingsSection: View {
       }
       if let statusMessage = pairingForm.statusMessage {
         Text(statusMessage).font(.caption2)
-          .foregroundStyle(
-            statusMessage.hasPrefix("Added") ? .green : .orange
-          )
+          .foregroundStyle(pairingForm.statusSucceeded == true ? .green : .orange)
           .fixedSize(horizontal: false, vertical: true)
       }
     }
@@ -778,12 +775,16 @@ struct T3SettingsSection: View {
       environmentRow(local)
     } else if !activity.hasLocalObservation {
       LabeledContent {
-        Text(isActivityEnabled ? "Discovering…" : "Off").foregroundStyle(.secondary)
+        Text(
+          isActivityEnabled ? String(localized: "Discovering…") : String(localized: "Off")
+        ).foregroundStyle(.secondary)
       } label: {
         Label("This Mac", systemImage: "laptopcomputer")
       }
       .accessibilityElement(children: .combine)
-      .accessibilityLabel("This Mac, \(isActivityEnabled ? "Discovering" : "Off")")
+      .accessibilityLabel(
+        isActivityEnabled
+          ? String(localized: "This Mac, Discovering") : String(localized: "This Mac, Off"))
     }
     ForEach(activity.environments.filter { $0.source == .connect }) { snapshot in
       environmentRow(snapshot)
@@ -809,7 +810,7 @@ struct T3SettingsSection: View {
         }
         Spacer()
         if !isActivityEnabled || !profile.enabled {
-          Text("Off").font(.caption).foregroundStyle(.secondary)
+          Text(String(localized: "Off")).font(.caption).foregroundStyle(.secondary)
         } else if row.isPaused {
           Text(row.stateText).font(.caption).foregroundStyle(.secondary)
         } else {
@@ -890,9 +891,12 @@ struct T3SettingsSection: View {
   private func remove(_ profile: T3EnvironmentProfile) {
     do {
       try activity.removeRemote(environmentID: profile.id)
-      machineStatusMessage = "Removed T3 Code machine."
+      machineStatusMessage = String(localized: "Removed T3 Code machine.")
+      machineStatusSucceeded = true
     } catch {
-      machineStatusMessage = "Machine was not removed: \(error.localizedDescription)"
+      machineStatusMessage = String(
+        localized: "Machine was not removed: \(error.localizedDescription)")
+      machineStatusSucceeded = false
     }
   }
 

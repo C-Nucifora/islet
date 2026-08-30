@@ -60,7 +60,7 @@ struct BatteryExpandedView: View {
 
       VStack(alignment: .leading, spacing: 0) {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
-          Text("\(percent)%")
+          Text(LocalizedFormat.percent(Double(percent) / 100))
             .font(.system(size: 19, weight: .bold, design: .rounded)).monospacedDigit()
             .appThemeForeground(.battery)
           Text(statusText)
@@ -73,12 +73,12 @@ struct BatteryExpandedView: View {
         }
       }
       .accessibilityElement(children: .combine)
-      .accessibilityLabel("Battery \(percent) percent, \(statusText)")
+      .accessibilityLabel(String(localized: "Battery \(percent) percent, \(statusText)"))
 
       Spacer(minLength: 8)
 
       if metrics?.lowPowerMode == true {
-        statusPill("Low Power", symbol: "leaf.fill", active: true)
+        statusPill(String(localized: "Low Power"), symbol: "leaf.fill", active: true)
       }
       statusPill(refreshLabel, symbol: "circle.fill", active: flow.hasLivePower)
         .help(refreshExplanation)
@@ -174,7 +174,8 @@ struct BatteryExpandedView: View {
     if let watts = flow.batteryInputWatts {
       items.append(
         FlowItem(
-          id: "battery-source", label: "Battery", note: "system battery supplement",
+          id: "battery-source", label: String(localized: "Battery"),
+          note: String(localized: "system battery supplement"),
           symbol: "battery.100percent", watts: watts, role: .batterySupplement))
     }
     return items
@@ -185,31 +186,36 @@ struct BatteryExpandedView: View {
     if let watts = flow.cpuUseWatts, watts > 0.05 {
       items.append(
         FlowItem(
-          id: "cpu", label: "CPU", note: "estimated processor power",
+          id: "cpu", label: String(localized: "CPU"),
+          note: String(localized: "estimated processor power"),
           symbol: "cpu", watts: watts, role: .systemLoad))
     }
     if let watts = flow.restOfMacWatts, watts > 0.05 {
       items.append(
         FlowItem(
-          id: "rest-of-mac", label: "Rest of Mac", note: "display, memory and other hardware",
+          id: "rest-of-mac", label: String(localized: "Rest of Mac"),
+          note: String(localized: "display, memory and other hardware"),
           symbol: "laptopcomputer", watts: watts, role: .systemLoad))
     } else if flow.cpuUseWatts == nil, let watts = flow.macUseWatts, watts > 0.05 {
       items.append(
         FlowItem(
-          id: "mac", label: "Running the Mac", note: "internal system load",
+          id: "mac", label: String(localized: "Running the Mac"),
+          note: String(localized: "internal system load"),
           symbol: "laptopcomputer", watts: watts, role: .systemLoad))
     }
     for output in flow.usbOutputs where output.watts > 0.05 {
       items.append(
         FlowItem(
-          id: "usb-output-\(output.portIndex)", label: "USB port \(output.portIndex)",
+          id: "usb-output-\(output.portIndex)",
+          label: String(localized: "USB port \(output.portIndex)"),
           note: usbOutputNote(output), symbol: "cable.connector", watts: output.watts,
           role: .usbOutput))
     }
     if let watts = flow.batteryChargeWatts {
       items.append(
         FlowItem(
-          id: "battery-charge", label: "Charging battery", note: "stored in the system battery",
+          id: "battery-charge", label: String(localized: "Charging battery"),
+          note: String(localized: "stored in the system battery"),
           symbol: "battery.100percent.bolt", watts: watts, role: .batteryCharge))
     }
     return items
@@ -218,18 +224,33 @@ struct BatteryExpandedView: View {
   private var adapterNote: String {
     switch (metrics?.adapterVolts, metrics?.adapterAmps, metrics?.adapterWatts) {
     case (let volts?, let amps?, _):
-      return String(format: "%.0f V × %.2f A negotiated", volts, amps)
-    case (_, _, let watts?): return "\(watts) W adapter rating"
-    default: return "external power"
+      return String(
+        localized:
+          "\(PowerFormat.volts(volts)) × \(LocalizedFormat.measurement(amps, unit: UnitElectricCurrent.amperes, fractionDigits: 2...2)) negotiated"
+      )
+    case (_, _, let watts?): return String(localized: "\(watts) W adapter rating")
+    default: return String(localized: "external power")
     }
   }
 
   private func usbOutputNote(_ output: USBPowerOutput) -> String {
     switch (output.volts, output.amps) {
-    case (let volts?, let amps?): return String(format: "%.1f V × %.2f A output", volts, amps)
-    case (let volts?, nil): return String(format: "%.1f V output", volts)
-    case (nil, let amps?): return String(format: "%.2f A output", amps)
-    case (nil, nil): return "external USB power"
+    case (let volts?, let amps?):
+      return String(
+        localized:
+          "\(LocalizedFormat.measurement(volts, unit: UnitElectricPotentialDifference.volts, fractionDigits: 1...1)) × \(LocalizedFormat.measurement(amps, unit: UnitElectricCurrent.amperes, fractionDigits: 2...2)) output"
+      )
+    case (let volts?, nil):
+      return String(
+        localized:
+          "\(LocalizedFormat.measurement(volts, unit: UnitElectricPotentialDifference.volts, fractionDigits: 1...1)) output"
+      )
+    case (nil, let amps?):
+      return String(
+        localized:
+          "\(LocalizedFormat.measurement(amps, unit: UnitElectricCurrent.amperes, fractionDigits: 2...2)) output"
+      )
+    case (nil, nil): return String(localized: "external USB power")
     }
   }
 
@@ -483,21 +504,32 @@ struct BatteryExpandedView: View {
   private var detailStrip: some View {
     ScrollView(.horizontal) {
       HStack(spacing: 16) {
-        detail("Health", metrics?.healthPercent.map { "\($0)%" }, symbol: "heart.fill")
-          .help(healthHelp)
         detail(
-          "Temperature", metrics?.temperatureC.map(PowerFormat.temperature),
+          String(localized: "Health"),
+          metrics?.healthPercent.map { LocalizedFormat.percent(Double($0) / 100) },
+          symbol: "heart.fill"
+        )
+        .help(healthHelp)
+        detail(
+          String(localized: "Temperature"),
+          metrics?.temperatureC.map { PowerFormat.temperature($0) },
           symbol: "thermometer.medium")
         detail(
-          "Cycles", metrics?.cycleCount.map(String.init), symbol: "arrow.triangle.2.circlepath")
-        detail("Capacity", capacityValue, symbol: "battery.75percent")
+          String(localized: "Cycles"), metrics?.cycleCount.map { LocalizedFormat.integer($0) },
+          symbol: "arrow.triangle.2.circlepath")
+        detail(String(localized: "Capacity"), capacityValue, symbol: "battery.75percent")
         if let trend = monitor.insightSnapshot.capacityTrend {
-          detail("Capacity trend", trend.wording, symbol: "chart.line.downtrend.xyaxis")
-            .help(trend.explanation)
+          detail(
+            String(localized: "Capacity trend"), trend.wording,
+            symbol: "chart.line.downtrend.xyaxis"
+          )
+          .help(trend.explanation)
         }
         telemetryDiagnostics
         ForEach(monitor.peripherals) { device in
-          detail(device.name, "\(device.percent)%", symbol: device.icon)
+          detail(
+            device.name, LocalizedFormat.percent(Double(device.percent) / 100),
+            symbol: device.icon)
         }
       }
     }
@@ -548,16 +580,20 @@ struct BatteryExpandedView: View {
 
   private var healthHelp: String {
     var parts: [String] = []
-    if let raw = metrics?.rawHealthPercent { parts.append("Raw health \(raw)%") }
-    if let condition = metrics?.condition { parts.append("Condition: \(condition)") }
-    return parts.isEmpty ? "Battery health" : parts.joined(separator: " · ")
+    if let raw = metrics?.rawHealthPercent {
+      parts.append(String(localized: "Raw health \(raw) percent"))
+    }
+    if let condition = metrics?.condition {
+      parts.append(String(localized: "Condition: \(condition)"))
+    }
+    return parts.isEmpty ? String(localized: "Battery health") : parts.joined(separator: " · ")
   }
 
   private var capacityValue: String? {
     guard let current = metrics?.rawMaxCapacityMAh ?? metrics?.nominalCapacityMAh else {
       return nil
     }
-    return "\(current) mAh"
+    return String(localized: "\(LocalizedFormat.integer(current)) mAh")
   }
 
 }

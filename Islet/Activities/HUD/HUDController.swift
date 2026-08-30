@@ -18,11 +18,11 @@ enum HUDEventTapStatus: String, Equatable, Sendable {
 
   var summary: String {
     switch self {
-    case .disabled: "Disabled"
-    case .accessibilityRequired: "Accessibility permission required"
-    case .active: "Active"
-    case .creationFailed: "Event tap could not be created"
-    case .interrupted: "Event tap interrupted"
+    case .disabled: String(localized: "Disabled")
+    case .accessibilityRequired: String(localized: "Accessibility permission required")
+    case .active: String(localized: "Active")
+    case .creationFailed: String(localized: "Event tap could not be created")
+    case .interrupted: String(localized: "Event tap interrupted")
     }
   }
 }

@@ -351,7 +351,9 @@ private struct ExpandedHUDOverlay: View {
     .overlay(Capsule().stroke(.white.opacity(0.14), lineWidth: 1))
     .shadow(color: .black.opacity(0.5), radius: 8, y: 3)
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel(snapshot.kind == .volume ? "Volume" : "Brightness")
+    .accessibilityLabel(
+      snapshot.kind == .volume ? String(localized: "Volume") : String(localized: "Brightness")
+    )
     .accessibilityValue("\(Int((snapshot.level * 100).rounded())) percent")
   }
 }

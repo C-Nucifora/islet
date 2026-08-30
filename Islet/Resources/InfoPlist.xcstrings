@@ -1,0 +1,118 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "NSBluetoothAlwaysUsageDescription" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Islet shows a brief animation when a Bluetooth device connects or disconnects, and reads the battery level of connected Apple peripherals."
+          }
+        },
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ïslët shøws å brïëf åñïmåtïøñ whëñ å Blûëtøøth dëvïçë çøññëçts ør dïsçøññëçts, åñd rëåds thë båttërÿ lëvël øf çøññëçtëd Åpplë përïphëråls. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "NSCalendarsFullAccessUsageDescription" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Islet shows your next event and today's agenda in the notch."
+          }
+        },
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ïslët shøws ÿøûr ñëxt ëvëñt åñd tødåÿ's ågëñdå ïñ thë ñøtçh. ~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "NSCalendarsUsageDescription" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Islet shows your next event and today's agenda in the notch."
+          }
+        },
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ïslët shøws ÿøûr ñëxt ëvëñt åñd tødåÿ's ågëñdå ïñ thë ñøtçh. ~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "NSLocalNetworkUsageDescription" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Islet connects to T3 Code on your Macs to show active agents in the notch."
+          }
+        },
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ïslët çøññëçts tø T3 Çødë øñ ÿøûr Måçs tø shøw åçtïvë ågëñts ïñ thë ñøtçh. ~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "NSLocationWhenInUseUsageDescription" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Islet shows the name of the Wi-Fi network you join. macOS requires location access to read network names; deny this and Islet will simply say 'Wi-Fi connected'."
+          }
+        },
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ïslët shøws thë ñåmë øf thë Wï-Fï ñëtwørk ÿøû jøïñ. måçØS rëqûïrës løçåtïøñ åççëss tø rëåd ñëtwørk ñåmës; dëñÿ thïs åñd Ïslët wïll sïmplÿ såÿ 'Wï-Fï çøññëçtëd'. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "NSRemindersFullAccessUsageDescription" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Islet shows your reminders in the notch and lets you complete them."
+          }
+        },
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ïslët shøws ÿøûr rëmïñdërs ïñ thë ñøtçh åñd lëts ÿøû çømplëtë thëm. ~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "NSRemindersUsageDescription" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Islet shows your reminders in the notch and lets you complete them."
+          }
+        },
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ïslët shøws ÿøûr rëmïñdërs ïñ thë ñøtçh åñd lëts ÿøû çømplëtë thëm. ~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

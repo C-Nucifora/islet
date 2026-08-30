@@ -335,7 +335,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
     return store.events(matching: predicate).map { event in
       AgendaEvent(
         id: "\(event.calendarItemIdentifier)|\(event.startDate.timeIntervalSinceReferenceDate)",
-        title: event.title ?? "Untitled",
+        title: event.title ?? String(localized: "Untitled"),
         start: event.startDate, end: event.endDate, isAllDay: event.isAllDay,
         calendarColorHex: ColorHex.string(from: event.calendar?.cgColor),
         joinURL: joinURL(from: event), location: normalizedLocation(from: event))
@@ -733,8 +733,10 @@ private struct CalendarMeetingLinkConfirmationModifier: ViewModifier {
   }
 
   private var confirmationTitle: String {
-    guard let host = link.trust.destinationHost else { return "Open meeting link?" }
-    return "Open \(host)?"
+    guard let host = link.trust.destinationHost else {
+      return String(localized: "Open meeting link?")
+    }
+    return String(localized: "Open \(host)?")
   }
 }
 

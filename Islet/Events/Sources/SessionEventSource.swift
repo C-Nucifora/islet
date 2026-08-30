@@ -10,7 +10,7 @@ import Combine
 @MainActor
 final class SessionEventSource: SystemEventSource {
   let id = "session"
-  let displayName = "Screen lock and Caps Lock"
+  let displayName = String(localized: "Screen lock and Caps Lock")
   let tier = SystemEventTier.extended
 
   private var cancellables: Set<AnyCancellable> = []
@@ -44,11 +44,12 @@ final class SessionEventSource: SystemEventSource {
       SystemEvent(
         sourceID: id,
         icon: locked ? "lock.fill" : "lock.open.fill",
-        title: locked ? "Locked" : "Unlocked",
+        title: locked ? String(localized: "Locked") : String(localized: "Unlocked"),
         accentHex: locked ? EventAccent.neutral : EventAccent.positive,
         motion: .lock,
         urgency: .ambient,
-        announcement: locked ? "Screen locked" : "Screen unlocked"))
+        announcement: locked
+          ? String(localized: "Screen locked") : String(localized: "Screen unlocked")))
   }
 
   private func reportCapsLock(_ on: Bool) {
@@ -58,11 +59,11 @@ final class SessionEventSource: SystemEventSource {
       SystemEvent(
         sourceID: id,
         icon: on ? "capslock.fill" : "capslock",
-        title: on ? "Caps Lock on" : "Caps Lock off",
+        title: on ? String(localized: "Caps Lock on") : String(localized: "Caps Lock off"),
         accentHex: on ? EventAccent.warning : EventAccent.neutral,
         motion: .lock,
         urgency: .ambient,
         duration: 1.2,
-        announcement: on ? "Caps Lock on" : "Caps Lock off"))
+        announcement: on ? String(localized: "Caps Lock on") : String(localized: "Caps Lock off")))
   }
 }

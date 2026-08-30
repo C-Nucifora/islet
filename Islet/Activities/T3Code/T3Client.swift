@@ -19,22 +19,30 @@ enum T3ClientError: Error, LocalizedError, Sendable {
 
   var errorDescription: String? {
     switch self {
-    case .invalidURL: "That is not a valid T3 Code URL."
-    case .unsupportedScheme: "T3 Code endpoints must use HTTP or HTTPS."
-    case .credentialsInURL: "Usernames and passwords are not allowed in an endpoint URL."
-    case .insecureRemoteHTTP: "Remote T3 Code machines must use HTTPS."
+    case .invalidURL: String(localized: "That is not a valid T3 Code URL.")
+    case .unsupportedScheme: String(localized: "T3 Code endpoints must use HTTP or HTTPS.")
+    case .credentialsInURL:
+      String(localized: "Usernames and passwords are not allowed in an endpoint URL.")
+    case .insecureRemoteHTTP: String(localized: "Remote T3 Code machines must use HTTPS.")
     case .unapprovedInsecureRemoteHTTP:
-      "This build does not approve plain HTTP for that T3 Code address. Pair it over HTTPS."
+      String(
+        localized:
+          "This build does not approve plain HTTP for that T3 Code address. Pair it over HTTPS.")
     case .environmentIdentityConflict:
-      "That T3 Code machine reports an identity already used by a different endpoint."
-    case .missingPairingToken: "The pairing link has no one-time token."
-    case .invalidResponse: "T3 Code returned an unreadable response."
-    case .responseTooLarge: "T3 Code returned more data than Islet accepts."
-    case .requestTimedOut: "T3 Code did not finish the request before the deadline."
+      String(
+        localized: "That T3 Code machine reports an identity already used by a different endpoint.")
+    case .missingPairingToken: String(localized: "The pairing link has no one-time token.")
+    case .invalidResponse: String(localized: "T3 Code returned an unreadable response.")
+    case .responseTooLarge: String(localized: "T3 Code returned more data than Islet accepts.")
+    case .requestTimedOut:
+      String(localized: "T3 Code did not finish the request before the deadline.")
     case .untrustedLocalEndpoint:
-      "The local endpoint is not owned by a trusted T3 Code app or CLI process. Pairing was not attempted."
-    case .unauthorized: "This T3 Code credential is no longer authorized."
-    case .http(let status): "T3 Code returned HTTP \(status)."
+      String(
+        localized:
+          "The local endpoint is not owned by a trusted T3 Code app or CLI process. Pairing was not attempted."
+      )
+    case .unauthorized: String(localized: "This T3 Code credential is no longer authorized.")
+    case .http(let status): String(localized: "T3 Code returned HTTP \(status).")
     }
   }
 }

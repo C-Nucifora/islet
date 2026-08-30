@@ -15,13 +15,13 @@ enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
 
   var title: String {
     switch self {
-    case .classic: "Classic"
-    case .mono: "Mono"
-    case .ocean: "Ocean"
-    case .violet: "Violet"
-    case .sunset: "Sunset"
-    case .forest: "Forest"
-    case .catppuccin: "Catppuccin"
+    case .classic: String(localized: "Classic")
+    case .mono: String(localized: "Mono")
+    case .ocean: String(localized: "Ocean")
+    case .violet: String(localized: "Violet")
+    case .sunset: String(localized: "Sunset")
+    case .forest: String(localized: "Forest")
+    case .catppuccin: String(localized: "Catppuccin")
     }
   }
 
@@ -149,8 +149,8 @@ enum BatteryGraphStyle: String, CaseIterable, Codable, Identifiable, Sendable {
 
   var title: String {
     switch self {
-    case .coloured: "Coloured"
-    case .monochrome: "Monochrome"
+    case .coloured: String(localized: "Coloured")
+    case .monochrome: String(localized: "Monochrome")
     }
   }
 }

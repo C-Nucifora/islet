@@ -195,17 +195,17 @@ enum SettingsTransferError: LocalizedError {
   var errorDescription: String? {
     switch self {
     case .corruptDocument:
-      "The file is not valid JSON."
+      String(localized: "The file is not valid JSON.")
     case .documentTooLarge:
-      "The settings file is larger than 1 MB."
+      String(localized: "The settings file is larger than 1 MB.")
     case .wrongFormat:
-      "The file is not an Islet settings export."
+      String(localized: "The file is not an Islet settings export.")
     case .unsupportedVersion(let version):
-      "This export uses unsupported settings version \(version)."
+      String(localized: "This export uses unsupported settings version \(version).")
     case .missingSettings:
-      "The export does not contain a settings object."
+      String(localized: "The export does not contain a settings object.")
     case .invalidValue(let key, let expected):
-      "\(key) has the wrong value. Expected \(expected)."
+      String(localized: "\(key) has the wrong value. Expected \(expected).")
     }
   }
 }

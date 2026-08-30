@@ -23,7 +23,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   /// Secondary sources drawn as chips under the hero. Adapter sources first, then CoreAudio ones,
   /// which carry no metadata at all — only "this app is producing audio".
   @Published private(set) var strip: [SourceID] = []
-  @Published private(set) var adapterStatus = "Starting…"
+  @Published private(set) var adapterStatus = String(localized: "Starting…")
   @Published private(set) var mediaControlNotice: String?
   /// The most recent command result. The view uses the accompanying notice only for failures,
   /// while this preserves the success or failure result for observers and tests.
@@ -172,7 +172,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     appIcons = [:]
     resolvedBundleIdentifiers = []
     activationDate = nil
-    adapterStatus = "Stopped"
+    adapterStatus = String(localized: "Stopped")
     mediaControlRequest &+= 1
     clearMediaControlFeedback()
     adapterFailure = nil

@@ -283,10 +283,12 @@ enum PulseSymbolWarning: LocalizedError, Equatable, Sendable {
 
   var errorDescription: String? {
     switch self {
-    case .empty: "symbol was empty; using waveform.path.ecg"
-    case .invalid: "symbol is not available on this macOS version; using waveform.path.ecg"
+    case .empty: String(localized: "symbol was empty; using waveform.path.ecg")
+    case .invalid:
+      String(localized: "symbol is not available on this macOS version; using waveform.path.ecg")
     case .platformUnavailable:
-      "symbol validation is unavailable on this platform; using waveform.path.ecg"
+      String(
+        localized: "symbol validation is unavailable on this platform; using waveform.path.ecg")
     }
   }
 }
@@ -307,19 +309,24 @@ enum PulseValidationError: LocalizedError, Equatable {
 
   var errorDescription: String? {
     switch self {
-    case .empty(let field): "\(field) must not be empty"
-    case .tooLong(let field, let limit): "\(field) exceeds \(limit) characters"
-    case .tooLongUTF8(let field, let limit): "\(field) exceeds \(limit) UTF-8 bytes"
-    case .invalidProgress: "progress must be a finite number from 0 through 1"
-    case .invalidAccentHex: "accentHex must use #RRGGBB format"
-    case .expired: "expiresAt is already in the past"
-    case .providerSetStale: "stale is an Islet-managed state"
-    case .tooManyActions: "an activity may expose at most three actions"
-    case .duplicateActionID: "action ids must be unique within an activity"
+    case .empty(let field): String(localized: "\(field) must not be empty")
+    case .tooLong(let field, let limit): String(localized: "\(field) exceeds \(limit) characters")
+    case .tooLongUTF8(let field, let limit):
+      String(localized: "\(field) exceeds \(limit) UTF-8 bytes")
+    case .invalidProgress: String(localized: "progress must be a finite number from 0 through 1")
+    case .invalidAccentHex: String(localized: "accentHex must use #RRGGBB format")
+    case .expired: String(localized: "expiresAt is already in the past")
+    case .providerSetStale: String(localized: "stale is an Islet-managed state")
+    case .tooManyActions: String(localized: "an activity may expose at most three actions")
+    case .duplicateActionID: String(localized: "action ids must be unique within an activity")
     case .unsafeActionURL:
-      "action URLs must use an unambiguous HTTP or HTTPS host without credentials or controls"
-    case .invalidRevision: "revision must be an integer from 0 through \(PulseRevision.maximum)"
-    case .unsafeProviderIdentity: "the action provider identity does not match its source"
+      String(
+        localized:
+          "action URLs must use an unambiguous HTTP or HTTPS host without credentials or controls")
+    case .invalidRevision:
+      String(localized: "revision must be an integer from 0 through \(PulseRevision.maximum)")
+    case .unsafeProviderIdentity:
+      String(localized: "the action provider identity does not match its source")
     }
   }
 }
@@ -344,19 +351,20 @@ enum PulseDeliveryProfile: String, CaseIterable, Codable, Identifiable, Sendable
 
   var title: String {
     switch self {
-    case .everything: "Everything"
-    case .focused: "Focus"
-    case .criticalOnly: "Critical only"
-    case .paused: "Paused"
+    case .everything: String(localized: "Everything")
+    case .focused: String(localized: "Focus")
+    case .criticalOnly: String(localized: "Critical only")
+    case .paused: String(localized: "Paused")
     }
   }
 
   var detail: String {
     switch self {
-    case .everything: "Show every provider update"
-    case .focused: "Show high-priority, failed, stale, and needs-action updates"
-    case .criticalOnly: "Show only critical and failed updates"
-    case .paused: "Keep the API available without showing new items"
+    case .everything: String(localized: "Show every provider update")
+    case .focused:
+      String(localized: "Show high-priority, failed, stale, and needs-action updates")
+    case .criticalOnly: String(localized: "Show only critical and failed updates")
+    case .paused: String(localized: "Keep the API available without showing new items")
     }
   }
 
@@ -381,17 +389,17 @@ enum PulseSourcePolicy: String, CaseIterable, Identifiable, Sendable {
   var id: Self { self }
   var title: String {
     switch self {
-    case .allowed: "Allow"
-    case .muted: "Mute"
-    case .revoked: "Revoke"
+    case .allowed: String(localized: "Allow")
+    case .muted: String(localized: "Mute")
+    case .revoked: String(localized: "Revoke")
     }
   }
 
   var detail: String {
     switch self {
-    case .allowed: "Accept and show matching updates"
-    case .muted: "Accept state without showing it"
-    case .revoked: "Reject updates from this source"
+    case .allowed: String(localized: "Accept and show matching updates")
+    case .muted: String(localized: "Accept state without showing it")
+    case .revoked: String(localized: "Reject updates from this source")
     }
   }
 }
@@ -410,16 +418,16 @@ enum PulseHistoryResult: String, Codable, Sendable {
 
   var title: String {
     switch self {
-    case .shown: "Shown"
-    case .updated: "Updated"
-    case .ended: "Ended"
-    case .dismissed: "Dismissed"
-    case .expired: "Expired"
-    case .stale: "Stale"
-    case .kept: "Kept"
-    case .suppressed: "Filtered"
-    case .rejected: "Rejected"
-    case .evicted: "Evicted"
+    case .shown: String(localized: "Shown")
+    case .updated: String(localized: "Updated")
+    case .ended: String(localized: "Ended")
+    case .dismissed: String(localized: "Dismissed")
+    case .expired: String(localized: "Expired")
+    case .stale: String(localized: "Stale")
+    case .kept: String(localized: "Kept")
+    case .suppressed: String(localized: "Filtered")
+    case .rejected: String(localized: "Rejected")
+    case .evicted: String(localized: "Evicted")
     }
   }
 }
@@ -447,10 +455,10 @@ enum PulseCapability: String, CaseIterable, Identifiable, Sendable {
   var id: Self { self }
   var title: String {
     switch self {
-    case .events: "Events"
-    case .persistentActivities: "Persistent activities"
-    case .progress: "Progress"
-    case .webActions: "Web links"
+    case .events: String(localized: "Events")
+    case .persistentActivities: String(localized: "Persistent activities")
+    case .progress: String(localized: "Progress")
+    case .webActions: String(localized: "Web links")
     }
   }
   var symbol: String {
@@ -492,45 +500,53 @@ struct PulseProviderDescriptor: Identifiable, Equatable, Sendable {
 
   static let gallery: [Self] = [
     .init(
-      id: "shortcuts", name: "Shortcuts", summary: "Publish events without writing code.",
+      id: "shortcuts", name: String(localized: "Shortcuts"),
+      summary: String(localized: "Publish events without writing code."),
       symbol: "square.stack.3d.up.fill", sourceIDs: ["shortcuts"],
       capabilities: [.events, .progress],
-      setupHint: "Import a starter shortcut or add an Islet action.",
+      setupHint: String(localized: "Import a starter shortcut or add an Islet action."),
       documentationLinks: PulseProviderDocumentationLink.shortcutStarterKit),
     .init(
-      id: "cli", name: "Pulse CLI", summary: "Send progress and alerts from local scripts.",
+      id: "cli", name: String(localized: "Pulse CLI"),
+      summary: String(localized: "Send progress and alerts from local scripts."),
       symbol: "terminal.fill", sourceIDs: ["cli"],
       capabilities: [.events, .persistentActivities, .progress, .webActions],
-      setupHint: "Run Tools/islet-pulse.swift from this project."),
+      setupHint: String(localized: "Run Tools/islet-pulse.swift from this project.")),
     .init(
-      id: "github-actions", name: "GitHub workflow watcher",
-      summary: "Shows GitHub run status observed on this Mac.",
+      id: "github-actions", name: String(localized: "GitHub workflow watcher"),
+      summary: String(localized: "Shows GitHub run status observed on this Mac."),
       symbol: "shippingbox.fill", sourceIDs: ["github-actions", "github"],
       capabilities: [.events, .persistentActivities, .progress, .webActions],
-      setupHint: "Run the watcher after gh auth login; Islet never receives your GitHub token."),
+      setupHint: String(
+        localized: "Run the watcher after gh auth login; Islet never receives your GitHub token.")),
     .init(
-      id: "xcode", name: "Xcode builds",
-      summary: "Shows local xcodebuild and test progress.",
+      id: "xcode", name: String(localized: "Xcode builds"),
+      summary: String(localized: "Shows local xcodebuild and test progress."),
       symbol: "hammer.fill", sourceIDs: ["xcode"],
       capabilities: [.events, .progress, .webActions],
-      setupHint: "Wrap xcodebuild with Tools/islet-xcode-pulse.swift."),
+      setupHint: String(localized: "Wrap xcodebuild with Tools/islet-xcode-pulse.swift.")),
     .init(
-      id: "chrome-downloads", name: "Chrome downloads",
-      summary: "Shows browser download progress without retaining URLs or paths.",
+      id: "chrome-downloads", name: String(localized: "Chrome downloads"),
+      summary: String(
+        localized: "Shows browser download progress without retaining URLs or paths."),
       symbol: "arrow.down.circle.fill", sourceIDs: ["chrome-downloads"],
       capabilities: [.events, .progress, .webActions],
-      setupHint: "Install the example Chrome extension and its local native host."),
+      setupHint: String(
+        localized: "Install the example Chrome extension and its local native host.")),
     .init(
-      id: "rclone", name: "rclone transfers",
-      summary: "Shows file copies and uploads from rclone's loopback control API.",
+      id: "rclone", name: String(localized: "rclone transfers"),
+      summary: String(
+        localized: "Shows file copies and uploads from rclone's loopback control API."),
       symbol: "arrow.up.arrow.down.circle.fill", sourceIDs: ["rclone"],
       capabilities: [.events, .progress, .webActions],
-      setupHint: "Run the example provider beside an rclone process with RC enabled."),
+      setupHint: String(
+        localized: "Run the example provider beside an rclone process with RC enabled.")),
     .init(
-      id: "developer-tools", name: "Developer tools", summary: "Build, test, and agent status.",
+      id: "developer-tools", name: String(localized: "Developer tools"),
+      summary: String(localized: "Build, test, and agent status."),
       symbol: "wrench.and.screwdriver.fill", sourceIDs: ["build", "tests", "agent"],
       capabilities: [.events, .persistentActivities, .progress, .webActions],
-      setupHint: "Use a stable source name from your local automation."),
+      setupHint: String(localized: "Use a stable source name from your local automation.")),
   ]
 }
 
@@ -563,10 +579,10 @@ enum PulseProviderHealth: Equatable, Sendable {
 
   var summary: String {
     switch self {
-    case .active(let count): "Active (\(count))"
-    case .needsAttention(let count): "Needs attention (\(count))"
-    case .seen: "Seen before"
-    case .neverSeen: "Not connected yet"
+    case .active(let count): String(localized: "Active (\(count))")
+    case .needsAttention(let count): String(localized: "Needs attention (\(count))")
+    case .seen: String(localized: "Seen before")
+    case .neverSeen: String(localized: "Not connected yet")
     }
   }
 }
@@ -774,9 +790,9 @@ enum PulseWireValidationError: LocalizedError, Equatable {
 
   var errorDescription: String? {
     switch self {
-    case .expectedObject(let path): "\(path) must be a JSON object"
-    case .invalidField(let path): "invalid field: \(path)"
-    case .unexpectedField(let path): "unexpected field: \(path)"
+    case .expectedObject(let path): String(localized: "\(path) must be a JSON object")
+    case .invalidField(let path): String(localized: "invalid field: \(path)")
+    case .unexpectedField(let path): String(localized: "unexpected field: \(path)")
     }
   }
 }

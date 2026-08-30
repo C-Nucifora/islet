@@ -237,26 +237,28 @@ final class AudioDeviceMonitor {
     switch change {
     case .input(let input):
       title = input.name
-      subtitle = "Input selected"
+      subtitle = String(localized: "Input selected")
       icon = "mic.fill"
-      announcement = "\(input.name) selected for audio input"
+      announcement = String(localized: "\(input.name) selected for audio input")
     case .output(let output):
       title = output.name
-      subtitle = "Output selected"
+      subtitle = String(localized: "Output selected")
       icon = iconName(for: output.name)
-      announcement = "\(output.name) selected for audio output"
+      announcement = String(localized: "\(output.name) selected for audio output")
     case .inputAndOutput(let input, let output):
       if input.id == output.id || input.name == output.name {
         title = output.name
-        subtitle = "Input and output selected"
+        subtitle = String(localized: "Input and output selected")
         icon = iconName(for: output.name)
-        announcement = "\(output.name) selected for audio input and output"
+        announcement = String(localized: "\(output.name) selected for audio input and output")
       } else {
-        title = "Audio devices changed"
-        subtitle = "\(input.name) input, \(output.name) output"
+        title = String(localized: "Audio devices changed")
+        subtitle = String(localized: "\(input.name) input, \(output.name) output")
         icon = "waveform"
         announcement =
-          "Audio input changed to \(input.name), and audio output changed to \(output.name)"
+          String(
+            localized:
+              "Audio input changed to \(input.name), and audio output changed to \(output.name)")
       }
     }
 

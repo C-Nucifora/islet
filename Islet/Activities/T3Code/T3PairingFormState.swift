@@ -28,6 +28,7 @@ struct T3PairingFormState {
   var allowInsecureHTTP = false
   private(set) var isPairing = false
   var statusMessage: String?
+  private(set) var statusSucceeded: Bool?
   private(set) var focusedField: T3PairingFormField?
 
   private var latestSubmissionID: UInt = 0
@@ -39,6 +40,7 @@ struct T3PairingFormState {
     latestSubmissionID &+= 1
     isPairing = true
     statusMessage = nil
+    statusSucceeded = nil
     focusedField = nil
     return T3PairingSubmission(
       id: latestSubmissionID, pairingLink: link, allowInsecureHTTP: allowInsecureHTTP)
@@ -58,11 +60,13 @@ struct T3PairingFormState {
         pairingLink = ""
         allowInsecureHTTP = false
       }
-      statusMessage = "Added T3 Code machine."
+      statusMessage = String(localized: "Added T3 Code machine.")
+      statusSucceeded = true
       focusedField = nil
       return .succeeded
     case .failure(let message):
       statusMessage = message
+      statusSucceeded = false
       focusedField =
         pairingLink.trimmingCharacters(in: .whitespacesAndNewlines) == submission.pairingLink
         ? .pairingLink : nil

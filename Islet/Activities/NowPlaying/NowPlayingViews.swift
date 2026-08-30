@@ -176,9 +176,13 @@ struct ExpandedPlayerView: View {
       }
       VStack(alignment: .leading, spacing: 1) {
         Text(activity.sourceName(for: source))
-        Text(playback.map { $0.isPlaying ? "Playing" : "Paused" } ?? "Audio detected")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+        Text(
+          playback.map {
+            $0.isPlaying ? String(localized: "Playing") : String(localized: "Paused")
+          } ?? String(localized: "Audio detected")
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
       }
       if isPrimary {
         Text("Primary")
@@ -289,12 +293,18 @@ struct ExpandedPlayerView: View {
       } label: {
         toggleStateIcon("shuffle", enabled: pb.isShuffleOn)
       }
-      .help(controlHelp(pb.isShuffleOn ? "Turn shuffle off" : "Turn shuffle on", source: source))
+      .help(
+        controlHelp(
+          pb.isShuffleOn
+            ? String(localized: "Turn shuffle off") : String(localized: "Turn shuffle on"),
+          source: source)
+      )
       .accessibilityLabel(
         activity.mediaControlAccessibilityLabel(
-          action: pb.isShuffleOn ? "Turn shuffle off" : "Turn shuffle on")
+          action: pb.isShuffleOn
+            ? String(localized: "Turn shuffle off") : String(localized: "Turn shuffle on"))
       )
-      .accessibilityValue(pb.isShuffleOn ? "On" : "Off")
+      .accessibilityValue(pb.isShuffleOn ? String(localized: "On") : String(localized: "Off"))
       // Podcasts/audiobooks get ±15 s skip; music gets prev/next.
       Button {
         guard let source else { return }
@@ -306,11 +316,14 @@ struct ExpandedPlayerView: View {
       }
       .help(
         controlHelp(
-          pb.supportsSkipBackward15 ? "Back 15 seconds" : "Previous track", source: source)
+          pb.supportsSkipBackward15
+            ? String(localized: "Back 15 seconds") : String(localized: "Previous track"),
+          source: source)
       )
       .accessibilityLabel(
         activity.mediaControlAccessibilityLabel(
-          action: pb.supportsSkipBackward15 ? "Back 15 seconds" : "Previous track")
+          action: pb.supportsSkipBackward15
+            ? String(localized: "Back 15 seconds") : String(localized: "Previous track"))
       )
       .disabled(source.map { activity.canPerform(backCommand, for: $0) } != true)
       Button {
@@ -318,9 +331,13 @@ struct ExpandedPlayerView: View {
       } label: {
         Image(systemName: pb.isPlaying ? "pause.fill" : "play.fill").font(.title2)
       }
-      .help(controlHelp(pb.isPlaying ? "Pause" : "Play", source: source))
+      .help(
+        controlHelp(
+          pb.isPlaying ? String(localized: "Pause") : String(localized: "Play"), source: source)
+      )
       .accessibilityLabel(
-        activity.mediaControlAccessibilityLabel(action: pb.isPlaying ? "Pause" : "Play"))
+        activity.mediaControlAccessibilityLabel(
+          action: pb.isPlaying ? String(localized: "Pause") : String(localized: "Play")))
       Button {
         guard let source else { return }
         Task {
@@ -330,11 +347,15 @@ struct ExpandedPlayerView: View {
         Image(systemName: pb.supportsSkipForward15 ? "goforward.15" : "forward.fill")
       }
       .help(
-        controlHelp(pb.supportsSkipForward15 ? "Forward 15 seconds" : "Next track", source: source)
+        controlHelp(
+          pb.supportsSkipForward15
+            ? String(localized: "Forward 15 seconds") : String(localized: "Next track"),
+          source: source)
       )
       .accessibilityLabel(
         activity.mediaControlAccessibilityLabel(
-          action: pb.supportsSkipForward15 ? "Forward 15 seconds" : "Next track")
+          action: pb.supportsSkipForward15
+            ? String(localized: "Forward 15 seconds") : String(localized: "Next track"))
       )
       .disabled(source.map { activity.canPerform(forwardCommand, for: $0) } != true)
       Button {
@@ -343,11 +364,15 @@ struct ExpandedPlayerView: View {
         toggleStateIcon(pb.repeatMode == 1 ? "repeat.1" : "repeat", enabled: pb.repeatMode != 0)
       }
       .help(
-        controlHelp(pb.repeatMode == 0 ? "Turn repeat on" : "Change repeat mode", source: source)
+        controlHelp(
+          pb.repeatMode == 0
+            ? String(localized: "Turn repeat on") : String(localized: "Change repeat mode"),
+          source: source)
       )
       .accessibilityLabel(
         activity.mediaControlAccessibilityLabel(
-          action: pb.repeatMode == 0 ? "Turn repeat on" : "Change repeat mode")
+          action: pb.repeatMode == 0
+            ? String(localized: "Turn repeat on") : String(localized: "Change repeat mode"))
       )
       .accessibilityValue(repeatAccessibilityValue(pb.repeatMode))
     }

@@ -25,11 +25,11 @@ struct SystemThermalPresentation: Equatable, Sendable {
 
     var name: String {
       switch self {
-      case .nominal: "nominal"
-      case .fair: "fair"
-      case .serious: "serious"
-      case .critical: "critical"
-      case .unavailable: "unavailable"
+      case .nominal: String(localized: "nominal")
+      case .fair: String(localized: "fair")
+      case .serious: String(localized: "serious")
+      case .critical: String(localized: "critical")
+      case .unavailable: String(localized: "unavailable")
       }
     }
   }
@@ -42,27 +42,34 @@ struct SystemThermalPresentation: Equatable, Sendable {
     self.batteryTemperatureC = batteryTemperatureC?.isFinite == true ? batteryTemperatureC : nil
   }
 
-  var pressureText: String { "System: \(pressure.name)" }
+  var pressureText: String { String(localized: "System: \(pressure.name)") }
 
   var batteryTemperatureText: String {
-    guard let batteryTemperatureC else { return "Battery: unavailable" }
-    return String(format: "Battery: %.1f °C", batteryTemperatureC)
+    guard let batteryTemperatureC else { return String(localized: "Battery: unavailable") }
+    return String(
+      localized:
+        "Battery: \(LocalizedFormat.number(batteryTemperatureC, fractionDigits: 1...1)) °C")
   }
 
   var accessibilityValue: String {
     let battery: String
     if let batteryTemperatureC {
-      battery = String(format: "Battery temperature %.1f degrees Celsius.", batteryTemperatureC)
+      battery = String(
+        localized:
+          "Battery temperature \(PowerFormat.temperatureAccessibility(batteryTemperatureC)).")
     } else {
-      battery = "Battery temperature unavailable."
+      battery = String(localized: "Battery temperature unavailable.")
     }
     return
-      "System thermal pressure \(pressure.name). \(battery) The readings do not map directly."
+      String(
+        localized:
+          "System thermal pressure \(pressure.name). \(battery) The readings do not map directly.")
   }
 
-  static let helpText =
-    "System thermal pressure and battery sensor temperature are separate readings and do not map "
-    + "directly."
+  static let helpText = String(
+    localized:
+      "System thermal pressure and battery sensor temperature are separate readings and do not map directly."
+  )
 }
 
 /// The System tab's readout.
@@ -116,18 +123,18 @@ struct SystemExpandedView: View {
 
   private var cpuRow: some View {
     row(
-      "CPU", kind: .cpu, fraction: sample.cpuTotal,
+      String(localized: "CPU"), kind: .cpu, fraction: sample.cpuTotal,
       text: percent(sample.cpuTotal), scale: .fixed(min: 0, max: 1)
     ) {
       HStack(spacing: 10) {
         if let performance = sample.cpuPerformance {
-          detail("P \(percent(performance))")
+          detail(String(localized: "P \(percent(performance))"))
         }
         if let efficiency = sample.cpuEfficiency {
-          detail("E \(percent(efficiency))")
+          detail(String(localized: "E \(percent(efficiency))"))
         }
         if let load = sample.loadAverage {
-          detail(String(format: "load %.2f", load))
+          detail(String(localized: "load \(LocalizedFormat.number(load, fractionDigits: 2...2))"))
         }
       }
     }
@@ -135,7 +142,7 @@ struct SystemExpandedView: View {
 
   private var gpuRow: some View {
     row(
-      "GPU", kind: .gpu, fraction: sample.gpu,
+      String(localized: "GPU"), kind: .gpu, fraction: sample.gpu,
       text: percent(sample.gpu), scale: .fixed(min: 0, max: 1)
     ) {
       EmptyView()
@@ -154,11 +161,14 @@ struct SystemExpandedView: View {
       return "\(bytes(used)) / \(bytes(total))"
     }()
     return row(
-      "RAM", kind: .memory, fraction: fraction, text: text, scale: .fixed(min: 0, max: 1)
+      String(localized: "RAM"), kind: .memory, fraction: fraction, text: text,
+      scale: .fixed(min: 0, max: 1)
     ) {
       HStack(spacing: 10) {
-        if let wired = sample.memoryWiredBytes { detail("wired \(bytes(wired))") }
-        if let swap = sample.swapUsedBytes { detail("swap \(bytes(swap))") }
+        if let wired = sample.memoryWiredBytes {
+          detail(String(localized: "wired \(bytes(wired))"))
+        }
+        if let swap = sample.swapUsedBytes { detail(String(localized: "swap \(bytes(swap))")) }
       }
     }
   }
@@ -169,8 +179,8 @@ struct SystemExpandedView: View {
       else { return "—" }
       return "↓ \(bytesPerSecond(read))  ↑ \(bytesPerSecond(write))"
     }()
-    return row("Disk", kind: .disk, fraction: nil, text: text, scale: .auto) {
-      if let free = sample.diskFreeBytes { detail("\(bytes(free)) free") }
+    return row(String(localized: "Disk"), kind: .disk, fraction: nil, text: text, scale: .auto) {
+      if let free = sample.diskFreeBytes { detail(String(localized: "\(bytes(free)) free")) }
     }
   }
 
@@ -180,7 +190,7 @@ struct SystemExpandedView: View {
       else { return "—" }
       return "↓ \(bitsPerSecond(inbound))  ↑ \(bitsPerSecond(outbound))"
     }()
-    return row("Net", kind: .network, fraction: nil, text: text, scale: .auto) {
+    return row(String(localized: "Net"), kind: .network, fraction: nil, text: text, scale: .auto) {
       if let interface = sample.primaryInterface { detail(interface) }
     }
   }
@@ -190,7 +200,8 @@ struct SystemExpandedView: View {
       thermalState: sample.thermalState,
       batteryTemperatureC: sample.batteryTemperatureC)
     return row(
-      "Therm", kind: .thermal, fraction: nil, text: presentation.pressureText,
+      String(localized: "Therm"), kind: .thermal, fraction: nil,
+      text: presentation.pressureText,
       scale: .fixed(min: 0, max: 1)
     ) {
       detail(presentation.batteryTemperatureText)
@@ -264,27 +275,35 @@ struct SystemExpandedView: View {
 
   private func percent(_ fraction: Double?) -> String {
     guard let fraction else { return "—" }
-    return "\(Int((fraction * 100).rounded()))%"
+    return LocalizedFormat.percent(fraction)
   }
 
   /// `.byteCount` takes an `Int64`, not a `UInt64` — the conversion is required, not incidental.
   /// `spellsOutZero: false` keeps an idle disk reading "0 bytes" rather than "Zero kB".
   private func bytes(_ value: UInt64) -> String {
-    Int64(value).formatted(
-      .byteCount(style: .file, allowedUnits: [.kb, .mb, .gb, .tb], spellsOutZero: false))
+    LocalizedFormat.bytes(Int64(value))
   }
 
   private func bytesPerSecond(_ value: Double) -> String {
-    "\(bytes(UInt64(max(value, 0))))/s"
+    String(localized: "\(bytes(UInt64(max(value, 0))))/s")
   }
 
   /// Network is conventionally quoted in bits per second; disk in bytes per second.
   private func bitsPerSecond(_ bytesPerSec: Double) -> String {
     let bits = max(bytesPerSec, 0) * 8
-    if bits >= 1_000_000_000 { return String(format: "%.1f Gb/s", bits / 1_000_000_000) }
-    if bits >= 1_000_000 { return String(format: "%.1f Mb/s", bits / 1_000_000) }
-    if bits >= 1_000 { return String(format: "%.0f Kb/s", bits / 1_000) }
-    return String(format: "%.0f b/s", bits)
+    if bits >= 1_000_000_000 {
+      return String(
+        localized: "\(LocalizedFormat.number(bits / 1_000_000_000, fractionDigits: 1...1)) Gb/s")
+    }
+    if bits >= 1_000_000 {
+      return String(
+        localized: "\(LocalizedFormat.number(bits / 1_000_000, fractionDigits: 1...1)) Mb/s")
+    }
+    if bits >= 1_000 {
+      return String(
+        localized: "\(LocalizedFormat.number(bits / 1_000, fractionDigits: 0...0)) Kb/s")
+    }
+    return String(localized: "\(LocalizedFormat.number(bits, fractionDigits: 0...0)) b/s")
   }
 }
 

@@ -32,14 +32,14 @@ struct ClipboardItem: Identifiable, Equatable {
   var preview: String {
     switch kind {
     case .text(let s): s.trimmingCharacters(in: .whitespacesAndNewlines)
-    case .fileURLs(let urls): urls.first?.lastPathComponent ?? "Files"
-    case .image: "Image"
+    case .fileURLs(let urls): urls.first?.lastPathComponent ?? String(localized: "Files")
+    case .image: String(localized: "Image")
     }
   }
 
   var detail: String? {
     guard case .fileURLs(let urls) = kind else { return nil }
-    return "\(urls.count) \(urls.count == 1 ? "file" : "files")"
+    return LocalizedText.fileCount(urls.count)
   }
 
   var retainedByteCount: Int {
@@ -783,7 +783,7 @@ final class ClipboardModel: ObservableObject {
     }
     guard generation == historyGeneration else { return false }
     guard succeeded else {
-      lastWriteError = "Couldn’t restore that clipboard item."
+      lastWriteError = String(localized: "Couldn’t restore that clipboard item.")
       return false
     }
     lastWriteError = nil
@@ -1159,8 +1159,15 @@ struct ClipboardView: View {
           Image(systemName: model.isPaused ? "play.fill" : "pause.fill")
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-        .help("Clipboard privacy pause")
-        .accessibilityLabel("Clipboard privacy pause")
+        .help(
+          model.isPaused
+            ? String(localized: "Resume clipboard history")
+            : String(localized: "Pause and clear clipboard history")
+        )
+        .accessibilityLabel(
+          model.isPaused
+            ? String(localized: "Resume clipboard history")
+            : String(localized: "Pause and clear clipboard history"))
         if !model.items.isEmpty {
           Button {
             model.clear()

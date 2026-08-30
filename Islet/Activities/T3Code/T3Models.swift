@@ -129,12 +129,12 @@ enum T3AgentPhase: String, Codable, Sendable {
 
   var label: String {
     switch self {
-    case .needsInput: "Needs input"
-    case .needsApproval: "Needs approval"
-    case .working: "Working"
-    case .monitoring: "Monitoring"
-    case .finished: "Finished"
-    case .failed: "Failed"
+    case .needsInput: String(localized: "Needs input")
+    case .needsApproval: String(localized: "Needs approval")
+    case .working: String(localized: "Working")
+    case .monitoring: String(localized: "Monitoring")
+    case .finished: String(localized: "Finished")
+    case .failed: String(localized: "Failed")
     }
   }
 
@@ -213,7 +213,7 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
         isLocal: isLocal,
         threadID: thread.id,
         title: thread.title,
-        project: projects[thread.projectId]?.title ?? "Unknown project",
+        project: projects[thread.projectId]?.title ?? String(localized: "Unknown project"),
         workspacePath: thread.worktreePath ?? projects[thread.projectId]?.workspaceRoot,
         providerInstance: thread.session?.providerName
           ?? thread.session?.providerInstanceId
@@ -318,12 +318,12 @@ enum T3ConnectionState: Equatable, Sendable {
 
   var label: String {
     switch self {
-    case .connecting: "Connecting"
-    case .connected: "Connected"
-    case .offline: "Offline"
-    case .reconnecting: "Reconnecting"
-    case .needsPairing: "Pair again"
-    case .credentialError: "Credential error"
+    case .connecting: String(localized: "Connecting")
+    case .connected: String(localized: "Connected")
+    case .offline: String(localized: "Offline")
+    case .reconnecting: String(localized: "Reconnecting")
+    case .needsPairing: String(localized: "Pair again")
+    case .credentialError: String(localized: "Credential error")
     }
   }
 

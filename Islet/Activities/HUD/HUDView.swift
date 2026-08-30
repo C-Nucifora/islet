@@ -38,7 +38,8 @@ struct HUDBarView: View {
   private var accessibilityLabel: String {
     switch snapshot.kind {
     case .brightness: "Brightness"
-    case .volume: snapshot.isMuted ? "Volume muted" : "Volume"
+    case .volume:
+      snapshot.isMuted ? String(localized: "Volume muted") : String(localized: "Volume")
     }
   }
 

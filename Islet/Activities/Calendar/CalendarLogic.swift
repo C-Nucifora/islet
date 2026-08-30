@@ -199,10 +199,10 @@ enum CalendarLogic {
   /// Short countdown label, e.g. "8m", "1h", or "now".
   static func countdownText(to start: Date, now: Date) -> String {
     let seconds = Int(start.timeIntervalSince(now))
-    if seconds <= 0 { return "now" }
+    if seconds <= 0 { return String(localized: "now") }
     let minutes = (seconds + 59) / 60
-    if minutes < 60 { return "\(minutes)m" }
+    if minutes < 60 { return String(localized: "\(LocalizedFormat.integer(minutes))m") }
     let hours = minutes / 60
-    return "\(hours)h"
+    return String(localized: "\(LocalizedFormat.integer(hours))h")
   }
 }
