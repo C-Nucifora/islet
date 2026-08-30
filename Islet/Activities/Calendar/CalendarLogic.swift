@@ -10,12 +10,10 @@ struct AgendaEvent: Identifiable, Equatable, Sendable {
   var calendarColorHex: String?
   var joinURL: URL?
   var location: String?
-  var travelTime: TimeInterval?
 
   init(
     id: String = UUID().uuidString, title: String, start: Date, end: Date, isAllDay: Bool,
-    calendarColorHex: String?, joinURL: URL?, location: String? = nil,
-    travelTime: TimeInterval? = nil
+    calendarColorHex: String?, joinURL: URL?, location: String? = nil
   ) {
     self.id = id
     self.title = title
@@ -25,7 +23,6 @@ struct AgendaEvent: Identifiable, Equatable, Sendable {
     self.calendarColorHex = calendarColorHex
     self.joinURL = joinURL
     self.location = location
-    self.travelTime = travelTime
   }
 }
 
@@ -78,18 +75,6 @@ enum CalendarAccessAction: Equatable, Sendable {
   case reload
   case clear
   case none
-}
-
-enum CalendarLeaveNotice: Equatable, Sendable {
-  case leaveNow
-  case leaveIn(minutes: Int)
-
-  var text: String {
-    switch self {
-    case .leaveNow: "Leave now"
-    case .leaveIn(let minutes): "Leave in \(minutes)m"
-    }
-  }
 }
 
 enum CalendarLogic {
@@ -195,22 +180,6 @@ enum CalendarLogic {
     } catch {
       return .failure(.saveFailed(error.localizedDescription))
     }
-  }
-
-  /// Uses the travel time already saved on the event by Calendar. Islet does not request location
-  /// access or calculate a route in the background.
-  static func leaveNotice(
-    for event: AgendaEvent, now: Date, enabled: Bool = true,
-    maximumAdvanceWarning: TimeInterval = 60 * 60
-  ) -> CalendarLeaveNotice? {
-    guard enabled, !event.isAllDay, event.start > now, event.location?.isEmpty == false,
-      let travelTime = event.travelTime, travelTime > 0
-    else { return nil }
-    let leaveDate = event.start.addingTimeInterval(-travelTime)
-    let seconds = leaveDate.timeIntervalSince(now)
-    guard seconds <= maximumAdvanceWarning else { return nil }
-    if seconds <= 0 { return .leaveNow }
-    return .leaveIn(minutes: max(1, Int(ceil(seconds / 60))))
   }
 
   /// The next event worth a countdown: soonest upcoming, timed (not all-day), not yet ended.

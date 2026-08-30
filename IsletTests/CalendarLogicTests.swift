@@ -211,22 +211,6 @@ final class CalendarLogicTests: XCTestCase {
     }
   }
 
-  func testLeaveNoticeRequiresSavedTravelTimeAndLocation() {
-    let base = AgendaEvent(
-      title: "Office", start: now + 45 * 60, end: now + 90 * 60, isAllDay: false,
-      calendarColorHex: nil, joinURL: nil, location: "Office", travelTime: 30 * 60)
-
-    XCTAssertEqual(
-      CalendarLogic.leaveNotice(for: base, now: now), .leaveIn(minutes: 15))
-    XCTAssertNil(CalendarLogic.leaveNotice(for: base, now: now, enabled: false))
-    var noEstimate = base
-    noEstimate.travelTime = nil
-    XCTAssertNil(CalendarLogic.leaveNotice(for: noEstimate, now: now))
-    var noLocation = base
-    noLocation.location = nil
-    XCTAssertNil(CalendarLogic.leaveNotice(for: noLocation, now: now))
-  }
-
   func testDisplayDropsEndedEventsAndOrdersAllDayFirst() {
     let interval = DateInterval(start: now.addingTimeInterval(-3600), duration: 86_400)
     let events = [
