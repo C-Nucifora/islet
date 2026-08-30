@@ -32,9 +32,9 @@
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Islet shows a brief animation when a Bluetooth device connects or disconnects, and reads the battery level of connected Apple peripherals.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Islet shows your next event and today's agenda in the notch.</string>
+	<string>Islet shows a three-day agenda and lets you add events from the notch.</string>
 	<key>NSCalendarsUsageDescription</key>
-	<string>Islet shows your next event and today's agenda in the notch.</string>
+	<string>Islet shows a three-day agenda and lets you add events from the notch.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
 	<key>NSLocalNetworkUsageDescription</key>
