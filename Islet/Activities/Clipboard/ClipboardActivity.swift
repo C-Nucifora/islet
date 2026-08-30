@@ -13,7 +13,7 @@ struct ClipboardItem: Identifiable, Equatable {
 
   enum Kind: Equatable {
     case text(String)
-    case fileURL(URL)
+    case fileURLs([URL])
     case image(ImagePayload)
   }
   let id = UUID()
@@ -23,7 +23,7 @@ struct ClipboardItem: Identifiable, Equatable {
   var icon: String {
     switch kind {
     case .text: "text.alignleft"
-    case .fileURL: "doc"
+    case .fileURLs: "doc"
     case .image: "photo"
     }
   }
@@ -31,15 +31,23 @@ struct ClipboardItem: Identifiable, Equatable {
   var preview: String {
     switch kind {
     case .text(let s): s.trimmingCharacters(in: .whitespacesAndNewlines)
-    case .fileURL(let url): url.lastPathComponent
+    case .fileURLs(let urls): urls.first?.lastPathComponent ?? "Files"
     case .image: "Image"
     }
+  }
+
+  var detail: String? {
+    guard case .fileURLs(let urls) = kind else { return nil }
+    return "\(urls.count) \(urls.count == 1 ? "file" : "files")"
   }
 
   var retainedByteCount: Int {
     switch kind {
     case .text(let string): string.lengthOfBytes(using: .utf8)
-    case .fileURL(let url): url.path.lengthOfBytes(using: .utf8)
+    case .fileURLs(let urls):
+      urls.reduce(into: 0) { count, url in
+        count += ClipboardPrivacyPolicy.fileURLByteCount(url)
+      }
     case .image(let payload): payload.data.count
     }
   }
@@ -48,6 +56,8 @@ struct ClipboardItem: Identifiable, Equatable {
 enum ClipboardPrivacyPolicy {
   static let maximumTextBytes = 64 * 1024
   static let maximumImageBytes = 12 * 1024 * 1024
+  static let maximumFileURLCount = 1_000
+  static let maximumFileURLBytes = 512 * 1024
 
   /// Pasteboard conventions used by password managers and apps that explicitly mark a copy as
   /// ephemeral. These values are intentionally raw strings because AppKit does not expose typed
@@ -65,6 +75,25 @@ enum ClipboardPrivacyPolicy {
 
   static func permits(types: [String]) -> Bool {
     sensitivePasteboardTypes.isDisjoint(with: types.map { $0.lowercased() })
+  }
+
+  /// File entries retain URL metadata, not file contents. Bound the number and encoded URL size so
+  /// one Finder copy cannot consume the history budget before it reaches the normal item limit.
+  static func permits(fileURLs: [URL]) -> Bool {
+    guard !fileURLs.isEmpty, fileURLs.count <= maximumFileURLCount,
+      fileURLs.allSatisfy(\.isFileURL)
+    else { return false }
+
+    var byteCount = 0
+    for url in fileURLs {
+      byteCount += fileURLByteCount(url)
+      if byteCount > maximumFileURLBytes { return false }
+    }
+    return true
+  }
+
+  static func fileURLByteCount(_ url: URL) -> Int {
+    url.absoluteString.lengthOfBytes(using: .utf8)
   }
 
   /// High-confidence secret formats only. Clipboard history is session-only, but credentials
@@ -176,10 +205,9 @@ final class ClipboardModel: ObservableObject {
     let rawTypes = (pb.types ?? []).map(\.rawValue)
     guard ClipboardPrivacyPolicy.permits(types: rawTypes) else { return }
     let item: ClipboardItem?
-    if let urls = pb.readObjects(forClasses: [NSURL.self]) as? [URL],
-      let url = urls.first, url.isFileURL
-    {
-      item = ClipboardItem(kind: .fileURL(url), date: Date())
+    let urls = ClipboardFileURLs.read(from: pb)
+    if ClipboardPrivacyPolicy.permits(fileURLs: urls) {
+      item = ClipboardItem(kind: .fileURLs(urls), date: Date())
     } else if let str = pb.string(forType: .string), ClipboardPrivacyPolicy.permits(text: str) {
       item = ClipboardItem(kind: .text(str), date: Date())
     } else if let payload = Self.imagePayload(from: pb) {
@@ -202,7 +230,7 @@ final class ClipboardModel: ObservableObject {
     let succeeded = ClipboardPasteboardTransaction.replace(on: pb) {
       switch item.kind {
       case .text(let s): pb.setString(s, forType: .string)
-      case .fileURL(let url): pb.writeObjects([url as NSURL])
+      case .fileURLs(let urls): ClipboardFileURLs.write(urls, to: pb)
       case .image(let payload):
         pb.setData(
           payload.data,
@@ -245,6 +273,23 @@ final class ClipboardModel: ObservableObject {
       return ClipboardItem.ImagePayload(data: data, pasteboardTypeRawValue: type.rawValue)
     }
     return nil
+  }
+}
+
+enum ClipboardFileURLs {
+  /// Reading NSURLs gives us the ordered URL list without accessing each target on disk. The
+  /// privacy policy validates the complete set afterward, so a mixed local/remote copy cannot be
+  /// retained as a misleading partial file list.
+  static func read(from pasteboard: NSPasteboard) -> [URL] {
+    let objects = pasteboard.readObjects(forClasses: [NSURL.self]) ?? []
+    return objects.compactMap { object in
+      guard let url = object as? NSURL else { return nil }
+      return url as URL
+    }
+  }
+
+  static func write(_ urls: [URL], to pasteboard: NSPasteboard) -> Bool {
+    pasteboard.writeObjects(urls.map { $0 as NSURL })
   }
 }
 
@@ -367,6 +412,9 @@ struct ClipboardView: View {
                   Image(systemName: item.icon).font(.caption2).appThemeForeground(.clipboard)
                     .frame(width: 16)
                   Text(item.preview).font(.caption).lineLimit(1)
+                  if let detail = item.detail {
+                    Text(detail).font(.caption2).foregroundStyle(.secondary)
+                  }
                   Spacer(minLength: 0)
                   Image(systemName: "doc.on.doc").font(.caption2).foregroundStyle(.secondary)
                 }
