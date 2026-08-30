@@ -4,6 +4,67 @@ import XCTest
 
 @testable import Islet
 
+@MainActor
+private final class VirtualNotchDelayScheduler: NotchDelayScheduler {
+  private struct PendingOperation {
+    let id: UInt
+    let deadline: Duration
+    let order: UInt
+    let action: @MainActor () -> Void
+  }
+
+  private final class ScheduledOperation: NotchScheduledOperation {
+    private weak var scheduler: VirtualNotchDelayScheduler?
+    private let id: UInt
+
+    init(scheduler: VirtualNotchDelayScheduler, id: UInt) {
+      self.scheduler = scheduler
+      self.id = id
+    }
+
+    func cancel() { scheduler?.cancel(id) }
+  }
+
+  private var now: Duration = .zero
+  private var nextID: UInt = 0
+  private var pending: [PendingOperation] = []
+
+  func schedule(
+    after delay: Duration,
+    action: @escaping @MainActor () -> Void
+  ) -> any NotchScheduledOperation {
+    precondition(delay >= .zero)
+    nextID &+= 1
+    let id = nextID
+    pending.append(PendingOperation(id: id, deadline: now + delay, order: id, action: action))
+    return ScheduledOperation(scheduler: self, id: id)
+  }
+
+  func advance(by duration: Duration) {
+    precondition(duration >= .zero)
+    now += duration
+    while let index = nextDueOperationIndex() {
+      let operation = pending.remove(at: index)
+      operation.action()
+    }
+  }
+
+  func advance(to time: Duration) {
+    precondition(time >= now)
+    advance(by: time - now)
+  }
+
+  private func cancel(_ id: UInt) {
+    pending.removeAll { $0.id == id }
+  }
+
+  private func nextDueOperationIndex() -> Int? {
+    pending.indices.filter { pending[$0].deadline <= now }.min {
+      pending[$0].order < pending[$1].order
+    }
+  }
+}
+
 final class DisplayStateReconcilerTests: XCTestCase {
   private let builtin = DisplayHardwareIdentity.builtin
   private let external = DisplayHardwareIdentity.external(vendor: 10, model: 20, serial: 30)
@@ -133,14 +194,16 @@ final class MultiDisplayPresentationTests: XCTestCase {
 final class NotchViewModelTests: XCTestCase {
   func makeVM(
     mode: InteractionMode = .hover,
-    barrierPushDistance: CGFloat? = Metrics.barrierPushDistance
+    barrierPushDistance: CGFloat? = Metrics.barrierPushDistance,
+    scheduler: (any NotchDelayScheduler)? = nil
   ) -> NotchViewModel {
     let g = NotchGeometry(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
       safeAreaTop: 32, auxLeftWidth: 716, auxRightWidth: 716,
       menuBarHeight: 37)
     return NotchViewModel(
-      geometry: g, modeOverride: mode, barrierPushDistanceOverride: barrierPushDistance)
+      geometry: g, modeOverride: mode, barrierPushDistanceOverride: barrierPushDistance,
+      scheduler: scheduler)
   }
 
   func expandedPanel(
@@ -417,16 +480,18 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(vm.panelFrame, expandedPanel(vm))
   }
 
-  func testPanelFrameShrinksAfterCollapsing() async throws {
-    let vm = makeVM(mode: .clickToPin)
+  func testPanelFrameShrinksAfterCollapsing() {
+    let scheduler = VirtualNotchDelayScheduler()
+    let vm = makeVM(mode: .clickToPin, scheduler: scheduler)
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
     vm.handleMouseDown(CGPoint(x: 100, y: 500))
-    try await Task.sleep(for: Motion.panelShrinkDelay + .milliseconds(200))
+    scheduler.advance(to: Motion.panelShrinkDelay)
     XCTAssertEqual(vm.panelFrame, vm.geometry.collapsedPanelFrame())
   }
 
-  func testRepeatedTransitionsDoNotDeferTheShrink() async throws {
-    let vm = makeVM(mode: .clickToPin)
+  func testRepeatedTransitionsDoNotDeferTheShrink() {
+    let scheduler = VirtualNotchDelayScheduler()
+    let vm = makeVM(mode: .clickToPin, scheduler: scheduler)
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
     vm.handleMouseDown(CGPoint(x: 100, y: 500))
     // Dither across the hit boundary while the shrink is pending. Restarting the timer on every
@@ -434,9 +499,10 @@ final class NotchViewModelTests: XCTestCase {
     for _ in 0..<8 {
       vm.handleMouseMoved(CGPoint(x: 864, y: 1110))
       vm.handleMouseMoved(CGPoint(x: 100, y: 500))
-      try await Task.sleep(for: .milliseconds(40))
+      scheduler.advance(by: .milliseconds(40))
     }
-    try await Task.sleep(for: Motion.panelShrinkDelay + .milliseconds(200))
+    XCTAssertEqual(vm.panelFrame, expandedPanel(vm))
+    scheduler.advance(to: Motion.panelShrinkDelay)
     XCTAssertEqual(vm.panelFrame, vm.geometry.collapsedPanelFrame())
   }
 
@@ -526,33 +592,35 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertTrue(vm.shouldIgnorePanelMouseEvents(at: CGPoint(x: 1_250, y: 1_000)))
   }
 
-  func testWidthShrinkPastStationaryCursorSchedulesCollapse() async throws {
+  func testWidthShrinkPastStationaryCursorSchedulesCollapse() {
     let savedTimeout = Defaults[.hoverCollapseTimeout]
     Defaults[.hoverCollapseTimeout] = 0.01
     defer { Defaults[.hoverCollapseTimeout] = savedTimeout }
-    let vm = makeVM()
+    let scheduler = VirtualNotchDelayScheduler()
+    let vm = makeVM(scheduler: scheduler)
     vm.handleFileDragMoved(CGPoint(x: 864, y: 1110))
     vm.setExpandedWidth(700)
     vm.handleMouseMoved(CGPoint(x: 1_150, y: 1_000))
     XCTAssertEqual(vm.state, .expanded(pinned: false))
 
     vm.setExpandedWidth(Metrics.expandedSize.width)
-    try await Task.sleep(for: .milliseconds(50))
+    scheduler.advance(by: .milliseconds(10))
 
     XCTAssertEqual(vm.state, .closed)
   }
 
-  func testWidthGrowthAroundStationaryCursorCancelsPendingCollapse() async throws {
+  func testWidthGrowthAroundStationaryCursorCancelsPendingCollapse() {
     let savedTimeout = Defaults[.hoverCollapseTimeout]
     Defaults[.hoverCollapseTimeout] = 0.03
     defer { Defaults[.hoverCollapseTimeout] = savedTimeout }
-    let vm = makeVM()
+    let scheduler = VirtualNotchDelayScheduler()
+    let vm = makeVM(scheduler: scheduler)
     vm.handleFileDragMoved(CGPoint(x: 864, y: 1110))
     vm.handleMouseMoved(CGPoint(x: 1_150, y: 1_000))
     XCTAssertEqual(vm.state, .expanded(pinned: false))
 
     vm.setExpandedWidth(700)
-    try await Task.sleep(for: .milliseconds(80))
+    scheduler.advance(by: .milliseconds(30))
 
     XCTAssertEqual(vm.state, .expanded(pinned: false))
   }
@@ -631,18 +699,19 @@ final class NotchViewModelTests: XCTestCase {
   /// Nothing in the app cancels the shrink today, but the handle that gates it must survive
   /// cancellation: a stranded non-nil `shrinkTask` fails the `shrinkTask == nil` guard forever, so
   /// the panel stays expanded-sized and the menu bar under it stays dead to clicks.
-  func testACancelledShrinkDoesNotBlockLaterShrinks() async throws {
-    let vm = makeVM(mode: .clickToPin)
+  func testACancelledShrinkDoesNotBlockLaterShrinks() {
+    let scheduler = VirtualNotchDelayScheduler()
+    let vm = makeVM(mode: .clickToPin, scheduler: scheduler)
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))  // expand: panel grows immediately
     vm.handleMouseDown(CGPoint(x: 100, y: 500))  // close: a shrink is scheduled
     vm.cancelPendingShrink()
-    try await Task.sleep(for: Motion.panelShrinkDelay + .milliseconds(200))
+    scheduler.advance(by: Motion.panelShrinkDelay)
     // Cancelled, so the base expanded frame remains in place.
     XCTAssertEqual(vm.panelFrame, expandedPanel(vm))
 
     // A later slot measurement must still be able to schedule a fresh shrink.
     vm.updateCompactWidths(leading: 10, trailing: 10)
-    try await Task.sleep(for: Motion.panelShrinkDelay + .milliseconds(300))
+    scheduler.advance(by: Motion.panelShrinkDelay)
     XCTAssertEqual(
       vm.panelFrame,
       vm.geometry.collapsedPanelFrame(compactLeading: 10, compactTrailing: 10))
