@@ -14,6 +14,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   @Published private(set) var lastCredentialError: String?
   private(set) var activationDate: Date?
 
+  private let localEndpointProvider: @Sendable () async -> T3Endpoint?
+  private let onLocalDiscoveryCompleted: @Sendable () -> Void
   private var credentialErrors: [String: String] = [:]
   private var environmentCandidates: [T3EnvironmentSnapshot] = []
   private var monitorTasks: [String: Task<Void, Never>] = [:]
@@ -22,6 +24,16 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   private var isMonitoring = false
   private var isSystemSuspended = false
   private var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+
+  init(
+    localEndpointProvider: @escaping @Sendable () async -> T3Endpoint? = {
+      await T3LocalDiscovery.endpoint()
+    },
+    onLocalDiscoveryCompleted: @escaping @Sendable () -> Void = {}
+  ) {
+    self.localEndpointProvider = localEndpointProvider
+    self.onLocalDiscoveryCompleted = onLocalDiscoveryCompleted
+  }
 
   var agents: [T3AgentSnapshot] {
     environments.flatMap(\.agents).sorted {
@@ -210,7 +222,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     return theme.color(for: .t3Code)
   }
 
-  private func restartMonitors(clearSnapshots: Bool = true) {
+  func restartMonitors(clearSnapshots: Bool = true) {
     cancelMonitorTasks()
     if clearSnapshots {
       environmentCandidates.removeAll()
@@ -247,7 +259,13 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   private func monitorLocal() async {
     var failures = 0
     while !Task.isCancelled {
-      guard let endpoint = await T3LocalDiscovery.endpoint() else {
+      let endpoint = await localEndpointProvider()
+      guard !Task.isCancelled else {
+        onLocalDiscoveryCompleted()
+        return
+      }
+      onLocalDiscoveryCompleted()
+      guard let endpoint else {
         failures += 1
         let error = T3ClientError.untrustedLocalEndpoint
         updateCredentialError(error, for: "local")
@@ -476,7 +494,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       agents: agents)
   }
 
-  private func upsert(_ snapshot: T3EnvironmentSnapshot) {
+  func upsert(_ snapshot: T3EnvironmentSnapshot) {
     let next = Self.upserting(snapshot, into: environmentCandidates)
     guard next != environmentCandidates else { return }
     environmentCandidates = next

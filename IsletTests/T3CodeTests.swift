@@ -1,3 +1,4 @@
+import Defaults
 import XCTest
 
 @testable import Islet
@@ -560,6 +561,64 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(candidates.filter(\.isLocal).map(\.id), ["local"])
   }
 
+  func testStopDropsLocalDiscoveryThatCompletesAfterCancellation() async {
+    let previousEnabled = Defaults[.t3CodeEnabled]
+    let previousProfiles = Defaults[.t3RemoteEnvironments]
+    Defaults[.t3CodeEnabled] = true
+    Defaults[.t3RemoteEnvironments] = []
+    defer {
+      Defaults[.t3CodeEnabled] = previousEnabled
+      Defaults[.t3RemoteEnvironments] = previousProfiles
+    }
+    let discovery = T3LocalDiscoveryGate()
+    let completed = T3LocalDiscoverySignal()
+    let activity = T3CodeActivity(
+      localEndpointProvider: { await discovery.endpoint() },
+      onLocalDiscoveryCompleted: { completed.signal() })
+    activity.start()
+    await discovery.waitUntilRequested()
+
+    activity.stop()
+    await discovery.resume(returning: nil)
+    await completed.wait(for: 1)
+
+    XCTAssertTrue(activity.environments.isEmpty)
+  }
+
+  func testPreservedRestartDropsOlderSuspendedLocalDiscoveryResult() async {
+    let previousEnabled = Defaults[.t3CodeEnabled]
+    let previousProfiles = Defaults[.t3RemoteEnvironments]
+    Defaults[.t3CodeEnabled] = true
+    Defaults[.t3RemoteEnvironments] = []
+    defer {
+      Defaults[.t3CodeEnabled] = previousEnabled
+      Defaults[.t3RemoteEnvironments] = previousProfiles
+    }
+    let staleDiscovery = T3LocalDiscoveryGate()
+    let currentDiscovery = T3LocalDiscoveryGate()
+    let discoveries = T3LocalDiscoverySequence([staleDiscovery, currentDiscovery])
+    let completed = T3LocalDiscoverySignal()
+    let activity = T3CodeActivity(
+      localEndpointProvider: { await discoveries.endpoint() },
+      onLocalDiscoveryCompleted: { completed.signal() })
+    activity.start()
+    await staleDiscovery.waitUntilRequested()
+    let identified = Self.environmentSnapshot(
+      id: "local|machine", logicalEnvironmentID: "machine", source: .local)
+    activity.upsert(identified)
+
+    activity.restartMonitors(clearSnapshots: false)
+    await currentDiscovery.waitUntilRequested()
+    await staleDiscovery.resume(returning: nil)
+    await completed.wait(for: 1)
+
+    XCTAssertEqual(activity.environments, [identified])
+
+    activity.stop()
+    await currentDiscovery.resume(returning: nil)
+    await completed.wait(for: 2)
+  }
+
   func testRemovingConnectCandidatesPreservesLocalAndManualCandidates() {
     let local = Self.environmentSnapshot(
       id: "local|same", logicalEnvironmentID: "same", source: .local)
@@ -686,6 +745,75 @@ final class T3CodeTests: XCTestCase {
       id: id, logicalEnvironmentID: logicalEnvironmentID, source: source, label: id,
       baseURL: "https://mini.example.com/", platform: nil, serverVersion: "1", state: state,
       agents: [])
+  }
+}
+
+private actor T3LocalDiscoveryGate {
+  private var requested = false
+  private var requestWaiter: CheckedContinuation<Void, Never>?
+  private var resultContinuation: CheckedContinuation<T3Endpoint?, Never>?
+
+  func endpoint() async -> T3Endpoint? {
+    requested = true
+    requestWaiter?.resume()
+    requestWaiter = nil
+    return await withCheckedContinuation { continuation in
+      resultContinuation = continuation
+    }
+  }
+
+  func waitUntilRequested() async {
+    if requested { return }
+    await withCheckedContinuation { continuation in
+      requestWaiter = continuation
+    }
+  }
+
+  func resume(returning endpoint: T3Endpoint?) {
+    resultContinuation?.resume(returning: endpoint)
+    resultContinuation = nil
+  }
+}
+
+private actor T3LocalDiscoverySequence {
+  private var discoveries: [T3LocalDiscoveryGate]
+
+  init(_ discoveries: [T3LocalDiscoveryGate]) {
+    self.discoveries = discoveries
+  }
+
+  func endpoint() async -> T3Endpoint? {
+    guard !discoveries.isEmpty else { return nil }
+    let discovery = discoveries.removeFirst()
+    return await discovery.endpoint()
+  }
+}
+
+private final class T3LocalDiscoverySignal: @unchecked Sendable {
+  private let lock = NSLock()
+  private var count = 0
+  private var waiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+  func signal() {
+    lock.lock()
+    count += 1
+    let ready = waiters.filter { $0.count <= count }
+    waiters.removeAll { $0.count <= count }
+    lock.unlock()
+    for waiter in ready { waiter.continuation.resume() }
+  }
+
+  func wait(for targetCount: Int) async {
+    await withCheckedContinuation { continuation in
+      lock.lock()
+      if count >= targetCount {
+        lock.unlock()
+        continuation.resume()
+      } else {
+        waiters.append((targetCount, continuation))
+        lock.unlock()
+      }
+    }
   }
 }
 
