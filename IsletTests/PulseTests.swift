@@ -319,6 +319,27 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testCredentialRevocationCleanupRemovesOnlyItsBoundSourceItems() throws {
+    let center = PulseCenter()
+    let now = Date(timeIntervalSince1970: 1_000)
+    let build = PulsePayload(
+      id: "job", source: "build", title: "Build", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    var tests = build
+    tests.source = "tests"
+    tests.title = "Tests"
+    XCTAssertTrue(center.apply(command(.show, build), now: now).ok)
+    XCTAssertTrue(center.apply(command(.show, tests), now: now).ok)
+
+    center.removeItems(forSource: " BUILD ", now: now.addingTimeInterval(1))
+
+    XCTAssertEqual(center.items.map(\.source), ["tests"])
+    XCTAssertEqual(center.history.first?.source, "build")
+    XCTAssertEqual(center.history.first?.result, .dismissed)
+  }
+
+  @MainActor
   func testHistoryIsBoundedAndStoresOnlyWireMetadata() throws {
     let center = PulseCenter()
     let now = Date(timeIntervalSince1970: 1_000)

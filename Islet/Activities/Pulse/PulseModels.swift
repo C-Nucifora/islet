@@ -410,6 +410,7 @@ struct PulseHistoryEntry: Identifiable, Equatable, Sendable {
 
 enum PulseCapability: String, CaseIterable, Identifiable, Sendable {
   case events
+  case persistentActivities
   case progress
   case webActions
 
@@ -417,6 +418,7 @@ enum PulseCapability: String, CaseIterable, Identifiable, Sendable {
   var title: String {
     switch self {
     case .events: "Events"
+    case .persistentActivities: "Persistent activities"
     case .progress: "Progress"
     case .webActions: "Web links"
     }
@@ -424,6 +426,7 @@ enum PulseCapability: String, CaseIterable, Identifiable, Sendable {
   var symbol: String {
     switch self {
     case .events: "sparkles"
+    case .persistentActivities: "rectangle.stack.fill"
     case .progress: "chart.bar.fill"
     case .webActions: "link"
     }
@@ -449,18 +452,18 @@ struct PulseProviderDescriptor: Identifiable, Equatable, Sendable {
     .init(
       id: "cli", name: "Pulse CLI", summary: "Send progress and alerts from local scripts.",
       symbol: "terminal.fill", sourceIDs: ["cli"],
-      capabilities: [.events, .progress, .webActions],
+      capabilities: [.events, .persistentActivities, .progress, .webActions],
       setupHint: "Run Tools/islet-pulse.swift from this project."),
     .init(
       id: "github-actions", name: "GitHub workflow watcher",
       summary: "Shows GitHub run status observed on this Mac.",
       symbol: "shippingbox.fill", sourceIDs: ["github-actions", "github"],
-      capabilities: [.events, .progress, .webActions],
+      capabilities: [.events, .persistentActivities, .progress, .webActions],
       setupHint: "Use the example locally or on a self-hosted Mac runner."),
     .init(
       id: "developer-tools", name: "Developer tools", summary: "Build, test, and agent status.",
       symbol: "hammer.fill", sourceIDs: ["xcode", "build", "tests", "agent"],
-      capabilities: [.events, .progress, .webActions],
+      capabilities: [.events, .persistentActivities, .progress, .webActions],
       setupHint: "Use a stable source name from your local automation."),
   ]
 }
@@ -502,6 +505,10 @@ struct PulseCommand: Codable, Sendable {
 enum PulseErrorCode: String, Codable, Sendable {
   case featureDisabled
   case unauthorized
+  case credentialRevoked
+  case permissionDenied
+  case requestIDRequired
+  case replayedRequest
   case invalidCommand
   case validationFailed
   case sourceRevoked
@@ -535,8 +542,8 @@ struct PulseResponse: Codable, Equatable, Sendable {
   }
 }
 
-/// Token-wide rolling-window protection. The per-connection cap bounds a single socket; this cap
-/// also prevents a noisy local provider from resetting its allowance by reconnecting repeatedly.
+/// Credential-wide rolling-window protection. The per-connection cap bounds a single socket; this
+/// cap also prevents a noisy provider from resetting its allowance by reconnecting repeatedly.
 struct PulseRateLimiter: Sendable {
   let limit: Int
   let window: TimeInterval
