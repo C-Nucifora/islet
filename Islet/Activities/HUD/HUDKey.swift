@@ -52,6 +52,58 @@ enum VolumeControlLayout {
     let delta = target - reference
     return originals.mapValues { max(0, min(1, $0 + delta)) }
   }
+
+  /// Moves a device's virtual master in one write when it has one. Otherwise, this makes a
+  /// best-effort transaction across every reported output channel and restores the old values if
+  /// any write or readback fails. CoreAudio has no multi-property volume-set API for individual
+  /// channels, so rollback is the closest available fallback to a single master write.
+  static func apply(
+    target: Float,
+    reportedElements: [UInt32],
+    read: (UInt32) -> Float?,
+    write: (UInt32, Float) -> Bool
+  ) -> Bool {
+    let elements = preferredElements(from: reportedElements)
+    guard !elements.isEmpty else { return false }
+
+    let originals = Dictionary(
+      uniqueKeysWithValues: elements.compactMap { element in
+        read(element).map { (element, $0) }
+      })
+    guard originals.count == elements.count,
+      let referenceElement = elements.first,
+      let reference = originals[referenceElement]
+    else { return false }
+
+    let targets = shiftedValues(originals, reference: reference, target: max(0, min(1, target)))
+    var written: [UInt32] = []
+    for element in elements {
+      guard let value = targets[element], write(element, value) else {
+        restore(written, originals: originals, write: write)
+        return false
+      }
+      written.append(element)
+    }
+
+    let verified = elements.allSatisfy { element in
+      guard let value = targets[element], let readback = read(element) else { return false }
+      return abs(readback - value) <= 0.02
+    }
+    guard verified else {
+      restore(written, originals: originals, write: write)
+      return false
+    }
+    return true
+  }
+
+  private static func restore(
+    _ elements: [UInt32], originals: [UInt32: Float], write: (UInt32, Float) -> Bool
+  ) {
+    for element in elements.reversed() {
+      guard let original = originals[element] else { continue }
+      _ = write(element, original)
+    }
+  }
 }
 
 /// Tracks which key-up events may be suppressed. A failed key-down and its key-up must both reach

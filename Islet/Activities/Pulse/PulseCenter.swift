@@ -19,8 +19,15 @@ final class PulseCenter: ObservableObject {
       refreshVisibleItems()
     }
   }
+  private let symbolAvailability: (String) -> Bool?
   private var storedItems: [PulseItem] = []
   private var expiryTask: Task<Void, Never>?
+
+  init(
+    symbolAvailability: @escaping (String) -> Bool? = PulseSymbolValidator.platformAvailability
+  ) {
+    self.symbolAvailability = symbolAvailability
+  }
 
   var primary: PulseItem? { items.first }
   var retainedItemCount: Int { storedItems.count }
@@ -28,9 +35,10 @@ final class PulseCenter: ObservableObject {
 
   @discardableResult
   func applyIfEnabled(
-    _ command: PulseCommand, now: Date = Date(), featureEnabled: Bool = Defaults[.pulseEnabled]
+    _ command: PulseCommand, now: Date = Date(),
+    activityEnabled: Bool = ActivityEnablement.isEnabled("pulse")
   ) -> PulseResponse {
-    guard featureEnabled else {
+    guard activityEnabled else {
       return .failure(
         "Pulse is disabled in Islet Settings", code: .featureDisabled,
         requestID: command.requestID)
@@ -55,7 +63,8 @@ final class PulseCenter: ObservableObject {
         }
         let normalizedIncomingID = try PulseItem.normalizedIdentifier(payload.id)
         let previous = storedItems.first { $0.id == normalizedIncomingID }
-        let item = try PulseItem(payload: payload, now: now, previous: previous)
+        let item = try PulseItem(
+          payload: payload, now: now, previous: previous, symbolAvailability: symbolAvailability)
         if let previous, sourceKey(previous.source) != sourceKey(item.source) {
           record(operation: command.operation, item: nil, result: .rejected, date: now)
           return .failure(
@@ -79,7 +88,9 @@ final class PulseCenter: ObservableObject {
           operation: command.operation, item: item,
           result: visible ? (previous == nil ? .shown : .updated) : .suppressed, date: now)
         refreshVisibleItems()
-        return .success(id: item.id, requestID: command.requestID)
+        return .success(
+          id: item.id, warning: item.symbolWarning?.localizedDescription,
+          requestID: command.requestID)
       case .end:
         guard let rawIdentifier = command.id ?? command.activity?.id else {
           record(operation: .end, item: nil, result: .rejected, date: now)

@@ -80,6 +80,7 @@
         "ok": { "type": "boolean" },
         "id": { "type": "string" },
         "error": { "type": "string" },
+        "warning": { "type": "string" },
         "errorCode": {
           "enum": [
             "featureDisabled",

@@ -8,22 +8,23 @@ final class BatteryActivity: NotchActivity, ObservableObject {
   let priority = ActivityPriority.ambient
   private(set) var activationDate: Date?
   private let monitor = BatteryMonitor()
-  private var lastState: BatteryState?
+  private var eventHistory = BatteryEventHistory()
   private var cancellables: Set<AnyCancellable> = []
   private var isMonitoring = false
 
   // The tab is available whenever the feature is on. Gating it on AC power made the whole power
   // screen vanish the moment you unplugged — which is exactly when you want to read it.
-  var isActive: Bool { Defaults[.batteryEnabled] }
+  var isActive: Bool { true }
 
   func start() {
     guard !isMonitoring else { return }
     isMonitoring = true
     monitor.start()
-    monitor.$state
+    monitor.$state.combineLatest(monitor.$hasFreshState)
       .receive(on: DispatchQueue.main)
-      .compactMap { $0 }
-      .sink { [weak self] new in self?.handle(new) }
+      .sink { [weak self] state, hasFreshState in
+        self?.handle(state, hasFreshState: hasFreshState)
+      }
       .store(in: &cancellables)
   }
 
@@ -32,19 +33,18 @@ final class BatteryActivity: NotchActivity, ObservableObject {
     isMonitoring = false
     monitor.stop()
     cancellables.removeAll()
-    lastState = nil
+    eventHistory.reset()
     activationDate = nil
     objectWillChange.send()
   }
 
-  private func handle(_ new: BatteryState) {
-    let events = BatteryEventDetector.events(from: lastState, to: new)
-    lastState = new
+  private func handle(_ new: BatteryState?, hasFreshState: Bool) {
+    let events = eventHistory.events(for: new, isFresh: hasFreshState)
+    guard hasFreshState, new != nil else { return }
     // Now that the tab is always active, its activation date is simply when it first had a reading.
     if activationDate == nil { activationDate = Date() }
     objectWillChange.send()
 
-    guard Defaults[.batteryEnabled] else { return }
     for event in events {
       SystemEventBus.shared.emit(Self.event(for: event))
     }
