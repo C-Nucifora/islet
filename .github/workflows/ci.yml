@@ -51,6 +51,20 @@ jobs:
           xcodegen --version
           test "$(xcbeautify --version)" = "3.2.1"
 
+      - name: Verify MediaRemoteAdapter provenance
+        run: |
+          Scripts/verify-mediaremote-adapter.sh
+          Scripts/rebuild-mediaremote-adapter.sh
+          Scripts/verify-mediaremote-adapter.sh \
+            Vendor/mediaremote-adapter-build/MediaRemoteAdapter.framework
+          diff --brief --recursive --no-dereference \
+            Vendor/MediaRemoteAdapter.framework \
+            Vendor/mediaremote-adapter-build/MediaRemoteAdapter.framework
+          cmp Islet/Resources/mediaremote-adapter.pl \
+            Vendor/mediaremote-adapter-build/mediaremote-adapter.pl
+          cmp Vendor/MediaRemoteAdapter-LICENSE \
+            Vendor/mediaremote-adapter-build/LICENSE
+
       - name: Lint source and integration files
         run: |
           xcrun swift-format lint --strict --recursive Islet IsletTests Tools
