@@ -1,0 +1,270 @@
+import Foundation
+
+enum T3ConnectSessionError: Error, Equatable, LocalizedError {
+  case notLinked
+  case invalidTokenResponse
+  case reauthenticationRequired
+  case httpStatus(Int)
+  case staleOperation
+
+  var errorDescription: String? {
+    switch self {
+    case .notLinked:
+      "No T3 Connect account is linked."
+    case .invalidTokenResponse:
+      "T3 Connect returned an invalid token response."
+    case .reauthenticationRequired:
+      "T3 Connect requires authorization again."
+    case .httpStatus(let status):
+      "T3 Connect returned HTTP \(status)."
+    case .staleOperation:
+      "The T3 Connect operation was invalidated by sign-out."
+    }
+  }
+}
+
+actor T3ConnectSession {
+  nonisolated static let maximumOAuthResponseBytes = 64 * 1_024
+  private nonisolated static let refreshLeadTime: TimeInterval = 5 * 60
+  private nonisolated static let requestDeadline: TimeInterval = 30
+
+  private let credentialStore: T3ConnectCredentialStore
+  private let transport: T3HTTPTransport
+  private let configuration: T3ConnectConfiguration
+  private let tokenOrigin: T3HTTPOrigin?
+  private let now: @Sendable () -> Date
+  private let grantID: @Sendable () -> UUID
+  private let onRefreshTaskReused: @Sendable () -> Void
+  private let onSignOutBegan: @Sendable () -> Void
+  private var refreshTask: (id: UUID, task: Task<T3OAuthRecord, any Error>)?
+  private var generation: UInt64 = 0
+
+  init(
+    credentialStore: T3ConnectCredentialStore = T3ConnectCredentialStore(),
+    transport: T3HTTPTransport = .shared,
+    configuration: T3ConnectConfiguration = .production,
+    now: @escaping @Sendable () -> Date = Date.init,
+    grantID: @escaping @Sendable () -> UUID = UUID.init,
+    onRefreshTaskReused: @escaping @Sendable () -> Void = {},
+    onSignOutBegan: @escaping @Sendable () -> Void = {}
+  ) {
+    self.credentialStore = credentialStore
+    self.transport = transport
+    self.configuration = configuration
+    tokenOrigin = try? T3HTTPOrigin(configuration.tokenEndpoint)
+    self.now = now
+    self.grantID = grantID
+    self.onRefreshTaskReused = onRefreshTaskReused
+    self.onSignOutBegan = onSignOutBegan
+  }
+
+  func loadStoredAccount() async throws -> T3ConnectAccount? {
+    try await credentialStore.loadOAuthRecord().map(T3ConnectAccount.init(record:))
+  }
+
+  func exchangeAuthorizationCode(_ code: String, verifier: String) async throws -> T3OAuthRecord {
+    let fields = [
+      ("grant_type", "authorization_code"),
+      ("client_id", configuration.clientID),
+      ("code", code),
+      ("code_verifier", verifier),
+      ("redirect_uri", configuration.redirectURI.absoluteString),
+    ]
+    let response = try await sendTokenRequest(fields)
+    return try authorizationRecord(from: response)
+  }
+
+  func validOAuthRecord() async throws -> T3OAuthRecord {
+    guard let record = try await credentialStore.loadOAuthRecord() else {
+      throw T3ConnectSessionError.notLinked
+    }
+    if record.expiresAt.timeIntervalSince(now()) > Self.refreshLeadTime { return record }
+
+    if let refreshTask {
+      onRefreshTaskReused()
+      return try await refreshTask.task.value
+    }
+
+    let taskID = UUID()
+    let capturedGeneration = generation
+    let task = Task { [self] in
+      try await refresh(record, capturedGeneration: capturedGeneration)
+    }
+    refreshTask = (taskID, task)
+    do {
+      let refreshed = try await task.value
+      clearRefreshTask(id: taskID)
+      return refreshed
+    } catch {
+      clearRefreshTask(id: taskID)
+      throw error
+    }
+  }
+
+  func commit(_ candidate: T3OAuthRecord) async throws {
+    let capturedGeneration = generation
+    try Task.checkCancellation()
+    guard capturedGeneration == generation else { throw T3ConnectSessionError.staleOperation }
+    try await credentialStore.replaceOAuthRecord(candidate)
+    try Task.checkCancellation()
+    guard capturedGeneration == generation else { throw T3ConnectSessionError.staleOperation }
+  }
+
+  func signOut() async throws {
+    generation &+= 1
+    refreshTask?.task.cancel()
+    refreshTask = nil
+    onSignOutBegan()
+    try await credentialStore.signOut()
+  }
+
+  private func refresh(
+    _ record: T3OAuthRecord, capturedGeneration: UInt64
+  ) async throws -> T3OAuthRecord {
+    let fields = [
+      ("grant_type", "refresh_token"),
+      ("client_id", configuration.clientID),
+      ("refresh_token", record.refreshToken),
+    ]
+    let response = try await sendTokenRequest(fields)
+    try Task.checkCancellation()
+    let candidate = try refreshedRecord(from: response, previous: record)
+    guard capturedGeneration == generation else { throw T3ConnectSessionError.staleOperation }
+    try await credentialStore.replaceOAuthRecord(candidate)
+    try Task.checkCancellation()
+    guard capturedGeneration == generation else { throw T3ConnectSessionError.staleOperation }
+    return candidate
+  }
+
+  private func clearRefreshTask(id: UUID) {
+    if refreshTask?.id == id { refreshTask = nil }
+  }
+
+  private func sendTokenRequest(_ fields: [(String, String)]) async throws -> T3HTTPResponse {
+    guard let tokenOrigin else { throw T3ClientError.invalidURL }
+    var request = URLRequest(url: configuration.tokenEndpoint)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue(
+      "application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+    request.httpBody = Data(Self.formBody(fields).utf8)
+
+    let response = try await transport.send(
+      request, expectedOrigin: tokenOrigin, deadline: Self.requestDeadline)
+    guard (200..<300).contains(response.statusCode) else {
+      if response.statusCode == 401 {
+        throw T3ConnectSessionError.reauthenticationRequired
+      }
+      guard response.data.count <= Self.maximumOAuthResponseBytes else {
+        throw T3ConnectSessionError.invalidTokenResponse
+      }
+      if Self.oauthError(from: response.data) == "invalid_grant" {
+        throw T3ConnectSessionError.reauthenticationRequired
+      }
+      throw T3ConnectSessionError.httpStatus(response.statusCode)
+    }
+    guard response.data.count <= Self.maximumOAuthResponseBytes else {
+      throw T3ConnectSessionError.invalidTokenResponse
+    }
+    return response
+  }
+
+  private func authorizationRecord(from response: T3HTTPResponse) throws -> T3OAuthRecord {
+    let token = try Self.decodeTokenResponse(response.data)
+    guard let refreshToken = token.refreshToken else {
+      throw T3ConnectSessionError.invalidTokenResponse
+    }
+    let receivedAt = now()
+    do {
+      return try T3OAuthRecord.authorizationGrant(
+        accessToken: token.accessToken, refreshToken: refreshToken,
+        expiresAt: receivedAt.addingTimeInterval(token.expiresIn),
+        displayIdentity: token.idToken.flatMap(T3ConnectAccount.displayIdentity(fromIDToken:)),
+        grantID: grantID, receivedAt: receivedAt)
+    } catch {
+      throw T3ConnectSessionError.invalidTokenResponse
+    }
+  }
+
+  private func refreshedRecord(
+    from response: T3HTTPResponse, previous: T3OAuthRecord
+  ) throws -> T3OAuthRecord {
+    let token = try Self.decodeTokenResponse(response.data)
+    let receivedAt = now()
+    do {
+      return try previous.refreshed(
+        accessToken: token.accessToken, refreshToken: token.refreshToken,
+        expiresAt: receivedAt.addingTimeInterval(token.expiresIn),
+        displayIdentity: token.idToken.flatMap(T3ConnectAccount.displayIdentity(fromIDToken:)),
+        receivedAt: receivedAt)
+    } catch {
+      throw T3ConnectSessionError.invalidTokenResponse
+    }
+  }
+
+  private nonisolated static func decodeTokenResponse(_ data: Data) throws -> OAuthTokenResponse {
+    guard data.count <= maximumOAuthResponseBytes,
+      let response = try? JSONDecoder().decode(OAuthTokenResponse.self, from: data),
+      response.tokenType.caseInsensitiveCompare("Bearer") == .orderedSame,
+      !response.accessToken.isEmpty,
+      response.accessToken.utf8.count <= T3OAuthRecord.maximumTokenBytes,
+      response.refreshToken.map({
+        !$0.isEmpty && $0.utf8.count <= T3OAuthRecord.maximumTokenBytes
+      }) ?? true,
+      response.idToken.map({ $0.utf8.count <= T3OAuthRecord.maximumTokenBytes }) ?? true,
+      response.expiresIn.isFinite, response.expiresIn > 0,
+      response.expiresIn <= T3OAuthRecord.maximumResponseLifetime
+    else {
+      throw T3ConnectSessionError.invalidTokenResponse
+    }
+    return response
+  }
+
+  private nonisolated static func oauthError(from data: Data) -> String? {
+    guard data.count <= maximumOAuthResponseBytes else { return nil }
+    return try? JSONDecoder().decode(OAuthFailureResponse.self, from: data).error
+  }
+
+  private nonisolated static func formBody(_ fields: [(String, String)]) -> String {
+    fields.map { "\(formEncode($0.0))=\(formEncode($0.1))" }.joined(separator: "&")
+  }
+
+  private nonisolated static func formEncode(_ value: String) -> String {
+    let hexadecimal = Array("0123456789ABCDEF".utf8)
+    var encoded = [UInt8]()
+    encoded.reserveCapacity(value.utf8.count)
+    for byte in value.utf8 {
+      if (byte >= 0x41 && byte <= 0x5A) || (byte >= 0x61 && byte <= 0x7A)
+        || (byte >= 0x30 && byte <= 0x39) || byte == 0x2D || byte == 0x2E || byte == 0x5F
+        || byte == 0x7E
+      {
+        encoded.append(byte)
+      } else {
+        encoded.append(0x25)
+        encoded.append(hexadecimal[Int(byte >> 4)])
+        encoded.append(hexadecimal[Int(byte & 0x0F)])
+      }
+    }
+    return String(decoding: encoded, as: UTF8.self)
+  }
+
+  private struct OAuthTokenResponse: Decodable, Sendable {
+    let accessToken: String
+    let refreshToken: String?
+    let tokenType: String
+    let expiresIn: TimeInterval
+    let idToken: String?
+
+    enum CodingKeys: String, CodingKey {
+      case accessToken = "access_token"
+      case refreshToken = "refresh_token"
+      case tokenType = "token_type"
+      case expiresIn = "expires_in"
+      case idToken = "id_token"
+    }
+  }
+
+  private struct OAuthFailureResponse: Decodable, Sendable {
+    let error: String?
+  }
+}
