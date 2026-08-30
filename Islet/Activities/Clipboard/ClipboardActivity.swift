@@ -265,12 +265,6 @@ final class ClipboardModel: ObservableObject {
     pollingState.isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
     pollingState = pollingPolicy.stateRecordingActivity(from: pollingState)
 
-    Defaults.publisher(.clipboardEnabled)
-      .dropFirst()
-      .sink { [weak self] change in
-        self?.setMonitoringEnabled(change.newValue)
-      }
-      .store(in: &cancellables)
     NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)
       .sink { [weak self] _ in self?.refreshLowPowerMode() }
       .store(in: &cancellables)
@@ -300,19 +294,6 @@ final class ClipboardModel: ObservableObject {
     clear()
   }
 
-  private func setMonitoringEnabled(_ enabled: Bool) {
-    pollingState.isEnabled = enabled
-    lastChange = pasteboard.changeCount
-    cancelPollingTimer()
-    guard enabled else {
-      pollingState.lastActivity = nil
-      clear()
-      return
-    }
-    pollingState = pollingPolicy.stateRecordingActivity(from: pollingState)
-    scheduleNextPoll()
-  }
-
   private func refreshLowPowerMode() {
     pollingState.isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
     scheduleNextPoll()
@@ -335,7 +316,7 @@ final class ClipboardModel: ObservableObject {
     cancelPollingTimer()
     guard let delay = pollingPolicy.nextDelay(for: pollingState) else { return }
     let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
-      self?.poll()
+      Task { @MainActor in self?.poll() }
     }
     pollingTimer = timer
     RunLoop.main.add(timer, forMode: .common)
