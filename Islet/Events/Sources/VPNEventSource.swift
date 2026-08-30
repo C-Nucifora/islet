@@ -218,8 +218,7 @@ final class VPNEventSource: SystemEventSource {
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.restartRecoveryTimer() }
       .store(in: &cancellables)
-    ContextRuleCenter.shared.$resolution
-      .dropFirst()
+    ContextRuleCenter.shared.resolutionChanges
       .sink { [weak self] _ in self?.restartRecoveryTimer() }
       .store(in: &cancellables)
     NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)

@@ -154,6 +154,26 @@ final class ContextRuleTests: XCTestCase {
     XCTAssertFalse(stopped.isActivityVisible("clipboard", baselineVisible: false))
   }
 
+  @MainActor
+  func testResolutionChangesEmitAfterTheCenterStoresTheNewResolution() {
+    let matchingRule = rule(
+      name: "Current power state",
+      trigger: ContextRuleTrigger(
+        kind: .lowPowerMode, boolean: ProcessInfo.processInfo.isLowPowerModeEnabled),
+      action: ContextRuleAction(activityVisibility: ["clipboard": false]))
+    let center = ContextRuleCenter(rules: [matchingRule])
+    var received: (emitted: ContextRuleResolution, stored: ContextRuleResolution)?
+    let cancellable = center.resolutionChanges.sink { emitted in
+      received = (emitted, center.resolution)
+    }
+
+    center.refresh(now: now)
+
+    XCTAssertEqual(received?.emitted.matchedRuleID, matchingRule.id)
+    XCTAssertEqual(received?.stored, received?.emitted)
+    withExtendedLifetime(cancellable) {}
+  }
+
   func testSleepClearsAppliedStateAndWakeResamplesCurrentContext() {
     let focusRule = rule(
       name: "Focus", trigger: ContextRuleTrigger(kind: .focusMode),

@@ -13,7 +13,14 @@ final class ContextRuleCenter: ObservableObject {
   @Published private(set) var snapshot = ContextSnapshot()
   @Published private(set) var resolution = ContextRuleResolution.none
 
+  /// Unlike `@Published`, this emits after `resolution` has been assigned. Subscribers that
+  /// rebuild policy by reading the center therefore cannot observe the previous rule result.
+  var resolutionChanges: AnyPublisher<ContextRuleResolution, Never> {
+    resolutionChangesSubject.eraseToAnyPublisher()
+  }
+
   private var runtime = ContextRuleRuntime()
+  private let resolutionChangesSubject = PassthroughSubject<ContextRuleResolution, Never>()
   private var cancellables: Set<AnyCancellable> = []
   private var timer: AnyCancellable?
   private var overrideExpiryTask: Task<Void, Never>?
@@ -174,7 +181,10 @@ final class ContextRuleCenter: ObservableObject {
   }
 
   private func publishRuntimeResolution() {
-    if resolution != runtime.resolution { resolution = runtime.resolution }
+    if resolution != runtime.resolution {
+      resolution = runtime.resolution
+      resolutionChangesSubject.send(resolution)
+    }
     PulseCenter.shared.ruleDeliveryProfile = resolution.action?.pulseDelivery
   }
 
