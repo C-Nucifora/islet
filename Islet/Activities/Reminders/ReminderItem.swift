@@ -142,7 +142,9 @@ enum RemindersLogic {
       }
     }
 
-    let undatedReserve = min(max(0, policy.reservedUndatedItems), undated.count, limit)
+    let prioritizedUndatedCount = undated.lazy.filter { $0.priority != 0 }.count
+    let undatedReserve = min(
+      max(0, policy.reservedUndatedItems), prioritizedUndatedCount, limit)
     let datedCount = min(dated.count, limit - undatedReserve)
     let undatedCount = min(undated.count, limit - datedCount)
     let selected = dated.prefix(datedCount).map(\.item) + undated.prefix(undatedCount).map(\.item)

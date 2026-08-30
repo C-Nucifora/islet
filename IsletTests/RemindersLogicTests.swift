@@ -74,6 +74,16 @@ final class RemindersLogicTests: XCTestCase {
       ["dated", "undated-high", "undated-low"])
   }
 
+  func testUnprioritizedUndatedItemsDoNotEvictDatedItems() {
+    let dated = (0..<8).map { item("dated-\($0)", due: TimeInterval($0) * 60) }
+    let items = dated + [item("undated-a"), item("undated-b")]
+
+    let selection = RemindersLogic.dashboardSelection(items, now: now)
+
+    XCTAssertEqual(selection.items.map(\.id), dated.map(\.id))
+    XCTAssertTrue(selection.hasMore)
+  }
+
   func testDashboardReportsNoMoreWhenEveryItemFits() {
     let selection = RemindersLogic.dashboardSelection(
       [item("overdue", due: -60), item("undated", priority: 1)], now: now)
