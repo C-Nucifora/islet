@@ -62,4 +62,8 @@ final class SettingsSearchTests: XCTestCase {
     XCTAssertTrue(SettingsDetailPage.t3Code.matchesSearch("sign out"))
     XCTAssertTrue(SettingsDetailPage.t3Code.matchesSearch("reconnect now"))
   }
+
+  func testPulseSearchFindsProviderSilenceTimeout() {
+    XCTAssertTrue(SettingsDetailPage.pulse.matchesSearch("silent stale timeout"))
+  }
 }
