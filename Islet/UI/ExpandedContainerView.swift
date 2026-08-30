@@ -10,16 +10,14 @@ struct ExpandedContainerView: View {
   @ObservedObject private var center = ActivityCenter.shared
   @ObservedObject private var shelf = ShelfModel.shared
   @Environment(\.appTheme) private var appTheme
+  /// nil selection means the dashboard ("Home"); otherwise an activity id.
+  @State private var selection: String? = nil
   private static let homeTab = "\u{0000}home"  // sentinel id for the dashboard chip
-
-  private var activities: [any NotchActivity] {
-    center.expandedActivities(temporarilyIncluding: vm.temporarilyPresentedActivityID)
-  }
 
   /// Tabs shown, left to right: Home, then active activities and persistent utility surfaces.
   private var tabs: [(id: String, icon: String)] {
     [(Self.homeTab, "square.grid.2x2.fill")]
-      + activities.map { ($0.id, $0.tabIcon) }
+      + center.expandedActivities.map { ($0.id, $0.tabIcon) }
   }
 
   /// Tabs that fit in the dynamically sized left ear. If the screen imposes a limit, the selected
@@ -49,7 +47,7 @@ struct ExpandedContainerView: View {
     {
       return "shelf"
     }
-    if let selection = vm.selectedActivityID, ids.contains(selection) { return selection }
+    if let selection, ids.contains(selection) { return selection }
     // Default to a prominent active activity (running timer or media player); else the dashboard.
     if let primary = center.primaryActivity, primary.id == "timer" || primary.id == "nowPlaying" {
       return primary.id
@@ -57,10 +55,11 @@ struct ExpandedContainerView: View {
     return Self.homeTab
   }
 
-  /// The height tier the selected tab wants. The dashboard always takes the base tier.
+  /// The height tier the selected tab wants. Home uses the tall tier so three ranked rows and the
+  /// overflow control remain clear of the physical notch.
   private var selectedHeight: CGFloat {
-    guard effectiveSelection != Self.homeTab,
-      let activity = activities.first(where: { $0.id == effectiveSelection })
+    guard effectiveSelection != Self.homeTab else { return Metrics.tallExpandedHeight }
+    guard let activity = center.expandedActivities.first(where: { $0.id == effectiveSelection })
     else { return Metrics.expandedSize.height }
     return activity.preferredExpandedHeight
   }
@@ -83,19 +82,19 @@ struct ExpandedContainerView: View {
         .padding(.horizontal, Self.rowPadding)
     }
     .onChange(of: effectiveSelection, initial: true) { _, id in
+      // Only the drawn island resizes; the panel already holds the tallest tier while expanded.
+      // Making the panel follow this crashed the app — see NotchViewModel.targetPanelFrame.
       vm.setExpandedHeight(selectedHeight)
     }
     .onChange(of: shelf.isDropPresentationActive, initial: true) { _, active in
-      if active { vm.selectActivity("shelf") }
+      if active { selection = "shelf" }
     }
     .onChange(of: shelf.presentationRequest, initial: true) { _, request in
       guard let request else { return }
-      vm.selectActivity("shelf")
+      selection = "shelf"
       Task { @MainActor in shelf.consumePresentationRequest(request) }
     }
     .onChange(of: tabs.map(\.id), initial: true) { _, ids in
-      vm.clearTemporaryPresentationIfUnavailable(
-        availableActivityIDs: ids.filter { $0 != Self.homeTab })
       vm.setExpandedWidth(preferredExpandedWidth(tabCount: ids.count))
     }
   }
@@ -131,7 +130,7 @@ struct ExpandedContainerView: View {
           Menu {
             ForEach(overflowTabs, id: \.id) { tab in
               Button {
-                vm.selectActivity(tab.id)
+                selection = tab.id
               } label: {
                 Label(ActivityCatalog.name(for: tab.id), systemImage: tab.icon)
               }
@@ -179,7 +178,7 @@ struct ExpandedContainerView: View {
   private func tabButton(_ tab: (id: String, icon: String)) -> some View {
     let selected = tab.id == effectiveSelection
     return Button {
-      vm.selectActivity(tab.id)
+      selection = tab.id
     } label: {
       Image(systemName: tab.icon)
         .font(.caption)
@@ -197,13 +196,13 @@ struct ExpandedContainerView: View {
 
   @ViewBuilder private var content: some View {
     if effectiveSelection == Self.homeTab {
-      IdleDashboardView()
-    } else if let activity = activities.first(where: {
+      IdleDashboardView { selection = $0 }
+    } else if let activity = center.expandedActivities.first(where: {
       $0.id == effectiveSelection
     }) {
       activity.expandedView
     } else {
-      IdleDashboardView()
+      IdleDashboardView { selection = $0 }
     }
   }
 }
