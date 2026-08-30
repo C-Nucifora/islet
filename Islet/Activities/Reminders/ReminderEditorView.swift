@@ -145,14 +145,6 @@ struct ReminderCustomSnoozeView: View {
   }
 }
 
-extension ReminderDraft {
-  init(item: ReminderItem) {
-    self.init(
-      title: item.title, listID: item.listID, dueDate: item.dueDate,
-      hasDueTime: item.hasDueTime, priority: item.priority)
-  }
-}
-
 private struct ReminderEditorWindowContent: View {
   @ObservedObject var provider: RemindersProvider
   let item: ReminderItem?
@@ -198,7 +190,13 @@ final class ReminderEditorWindow: NSObject, NSWindowDelegate {
 
   func presentEditor(provider: RemindersProvider, item: ReminderItem?) {
     provider.dismissActionError()
-    let draft = item.map(ReminderDraft.init(item:)) ?? provider.defaultDraft()
+    let draft: ReminderDraft
+    if let item {
+      guard let editDraft = provider.draft(for: item) else { return }
+      draft = editDraft
+    } else {
+      draft = provider.defaultDraft()
+    }
     present(
       title: item == nil ? "New reminder" : "Edit reminder",
       content: ReminderEditorWindowContent(
