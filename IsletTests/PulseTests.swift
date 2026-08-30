@@ -118,6 +118,61 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testPulseSymbolValidationKeepsValidSymbolsAndReplacesInvalidSymbols() throws {
+    let now = Date(timeIntervalSince1970: 1_000)
+    let validPayload = PulsePayload(
+      id: "valid-symbol", source: "tests", title: "Valid", subtitle: nil,
+      symbol: "checkmark.circle.fill", accentHex: nil, progress: nil, state: nil,
+      priority: nil, expiresAt: nil, actions: nil)
+    let valid = try PulseItem(
+      payload: validPayload, now: now, symbolAvailability: { $0 == "checkmark.circle.fill" })
+    XCTAssertEqual(valid.symbol, "checkmark.circle.fill")
+    XCTAssertNil(valid.symbolWarning)
+
+    var invalidPayload = validPayload
+    invalidPayload.id = "invalid-symbol"
+    invalidPayload.symbol = "not.a.real.sf.symbol"
+    let invalid = try PulseItem(
+      payload: invalidPayload, now: now, symbolAvailability: { _ in false })
+    XCTAssertEqual(invalid.symbol, PulseSymbolValidator.fallbackSymbol)
+    XCTAssertEqual(invalid.symbolWarning, .invalid)
+
+    let center = PulseCenter(symbolAvailability: { _ in false })
+    let response = center.apply(command(.show, invalidPayload), now: now)
+    XCTAssertTrue(response.ok)
+    XCTAssertEqual(center.items.first?.symbol, PulseSymbolValidator.fallbackSymbol)
+    XCTAssertEqual(response.warning, PulseSymbolWarning.invalid.localizedDescription)
+  }
+
+  @MainActor
+  func testPulseSymbolValidationReplacesEmptyAndPlatformUnavailableSymbols() throws {
+    let now = Date(timeIntervalSince1970: 1_000)
+    var payload = PulsePayload(
+      id: "empty-symbol", source: "tests", title: "Empty", subtitle: nil, symbol: "  ",
+      accentHex: nil, progress: nil, state: nil, priority: nil, expiresAt: nil, actions: nil)
+    let empty = try PulseItem(payload: payload, now: now, symbolAvailability: { _ in true })
+    XCTAssertEqual(empty.symbol, PulseSymbolValidator.fallbackSymbol)
+    XCTAssertEqual(empty.symbolWarning, .empty)
+
+    let emptyCenter = PulseCenter(symbolAvailability: { _ in true })
+    let emptyResponse = emptyCenter.apply(command(.show, payload), now: now)
+    XCTAssertTrue(emptyResponse.ok)
+    XCTAssertEqual(emptyResponse.warning, PulseSymbolWarning.empty.localizedDescription)
+
+    payload.id = "platform-unavailable-symbol"
+    payload.symbol = "checkmark.circle.fill"
+    let unavailable = try PulseItem(
+      payload: payload, now: now, symbolAvailability: { _ in nil })
+    XCTAssertEqual(unavailable.symbol, PulseSymbolValidator.fallbackSymbol)
+    XCTAssertEqual(unavailable.symbolWarning, .platformUnavailable)
+
+    let center = PulseCenter(symbolAvailability: { _ in nil })
+    let response = center.apply(command(.show, payload), now: now)
+    XCTAssertTrue(response.ok)
+    XCTAssertEqual(response.warning, PulseSymbolWarning.platformUnavailable.localizedDescription)
+  }
+
+  @MainActor
   func testFocusProfileSuppressesNormalUpdatesButKeepsUrgentWork() throws {
     let center = PulseCenter()
     center.deliveryProfile = .focused
