@@ -269,6 +269,47 @@ private final class XcodeOutputParser: @unchecked Sendable {
   }
 }
 
+private final class XcodeOutputDrainer: @unchecked Sendable {
+  private static let readSize = 16 * 1_024
+
+  private let source: FileHandle
+  private let destination: FileHandle
+  private let parser: XcodeOutputParser
+  private let outputLock: NSLock
+  private let progressChanged: () -> Void
+
+  init(
+    source: FileHandle,
+    destination: FileHandle,
+    parser: XcodeOutputParser,
+    outputLock: NSLock,
+    progressChanged: @escaping () -> Void
+  ) {
+    self.source = source
+    self.destination = destination
+    self.parser = parser
+    self.outputLock = outputLock
+    self.progressChanged = progressChanged
+  }
+
+  func run() {
+    while true {
+      let data: Data
+      do {
+        guard let next = try source.read(upToCount: Self.readSize), !next.isEmpty else { break }
+        data = next
+      } catch {
+        break
+      }
+      outputLock.lock()
+      destination.write(data)
+      outputLock.unlock()
+      if parser.consume(data) { progressChanged() }
+    }
+    parser.finish()
+  }
+}
+
 private struct PulseStatus {
   let operation: String
   let title: String
@@ -280,19 +321,70 @@ private struct PulseStatus {
   let includeFailureAction: Bool
 }
 
+private struct PendingPulseStatus {
+  let status: PulseStatus
+  let force: Bool
+  let completion: (() -> Void)?
+}
+
 private final class PulsePublisher: @unchecked Sendable {
   private let options: Options
-  private let queue = DispatchQueue(label: "dev.islet.xcode-pulse.publisher", qos: .utility)
+  private let stateQueue = DispatchQueue(
+    label: "dev.islet.xcode-pulse.publisher-state", qos: .utility)
+  private let workerQueue = DispatchQueue(
+    label: "dev.islet.xcode-pulse.publisher-worker", qos: .utility)
+  private let reporterTimeout: TimeInterval
+  private var pending: PendingPulseStatus?
+  private var workerRunning = false
+  private var acceptingUpdates = true
   private var lastFingerprint = ""
   private var lastUpdate = Date.distantPast
 
-  init(options: Options) { self.options = options }
-
-  func publish(_ status: PulseStatus, force: Bool = false) {
-    queue.async { self.send(status, force: force) }
+  init(options: Options) {
+    self.options = options
+    let environment = ProcessInfo.processInfo.environment
+    if environment["ISLET_PULSE_EXECUTABLE"]?.isEmpty == false,
+      let rawTimeout = environment["ISLET_PULSE_TIMEOUT_SECONDS"],
+      let timeout = TimeInterval(rawTimeout), timeout.isFinite, timeout > 0
+    {
+      reporterTimeout = min(60, max(0.05, timeout))
+    } else {
+      reporterTimeout = 6
+    }
   }
 
-  func finish(_ status: PulseStatus) { queue.sync { send(status, force: true) } }
+  func publish(_ status: PulseStatus, force: Bool = false) {
+    stateQueue.async {
+      guard self.acceptingUpdates else { return }
+      self.pending = PendingPulseStatus(status: status, force: force, completion: nil)
+      self.startNextIfNeeded()
+    }
+  }
+
+  func finish(_ status: PulseStatus) {
+    let completed = DispatchSemaphore(value: 0)
+    stateQueue.async {
+      self.acceptingUpdates = false
+      self.pending = PendingPulseStatus(
+        status: status, force: true, completion: { completed.signal() })
+      self.startNextIfNeeded()
+    }
+    completed.wait()
+  }
+
+  private func startNextIfNeeded() {
+    guard !workerRunning, let next = pending else { return }
+    pending = nil
+    workerRunning = true
+    workerQueue.async {
+      self.send(next.status, force: next.force)
+      self.stateQueue.async {
+        self.workerRunning = false
+        next.completion?()
+        self.startNextIfNeeded()
+      }
+    }
+  }
 
   private func send(_ status: PulseStatus, force: Bool) {
     let fingerprint = "\(status.title)|\(status.subtitle)|\(status.state)|\(status.progress ?? -1)"
@@ -334,8 +426,16 @@ private final class PulsePublisher: @unchecked Sendable {
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
     do {
+      let exited = DispatchSemaphore(value: 0)
+      process.terminationHandler = { _ in exited.signal() }
       try process.run()
-      process.waitUntilExit()
+      if exited.wait(timeout: .now() + reporterTimeout) == .timedOut {
+        if process.isRunning { process.terminate() }
+        if exited.wait(timeout: .now() + 0.25) == .timedOut, process.isRunning {
+          kill(process.processIdentifier, SIGKILL)
+          _ = exited.wait(timeout: .now() + 1)
+        }
+      }
     } catch {
       // Pulse reporting is best effort. A missing or stopped Islet must not change xcodebuild.
     }
@@ -393,27 +493,24 @@ do {
   process.standardOutput = stdoutPipe
   process.standardError = stderrPipe
   let outputLock = NSLock()
-  for (pipe, destination, parser) in [
-    (stdoutPipe, FileHandle.standardOutput, stdoutParser),
-    (stderrPipe, FileHandle.standardError, stderrParser),
-  ] {
-    pipe.fileHandleForReading.readabilityHandler = { handle in
-      let data = handle.availableData
-      guard !data.isEmpty else { return }
-      outputLock.lock()
-      destination.write(data)
-      outputLock.unlock()
-      if parser.consume(data) {
-        let snapshot = currentSnapshot()
-        publisher.publish(
-          PulseStatus(
-            operation: "update", title: "\(noun) running",
-            subtitle: "\(options.label) · \(elapsed(Date().timeIntervalSince(start)))",
-            state: snapshot.progress == nil ? "active" : "progress", priority: "normal",
-            progress: snapshot.progress, expiry: nil, includeFailureAction: false))
-      }
-    }
+  let progressChanged = {
+    let snapshot = currentSnapshot()
+    publisher.publish(
+      PulseStatus(
+        operation: "update", title: "\(noun) running",
+        subtitle: "\(options.label) · \(elapsed(Date().timeIntervalSince(start)))",
+        state: snapshot.progress == nil ? "active" : "progress", priority: "normal",
+        progress: snapshot.progress, expiry: nil, includeFailureAction: false))
   }
+  let drainers = [
+    XcodeOutputDrainer(
+      source: stdoutPipe.fileHandleForReading, destination: FileHandle.standardOutput,
+      parser: stdoutParser, outputLock: outputLock, progressChanged: progressChanged),
+    XcodeOutputDrainer(
+      source: stderrPipe.fileHandleForReading, destination: FileHandle.standardError,
+      parser: stderrParser, outputLock: outputLock, progressChanged: progressChanged),
+  ]
+  let readers = DispatchGroup()
 
   let signalLock = NSLock()
   var receivedSignal: Int32?
@@ -447,6 +544,13 @@ do {
         priority: "critical", progress: nil, expiry: 60, includeFailureAction: false))
     throw error
   }
+  for drainer in drainers {
+    readers.enter()
+    DispatchQueue.global(qos: .utility).async {
+      drainer.run()
+      readers.leave()
+    }
+  }
   signalLock.lock()
   let pendingSignal = receivedSignal
   signalLock.unlock()
@@ -470,21 +574,7 @@ do {
   timer.cancel()
   interruptSource.cancel()
   terminateSource.cancel()
-  for (pipe, destination, parser) in [
-    (stdoutPipe, FileHandle.standardOutput, stdoutParser),
-    (stderrPipe, FileHandle.standardError, stderrParser),
-  ] {
-    pipe.fileHandleForReading.readabilityHandler = nil
-    let tail = pipe.fileHandleForReading.readDataToEndOfFile()
-    if !tail.isEmpty {
-      outputLock.lock()
-      destination.write(tail)
-      outputLock.unlock()
-      _ = parser.consume(tail)
-    }
-  }
-  stdoutParser.finish()
-  stderrParser.finish()
+  readers.wait()
 
   let snapshot = currentSnapshot()
   signalLock.lock()
