@@ -208,6 +208,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .systemMetrics:
       pageContent + [
         "Visibility", "System activity", "Always show System in the activity switcher",
+        "Automatic presence", "High CPU", "Thermal pressure", "Memory pressure",
+        "Low disk space", "Heavy disk activity", "High network traffic",
         "Metric presentation", "Presentation", "Compact", "Balanced", "Detailed", "Custom",
         "Customize individual metrics", "current value recent graph state labels",
       ] + SystemMetricKind.allCases.map(\.displayName)
@@ -355,6 +357,12 @@ struct SettingsView: View {
   @Default(.portsEnabled) private var portsEnabled
   @Default(.systemEnabled) private var systemEnabled
   @Default(.systemAlwaysVisible) private var systemAlwaysVisible
+  @Default(.systemAutoPresentCPU) private var systemAutoPresentCPU
+  @Default(.systemAutoPresentThermal) private var systemAutoPresentThermal
+  @Default(.systemAutoPresentMemoryPressure) private var systemAutoPresentMemoryPressure
+  @Default(.systemAutoPresentLowDiskSpace) private var systemAutoPresentLowDiskSpace
+  @Default(.systemAutoPresentDiskThroughput) private var systemAutoPresentDiskThroughput
+  @Default(.systemAutoPresentNetworkThroughput) private var systemAutoPresentNetworkThroughput
   @Default(.metricStyles) private var metricStyles
   @Default(.disabledEventSources) private var disabledEventSources
   @Default(.pulseEnabled) private var pulseEnabled
@@ -1030,6 +1038,18 @@ struct SettingsView: View {
         }
       }
       if systemEnabled {
+        Section("Automatic presence") {
+          Toggle("High CPU", isOn: $systemAutoPresentCPU)
+          Toggle("Thermal pressure", isOn: $systemAutoPresentThermal)
+          Toggle("Memory pressure", isOn: $systemAutoPresentMemoryPressure)
+          Toggle("Low disk space", isOn: $systemAutoPresentLowDiskSpace)
+          Toggle("Heavy disk activity", isOn: $systemAutoPresentDiskThroughput)
+          Toggle("High network traffic", isOn: $systemAutoPresentNetworkThroughput)
+          Text(
+            "Islet waits for sustained conditions and a clear recovery margin. Disk and network rates show unusually heavy traffic, not measured saturation, because device and link capacity are unavailable."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
         Section("Metric presentation") {
           Picker("Presentation", selection: metricPresetBinding) {
             ForEach(SystemMetricPreset.allCases) { preset in
@@ -1575,6 +1595,12 @@ struct SettingsView: View {
     priorityList = ["com.spotify.client", "com.apple.Music"]
     activityOrder = ActivityCatalog.defaultOrder
     systemAlwaysVisible = false
+    systemAutoPresentCPU = true
+    systemAutoPresentThermal = true
+    systemAutoPresentMemoryPressure = true
+    systemAutoPresentLowDiskSpace = true
+    systemAutoPresentDiskThroughput = true
+    systemAutoPresentNetworkThroughput = true
     metricStyles = [:]
     hudStyle = .bar
   }
