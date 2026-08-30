@@ -152,6 +152,178 @@ final class T3ConnectSessionTests: XCTestCase {
     XCTAssertEqual(requestCount, 1)
   }
 
+  func testCancelingOnlyRefreshWaiterStopsRequestAndPreservesStoredGrant() async throws {
+    let callerReturned = expectation(description: "canceled refresh caller returned")
+    let refreshStopped = expectation(description: "refresh request stopped")
+    let expiringRecord = try record(expiresIn: 1)
+    let secureStore = try secureStore(oauthRecord: expiringRecord)
+    let recorder = T3OAuthHTTPRecorder(
+      responses: [
+        .json(
+          status: 200,
+          #"{"access_token":"discarded","token_type":"Bearer","expires_in":3600}"#)
+      ],
+      suspended: true,
+      onStop: { refreshStopped.fulfill() })
+    let session = makeSession(store: secureStore, recorder: recorder)
+    let caller = Task {
+      do {
+        _ = try await session.validOAuthRecord()
+        XCTFail("Expected cancellation")
+      } catch is CancellationError {
+      } catch {
+        XCTFail("Expected cancellation, got \(error)")
+      }
+      callerReturned.fulfill()
+    }
+    await recorder.waitForRequestCount(1)
+
+    caller.cancel()
+    await fulfillment(of: [callerReturned, refreshStopped], timeout: 2)
+
+    let persistedRecord = try await secureStore.oauthRecord()
+    XCTAssertEqual(persistedRecord, expiringRecord)
+    recorder.resumeAll()
+    await caller.value
+  }
+
+  func testCancelingOneRefreshWaiterKeepsRequestAliveForSurvivor() async throws {
+    let canceledCallerReturned = expectation(description: "canceled refresh caller returned")
+    let reused = T3SessionSignal()
+    let expiringRecord = try record(expiresIn: 1)
+    let secureStore = try secureStore(oauthRecord: expiringRecord)
+    let recorder = T3OAuthHTTPRecorder(
+      responses: [
+        .json(
+          status: 200,
+          #"{"access_token":"survivor","token_type":"Bearer","expires_in":3600}"#)
+      ],
+      suspended: true)
+    let session = makeSession(
+      store: secureStore, recorder: recorder, onRefreshTaskReused: { reused.signal() })
+    let canceledCaller = Task {
+      do {
+        _ = try await session.validOAuthRecord()
+        XCTFail("Expected cancellation")
+      } catch is CancellationError {
+      } catch {
+        XCTFail("Expected cancellation, got \(error)")
+      }
+      canceledCallerReturned.fulfill()
+    }
+    await recorder.waitForRequestCount(1)
+    let survivor = Task { try await session.validOAuthRecord() }
+    await reused.wait()
+
+    canceledCaller.cancel()
+    await fulfillment(of: [canceledCallerReturned], timeout: 2)
+    XCTAssertEqual(recorder.stopCount(), 0)
+    recorder.resumeAll()
+
+    await canceledCaller.value
+    let refreshed = try await survivor.value
+    XCTAssertEqual(refreshed.accessToken, "survivor")
+    XCTAssertEqual(recorder.requests().count, 1)
+  }
+
+  func testCanceledRefreshCreatorCannotStrandCompletedRefreshState() async throws {
+    let clock = T3SessionTestClock(now: now)
+    let ownerGate = T3SessionGate()
+    let expiringRecord = try record(expiresIn: 1)
+    let secureStore = try secureStore(oauthRecord: expiringRecord)
+    let recorder = T3OAuthHTTPRecorder(responses: [
+      .json(
+        status: 200,
+        #"{"access_token":"first-refresh","token_type":"Bearer","expires_in":3600}"#),
+      .json(
+        status: 200,
+        #"{"access_token":"second-refresh","token_type":"Bearer","expires_in":3600}"#),
+    ])
+    let session = makeSession(
+      store: secureStore, recorder: recorder, currentTime: { clock.value() },
+      onOwnedRefreshCompleted: { await ownerGate.suspend() })
+    let creator = Task { try await session.validOAuthRecord() }
+    await ownerGate.waitUntilSuspended()
+
+    creator.cancel()
+    clock.advance(by: 3_301)
+    let refreshedAgain = try await session.validOAuthRecord()
+
+    XCTAssertEqual(refreshedAgain.accessToken, "second-refresh")
+    XCTAssertEqual(recorder.requests().count, 2)
+    await ownerGate.resume()
+    do {
+      _ = try await creator.value
+      XCTFail("Expected the creating caller to be canceled")
+    } catch is CancellationError {
+    }
+  }
+
+  func testCallerWaitsForCanceledRefreshTerminationBeforeRetrying() async throws {
+    let expiringRecord = try record(expiresIn: 1)
+    let credentialStore = T3RefreshRaceCredentialStore(
+      record: expiringRecord, suspendFirstReplacement: true)
+    let terminationWaitEntered = T3SessionSignal()
+    let recorder = T3OAuthHTTPRecorder(responses: [
+      .json(
+        status: 200,
+        #"{"access_token":"first-refresh","token_type":"Bearer","expires_in":3600}"#),
+      .json(
+        status: 200,
+        #"{"access_token":"duplicate-refresh","token_type":"Bearer","expires_in":3600}"#),
+    ])
+    let session = makeSession(
+      credentialStore: credentialStore, recorder: recorder,
+      onRefreshTaskReused: { terminationWaitEntered.signal() })
+    let canceledCaller = Task { try await session.validOAuthRecord() }
+    await credentialStore.waitForReplacement()
+
+    canceledCaller.cancel()
+    await credentialStore.waitForReplacementCancellation()
+    let retryingCaller = Task { try await session.validOAuthRecord() }
+    await terminationWaitEntered.wait()
+    let loadCountWhileWaiting = await credentialStore.recordedLoadCount()
+    XCTAssertEqual(loadCountWhileWaiting, 1)
+    await credentialStore.resumeReplacement()
+
+    do {
+      _ = try await canceledCaller.value
+      XCTFail("Expected the first caller to be canceled")
+    } catch is CancellationError {
+    }
+    let refreshed = try await retryingCaller.value
+    XCTAssertEqual(refreshed.accessToken, "first-refresh")
+    XCTAssertEqual(recorder.requests().count, 1)
+    let finalLoadCount = await credentialStore.recordedLoadCount()
+    XCTAssertEqual(finalLoadCount, 2)
+  }
+
+  func testStoredRecordLoadRetriesWhenRefreshStateChangesBeforeResume() async throws {
+    let expiringRecord = try record(expiresIn: 1)
+    let credentialStore = T3RefreshRaceCredentialStore(
+      record: expiringRecord, suspendFirstLoad: true)
+    let recorder = T3OAuthHTTPRecorder(responses: [
+      .json(
+        status: 200,
+        #"{"access_token":"first-refresh","token_type":"Bearer","expires_in":3600}"#),
+      .json(
+        status: 200,
+        #"{"access_token":"stale-refresh","token_type":"Bearer","expires_in":3600}"#),
+    ])
+    let session = makeSession(credentialStore: credentialStore, recorder: recorder)
+    let staleLoadCaller = Task { try await session.validOAuthRecord() }
+    await credentialStore.waitForLoadSuspension()
+
+    let currentCaller = Task { try await session.validOAuthRecord() }
+    let currentRecord = try await currentCaller.value
+    await credentialStore.resumeLoad()
+    let reloadedRecord = try await staleLoadCaller.value
+
+    XCTAssertEqual(currentRecord.accessToken, "first-refresh")
+    XCTAssertEqual(reloadedRecord.accessToken, "first-refresh")
+    XCTAssertEqual(recorder.requests().count, 1)
+  }
+
   func testRefreshPreservesGrantRefreshTokenAndIdentityWhenOmitted() async throws {
     let expiringRecord = try record(
       expiresIn: 1, refreshToken: "old-refresh", displayIdentity: "old@example.com")
@@ -342,6 +514,7 @@ final class T3ConnectSessionTests: XCTestCase {
     store: T3SessionSecureRecordStore,
     recorder: T3OAuthHTTPRecorder,
     grantID: UUID? = nil,
+    currentTime: (@Sendable () -> Date)? = nil,
     onRefreshTaskReused: @escaping @Sendable () -> Void = {},
     onSignOutBegan: @escaping @Sendable () -> Void = {},
     onOwnedRefreshCompleted: @escaping @Sendable () async -> Void = {}
@@ -351,11 +524,12 @@ final class T3ConnectSessionTests: XCTestCase {
     T3OAuthURLProtocol.recorder = recorder
     let transport = T3HTTPTransport(session: URLSession(configuration: configuration))
     let fixedNow = now
+    let resolvedNow = currentTime ?? { fixedNow }
     return T3ConnectSession(
       credentialStore: T3ConnectCredentialStore(store: store),
       transport: transport,
       configuration: .test,
-      now: { fixedNow },
+      now: resolvedNow,
       grantID: { grantID ?? UUID() },
       onRefreshTaskReused: onRefreshTaskReused,
       onSignOutBegan: onSignOutBegan,
@@ -364,7 +538,8 @@ final class T3ConnectSessionTests: XCTestCase {
 
   private func makeSession(
     credentialStore: any T3OAuthCredentialStoring,
-    recorder: T3OAuthHTTPRecorder
+    recorder: T3OAuthHTTPRecorder,
+    onRefreshTaskReused: @escaping @Sendable () -> Void = {}
   ) -> T3ConnectSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [T3OAuthURLProtocol.self]
@@ -374,7 +549,8 @@ final class T3ConnectSessionTests: XCTestCase {
       credentialStore: credentialStore,
       transport: T3HTTPTransport(session: URLSession(configuration: configuration)),
       configuration: .test,
-      now: { fixedNow })
+      now: { fixedNow },
+      onRefreshTaskReused: onRefreshTaskReused)
   }
 
   private func record(
@@ -429,10 +605,16 @@ private final class T3OAuthHTTPRecorder: @unchecked Sendable {
   private var pendingLoaders: [T3OAuthURLProtocol] = []
   private var requestWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
   private let suspended: Bool
+  private let onStop: @Sendable () -> Void
+  private var stoppedRequests = 0
 
-  init(responses: [T3OAuthHTTPResponse], suspended: Bool = false) {
+  init(
+    responses: [T3OAuthHTTPResponse], suspended: Bool = false,
+    onStop: @escaping @Sendable () -> Void = {}
+  ) {
     self.responses = responses
     self.suspended = suspended
+    self.onStop = onStop
   }
 
   func handle(_ loader: T3OAuthURLProtocol) {
@@ -483,6 +665,19 @@ private final class T3OAuthHTTPRecorder: @unchecked Sendable {
     for (loader, response) in deliveries { deliver(response, to: loader) }
   }
 
+  func recordStop() {
+    lock.lock()
+    stoppedRequests += 1
+    lock.unlock()
+    onStop()
+  }
+
+  func stopCount() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return stoppedRequests
+  }
+
   private func nextResponse() -> T3OAuthHTTPResponse? {
     responses.isEmpty ? nil : responses.removeFirst()
   }
@@ -528,8 +723,13 @@ private final class T3OAuthURLProtocol: URLProtocol, @unchecked Sendable {
 
   override func stopLoading() {
     lock.lock()
+    guard !stopped else {
+      lock.unlock()
+      return
+    }
     stopped = true
     lock.unlock()
+    Self.recorder?.recordStop()
   }
 
   func deliver(_ response: T3OAuthHTTPResponse) {
@@ -654,6 +854,98 @@ private actor T3SuspendedOAuthCredentialStore: T3OAuthCredentialStoring {
   func record() -> T3OAuthRecord? { storedRecord }
 }
 
+private actor T3RefreshRaceCredentialStore: T3OAuthCredentialStoring {
+  private var storedRecord: T3OAuthRecord
+  private let suspendFirstLoad: Bool
+  private let suspendFirstReplacement: Bool
+  private var loadCount = 0
+  private var didSuspendLoad = false
+  private var loadStarted = false
+  private var loadWaiter: CheckedContinuation<Void, Never>?
+  private var loadContinuation: CheckedContinuation<Void, Never>?
+  private var didSuspendReplacement = false
+  private var replacementStarted = false
+  private var replacementWaiter: CheckedContinuation<Void, Never>?
+  private var replacementContinuation: CheckedContinuation<Void, Never>?
+  private let replacementCanceled = T3SessionSignal()
+
+  init(
+    record: T3OAuthRecord, suspendFirstLoad: Bool = false,
+    suspendFirstReplacement: Bool = false
+  ) {
+    storedRecord = record
+    self.suspendFirstLoad = suspendFirstLoad
+    self.suspendFirstReplacement = suspendFirstReplacement
+  }
+
+  func loadOAuthRecord() async throws -> T3OAuthRecord? {
+    let record = storedRecord
+    loadCount += 1
+    if suspendFirstLoad, !didSuspendLoad {
+      didSuspendLoad = true
+      loadStarted = true
+      loadWaiter?.resume()
+      loadWaiter = nil
+      await withCheckedContinuation { continuation in
+        loadContinuation = continuation
+      }
+    }
+    return record
+  }
+
+  func replaceOAuthRecord(_ record: T3OAuthRecord) async throws {
+    if suspendFirstReplacement, !didSuspendReplacement {
+      didSuspendReplacement = true
+      replacementStarted = true
+      replacementWaiter?.resume()
+      replacementWaiter = nil
+      let replacementCanceled = replacementCanceled
+      await withTaskCancellationHandler {
+        await withCheckedContinuation { continuation in
+          replacementContinuation = continuation
+        }
+      } onCancel: {
+        replacementCanceled.signal()
+      }
+    }
+    storedRecord = record
+  }
+
+  func signOut() async throws {}
+
+  func recordedLoadCount() -> Int {
+    loadCount
+  }
+
+  func waitForReplacement() async {
+    if replacementStarted { return }
+    await withCheckedContinuation { continuation in
+      replacementWaiter = continuation
+    }
+  }
+
+  func waitForReplacementCancellation() async {
+    await replacementCanceled.wait()
+  }
+
+  func waitForLoadSuspension() async {
+    if loadStarted { return }
+    await withCheckedContinuation { continuation in
+      loadWaiter = continuation
+    }
+  }
+
+  func resumeLoad() {
+    loadContinuation?.resume()
+    loadContinuation = nil
+  }
+
+  func resumeReplacement() {
+    replacementContinuation?.resume()
+    replacementContinuation = nil
+  }
+}
+
 private final class T3SessionSignal: @unchecked Sendable {
   private let lock = NSLock()
   private var signaled = false
@@ -688,6 +980,7 @@ private actor T3SessionGate {
   private var resumeContinuation: CheckedContinuation<Void, Never>?
 
   func suspend() async {
+    if suspended { return }
     suspended = true
     suspendedWaiter?.resume()
     suspendedWaiter = nil
@@ -706,6 +999,27 @@ private actor T3SessionGate {
   func resume() {
     resumeContinuation?.resume()
     resumeContinuation = nil
+  }
+}
+
+private final class T3SessionTestClock: @unchecked Sendable {
+  private let lock = NSLock()
+  private var now: Date
+
+  init(now: Date) {
+    self.now = now
+  }
+
+  func value() -> Date {
+    lock.lock()
+    defer { lock.unlock() }
+    return now
+  }
+
+  func advance(by interval: TimeInterval) {
+    lock.lock()
+    now = now.addingTimeInterval(interval)
+    lock.unlock()
   }
 }
 

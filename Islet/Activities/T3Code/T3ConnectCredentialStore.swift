@@ -181,26 +181,34 @@ actor T3ConnectCredentialStore {
     signOutInProgress = true
     generation &+= 1
 
+    let cleanupTask = Task { [self] in await performSignOutCleanup() }
+    let result = await cleanupTask.value
+    if result.deletedOAuth { oauthCache = .loaded(nil) }
+    if result.deletedProofKey { proofKeyCache = .loaded(nil) }
+    finishSignOut()
+    if let firstError = result.firstError { throw firstError }
+  }
+
+  private func performSignOutCleanup() async -> SignOutCleanupResult {
     let store = store
-    var firstError: (any Error)?
+    var result = SignOutCleanupResult()
     do {
       try await withStoreLock(.oauth) {
         try await store.delete(service: Self.service, account: Self.oauthAccount)
       }
-      oauthCache = .loaded(nil)
+      result.deletedOAuth = true
     } catch {
-      firstError = error
+      result.firstError = error
     }
     do {
       try await withStoreLock(.proofKey) {
         try await store.delete(service: Self.service, account: Self.dpopKeyAccount)
       }
-      proofKeyCache = .loaded(nil)
+      result.deletedProofKey = true
     } catch {
-      if firstError == nil { firstError = error }
+      if result.firstError == nil { result.firstError = error }
     }
-    finishSignOut()
-    if let firstError { throw firstError }
+    return result
   }
 
   private func waitForSignOutCompletion() async {
@@ -281,6 +289,12 @@ actor T3ConnectCredentialStore {
   private enum StoreOperationKind: Sendable {
     case oauth
     case proofKey
+  }
+
+  private struct SignOutCleanupResult: Sendable {
+    var deletedOAuth = false
+    var deletedProofKey = false
+    var firstError: (any Error)?
   }
 
   private enum Cache<Value: Sendable>: Sendable {

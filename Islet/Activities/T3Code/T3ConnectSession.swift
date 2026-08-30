@@ -45,7 +45,8 @@ actor T3ConnectSession {
   private let onRefreshTaskReused: @Sendable () -> Void
   private let onSignOutBegan: @Sendable () -> Void
   private let onOwnedRefreshCompleted: @Sendable () async -> Void
-  private var refreshTask: (id: UUID, task: Task<T3OAuthRecord, any Error>)?
+  private var refreshTask: PendingRefreshTask?
+  private var refreshRevision: UInt64 = 0
   private var generation: UInt64 = 0
   private var accountTransitionInProgress = false
 
@@ -88,43 +89,39 @@ actor T3ConnectSession {
 
   func validOAuthRecord() async throws -> T3OAuthRecord {
     let capturedGeneration = generation
-    try Task.checkCancellation()
-    guard !accountTransitionInProgress else { throw T3ConnectSessionError.staleOperation }
-    let loadedRecord = try await credentialStore.loadOAuthRecord()
-    try Task.checkCancellation()
-    guard capturedGeneration == generation, !accountTransitionInProgress else {
-      throw T3ConnectSessionError.staleOperation
-    }
-    guard let record = loadedRecord else { throw T3ConnectSessionError.notLinked }
-    if record.expiresAt.timeIntervalSince(now()) > Self.refreshLeadTime { return record }
-
-    if let refreshTask {
-      onRefreshTaskReused()
-      let refreshed = try await refreshTask.task.value
-      try Task.checkCancellation()
-      guard capturedGeneration == generation, !accountTransitionInProgress else {
-        throw T3ConnectSessionError.staleOperation
+    while true {
+      try requireCurrent(capturedGeneration)
+      if let refreshTask {
+        onRefreshTaskReused()
+        if refreshTask.cancellationRequested {
+          try await waitForRefreshTaskTermination(refreshTask)
+          try requireCurrent(capturedGeneration)
+          continue
+        }
+        let refreshed = try await waitForRefreshTask(refreshTask)
+        try requireCurrent(capturedGeneration)
+        return refreshed
       }
-      return refreshed
-    }
 
-    let taskID = UUID()
-    let task = Task { [self] in
-      try await refresh(record, capturedGeneration: capturedGeneration)
-    }
-    refreshTask = (taskID, task)
-    do {
-      let refreshed = try await task.value
+      let capturedRefreshRevision = refreshRevision
+      let loadedRecord = try await credentialStore.loadOAuthRecord()
+      try requireCurrent(capturedGeneration)
+      guard capturedRefreshRevision == refreshRevision else { continue }
+      guard let record = loadedRecord else { throw T3ConnectSessionError.notLinked }
+      if record.expiresAt.timeIntervalSince(now()) > Self.refreshLeadTime { return record }
+
+      let taskID = UUID()
+      let task = Task { [self] in
+        try await refresh(record, capturedGeneration: capturedGeneration)
+      }
+      let pending = PendingRefreshTask(
+        id: taskID, task: task, waiterIDs: [], cancellationRequested: false)
+      refreshTask = pending
+      refreshRevision &+= 1
+      let refreshed = try await waitForRefreshTask(pending)
       await onOwnedRefreshCompleted()
-      clearRefreshTask(id: taskID)
-      try Task.checkCancellation()
-      guard capturedGeneration == generation, !accountTransitionInProgress else {
-        throw T3ConnectSessionError.staleOperation
-      }
+      try requireCurrent(capturedGeneration)
       return refreshed
-    } catch {
-      clearRefreshTask(id: taskID)
-      throw error
     }
   }
 
@@ -133,8 +130,7 @@ actor T3ConnectSession {
     generation &+= 1
     let capturedGeneration = generation
     accountTransitionInProgress = true
-    refreshTask?.task.cancel()
-    refreshTask = nil
+    cancelRefreshTaskForAccountTransition()
     defer {
       if capturedGeneration == generation { accountTransitionInProgress = false }
     }
@@ -147,8 +143,7 @@ actor T3ConnectSession {
     generation &+= 1
     let capturedGeneration = generation
     accountTransitionInProgress = true
-    refreshTask?.task.cancel()
-    refreshTask = nil
+    cancelRefreshTaskForAccountTransition()
     onSignOutBegan()
     defer {
       if capturedGeneration == generation { accountTransitionInProgress = false }
@@ -174,8 +169,78 @@ actor T3ConnectSession {
     return candidate
   }
 
-  private func clearRefreshTask(id: UUID) {
-    if refreshTask?.id == id { refreshTask = nil }
+  private func waitForRefreshTask(_ pending: PendingRefreshTask) async throws -> T3OAuthRecord {
+    let waiterID = UUID()
+    guard refreshTask?.id == pending.id else { throw T3ConnectSessionError.staleOperation }
+    refreshTask?.waiterIDs.insert(waiterID)
+    let waiter = T3SessionTaskWaiter<T3OAuthRecord>()
+    Task { [self] in
+      let result = await pending.task.result
+      finishRefreshTask(id: pending.id)
+      waiter.resolve(with: result)
+      releaseRefreshWaiter(taskID: pending.id, waiterID: waiterID, cancelIfUnused: false)
+    }
+    return try await withTaskCancellationHandler {
+      try await waiter.value()
+    } onCancel: {
+      Task {
+        await self.releaseRefreshWaiter(
+          taskID: pending.id, waiterID: waiterID, cancelIfUnused: true)
+        waiter.resolve(with: .failure(CancellationError()))
+      }
+    }
+  }
+
+  private func waitForRefreshTaskTermination(_ pending: PendingRefreshTask) async throws {
+    guard refreshTask?.id == pending.id else { return }
+    let waiter = T3SessionTaskWaiter<Void>()
+    Task { [self] in
+      _ = await pending.task.result
+      finishRefreshTask(id: pending.id)
+      waiter.resolve(with: .success(()))
+    }
+    try await withTaskCancellationHandler {
+      try await waiter.value()
+    } onCancel: {
+      waiter.resolve(with: .failure(CancellationError()))
+    }
+  }
+
+  private func finishRefreshTask(id: UUID) {
+    if refreshTask?.id == id {
+      refreshTask = nil
+      refreshRevision &+= 1
+    }
+  }
+
+  private func releaseRefreshWaiter(
+    taskID: UUID, waiterID: UUID, cancelIfUnused: Bool
+  ) {
+    guard var pending = refreshTask, pending.id == taskID,
+      pending.waiterIDs.remove(waiterID) != nil
+    else { return }
+    if cancelIfUnused, pending.waiterIDs.isEmpty {
+      pending.cancellationRequested = true
+      refreshTask = pending
+      refreshRevision &+= 1
+      pending.task.cancel()
+    } else {
+      refreshTask = pending
+    }
+  }
+
+  private func requireCurrent(_ capturedGeneration: UInt64) throws {
+    try Task.checkCancellation()
+    guard capturedGeneration == generation, !accountTransitionInProgress else {
+      throw T3ConnectSessionError.staleOperation
+    }
+  }
+
+  private func cancelRefreshTaskForAccountTransition() {
+    guard let refreshTask else { return }
+    self.refreshTask = nil
+    refreshRevision &+= 1
+    refreshTask.task.cancel()
   }
 
   private func sendTokenRequest(_ fields: [(String, String)]) async throws -> T3HTTPResponse {
@@ -304,5 +369,44 @@ actor T3ConnectSession {
 
   private struct OAuthFailureResponse: Decodable, Sendable {
     let error: String?
+  }
+
+  private struct PendingRefreshTask: Sendable {
+    let id: UUID
+    let task: Task<T3OAuthRecord, any Error>
+    var waiterIDs: Set<UUID>
+    var cancellationRequested: Bool
+  }
+}
+
+private final class T3SessionTaskWaiter<Value: Sendable>: @unchecked Sendable {
+  private let lock = NSLock()
+  private var continuation: CheckedContinuation<Value, any Error>?
+  private var result: Result<Value, any Error>?
+
+  func value() async throws -> Value {
+    try await withCheckedThrowingContinuation { continuation in
+      lock.lock()
+      if let result {
+        lock.unlock()
+        continuation.resume(with: result)
+      } else {
+        self.continuation = continuation
+        lock.unlock()
+      }
+    }
+  }
+
+  func resolve(with result: Result<Value, any Error>) {
+    lock.lock()
+    guard self.result == nil else {
+      lock.unlock()
+      return
+    }
+    self.result = result
+    let continuation = continuation
+    self.continuation = nil
+    lock.unlock()
+    continuation?.resume(with: result)
   }
 }

@@ -176,6 +176,67 @@ final class T3ConnectCredentialTests: XCTestCase {
       [T3ConnectCredentialStore.oauthAccount, T3ConnectCredentialStore.dpopKeyAccount])
   }
 
+  func testAlreadyCanceledCallerStillCompletesOwnedSignOutCleanup() async throws {
+    let record = try persistedRecord(accessToken: "removed-access")
+    let proofKey = Data("removed-proof-key".utf8)
+    let store = T3FakeSecureRecordStore(records: [
+      T3ConnectCredentialStore.oauthAccount: try JSONEncoder().encode(record),
+      T3ConnectCredentialStore.dpopKeyAccount: proofKey,
+    ])
+    let credentials = T3ConnectCredentialStore(store: store)
+    let start = T3CredentialTestSignal()
+    let signOut = Task {
+      await start.wait()
+      try await credentials.signOut()
+    }
+    signOut.cancel()
+    start.signal()
+
+    try await signOut.value
+
+    let deletedAccounts = await store.deletedAccounts()
+    let storedOAuth = await store.storedData(account: T3ConnectCredentialStore.oauthAccount)
+    let storedProofKey = await store.storedData(account: T3ConnectCredentialStore.dpopKeyAccount)
+    XCTAssertEqual(
+      deletedAccounts,
+      [T3ConnectCredentialStore.oauthAccount, T3ConnectCredentialStore.dpopKeyAccount])
+    XCTAssertNil(storedOAuth)
+    XCTAssertNil(storedProofKey)
+
+    try await credentials.signOut()
+  }
+
+  func testCancelingCallerBetweenDeletesStillCompletesOwnedSignOutCleanup() async throws {
+    let record = try persistedRecord(accessToken: "removed-access")
+    let proofKey = Data("removed-proof-key".utf8)
+    let store = T3FakeSecureRecordStore(
+      records: [
+        T3ConnectCredentialStore.oauthAccount: try JSONEncoder().encode(record),
+        T3ConnectCredentialStore.dpopKeyAccount: proofKey,
+      ],
+      suspendOAuthDeletion: true)
+    let credentials = T3ConnectCredentialStore(store: store)
+    let loadedRecord = try await credentials.loadOAuthRecord()
+    let loadedProofKey = try await credentials.loadProofKey()
+    XCTAssertEqual(loadedRecord, record)
+    XCTAssertEqual(loadedProofKey, proofKey)
+    let signOut = Task { try await credentials.signOut() }
+    await store.waitForOAuthDeletion()
+
+    signOut.cancel()
+    await store.resumeOAuthDeletion()
+
+    try await signOut.value
+    let deletedAccounts = await store.deletedAccounts()
+    XCTAssertEqual(
+      deletedAccounts,
+      [T3ConnectCredentialStore.oauthAccount, T3ConnectCredentialStore.dpopKeyAccount])
+    let cachedRecord = try await credentials.loadOAuthRecord()
+    let cachedProofKey = try await credentials.loadProofKey()
+    XCTAssertNil(cachedRecord)
+    XCTAssertNil(cachedProofKey)
+  }
+
   func testSignOutContinuesAfterOAuthDeletionFailsAndKeepsCachesTruthful() async throws {
     let record = try persistedRecord(accessToken: "retained-access")
     let proofKey = Data("proof-key".utf8)
