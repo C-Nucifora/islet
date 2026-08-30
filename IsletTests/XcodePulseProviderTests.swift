@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 
@@ -51,8 +52,21 @@ final class XcodePulseProviderTests: XCTestCase {
             printf '[2/2] Link\\n** BUILD SUCCEEDED **\\n'
             exit 0
             ;;
+          many-progress)
+            index=1
+            while [ "$index" -le 20 ]; do
+              printf '[%d/20] Step %d\\n' "$index" "$index"
+              index=$((index + 1))
+            done
+            printf '** BUILD SUCCEEDED **\\n'
+            exit 0
+            ;;
           signalled)
             kill -TERM $$
+            ;;
+          delayed-cancel)
+            printf '** BUILD CANCELLED ** %07000d\n' 0 >&2
+            exit 65
             ;;
         esac
         """)
@@ -65,6 +79,11 @@ final class XcodePulseProviderTests: XCTestCase {
           line="${line}<${argument}>"
         done
         printf '%s\\n' "$line" >> "${PULSE_RECORD_FILE:?}"
+        if [ "${MOCK_PULSE_SCENARIO-}" = hung ]; then
+          while kill -0 "$PPID" 2>/dev/null; do
+            sleep 0.05
+          done
+        fi
         """)
   }
 
@@ -165,6 +184,63 @@ final class XcodePulseProviderTests: XCTestCase {
     XCTAssertFalse(records.last?.contains(temporaryDirectory.path) == true)
   }
 
+  func testFinalOutputIsDrainedBeforeTerminalClassification() throws {
+    var sockets = [Int32](repeating: -1, count: 2)
+    XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets), 0)
+    var sendBuffer: Int32 = 1_024
+    XCTAssertEqual(
+      setsockopt(
+        sockets[0], SOL_SOCKET, SO_SNDBUF, &sendBuffer,
+        socklen_t(MemoryLayout.size(ofValue: sendBuffer))),
+      0)
+    let providerOutput = FileHandle(fileDescriptor: sockets[0], closeOnDealloc: true)
+    let capturedOutput = FileHandle(fileDescriptor: sockets[1], closeOnDealloc: true)
+    let launched = try makeProviderProcess(
+      scenario: "delayed-cancel",
+      providerArguments: ["--id", "delayed-cancel", "--", "build"])
+    launched.process.standardOutput = providerOutput
+    launched.process.standardError = providerOutput
+
+    try launched.process.run()
+    try providerOutput.close()
+    Thread.sleep(forTimeInterval: 0.8)
+    let mirroredData = capturedOutput.readDataToEndOfFile()
+    launched.process.waitUntilExit()
+
+    XCTAssertEqual(launched.process.terminationStatus, 65)
+    XCTAssertTrue(String(decoding: mirroredData, as: UTF8.self).contains("** BUILD CANCELLED **"))
+    let final = try XCTUnwrap(pulseRecords().last)
+    XCTAssertTrue(final.contains("<cancelled>"), final)
+  }
+
+  func testHungPulseReporterIsBoundedAndProgressIsCoalesced() throws {
+    let launched = try makeProviderProcess(
+      scenario: "many-progress",
+      providerArguments: ["--id", "hung-reporter", "--", "build"],
+      environmentOverrides: [
+        "ISLET_PULSE_TIMEOUT_SECONDS": "0.5",
+        "MOCK_PULSE_SCENARIO": "hung",
+      ])
+
+    let start = Date()
+    try launched.process.run()
+    let deadline = start.addingTimeInterval(4)
+    while launched.process.isRunning && Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.01)
+    }
+    let completedInTime = !launched.process.isRunning
+    if !completedInTime {
+      kill(launched.process.processIdentifier, SIGKILL)
+    }
+    launched.process.waitUntilExit()
+
+    XCTAssertTrue(completedInTime, "provider did not bound the hung Pulse reporter")
+    XCTAssertEqual(launched.process.terminationStatus, 0)
+    let records = try pulseRecords()
+    XCTAssertEqual(records.count, 2, records.joined(separator: "\n"))
+    XCTAssertTrue(records.last?.contains("<succeeded>") == true)
+  }
+
   func testFailurePathPublishesOnlyTruncatedFilenameAndLine() throws {
     let result = try runProvider(
       scenario: "path-failure",
@@ -210,7 +286,11 @@ final class XcodePulseProviderTests: XCTestCase {
     return (launched.process.terminationStatus, String(decoding: data, as: UTF8.self))
   }
 
-  private func makeProviderProcess(scenario: String, providerArguments: [String]) throws -> (
+  private func makeProviderProcess(
+    scenario: String,
+    providerArguments: [String],
+    environmentOverrides: [String: String] = [:]
+  ) throws -> (
     process: Process, output: Pipe
   ) {
     let root = URL(fileURLWithPath: #filePath)
@@ -224,6 +304,7 @@ final class XcodePulseProviderTests: XCTestCase {
     environment["ISLET_PULSE_EXECUTABLE"] = pulseURL.path
     environment["PULSE_RECORD_FILE"] = recordURL.path
     environment["MOCK_XCODE_SCENARIO"] = scenario
+    for (key, value) in environmentOverrides { environment[key] = value }
     process.environment = environment
     let output = Pipe()
     process.standardOutput = output
