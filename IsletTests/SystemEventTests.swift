@@ -111,15 +111,16 @@ final class SystemEventTests: XCTestCase {
 
   // MARK: - Event to sneak
 
-  /// The bus renders events into the existing Sneak type; the queue is untouched. Coalescing key,
-  /// duration and announcement must all survive the trip.
+  /// The bus renders events into the Sneak type. Coalescing key, urgency, duration and announcement
+  /// must all survive the trip.
   @MainActor
   func testSneakCarriesTheEventsCoalescingKeyDurationAndAnnouncement() {
     let e = SystemEvent(
       sourceID: "wifi", icon: "wifi", title: "Wi-Fi connected", subtitle: "Home",
-      accentHex: EventAccent.positive, motion: .wifi, duration: 2.5)
+      accentHex: EventAccent.positive, motion: .wifi, urgency: .alert, duration: 2.5)
     let sneak = Sneak(event: e)
     XCTAssertEqual(sneak.source, "wifi")
+    XCTAssertEqual(sneak.urgency, .alert)
     XCTAssertEqual(sneak.duration, 2.5)
     XCTAssertEqual(sneak.announcement, "Wi-Fi connected, Home")
   }
