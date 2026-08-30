@@ -17,7 +17,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 80,
-      "description": "Optional source guard for end. Providers should always include it."
+      "description": "Provider namespace for end. Optional only while exactly one source owns the id."
     },
     "requestID": {
       "type": "string",
@@ -90,6 +90,7 @@
             "sourceRevoked",
             "identifierConflict",
             "sourceMismatch",
+            "ambiguousIdentifier",
             "messageTooLarge",
             "commandLimitExceeded",
             "rateLimited",

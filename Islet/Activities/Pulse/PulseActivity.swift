@@ -118,6 +118,10 @@ private struct PulseItemRow: View {
         .accessibilityLabel("\(item.source), \(stateLabel)")
       VStack(alignment: .leading, spacing: 2) {
         Text(item.title).font(.caption.weight(.semibold)).lineLimit(1)
+        Text("\(item.source) · \(item.providerIdentifier)")
+          .font(.caption2.monospaced())
+          .foregroundStyle(.tertiary)
+          .lineLimit(1)
         if let subtitle = item.subtitle {
           Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
         }

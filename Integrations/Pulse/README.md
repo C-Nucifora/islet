@@ -29,10 +29,10 @@ with `featureDisabled`.
 
 ## Operations
 
-- `show`: create an item, or replace an existing item with the same `id`.
+- `show`: create an item, or replace an existing item with the same source and `id`.
 - `update`: the same idempotent upsert semantics as `show`, named for provider readability.
 - `event`: create an item that expires after eight seconds unless `expiresAt` is supplied.
-- `end`: remove an item by `id`.
+- `end`: remove an item by source and `id`.
 
 Dates use ISO 8601, with or without fractional seconds. `progress` outside `0...1` is rejected.
 Islet marks nonterminal work stale when a provider stops sending valid updates. The timeout is
@@ -41,11 +41,17 @@ it, and a later valid update recovers the item and starts a fresh timeout.
 Web actions may use only host-bearing
 `http` or `https` URLs, cannot embed credentials, and are limited to 2,048 characters. Activity
 and action IDs are trimmed, bounded to 128 characters, and action IDs must be unique within one
-activity. Activity IDs are global within Islet's current stack: an update from a different source
-cannot overwrite an existing ID. Providers should prefix IDs with their source, update only when
-data changes, and always end work that is no longer relevant. Include `source` on `end`; Islet then
-rejects cleanup if the ID belongs to another source. Omitting it remains supported for older
-clients.
+activity. Islet keys each activity by its trimmed, lowercased source and its provider-local ID, so
+different sources can use the same natural ID without overwriting each other. Source normalization
+also means names such as `Build`, `build`, and ` build ` share one namespace. Provider-local IDs
+remain case-sensitive. Providers should update only when data changes and always end work that is
+no longer relevant.
+
+Include `source` on `end` to select the provider namespace. For compatibility, Islet accepts an
+unscoped end while exactly one active source owns that ID. If multiple sources own it, Islet leaves
+every item untouched and returns `ambiguousIdentifier`. A scoped end for the wrong source returns
+`sourceMismatch`. Pulse item state and history are session-only, so restarting into this protocol
+expires the old process's global-keyed state instead of attempting an on-disk migration.
 
 Set a unique `requestID` on every command. Islet echoes it on decoded responses, allowing clients
 to correlate results if they reuse a connection. Clients that omit it should send only one command
@@ -55,7 +61,7 @@ unknown, or unavailable symbol is replaced with Pulse's `waveform.path.ecg` fall
 still succeeds and includes a field-specific `warning` in its response.
 The socket rejects unknown JSON fields so a misspelled protocol key cannot fail silently.
 
-## Delivery profiles and payload-free history
+## Delivery profiles and bounded history
 
 The user can choose Everything, Focus, Critical only, or Paused in Settings, the menu, Shortcuts,
 or Quick Actions. Filtering happens after validation. A suppressed update still receives a success
@@ -77,16 +83,18 @@ content-routing control, not credential revocation, a sandbox, or a security bou
 provider token** in Settings to atomically replace the shared credential and disconnect every
 provider. Every legitimate provider must then reread the token before reconnecting.
 
-Islet keeps at most 200 history entries for the current process. Each entry contains only time,
-operation, source routing name, state, priority, and outcome. It never contains payload IDs, titles, subtitles,
-action labels or URLs, authentication tokens, or error descriptions. History is not written to
-disk and can be cleared from Settings at any time.
+Islet keeps at most 200 history entries for the current process. Each accepted entry contains time,
+operation, source routing name, provider-local ID, state, priority, and outcome. It never contains
+titles, subtitles, action labels or URLs, authentication tokens, or error descriptions. Rejected
+payloads do not contribute an unvalidated source or ID. History is not written to disk and can be
+cleared from Settings at any time.
 
 ## Provider gallery
 
 Settings includes health and capability metadata for Shortcuts, the reference CLI, a local GitHub
-workflow watcher, and common developer tools. Health is inferred locally from active items and payload-free session
-history; Islet does not phone home. Unknown source names remain visible as unlisted local sources.
+workflow watcher, and common developer tools. Health is inferred locally from active items and
+bounded session history; Islet does not phone home. Unknown source names remain visible as unlisted
+local sources.
 The machine-readable gallery is in [providers.json](providers.json).
 
 The gallery's capabilities are explanatory protocol boundaries, not access to Islet data:

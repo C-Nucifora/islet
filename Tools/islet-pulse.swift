@@ -8,7 +8,7 @@ private let usage = """
          islet-pulse <show|update|event> <id> <title> [subtitle] [options]
 
   options:
-    --source NAME            Stable provider source (default: cli)
+    --source NAME            Stable provider source (default: cli; use with end)
     --progress NUMBER        Progress from 0 through 1
     --state STATE            active|progress|needsAction|succeeded|failed
     --priority PRIORITY      low|normal|high|critical
