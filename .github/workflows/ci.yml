@@ -33,11 +33,23 @@ jobs:
           Scripts/install-xcodegen.sh "$RUNNER_TEMP/xcodegen"
           echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
 
+      - name: Restore verified xcbeautify archive
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/xcbeautify-cache
+          key: xcbeautify-3.2.1-universal-87fdbe786f71d7b2ee28c5c1ca97087587292f2c5c6f9e721cf02db8b2a3c241
+
+      - name: Install xcbeautify
+        run: |
+          Scripts/install-xcbeautify.sh "$RUNNER_TEMP/xcbeautify" "$RUNNER_TEMP/xcbeautify-cache"
+          echo "$RUNNER_TEMP/xcbeautify/bin" >> "$GITHUB_PATH"
+
       - name: Check toolchain
         run: |
           xcodebuild -version
           swift --version
           xcodegen --version
+          test "$(xcbeautify --version)" = "3.2.1"
 
       - name: Lint source and integration files
         run: |
@@ -118,12 +130,24 @@ jobs:
           Scripts/install-xcodegen.sh "$RUNNER_TEMP/xcodegen"
           echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
 
+      - name: Restore verified xcbeautify archive
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/xcbeautify-cache
+          key: xcbeautify-3.2.1-universal-87fdbe786f71d7b2ee28c5c1ca97087587292f2c5c6f9e721cf02db8b2a3c241
+
+      - name: Install xcbeautify
+        run: |
+          Scripts/install-xcbeautify.sh "$RUNNER_TEMP/xcbeautify" "$RUNNER_TEMP/xcbeautify-cache"
+          echo "$RUNNER_TEMP/xcbeautify/bin" >> "$GITHUB_PATH"
+
       - name: Check Intel toolchain
         run: |
           [[ "$(uname -m)" == x86_64 ]]
           xcodebuild -version
           swift --version
           xcodegen --version
+          test "$(xcbeautify --version)" = "3.2.1"
 
       - name: Generate Xcode project
         run: |
