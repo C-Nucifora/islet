@@ -240,6 +240,15 @@ extension Defaults.Keys {
     ActivityEnablement.migrationVersionKey, default: 0)
   /// Retained only as input to the one-time activity enablement migration.
   static let legacyClipboardEnabled = Key<Bool>("clipboardEnabled", default: false)
+  static let clipboardExcludedBundleIdentifiers = Key<[String]>(
+    "clipboardExcludedBundleIdentifiers", default: [])
+  static let clipboardPausedFocusIdentifiers = Key<[String]>(
+    "clipboardPausedFocusIdentifiers", default: [])
+  static let clipboardClearHistoryOnPause = Key<Bool>(
+    "clipboardClearHistoryOnPause", default: true)
+  static let clipboardManuallyPaused = Key<Bool>("clipboardManuallyPaused", default: false)
+  static let clipboardPausedUntil = Key<Date?>("clipboardPausedUntil")
+  static let clipboardPausedLoginSession = Key<String?>("clipboardPausedLoginSession")
   static let legacyPortsEnabled = Key<Bool>("portsEnabled", default: true)
   /// Event sources the user has switched off. Inferred sources start off because they can be late
   /// or ambiguous; a user can explicitly enable the ones they find useful.

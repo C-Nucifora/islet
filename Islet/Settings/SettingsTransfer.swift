@@ -198,6 +198,9 @@ enum SettingsTransfer {
 
   static let excludedPreferenceKeys: Set<String> = [
     "activityEnablementMigrationVersion", "batteryEnabled", "clipboardEnabled",
+    "clipboardClearHistoryOnPause", "clipboardExcludedBundleIdentifiers",
+    "clipboardManuallyPaused", "clipboardPausedFocusIdentifiers", "clipboardPausedLoginSession",
+    "clipboardPausedUntil",
     "continuityEnabled", "hiddenCalendarIDs", "onboardingVersion", "portsEnabled",
     "pulseEnabled", "systemEnabled", "t3CodeEnabled", "t3RemoteEnvironments",
   ]

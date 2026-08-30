@@ -116,7 +116,7 @@ struct IsletQuickAction: Identifiable {
         detail: "Capture new copies without backfilling missed items",
         symbol: "clipboard.fill", keywords: "privacy start capture",
         isAvailable: {
-          ClipboardModel.shared.isPaused
+          ClipboardModel.shared.canResumeManualPause
         },
         perform: { ClipboardModel.shared.setPaused(false) }),
       .init(
