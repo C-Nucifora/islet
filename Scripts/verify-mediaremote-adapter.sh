@@ -10,6 +10,7 @@ expected_exports="$repo_root/Vendor/MediaRemoteAdapter.expected-exports.txt"
 binary="$framework/MediaRemoteAdapter"
 plist="$framework/Resources/Info.plist"
 code_resources="$framework/Versions/A/_CodeSignature/CodeResources"
+loader_patch="$repo_root/Vendor/MediaRemoteAdapter-loader.patch"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/islet-mediaremote-verify.XXXXXX")
 trap 'rm -rf "$work_dir"' EXIT
 
@@ -41,6 +42,7 @@ verify_sha256 "$(read_manifest '.artifacts.infoPlistSHA256')" "$plist"
 verify_sha256 "$(read_manifest '.artifacts.codeResourcesSHA256')" "$code_resources"
 verify_sha256 "$(read_manifest '.artifacts.loaderSHA256')" \
   "$repo_root/Islet/Resources/mediaremote-adapter.pl"
+verify_sha256 "$(read_manifest '.artifacts.loaderPatchSHA256')" "$loader_patch"
 verify_sha256 "$(read_manifest '.artifacts.licenseSHA256')" \
   "$repo_root/Vendor/MediaRemoteAdapter-LICENSE"
 

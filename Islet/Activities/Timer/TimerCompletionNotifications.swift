@@ -148,7 +148,9 @@ final class TimerCompletionNotifications: NSObject, TimerCompletionNotifying,
   ) {
     let identifier = response.notification.request.identifier
     if identifier.hasPrefix("timer-completion-") {
+      let title = response.notification.request.content.title
       Task { @MainActor in
+        AppState.timer.presentCompletionFromNotification(title: title)
         NSApp.activate(ignoringOtherApps: true)
         ScreenManager.shared.openCompletedTimer()
       }
