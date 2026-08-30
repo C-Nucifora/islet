@@ -3,6 +3,62 @@ import Defaults
 import Foundation
 
 @MainActor
+protocol PulseClock: AnyObject {
+  var now: Date { get }
+}
+
+@MainActor
+final class PulseSystemClock: PulseClock {
+  var now: Date { Date() }
+}
+
+@MainActor
+final class PulseDeadlineTask {
+  private var cancellation: (() -> Void)?
+
+  init(cancellation: @escaping () -> Void) {
+    self.cancellation = cancellation
+  }
+
+  func cancel() {
+    cancellation?()
+    cancellation = nil
+  }
+}
+
+@MainActor
+protocol PulseDeadlineScheduling: AnyObject {
+  func schedule(
+    at deadline: Date, action: @escaping @MainActor @Sendable () -> Void
+  ) -> PulseDeadlineTask
+}
+
+@MainActor
+final class PulseSystemDeadlineScheduler: PulseDeadlineScheduling {
+  private let clock: any PulseClock
+
+  init(clock: any PulseClock) {
+    self.clock = clock
+  }
+
+  func schedule(
+    at deadline: Date, action: @escaping @MainActor @Sendable () -> Void
+  ) -> PulseDeadlineTask {
+    let task = Task { @MainActor [clock] in
+      let delay = max(0, deadline.timeIntervalSince(clock.now))
+      do {
+        try await Task.sleep(for: .seconds(delay))
+      } catch {
+        return
+      }
+      guard !Task.isCancelled else { return }
+      action()
+    }
+    return PulseDeadlineTask { task.cancel() }
+  }
+}
+
+@MainActor
 final class PulseCenter: ObservableObject {
   static let shared = PulseCenter()
   static let maximumItems = 100
@@ -30,13 +86,25 @@ final class PulseCenter: ObservableObject {
   }
   private let symbolAvailability: (String) -> Bool?
   private var storedItems: [PulseItem] = []
-  private var expiryTask: Task<Void, Never>?
+  private var deadlineTask: PulseDeadlineTask?
+  private let clock: any PulseClock
+  private let deadlineScheduler: any PulseDeadlineScheduling
+  private var stalenessPolicy: PulseStalenessPolicy
 
   init(
+    staleTimeout: TimeInterval = Defaults[.pulseStaleTimeout],
+    staleRetention: TimeInterval = PulseStalenessPolicy.defaultRetention,
+    clock: (any PulseClock)? = nil,
+    scheduler: (any PulseDeadlineScheduling)? = nil,
     symbolAvailability: @escaping (String) -> Bool? = PulseSymbolValidator.platformAvailability,
     deliveryProfileKey: Defaults.Key<PulseDeliveryProfile> = .pulseDeliveryProfile,
     sourcePoliciesKey: Defaults.Key<[String: String]> = .pulseSourcePolicies
   ) {
+    let resolvedClock = clock ?? PulseSystemClock()
+    self.clock = resolvedClock
+    deadlineScheduler = scheduler ?? PulseSystemDeadlineScheduler(clock: resolvedClock)
+    stalenessPolicy = PulseStalenessPolicy(
+      timeout: staleTimeout, retention: staleRetention)
     self.symbolAvailability = symbolAvailability
     self.deliveryProfileKey = deliveryProfileKey
     self.sourcePoliciesKey = sourcePoliciesKey
@@ -59,10 +127,11 @@ final class PulseCenter: ObservableObject {
   var effectiveDeliveryProfile: PulseDeliveryProfile {
     ruleDeliveryProfile ?? deliveryProfile
   }
+  var staleTimeout: TimeInterval { stalenessPolicy.timeout }
 
   @discardableResult
   func applyIfEnabled(
-    _ command: PulseCommand, now: Date = Date(),
+    _ command: PulseCommand, now: Date? = nil,
     activityEnabled: Bool = ActivityEnablement.isEnabled("pulse")
   ) -> PulseResponse {
     guard activityEnabled else {
@@ -74,9 +143,10 @@ final class PulseCenter: ObservableObject {
   }
 
   @discardableResult
-  func apply(_ command: PulseCommand, now: Date = Date()) -> PulseResponse {
+  func apply(_ command: PulseCommand, now suppliedNow: Date? = nil) -> PulseResponse {
+    let now = suppliedNow ?? clock.now
     do {
-      removeExpired(now: now)
+      processDeadlines(now: now)
       switch command.operation {
       case .show, .update, .event:
         guard var payload = command.activity else {
@@ -91,7 +161,8 @@ final class PulseCenter: ObservableObject {
         let normalizedIncomingID = try PulseItem.normalizedIdentifier(payload.id)
         let previous = storedItems.first { $0.id == normalizedIncomingID }
         let item = try PulseItem(
-          payload: payload, now: now, previous: previous, symbolAvailability: symbolAvailability)
+          payload: payload, now: now, previous: previous,
+          staleTimeout: stalenessPolicy.timeout, symbolAvailability: symbolAvailability)
         if let previous, sourceKey(previous.source) != sourceKey(item.source) {
           record(operation: command.operation, item: nil, result: .rejected, date: now)
           return .failure(
@@ -139,7 +210,7 @@ final class PulseCenter: ObservableObject {
           record(operation: .end, item: item, result: .ended, date: now)
         }
         refreshVisibleItems()
-        scheduleExpiry()
+        scheduleDeadline()
         return .success(id: identifier, requestID: command.requestID)
       }
     } catch {
@@ -151,27 +222,57 @@ final class PulseCenter: ObservableObject {
     }
   }
 
-  func dismiss(_ id: String, now: Date = Date()) {
+  func dismiss(_ id: String, now suppliedNow: Date? = nil) {
+    let now = suppliedNow ?? clock.now
     guard let item = storedItems.first(where: { $0.id == id }) else { return }
     storedItems.removeAll { $0.id == id }
     record(operation: .end, item: item, result: .dismissed, date: now)
     refreshVisibleItems()
-    scheduleExpiry()
+    scheduleDeadline()
   }
 
-  func removeAll(now: Date = Date()) {
+  func keepStale(_ id: String, now suppliedNow: Date? = nil) {
+    let now = suppliedNow ?? clock.now
+    guard let index = storedItems.firstIndex(where: { $0.id == id && $0.state == .stale })
+    else { return }
+    guard !storedItems[index].isStaleKept else { return }
+    storedItems[index].isStaleKept = true
+    storedItems[index].expiresAt = nil
+    storedItems[index].staleRemovalAt = nil
+    record(operation: .update, item: storedItems[index], result: .kept, date: now)
+    refreshVisibleItems()
+    scheduleDeadline()
+  }
+
+  func setStaleTimeout(_ timeout: TimeInterval, now suppliedNow: Date? = nil) {
+    let now = suppliedNow ?? clock.now
+    let updatedPolicy = PulseStalenessPolicy(
+      timeout: timeout, retention: stalenessPolicy.retention)
+    guard updatedPolicy.timeout != stalenessPolicy.timeout else { return }
+    stalenessPolicy = updatedPolicy
+    for index in storedItems.indices where storedItems[index].state.receivesStaleDeadline {
+      storedItems[index].staleAt = storedItems[index].updatedAt.addingTimeInterval(
+        stalenessPolicy.timeout)
+    }
+    processDeadlines(now: now)
+    scheduleDeadline()
+  }
+
+  func removeAll(now suppliedNow: Date? = nil) {
+    let now = suppliedNow ?? clock.now
     for item in storedItems {
       record(operation: .end, item: item, result: .dismissed, date: now)
     }
     storedItems.removeAll()
     items.removeAll()
-    expiryTask?.cancel()
-    expiryTask = nil
+    deadlineTask?.cancel()
+    deadlineTask = nil
   }
 
   /// Dismisses only what the user can currently see. Muted or delivery-filtered provider state is
   /// intentionally retained so a visible-stack action never silently destroys hidden work.
-  func dismissVisible(now: Date = Date()) {
+  func dismissVisible(now suppliedNow: Date? = nil) {
+    let now = suppliedNow ?? clock.now
     let visibleIDs = Set(items.map(\.id))
     guard !visibleIDs.isEmpty else { return }
     let removed = storedItems.filter { visibleIDs.contains($0.id) }
@@ -180,7 +281,7 @@ final class PulseCenter: ObservableObject {
       record(operation: .end, item: item, result: .dismissed, date: now)
     }
     refreshVisibleItems()
-    scheduleExpiry()
+    scheduleDeadline()
   }
 
   func clearHistory() { history.removeAll() }
@@ -194,7 +295,10 @@ final class PulseCenter: ObservableObject {
     return policies.count == 1 ? (policies.first ?? .allowed) : .muted
   }
 
-  func setPolicy(_ policy: PulseSourcePolicy, for source: String, now: Date = Date()) {
+  func setPolicy(
+    _ policy: PulseSourcePolicy, for source: String, now suppliedNow: Date? = nil
+  ) {
+    let now = suppliedNow ?? clock.now
     let key = sourceKey(source)
     guard !key.isEmpty else { return }
     if policy == .allowed { sourcePolicies[key] = nil } else { sourcePolicies[key] = policy }
@@ -205,21 +309,23 @@ final class PulseCenter: ObservableObject {
       for item in removed {
         record(operation: .end, item: item, result: .dismissed, date: now)
       }
-      scheduleExpiry()
+      scheduleDeadline()
     }
     refreshVisibleItems()
   }
 
   func setPolicy(
-    _ policy: PulseSourcePolicy, for descriptor: PulseProviderDescriptor, now: Date = Date()
+    _ policy: PulseSourcePolicy, for descriptor: PulseProviderDescriptor,
+    now suppliedNow: Date? = nil
   ) {
+    let now = suppliedNow ?? clock.now
     for source in descriptor.sourceIDs { setPolicy(policy, for: source, now: now) }
   }
 
   var providerStatuses: [PulseProviderStatus] {
     PulseProviderDescriptor.gallery.map { descriptor in
       let activeItems = storedItems.filter {
-        descriptor.sourceIDs.contains(sourceKey($0.source))
+        $0.state != .stale && descriptor.sourceIDs.contains(sourceKey($0.source))
       }
       let attentionCount = activeItems.count { $0.state == .failed || $0.state == .needsAction }
       if attentionCount > 0 {
@@ -264,7 +370,7 @@ final class PulseCenter: ObservableObject {
         record(operation: operation, item: item, result: .evicted, date: now)
       }
     }
-    scheduleExpiry()
+    scheduleDeadline()
     return storedItems.contains { $0.id == item.id }
   }
 
@@ -279,39 +385,61 @@ final class PulseCenter: ObservableObject {
   private func sortStoredItems() {
     storedItems.sort {
       if $0.priority != $1.priority { return $0.priority > $1.priority }
-      let leftNeedsAction = $0.state == .needsAction || $0.state == .failed
-      let rightNeedsAction = $1.state == .needsAction || $1.state == .failed
+      let leftNeedsAction = [.needsAction, .failed, .stale].contains($0.state)
+      let rightNeedsAction = [.needsAction, .failed, .stale].contains($1.state)
       if leftNeedsAction != rightNeedsAction { return leftNeedsAction }
       return $0.updatedAt > $1.updatedAt
     }
   }
 
-  private func scheduleExpiry() {
-    expiryTask?.cancel()
-    guard let next = storedItems.compactMap(\.expiresAt).min() else {
-      expiryTask = nil
+  private func scheduleDeadline() {
+    deadlineTask?.cancel()
+    let deadlines = storedItems.flatMap { item in
+      [item.expiresAt, item.staleAt, item.staleRemovalAt].compactMap { $0 }
+    }
+    guard let next = deadlines.min() else {
+      deadlineTask = nil
       return
     }
-    expiryTask = Task { [weak self] in
-      let delay = max(0, next.timeIntervalSinceNow)
-      try? await Task.sleep(for: .seconds(delay))
-      guard !Task.isCancelled else { return }
-      self?.expire(now: Date())
+    deadlineTask = deadlineScheduler.schedule(at: next) { [weak self] in
+      self?.deadlineReached()
     }
   }
 
-  private func expire(now: Date) {
-    removeExpired(now: now)
-    scheduleExpiry()
+  private func deadlineReached() {
+    processDeadlines(now: clock.now)
+    scheduleDeadline()
   }
 
-  private func removeExpired(now: Date) {
-    let expired = storedItems.filter { ($0.expiresAt ?? .distantFuture) <= now }
-    guard !expired.isEmpty else { return }
+  private func processDeadlines(now: Date) {
+    let providerExpired = storedItems.filter { ($0.expiresAt ?? .distantFuture) <= now }
     storedItems.removeAll { ($0.expiresAt ?? .distantFuture) <= now }
-    for item in expired {
+    for item in providerExpired {
       record(operation: .end, item: item, result: .expired, date: now)
     }
+
+    var newlyStale: [PulseItem] = []
+    for index in storedItems.indices {
+      guard let staleAt = storedItems[index].staleAt, staleAt <= now,
+        storedItems[index].state.receivesStaleDeadline
+      else { continue }
+      storedItems[index].state = .stale
+      storedItems[index].staleAt = nil
+      storedItems[index].staleRemovalAt = staleAt.addingTimeInterval(
+        stalenessPolicy.retention)
+      newlyStale.append(storedItems[index])
+    }
+    for item in newlyStale {
+      record(operation: .update, item: item, result: .stale, date: now)
+    }
+
+    let staleExpired = storedItems.filter { ($0.staleRemovalAt ?? .distantFuture) <= now }
+    storedItems.removeAll { ($0.staleRemovalAt ?? .distantFuture) <= now }
+    for item in staleExpired {
+      record(operation: .end, item: item, result: .expired, date: now)
+    }
+    guard !providerExpired.isEmpty || !newlyStale.isEmpty || !staleExpired.isEmpty else { return }
+    sortStoredItems()
     refreshVisibleItems()
   }
 
