@@ -223,6 +223,21 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testProvidersCannotSetIsletManagedStaleState() {
+    let center = makeCenter()
+    let payload = PulsePayload(
+      id: "forged-stale", source: "tests", title: "Forged", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: 0.5, state: .stale, priority: .normal,
+      expiresAt: nil, actions: nil)
+
+    let response = center.apply(command(.update, payload))
+
+    XCTAssertFalse(response.ok)
+    XCTAssertEqual(response.errorCode, .validationFailed)
+    XCTAssertTrue(center.items.isEmpty)
+  }
+
+  @MainActor
   func testFocusProfileSuppressesNormalUpdatesButKeepsUrgentWork() throws {
     let center = makeCenter()
     center.deliveryProfile = .focused
@@ -519,6 +534,151 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(response.errorCode, .capacityExceeded)
     XCTAssertFalse(center.items.contains { $0.id == "low" })
     XCTAssertEqual(center.history.first?.result, .evicted)
+  }
+
+  @MainActor
+  func testProviderSilenceMarksNonterminalWorkStale() throws {
+    let clock = TestPulseClock(now: Date(timeIntervalSince1970: 1_000))
+    let scheduler = TestPulseDeadlineScheduler(clock: clock)
+    let center = makeCenter(
+      staleTimeout: 10, staleRetention: 20, clock: clock, scheduler: scheduler)
+    let payload = PulsePayload(
+      id: "silent", source: "cli", title: "Running", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: 0.4, state: .progress, priority: .normal,
+      expiresAt: nil, actions: nil)
+
+    XCTAssertTrue(center.apply(command(.show, payload)).ok)
+    XCTAssertEqual(center.items.first?.staleAt, clock.now.addingTimeInterval(10))
+
+    scheduler.advance(to: clock.now.addingTimeInterval(9))
+    XCTAssertEqual(center.items.first?.state, .progress)
+
+    scheduler.advance(to: Date(timeIntervalSince1970: 1_010))
+    let stale = try XCTUnwrap(center.items.first)
+    XCTAssertEqual(stale.state, .stale)
+    XCTAssertNil(stale.staleAt)
+    XCTAssertEqual(stale.staleRemovalAt, Date(timeIntervalSince1970: 1_030))
+    XCTAssertEqual(center.history.first?.result, .stale)
+    XCTAssertEqual(center.history.first?.state, .stale)
+    XCTAssertEqual(
+      center.providerStatuses.first { $0.id == "cli" }?.health,
+      .seen(Date(timeIntervalSince1970: 1_010)))
+  }
+
+  @MainActor
+  func testValidUpdateRefreshesDeadlineAndRecoversStaleWork() throws {
+    let clock = TestPulseClock(now: Date(timeIntervalSince1970: 2_000))
+    let scheduler = TestPulseDeadlineScheduler(clock: clock)
+    let center = makeCenter(
+      staleTimeout: 10, staleRetention: 20, clock: clock, scheduler: scheduler)
+    var payload = PulsePayload(
+      id: "recovering", source: "cli", title: "Running", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: 0.2, state: .progress, priority: .normal,
+      expiresAt: nil, actions: nil)
+
+    XCTAssertTrue(center.apply(command(.show, payload)).ok)
+    scheduler.advance(to: Date(timeIntervalSince1970: 2_005))
+    payload.progress = 0.5
+    XCTAssertTrue(center.apply(command(.update, payload)).ok)
+    XCTAssertEqual(center.items.first?.staleAt, Date(timeIntervalSince1970: 2_015))
+
+    scheduler.advance(to: Date(timeIntervalSince1970: 2_010))
+    XCTAssertEqual(center.items.first?.state, .progress)
+    scheduler.advance(to: Date(timeIntervalSince1970: 2_015))
+    XCTAssertEqual(center.items.first?.state, .stale)
+
+    scheduler.advance(to: Date(timeIntervalSince1970: 2_016))
+    payload.progress = 0.8
+    XCTAssertTrue(center.apply(command(.update, payload)).ok)
+    let recovered = try XCTUnwrap(center.items.first)
+    XCTAssertEqual(recovered.state, .progress)
+    XCTAssertEqual(recovered.staleAt, Date(timeIntervalSince1970: 2_026))
+    XCTAssertNil(recovered.staleRemovalAt)
+    XCTAssertFalse(recovered.isStaleKept)
+
+    scheduler.advance(to: Date(timeIntervalSince1970: 2_020))
+    payload.progress = 2
+    XCTAssertFalse(center.apply(command(.update, payload)).ok)
+    XCTAssertEqual(center.items.first?.staleAt, Date(timeIntervalSince1970: 2_026))
+    scheduler.advance(to: Date(timeIntervalSince1970: 2_026))
+    XCTAssertEqual(center.items.first?.state, .stale)
+  }
+
+  @MainActor
+  func testStaleWorkCanBeKeptOrDismissedAndOtherwiseHasBoundedRetention() throws {
+    let clock = TestPulseClock(now: Date(timeIntervalSince1970: 3_000))
+    let scheduler = TestPulseDeadlineScheduler(clock: clock)
+    let center = makeCenter(
+      staleTimeout: 10, staleRetention: 20, clock: clock, scheduler: scheduler)
+    var payload = PulsePayload(
+      id: "kept", source: "cli", title: "Keep me", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: 0.2, state: .progress, priority: .normal,
+      expiresAt: Date(timeIntervalSince1970: 3_500), actions: nil)
+
+    XCTAssertTrue(center.apply(command(.show, payload)).ok)
+    scheduler.advance(to: Date(timeIntervalSince1970: 3_010))
+    center.keepStale("kept")
+    XCTAssertTrue(try XCTUnwrap(center.items.first).isStaleKept)
+    XCTAssertNil(center.items.first?.expiresAt)
+    XCTAssertNil(center.items.first?.staleRemovalAt)
+    XCTAssertEqual(center.history.first?.result, .kept)
+
+    scheduler.advance(to: Date(timeIntervalSince1970: 4_000))
+    XCTAssertEqual(center.items.map(\.id), ["kept"])
+    center.dismiss("kept")
+    XCTAssertTrue(center.items.isEmpty)
+    XCTAssertEqual(center.history.first?.result, .dismissed)
+
+    payload.id = "unclaimed"
+    payload.title = "Remove me"
+    payload.expiresAt = nil
+    XCTAssertTrue(center.apply(command(.show, payload)).ok)
+    scheduler.advance(to: Date(timeIntervalSince1970: 4_010))
+    XCTAssertEqual(center.items.first?.state, .stale)
+    scheduler.advance(to: Date(timeIntervalSince1970: 4_030))
+    XCTAssertTrue(center.items.isEmpty)
+    XCTAssertEqual(center.history.first?.result, .expired)
+    XCTAssertEqual(center.history.first?.state, .stale)
+  }
+
+  @MainActor
+  func testTerminalWorkDoesNotReceiveAStaleDeadline() throws {
+    let clock = TestPulseClock(now: Date(timeIntervalSince1970: 5_000))
+    let scheduler = TestPulseDeadlineScheduler(clock: clock)
+    let center = makeCenter(
+      staleTimeout: 10, staleRetention: 20, clock: clock, scheduler: scheduler)
+    for state in [PulseState.succeeded, .failed, .cancelled] {
+      let payload = PulsePayload(
+        id: state.rawValue, source: "cli", title: state.rawValue, subtitle: nil, symbol: nil,
+        accentHex: nil, progress: 1, state: state, priority: .normal,
+        expiresAt: nil, actions: nil)
+
+      XCTAssertTrue(center.apply(command(.show, payload)).ok)
+      XCTAssertNil(center.items.first { $0.id == state.rawValue }?.staleAt)
+    }
+    XCTAssertEqual(scheduler.pendingCount, 0)
+    scheduler.advance(to: Date(timeIntervalSince1970: 10_000))
+    XCTAssertEqual(Set(center.items.map(\.state)), [.succeeded, .failed, .cancelled])
+  }
+
+  @MainActor
+  func testChangingTimeoutRecomputesExistingLiveDeadline() {
+    let clock = TestPulseClock(now: Date(timeIntervalSince1970: 6_000))
+    let scheduler = TestPulseDeadlineScheduler(clock: clock)
+    let center = makeCenter(
+      staleTimeout: 30, staleRetention: 20, clock: clock, scheduler: scheduler)
+    let payload = PulsePayload(
+      id: "reconfigured", source: "cli", title: "Running", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: 0.1, state: .progress, priority: .normal,
+      expiresAt: nil, actions: nil)
+
+    XCTAssertTrue(center.apply(command(.show, payload)).ok)
+    scheduler.advance(to: Date(timeIntervalSince1970: 6_010))
+    center.setStaleTimeout(5)
+
+    XCTAssertEqual(center.staleTimeout, 5)
+    XCTAssertEqual(center.items.first?.state, .stale)
+    XCTAssertEqual(center.history.first?.result, .stale)
   }
 
   func testPulseConnectionAdmissionIsConcurrentRatherThanLifetimeBounded() {
@@ -846,6 +1006,10 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   private func makeCenter(
+    staleTimeout: TimeInterval = PulseStalenessPolicy.defaultTimeout,
+    staleRetention: TimeInterval = PulseStalenessPolicy.defaultRetention,
+    clock: (any PulseClock)? = nil,
+    scheduler: (any PulseDeadlineScheduling)? = nil,
     symbolAvailability: @escaping (String) -> Bool? = PulseSymbolValidator.platformAvailability
   ) -> PulseCenter {
     let key = Defaults.Key<PulseDeliveryProfile>(
@@ -853,7 +1017,8 @@ final class PulseTests: XCTestCase {
     let sourcePoliciesKey = Defaults.Key<[String: String]>(
       "pulseSourcePolicies", default: [:], suite: deliveryProfileSuite)
     return PulseCenter(
-      symbolAvailability: symbolAvailability, deliveryProfileKey: key,
+      staleTimeout: staleTimeout, staleRetention: staleRetention, clock: clock,
+      scheduler: scheduler, symbolAvailability: symbolAvailability, deliveryProfileKey: key,
       sourcePoliciesKey: sourcePoliciesKey)
   }
 
@@ -900,4 +1065,52 @@ private final class TestPulseRetryScheduler {
   }
 
   func fire(at index: Int) { tasks[index].action() }
+}
+
+@MainActor
+private final class TestPulseClock: PulseClock {
+  var now: Date
+
+  init(now: Date) {
+    self.now = now
+  }
+}
+
+@MainActor
+private final class TestPulseDeadlineScheduler: PulseDeadlineScheduling {
+  private struct Entry {
+    let id: UUID
+    let deadline: Date
+    let action: @MainActor @Sendable () -> Void
+  }
+
+  private let clock: TestPulseClock
+  private var entries: [Entry] = []
+
+  init(clock: TestPulseClock) {
+    self.clock = clock
+  }
+
+  var pendingCount: Int { entries.count }
+
+  func schedule(
+    at deadline: Date, action: @escaping @MainActor @Sendable () -> Void
+  ) -> PulseDeadlineTask {
+    let id = UUID()
+    entries.append(Entry(id: id, deadline: deadline, action: action))
+    return PulseDeadlineTask { [weak self] in
+      self?.entries.removeAll { $0.id == id }
+    }
+  }
+
+  func advance(to date: Date) {
+    precondition(date >= clock.now)
+    clock.now = date
+    while let index = entries.indices.min(by: { entries[$0].deadline < entries[$1].deadline }),
+      entries[index].deadline <= date
+    {
+      let entry = entries.remove(at: index)
+      entry.action()
+    }
+  }
 }
