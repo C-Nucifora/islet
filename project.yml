@@ -55,8 +55,8 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSUIElement: true
         NSHumanReadableCopyright: ""
-        NSCalendarsUsageDescription: "Islet shows your next event and today's agenda in the notch."
-        NSCalendarsFullAccessUsageDescription: "Islet shows your next event and today's agenda in the notch."
+        NSCalendarsUsageDescription: "Islet shows a three-day agenda and lets you add events from the notch."
+        NSCalendarsFullAccessUsageDescription: "Islet shows a three-day agenda and lets you add events from the notch."
         NSRemindersUsageDescription: "Islet shows your reminders in the notch and lets you complete them."
         NSRemindersFullAccessUsageDescription: "Islet shows your reminders in the notch and lets you complete them."
         NSBluetoothAlwaysUsageDescription: "Islet shows a brief animation when a Bluetooth device connects or disconnects, and reads the battery level of connected Apple peripherals."

@@ -201,7 +201,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       pageContent + [
         "Calendar", "Activity", "Upcoming-event countdown", "Calendars shown in Islet",
         "Manage Calendar permission", "Reminders", "Show incomplete reminders on Home",
-        "Manage Reminders permission", "agenda meetings due snooze complete meeting links",
+        "Manage Reminders permission", "three day agenda add event title time location conference",
+        "meetings due snooze complete meeting links travel leave time",
       ]
     case .nowPlaying:
       pageContent + [
@@ -385,6 +386,7 @@ struct SettingsView: View {
   @Default(.hudStyle) private var hudStyle
   @Default(.calendarEnabled) private var calendarEnabled
   @Default(.calendarLeadMinutes) private var calendarLeadMinutes
+  @Default(.calendarLeaveTimeWarningsEnabled) private var calendarLeaveTimeWarningsEnabled
   @Default(.hiddenCalendarIDs) private var hiddenCalendarIDs
   @Default(.remindersEnabled) private var remindersEnabled
   @Default(.showOnAllDisplays) private var showOnAllDisplays
@@ -552,6 +554,11 @@ struct SettingsView: View {
           hiddenCalendarIDs.append(id)
         }
       })
+  }
+
+  private func calendarChoiceLabel(_ choice: CalendarChoice) -> String {
+    let duplicateCount = calendar.availableCalendars.filter { $0.title == choice.title }.count
+    return duplicateCount > 1 ? "\(choice.title) · \(choice.sourceTitle)" : choice.title
   }
 
   private func sourcePolicyBinding(_ source: String) -> Binding<PulseSourcePolicy> {
@@ -1096,13 +1103,30 @@ struct SettingsView: View {
             Text("30 minutes before").tag(30)
             Text("1 hour before").tag(60)
           }
+          Toggle("Show leave-time warnings", isOn: $calendarLeaveTimeWarningsEnabled)
+          Text(
+            "Warnings use only travel times already supplied with an event. Islet never tracks your location."
+          )
+          .font(.caption).foregroundStyle(.secondary)
           if calendar.authorization.canRead, !calendar.availableCalendars.isEmpty {
             DisclosureGroup("Calendars shown in Islet") {
               ForEach(calendar.availableCalendars) { choice in
-                Toggle(choice.title, isOn: calendarEnabledBinding(choice.id))
+                Toggle(calendarChoiceLabel(choice), isOn: calendarEnabledBinding(choice.id))
               }
             }
+            Text(
+              "Deleted calendars are removed from this saved filter. Renaming one keeps its setting."
+            )
+            .font(.caption).foregroundStyle(.secondary)
           }
+          Text(
+            "The agenda covers three local calendar days. Add events from the Calendar activity."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+          Text(
+            "macOS does not share Calendar travel-time estimates, so Islet does not guess leave times."
+          )
+          .font(.caption).foregroundStyle(.secondary)
         }
         Button("Manage Calendar permission…") {
           navigate(to: .permissions)

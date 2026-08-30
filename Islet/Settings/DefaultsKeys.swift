@@ -234,6 +234,8 @@ extension Defaults.Keys {
   /// Provider setting shared by the Calendar activity and Home agenda, not an activity switch.
   static let calendarEnabled = Key<Bool>("calendarEnabled", default: true)
   static let calendarLeadMinutes = Key<Int>("calendarLeadMinutes", default: 10)
+  static let calendarLeaveTimeWarningsEnabled = Key<Bool>(
+    "calendarLeaveTimeWarningsEnabled", default: true)
   static let hiddenCalendarIDs = Key<[String]>("hiddenCalendarIDs", default: [])
   static let remindersEnabled = Key<Bool>("remindersEnabled", default: true)
   static let showOnAllDisplays = Key<Bool>("showOnAllDisplays", default: false)
