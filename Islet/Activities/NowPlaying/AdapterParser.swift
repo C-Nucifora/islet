@@ -76,8 +76,11 @@ enum AdapterParser {
     if let v = payload["parentApplicationBundleIdentifier"] as? String {
       state.parentBundleIdentifier = v
     }
-    let ff = payload["supportsFastForward15Seconds"] as? Bool
-    let rw = payload["supportsRewind15Seconds"] as? Bool
-    if ff != nil || rw != nil { state.supportsSkip15 = (ff ?? false) || (rw ?? false) }
+    if payload["supportsFastForward15Seconds"] != nil {
+      state.supportsSkipForward15 = payload["supportsFastForward15Seconds"] as? Bool ?? false
+    }
+    if payload["supportsRewind15Seconds"] != nil {
+      state.supportsSkipBackward15 = payload["supportsRewind15Seconds"] as? Bool ?? false
+    }
   }
 }

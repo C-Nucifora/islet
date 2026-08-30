@@ -114,4 +114,26 @@ final class MediaRemoteCommandsTests: XCTestCase {
       MediaControlPresentation.accessibilityLabel(action: "Pause", sourceScoped: false),
       "Pause unavailable")
   }
+
+  func testFeedbackNamesTheAttemptedActionWithoutLeakingSourceIdentity() {
+    let privateSource = source("com.example.private-player", 20)
+    let message = MediaControlFeedback.message(
+      for: .seek(to: 42), result: .rejected(target: privateSource))
+
+    XCTAssertEqual(message, "Can't seek: the player rejected it")
+    XCTAssertFalse(message?.contains(privateSource.displayBundleIdentifier) == true)
+    XCTAssertEqual(
+      MediaControlFeedback.logReason(for: .rejected(target: privateSource)), "rejected")
+  }
+
+  func testFeedbackExplainsUnavailableAtomicTargeting() {
+    let privateSource = source("com.example.private-player", 20)
+    XCTAssertEqual(
+      MediaControlFeedback.message(
+        for: .togglePlayPause, result: .sourceTargetingUnavailable(privateSource)),
+      "Can't change playback: Islet can't target this player safely")
+    XCTAssertEqual(
+      MediaControlFeedback.logReason(for: .sourceTargetingUnavailable(privateSource)),
+      "source-targeting-unavailable")
+  }
 }

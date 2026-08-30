@@ -23,6 +23,19 @@ enum MediaCommand: Equatable, Sendable {
     case .seek: nil
     }
   }
+
+  var feedbackName: String {
+    switch self {
+    case .toggleShuffle: "change shuffle"
+    case .skipBackward15: "skip back 15 seconds"
+    case .previous: "go to the previous track"
+    case .togglePlayPause: "change playback"
+    case .skipForward15: "skip forward 15 seconds"
+    case .next: "go to the next track"
+    case .cycleRepeat: "change repeat"
+    case .seek: "seek"
+    }
+  }
 }
 
 enum MediaCommandResult: Equatable, Sendable {
@@ -30,6 +43,34 @@ enum MediaCommandResult: Equatable, Sendable {
   case sourceNotControllable(SourceID)
   case sourceTargetingUnavailable(SourceID)
   case rejected(target: SourceID)
+}
+
+/// A short explanation shown beside the media controls when the attempted action did not run.
+/// Source identities stay out of this copy because the card itself already names the app.
+enum MediaControlFeedback {
+  static func message(for command: MediaCommand, result: MediaCommandResult) -> String? {
+    let action = command.feedbackName
+    switch result {
+    case .sent:
+      return nil
+    case .sourceNotControllable:
+      return "Can't \(action): this audio source has no media controls"
+    case .sourceTargetingUnavailable:
+      return "Can't \(action): Islet can't target this player safely"
+    case .rejected:
+      return "Can't \(action): the player rejected it"
+    }
+  }
+
+  static func logReason(for result: MediaCommandResult) -> String? {
+    switch result {
+    case .sent:
+      return nil
+    case .sourceNotControllable: return "source-not-controllable"
+    case .sourceTargetingUnavailable: return "source-targeting-unavailable"
+    case .rejected: return "rejected"
+    }
+  }
 }
 
 /// Routes a media command only through a transport that targets the source atomically.
