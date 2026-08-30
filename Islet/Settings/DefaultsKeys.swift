@@ -128,6 +128,8 @@ extension HUDStyle: Defaults.Serializable {}
 extension EnergyMode: Defaults.Serializable {}
 extension HapticStrength: Defaults.Serializable {}
 extension PulseDeliveryProfile: Defaults.Serializable {}
+extension BatteryDrainBaselinePoint: Defaults.Serializable {}
+extension BatteryCapacityPoint: Defaults.Serializable {}
 
 /// The persisted activity switch. `disabledActivities` is an exclusion list so activities added by
 /// a newer build start enabled, and an older build can retain ids it does not understand.
@@ -232,6 +234,18 @@ extension Defaults.Keys {
   static let hideFromScreenRecording = Key<Bool>("hideFromScreenRecording", default: false)
   /// Retained only as input to the one-time activity enablement migration.
   static let legacyBatteryEnabled = Key<Bool>("batteryEnabled", default: true)
+  static let unusualBatteryDrainWarnings = Key<Bool>("unusualBatteryDrainWarnings", default: true)
+  static let chargerCapacityWarnings = Key<Bool>("chargerCapacityWarnings", default: true)
+  static let peripheralBatteryWarningThresholds = Key<[String: Int]>(
+    "peripheralBatteryWarningThresholds",
+    default: Dictionary(
+      uniqueKeysWithValues: PeripheralDeviceType.allCases.map { ($0.rawValue, 20) }))
+  static let batteryDrainBaseline = Key<[BatteryDrainBaselinePoint]>(
+    "batteryDrainBaseline", default: [])
+  static let batteryCapacityHistory = Key<[BatteryCapacityPoint]>(
+    "batteryCapacityHistory", default: [])
+  static let batteryInsightLastAlertDates = Key<[String: Date]>(
+    "batteryInsightLastAlertDates", default: [:])
   static let hudEnabled = Key<Bool>("hudEnabled", default: false)
   static let hudStyle = Key<HUDStyle>("hudStyle", default: .bar)
   /// Stable Core Graphics display UUIDs for monitors whose DDC control the user disabled.
