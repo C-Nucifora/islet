@@ -209,7 +209,7 @@ final class T3CodeTests: XCTestCase {
       ["machine:failed", "machine:newer", "machine:older"])
   }
 
-  func testExpandedRowsKeepOfflineMachineAlongsideGloballyOrderedAgents() {
+  func testExpandedRowsKeepEveryMachineAlongsideGloballyOrderedAgents() {
     let now = Date(timeIntervalSince1970: 1_788_000_000)
     let remoteURL = "https://office.example"
     let snapshots = [
@@ -239,8 +239,8 @@ final class T3CodeTests: XCTestCase {
       guard case .environment(let environment) = row else { return nil }
       return environment
     }
-    XCTAssertEqual(environments.map(\.label), ["Office Mac"])
-    XCTAssertEqual(environments.first?.state, .offline("No route"))
+    XCTAssertEqual(environments.map(\.label), ["This Mac", "Office Mac"])
+    XCTAssertEqual(environments.map(\.state), [.connected, .offline("No route")])
   }
 
   func testDuplicateProjectIDsDoNotCrashAgentDerivation() throws {

@@ -610,7 +610,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       T3ExpandedRow.agent(
         agent, environmentLabel: labels[agent.environmentID] ?? agent.environmentID)
     }
-    return agents + visible.filter(\.agents.isEmpty).map(T3ExpandedRow.environment)
+    return agents + visible.map(T3ExpandedRow.environment)
   }
 
   nonisolated static func environmentActions(
