@@ -127,7 +127,9 @@ struct PublishPulseEventIntent: AppIntent {
     let response = center.applyIfEnabled(
       PulseCommand(token: "", operation: .event, activity: payload, id: nil))
     guard response.ok else { throw PulseIntentError.rejected(response.error ?? "Unknown error") }
-    if center.items.contains(where: { $0.id == id }) {
+    if center.items.contains(where: {
+      $0.providerIdentifier == id && $0.id.normalizedSource == "shortcuts"
+    }) {
       return .result(value: id, dialog: "Published to Islet.")
     }
     return .result(
