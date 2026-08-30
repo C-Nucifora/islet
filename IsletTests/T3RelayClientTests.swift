@@ -176,6 +176,42 @@ final class T3RelayClientTests: XCTestCase {
     XCTAssertEqual(environments.map(\.webSocketBaseURL.port), [65_535, 1])
   }
 
+  func testInventoryCanonicalizesWHATWGIPAuthoritiesAndRejectsInvalidHosts() async throws {
+    let recorder = T3RelayHTTPRecorder(responses: [
+      .inventory([
+        Self.environmentJSON(
+          environmentID: "ipv6",
+          httpBaseURL: "https://[2001:0db8:0:0:0:0:0:1]:443",
+          webSocketBaseURL: "wss://[::ffff:192.0.2.128]:443/ws"),
+        Self.environmentJSON(
+          environmentID: "ipv4",
+          httpBaseURL: "https://127.000.000.001:443",
+          webSocketBaseURL: "wss://0x7f000001:443/ws"),
+      ])
+    ])
+    let client = makeClient(recorder: recorder, signer: T3RelayProofRecorder())
+
+    let environments = try await client.listEnvironments(accountToken: "account")
+
+    XCTAssertEqual(
+      environments.map(\.httpBaseURL.absoluteString),
+      ["https://[2001:db8::1]/", "https://127.0.0.1/"])
+    XCTAssertEqual(
+      environments.map(\.webSocketBaseURL.absoluteString),
+      ["wss://[::ffff:c000:280]/ws", "wss://127.0.0.1/ws"])
+
+    for invalidHost in ["example.123", "1.2.3.256", "[fe80::1%25en0]"] {
+      let invalidRecorder = T3RelayHTTPRecorder(responses: [
+        .inventory([Self.environmentJSON(httpBaseURL: "https://\(invalidHost)")])
+      ])
+      let invalidClient = makeClient(
+        recorder: invalidRecorder, signer: T3RelayProofRecorder())
+      await assertInvalidResponse {
+        _ = try await invalidClient.listEnvironments(accountToken: "account")
+      }
+    }
+  }
+
   func testCacheableInventoryCannotCrossBearerTokens() async throws {
     let firstResponse = T3RelayHTTPResponse.inventory([
       Self.environmentJSON(label: "First account")
@@ -313,6 +349,54 @@ final class T3RelayClientTests: XCTestCase {
         .init(
           method: "POST", url: "https://env-one.t3-relay-unit.test/oauth/token",
           accessToken: nil),
+      ])
+  }
+
+  func testAuthorizationCanonicalizesRelayResourceRequestURLsAndProofHTUs() async throws {
+    let environment = Self.environment(host: "ENV-ONE.T3-RELAY-UNIT.TEST:443")
+    let recorder = T3RelayHTTPRecorder(
+      responses: Self.authorizationResponses(environment: environment))
+    let secureStore = T3RelaySignerSecureStore(proofKey: Data((1...32).map(UInt8.init)))
+    let signer = T3DPoPSigner(
+      store: T3ConnectCredentialStore(store: secureStore),
+      now: { Date(timeIntervalSince1970: 1_800_000_000) },
+      makeJTI: { UUID().uuidString })
+    let configuration = T3ConnectConfiguration(
+      hostedAuthorizationURL: URL(string: "https://app.t3-relay-unit.test/connect")!,
+      tokenEndpoint: URL(string: "https://oauth.t3-relay-unit.test/token")!,
+      clientID: "test-client",
+      redirectURI: URL(string: "http://127.0.0.1:34338/callback")!,
+      scopes: ["openid", "profile", "email"],
+      relayOrigin: URL(string: "HTTPS://RELAY.T3-RELAY-UNIT.TEST:443")!,
+      relayClientID: "test-relay-client")
+    let client = makeClient(
+      recorder: recorder, signer: signer, configuration: configuration)
+
+    let authorization = try await client.authorize(
+      environment: environment, accountToken: "account", grantID: grantID)
+
+    XCTAssertEqual(
+      authorization.endpoint.baseURL.absoluteString,
+      "https://env-one.t3-relay-unit.test/")
+    let requests = recorder.requests()
+    XCTAssertEqual(
+      requests.compactMap { $0.url?.absoluteString },
+      [
+        "https://relay.t3-relay-unit.test/v1/client/dpop-token",
+        "https://relay.t3-relay-unit.test/v1/environments/env-one/connect",
+        "https://env-one.t3-relay-unit.test/.well-known/t3/environment",
+        "https://env-one.t3-relay-unit.test/api/auth/session",
+        "https://env-one.t3-relay-unit.test/oauth/token",
+      ])
+    XCTAssertEqual(
+      Self.formValue("resource", in: requests[0]),
+      "https://relay.t3-relay-unit.test")
+    XCTAssertEqual(
+      try [requests[0], requests[1], requests[4]].map(Self.dpopHTU),
+      [
+        "https://relay.t3-relay-unit.test/v1/client/dpop-token",
+        "https://relay.t3-relay-unit.test/v1/environments/env-one/connect",
+        "https://env-one.t3-relay-unit.test/oauth/token",
       ])
   }
 
@@ -988,11 +1072,12 @@ final class T3RelayClientTests: XCTestCase {
     signer: any T3DPoPProofProviding,
     now: @escaping @Sendable () -> Date? = { nil },
     preloadManagedCookie: Bool = false,
+    configuration: T3ConnectConfiguration = .relayTest,
     onRelayTaskReused: @escaping @Sendable () -> Void = {},
     onEnvironmentTaskReused: @escaping @Sendable () -> Void = {}
   ) -> T3RelayClient {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.protocolClasses = [T3RelayURLProtocol.self]
+    let sessionConfiguration = URLSessionConfiguration.ephemeral
+    sessionConfiguration.protocolClasses = [T3RelayURLProtocol.self]
     let cookieStorage = HTTPCookieStorage.sharedCookieStorage(
       forGroupContainerIdentifier: "dev.islet.tests.\(UUID().uuidString)")
     if preloadManagedCookie,
@@ -1003,16 +1088,16 @@ final class T3RelayClientTests: XCTestCase {
     {
       cookieStorage.setCookie(cookie)
     }
-    configuration.httpCookieStorage = cookieStorage
-    configuration.httpShouldSetCookies = true
-    configuration.requestCachePolicy = .useProtocolCachePolicy
+    sessionConfiguration.httpCookieStorage = cookieStorage
+    sessionConfiguration.httpShouldSetCookies = true
+    sessionConfiguration.requestCachePolicy = .useProtocolCachePolicy
     T3RelayURLProtocol.recorder = recorder
     T3RelayURLProtocol.cookieStorage = cookieStorage
     let fixedNow = self.now
     return T3RelayClient(
-      transport: T3HTTPTransport(session: URLSession(configuration: configuration)),
+      transport: T3HTTPTransport(session: URLSession(configuration: sessionConfiguration)),
       signer: signer,
-      configuration: .relayTest,
+      configuration: configuration,
       now: { now() ?? fixedNow },
       onRelayTaskReused: onRelayTaskReused,
       onEnvironmentTaskReused: onEnvironmentTaskReused)
@@ -1104,6 +1189,27 @@ final class T3RelayClientTests: XCTestCase {
 
   private static func body(_ request: URLRequest) -> String {
     String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+  }
+
+  private static func formValue(_ name: String, in request: URLRequest) -> String? {
+    var components = URLComponents()
+    components.percentEncodedQuery = body(request)
+    return components.queryItems?.first { $0.name == name }?.value
+  }
+
+  private static func dpopHTU(_ request: URLRequest) throws -> String {
+    let proof = try XCTUnwrap(request.value(forHTTPHeaderField: "DPoP"))
+    let parts = proof.split(separator: ".", omittingEmptySubsequences: false)
+    XCTAssertEqual(parts.count, 3)
+    let payloadPart = try XCTUnwrap(parts.dropFirst().first)
+    var encoded = String(payloadPart).replacingOccurrences(of: "-", with: "+")
+      .replacingOccurrences(of: "_", with: "/")
+    let remainder = encoded.count % 4
+    if remainder > 0 { encoded.append(String(repeating: "=", count: 4 - remainder)) }
+    let data = try XCTUnwrap(Data(base64Encoded: encoded))
+    let payload = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: data) as? [String: Any])
+    return try XCTUnwrap(payload["htu"] as? String)
   }
 
   private static func jsonObject(_ request: URLRequest) throws -> [String: AnyHashable] {
@@ -1374,7 +1480,7 @@ private final class T3RelayURLProtocol: URLProtocol, @unchecked Sendable {
   private var stopped = false
 
   override class func canInit(with request: URLRequest) -> Bool {
-    request.url?.host?.hasSuffix("t3-relay-unit.test") == true
+    request.url?.host?.lowercased().hasSuffix("t3-relay-unit.test") == true
   }
 
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -1417,6 +1523,26 @@ private final class T3RelayURLProtocol: URLProtocol, @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     return stopped
+  }
+}
+
+private actor T3RelaySignerSecureStore: T3SecureRecordStore {
+  private var proofKey: Data?
+
+  init(proofKey: Data) {
+    self.proofKey = proofKey
+  }
+
+  func data(service: String, account: String) async throws -> Data? {
+    account == T3ConnectCredentialStore.dpopKeyAccount ? proofKey : nil
+  }
+
+  func replace(_ data: Data, service: String, account: String, label: String) async throws {
+    if account == T3ConnectCredentialStore.dpopKeyAccount { proofKey = data }
+  }
+
+  func delete(service: String, account: String) async throws {
+    if account == T3ConnectCredentialStore.dpopKeyAccount { proofKey = nil }
   }
 }
 

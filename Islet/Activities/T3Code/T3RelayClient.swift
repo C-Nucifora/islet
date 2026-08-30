@@ -525,6 +525,7 @@ actor T3RelayClient {
     }
     components.scheme = "https"
     components.path = "/"
+    guard T3URLAuthorityCanonicalizer.canonicalize(&components) else { return nil }
     return components.url
   }
 
@@ -540,6 +541,7 @@ actor T3RelayClient {
       return nil
     }
     components.scheme = "wss"
+    guard T3URLAuthorityCanonicalizer.canonicalize(&components) else { return nil }
     return components.url
   }
 
@@ -555,6 +557,7 @@ actor T3RelayClient {
     }
     components.scheme = "https"
     components.path = ""
+    guard T3URLAuthorityCanonicalizer.canonicalize(&components) else { return nil }
     return components.url?.absoluteString
   }
 

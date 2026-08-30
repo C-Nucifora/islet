@@ -65,6 +65,73 @@ final class T3DPoPSignerTests: XCTestCase {
     XCTAssertNil(payload["ath"])
   }
 
+  func testProofCanonicalizesSchemeHostAndDefaultPortsLikeWHATWGURL() async throws {
+    let secureStore = T3DPoPSignerSecureStore(proofKey: fixedPrivateKey)
+    let signer = makeSigner(store: secureStore)
+    let cases = [
+      (
+        input: "HTTPS://SERVER.EXAMPLE:443/resource?secret=yes#section",
+        expected: "https://server.example/resource"
+      ),
+      (input: "HTTP://SERVER.EXAMPLE:80/resource", expected: "http://server.example/resource"),
+      (
+        input: "https://SERVER.EXAMPLE:8443/resource",
+        expected: "https://server.example:8443/resource"
+      ),
+      (
+        input: "http://SERVER.EXAMPLE:8080/resource",
+        expected: "http://server.example:8080/resource"
+      ),
+      (
+        input: "https://[2001:0db8:0:0:0:0:0:1]:443/resource",
+        expected: "https://[2001:db8::1]/resource"
+      ),
+      (
+        input: "https://[::ffff:192.0.2.128]:443/resource",
+        expected: "https://[::ffff:c000:280]/resource"
+      ),
+      (
+        input: "https://127.000.000.001:443/resource",
+        expected: "https://127.0.0.1/resource"
+      ),
+      (input: "https://0x7f000001/resource", expected: "https://127.0.0.1/resource"),
+      (
+        input: "https://BÜCHER.EXAMPLE:443/resource",
+        expected: "https://xn--bcher-kva.example/resource"
+      ),
+      (input: "https://%65XAMPLE.COM:443/resource", expected: "https://example.com/resource"),
+      (input: "https://EXAMPLE.COM.:443/resource", expected: "https://example.com./resource"),
+      (input: "https://EXAMPLE..:443/resource", expected: "https://example../resource"),
+    ]
+
+    for item in cases {
+      let proof = try await signer.proof(
+        method: "GET", url: try XCTUnwrap(URL(string: item.input)), accessToken: nil)
+      let payload = try decodeProof(proof).payload
+
+      XCTAssertEqual(payload["htu"] as? String, item.expected, item.input)
+    }
+  }
+
+  func testProofRejectsHostsThatWHATWGURLRejects() async throws {
+    let secureStore = T3DPoPSignerSecureStore(proofKey: fixedPrivateKey)
+    let signer = makeSigner(store: secureStore)
+
+    for value in [
+      "https://example.123/resource", "https://1.2.3.256/resource",
+      "https://1..2/resource", "https://.1/resource",
+      "https://[fe80::1%25en0]/resource",
+    ] {
+      do {
+        _ = try await signer.proof(
+          method: "GET", url: try XCTUnwrap(URL(string: value)), accessToken: nil)
+        XCTFail("Expected \(value) to be rejected")
+      } catch let error as T3DPoPSignerError {
+        XCTAssertEqual(error, .invalidURL)
+      }
+    }
+  }
+
   func testProofHashesBoundAccessToken() async throws {
     let secureStore = T3DPoPSignerSecureStore(proofKey: fixedPrivateKey)
     let signer = makeSigner(store: secureStore)
