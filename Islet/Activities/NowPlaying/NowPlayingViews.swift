@@ -215,7 +215,7 @@ struct ExpandedPlayerView: View {
   private func scrubber(_ pb: PlaybackState, source: SourceID?) -> some View {
     let canSeek = source.map { activity.canPerform(.seek(to: 0), for: $0) } ?? false
     // Only tick while actually playing; a paused track's position is fixed, so no redraw is needed.
-    TimelineView(.animation(minimumInterval: 0.5, paused: pb.isPlaying == false)) { _ in
+    return TimelineView(.animation(minimumInterval: 0.5, paused: pb.isPlaying == false)) { _ in
       let elapsedText = MediaDurationFormatter.string(
         for: scrubbing ? scrubValue : pb.currentElapsed)
       let durationText = MediaDurationFormatter.string(for: pb.duration)
