@@ -1,15 +1,20 @@
-import Defaults
 import Foundation
 
-@MainActor
-struct PulseRevisionPersistenceStore {
-  let readData: () -> Data?
-  let writeData: (Data?) -> Void
+struct PulseRevisionPersistenceStore: Sendable {
+  let readData: @Sendable () -> Data?
+  let writeData: @Sendable (Data?) -> Void
 
   static var defaults: Self {
-    Self(
-      readData: { Defaults[.pulseRevisionStateData] },
-      writeData: { Defaults[.pulseRevisionStateData] = $0 })
+    let key = "pulseRevisionStateData"
+    return Self(
+      readData: { UserDefaults.standard.data(forKey: key) },
+      writeData: { data in
+        if let data {
+          UserDefaults.standard.set(data, forKey: key)
+        } else {
+          UserDefaults.standard.removeObject(forKey: key)
+        }
+      })
   }
 }
 
@@ -41,22 +46,27 @@ private struct PulseRevisionSnapshot: Codable {
   }
 }
 
+struct PulseRevisionRestoration {
+  let records: [PulseItem.ID: PulseRevisionRecord]
+  let requiresRewrite: Bool
+}
+
 enum PulseRevisionPersistence {
   static let maximumRecordAge: TimeInterval = 30 * 24 * 60 * 60
   static let maximumDocumentBytes = 4 * 1_024 * 1_024
 
-  @MainActor
   static func restore(
     from store: PulseRevisionPersistenceStore, now: Date, maximumRecords: Int
-  ) -> [PulseItem.ID: PulseRevisionRecord] {
-    guard let data = store.readData() else { return [:] }
+  ) -> PulseRevisionRestoration {
+    guard let data = store.readData() else {
+      return PulseRevisionRestoration(records: [:], requiresRewrite: false)
+    }
     guard data.count <= maximumDocumentBytes,
       let snapshot = try? JSONDecoder().decode(PulseRevisionSnapshot.self, from: data),
       snapshot.version == PulseRevisionSnapshot.currentVersion,
       snapshot.records.count <= maximumRecords
     else {
-      store.writeData(nil)
-      return [:]
+      return PulseRevisionRestoration(records: [:], requiresRewrite: true)
     }
 
     var restored: [PulseItem.ID: PulseRevisionRecord] = [:]
@@ -70,8 +80,7 @@ enum PulseRevisionPersistence {
         id.providerIdentifier == record.providerIdentifier,
         restored[id] == nil
       else {
-        store.writeData(nil)
-        return [:]
+        return PulseRevisionRestoration(records: [:], requiresRewrite: true)
       }
       if isExpired(record, now: now) {
         removedExpiredRecord = true
@@ -80,11 +89,10 @@ enum PulseRevisionPersistence {
       restored[id] = record
     }
 
-    if removedExpiredRecord { save(restored, to: store) }
-    return restored
+    return PulseRevisionRestoration(
+      records: restored, requiresRewrite: removedExpiredRecord)
   }
 
-  @MainActor
   static func save(
     _ records: [PulseItem.ID: PulseRevisionRecord], to store: PulseRevisionPersistenceStore
   ) {
@@ -107,5 +115,68 @@ enum PulseRevisionPersistence {
   static func isExpired(_ record: PulseRevisionRecord, now: Date) -> Bool {
     guard now.timeIntervalSinceReferenceDate.isFinite else { return false }
     return now.timeIntervalSince(record.acceptedAt) > maximumRecordAge
+  }
+}
+
+/// Serializes and writes only the newest pending revision snapshot. Encoding and UserDefaults I/O
+/// stay off the main actor; the serial queue preserves write order when a write is already running.
+final class PulseRevisionPersistenceWriter: @unchecked Sendable {
+  static let defaultCoalescingDelay: TimeInterval = 0.25
+
+  private let queue = DispatchQueue(label: "dev.islet.pulse-revision-persistence")
+  private let lock = NSLock()
+  private let store: PulseRevisionPersistenceStore
+  private let coalescingDelay: TimeInterval
+  private var pendingRecords: [PulseItem.ID: PulseRevisionRecord]?
+  private var scheduledGeneration: UInt64 = 0
+  private var scheduledWorkItem: DispatchWorkItem?
+
+  init(
+    store: PulseRevisionPersistenceStore,
+    coalescingDelay: TimeInterval = defaultCoalescingDelay
+  ) {
+    self.store = store
+    self.coalescingDelay = max(0, coalescingDelay)
+  }
+
+  func submit(_ records: [PulseItem.ID: PulseRevisionRecord]) {
+    lock.lock()
+    pendingRecords = records
+    scheduledGeneration &+= 1
+    let generation = scheduledGeneration
+    scheduledWorkItem?.cancel()
+    let workItem = DispatchWorkItem { [weak self] in
+      self?.persistIfCurrent(generation: generation)
+    }
+    scheduledWorkItem = workItem
+    lock.unlock()
+    queue.asyncAfter(deadline: .now() + coalescingDelay, execute: workItem)
+  }
+
+  func flush() {
+    lock.lock()
+    scheduledWorkItem?.cancel()
+    scheduledWorkItem = nil
+    scheduledGeneration &+= 1
+    let records = pendingRecords
+    pendingRecords = nil
+    lock.unlock()
+
+    queue.sync {
+      guard let records else { return }
+      PulseRevisionPersistence.save(records, to: store)
+    }
+  }
+
+  private func persistIfCurrent(generation: UInt64) {
+    lock.lock()
+    guard generation == scheduledGeneration, let records = pendingRecords else {
+      lock.unlock()
+      return
+    }
+    pendingRecords = nil
+    scheduledWorkItem = nil
+    lock.unlock()
+    PulseRevisionPersistence.save(records, to: store)
   }
 }
