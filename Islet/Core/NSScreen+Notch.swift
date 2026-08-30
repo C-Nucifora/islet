@@ -28,6 +28,19 @@ extension NSScreen {
     return CFUUIDCreateString(nil, uuid) as String
   }
 
+  /// A conservative fallback for the rare reconfiguration where macOS changes a display UUID.
+  /// Built-in displays are unique. An external display must report a serial number before it is
+  /// safe to distinguish it from another monitor of the same model.
+  var displayHardwareIdentity: DisplayHardwareIdentity? {
+    guard let displayID else { return nil }
+    if isBuiltin { return .builtin }
+    let serial = CGDisplaySerialNumber(displayID)
+    guard serial != 0 else { return nil }
+    return .external(
+      vendor: CGDisplayVendorNumber(displayID), model: CGDisplayModelNumber(displayID),
+      serial: serial)
+  }
+
   /// The notch numbers AppKit reports right now. Split out from geometry construction so callers
   /// can run the reading through `NotchStickiness` first — these can come back empty transiently,
   /// and an empty reading silently means "no notch, use the 200pt fallback".

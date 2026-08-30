@@ -61,4 +61,57 @@ final class SourceStripTests: XCTestCase {
       SourceStrip.merge(adapter: adapter, audio: audio),
       [key("com.spotify.client", 1), key("com.apple.Music", 3)])
   }
+
+  func testChooserKeepsThePrimaryAndEveryHiddenSourceForFourOrMoreSources() {
+    let primary = key("com.apple.Music", 1)
+    let secondary = (2...6).map { key("app\($0)", Int32($0)) }
+
+    let layout = MediaSourceChooser.layout(primary: primary, secondary: secondary)
+
+    XCTAssertEqual(layout.primary, primary)
+    XCTAssertEqual(layout.shown, Array(secondary.prefix(3)))
+    XCTAssertEqual(layout.hidden, Array(secondary.dropFirst(3)))
+  }
+
+  func testChooserLayoutKeepsTheStripBounded() {
+    let sources = (1...9).map { key("app\($0)", Int32($0)) }
+    let layout = MediaSourceChooser.layout(primary: nil, secondary: sources)
+
+    XCTAssertEqual(layout.shown.count, 3)
+    XCTAssertEqual(layout.hidden.count, 6)
+  }
+
+  func testChooserSelectionUsesDisplayIdentityAndKeepsOtherPrioritiesStable() {
+    let safariHelper = key("com.apple.WebKit.GPU", 12, parent: "com.apple.Safari")
+    let selection = MediaSourceChooser.selection(
+      for: safariHelper,
+      priorityList: ["com.spotify.client", "com.apple.Safari", "com.apple.Music"])
+
+    XCTAssertEqual(selection.mode, .prioritized)
+    XCTAssertEqual(
+      selection.priorityList,
+      ["com.apple.Safari", "com.spotify.client", "com.apple.Music"])
+  }
+
+  func testChooserSelectionIsStableWhenTheRequestedSourceIsAlreadyPrimary() {
+    let spotify = key("com.spotify.client", 12)
+    let selection = MediaSourceChooser.selection(
+      for: spotify, priorityList: ["com.spotify.client", "com.apple.Music"])
+
+    XCTAssertEqual(selection.priorityList, ["com.spotify.client", "com.apple.Music"])
+  }
+
+  func testChooserAccessibilityLabelsDescribePlaybackAndPrimaryMarkers() {
+    XCTAssertEqual(
+      MediaSourceChooser.accessibilityLabel(
+        appName: "Music", isPlaying: true, isPrimary: true),
+      "Music, Playing, Primary source")
+    XCTAssertEqual(
+      MediaSourceChooser.accessibilityLabel(
+        appName: "Spotify", isPlaying: false, isPrimary: false),
+      "Spotify, Paused, Additional source")
+    XCTAssertEqual(
+      MediaSourceChooser.accessibilityHint(appName: "Spotify"),
+      "Makes Spotify the primary player")
+  }
 }

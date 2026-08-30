@@ -20,11 +20,14 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   /// which carry no metadata at all — only "this app is producing audio".
   @Published private(set) var strip: [SourceID] = []
   @Published private(set) var adapterStatus = "Starting…"
+  @Published private(set) var adapterFailure: String?
   private(set) var activationDate: Date?
 
   private var table = MediaSourceTable()
   private var artworkPayloads: [SourceID: Data] = [:]
   private var artworkImages: [SourceID: NSImage] = [:]
+  private var artworkDecodeTasks: [SourceID: Task<Void, Never>] = [:]
+  private var artworkRequestIDs: [SourceID: UUID] = [:]
   private var appNames: [String: String] = [:]
   private var appIcons: [String: NSImage] = [:]
   private var resolvedBundleIdentifiers: Set<String> = []
@@ -57,6 +60,9 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     isMonitoring = true
     watcher.onStatus = { status in
       Task { @MainActor [weak self] in self?.adapterStatus = status }
+    }
+    watcher.onDiagnostic = { diagnostic in
+      Task { @MainActor [weak self] in self?.adapterFailure = diagnostic }
     }
     watcher.start()
     audio.start()
@@ -121,15 +127,25 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     strip = []
     artworkPayloads = [:]
     artworkImages = [:]
+    for task in artworkDecodeTasks.values { task.cancel() }
+    artworkDecodeTasks = [:]
+    artworkRequestIDs = [:]
     appNames = [:]
     appIcons = [:]
     resolvedBundleIdentifiers = []
     activationDate = nil
     adapterStatus = "Stopped"
+    adapterFailure = nil
   }
 
-  /// Tapping a chip. See `MediaRemoteCommands.promote` for what "promote" can actually mean today.
+  /// Tapping a source makes its display identity the first configured primary player, then asks
+  /// MediaRemote to focus it. See `MediaRemoteCommands.promote` for the activation fallback.
   func promote(_ source: SourceID) {
+    let selection = MediaSourceChooser.selection(
+      for: source, priorityList: Defaults[.mediaPriorityList])
+    Defaults[.mediaSourceMode] = selection.mode
+    Defaults[.mediaPriorityList] = selection.priorityList
+    publish()
     MediaRemoteCommands.shared.promote(source)
   }
 
@@ -143,6 +159,17 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
 
   func sourceName(for source: SourceID) -> String {
     appNames[source.displayBundleIdentifier] ?? source.displayBundleIdentifier
+  }
+
+  func sourceAccessibilityLabel(for source: SourceID, isPrimary: Bool) -> String {
+    MediaSourceChooser.accessibilityLabel(
+      appName: sourceName(for: source),
+      isPlaying: sources[source]?.isPlaying ?? true,
+      isPrimary: isPrimary)
+  }
+
+  func sourceSelectionAccessibilityHint(for source: SourceID) -> String {
+    MediaSourceChooser.accessibilityHint(appName: sourceName(for: source))
   }
 
   var knownBundleIdentifiers: [String] {
@@ -196,23 +223,44 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     if presentationChanged, !publishedPropertyChanged { objectWillChange.send() }
   }
 
-  /// Decode artwork and resolve application metadata when the model changes, not from SwiftUI's
-  /// `body`. Body can be recomputed many times per second while scrubbing or animating bars; doing
-  /// AppKit workspace and image-decoding work there caused avoidable UI and energy spikes.
+  /// Schedule bounded artwork decoding when the payload changes, not from SwiftUI's `body`.
   private func reconcileArtwork(with states: [SourceID: PlaybackState]) {
     let activeKeys = Set(states.keys)
+    let staleKeys = artworkDecodeTasks.keys.filter { !activeKeys.contains($0) }
+    for key in staleKeys {
+      artworkDecodeTasks[key]?.cancel()
+      artworkDecodeTasks[key] = nil
+      artworkRequestIDs[key] = nil
+    }
     artworkPayloads = artworkPayloads.filter { activeKeys.contains($0.key) }
     artworkImages = artworkImages.filter { activeKeys.contains($0.key) }
     for (key, state) in states {
       guard artworkPayloads[key] != state.artwork else { continue }
-      if let data = state.artwork, let image = NSImage(data: data) {
-        artworkPayloads[key] = data
-        artworkImages[key] = image
-      } else {
-        artworkPayloads[key] = nil
-        artworkImages[key] = nil
+      artworkDecodeTasks[key]?.cancel()
+      artworkDecodeTasks[key] = nil
+      artworkRequestIDs[key] = nil
+      artworkPayloads[key] = state.artwork
+      artworkImages[key] = nil
+      guard let data = state.artwork else { continue }
+
+      let requestID = UUID()
+      artworkRequestIDs[key] = requestID
+      artworkDecodeTasks[key] = Task.detached(priority: .utility) { [weak self] in
+        let decoded = ArtworkDecoder.decode(data)
+        guard !Task.isCancelled else { return }
+        await self?.acceptArtwork(decoded, payload: data, requestID: requestID, for: key)
       }
     }
+  }
+
+  private func acceptArtwork(
+    _ decoded: DecodedArtwork?, payload: Data, requestID: UUID, for key: SourceID
+  ) {
+    guard artworkPayloads[key] == payload, artworkRequestIDs[key] == requestID else { return }
+    artworkDecodeTasks[key] = nil
+    artworkRequestIDs[key] = nil
+    artworkImages[key] = decoded.map { NSImage(cgImage: $0.cgImage, size: .zero) }
+    objectWillChange.send()
   }
 
   private func resolveApplication(for bundleIdentifier: String) {

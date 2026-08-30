@@ -114,3 +114,49 @@ enum SourceStrip {
     return (Array(sources.prefix(limit)), sources.count - limit)
   }
 }
+
+/// The presentation and preference change behind the source-strip overflow control. Keeping this
+/// separate from SwiftUI makes the bounded strip and every chooser entry easy to verify.
+enum MediaSourceChooser {
+  struct Layout: Equatable {
+    let primary: SourceID?
+    let shown: [SourceID]
+    let hidden: [SourceID]
+  }
+
+  struct Selection: Equatable {
+    let mode: MediaSourceMode
+    let priorityList: [String]
+  }
+
+  /// The primary is shown in the chooser as a status row. The selectable rows are exactly the
+  /// sources that did not fit in the three-chip strip.
+  static func layout(primary: SourceID?, secondary: [SourceID], limit: Int = 3) -> Layout {
+    let strip = SourceStrip.layout(secondary, limit: limit)
+    return Layout(
+      primary: primary,
+      shown: strip.shown,
+      hidden: Array(secondary.dropFirst(strip.shown.count)))
+  }
+
+  /// A direct source choice is an explicit preference, so promote the display identity to the
+  /// start of the existing prioritized-player list. This deliberately keeps the other entries in
+  /// their current order and removes only duplicates of the chosen app.
+  static func selection(for source: SourceID, priorityList: [String]) -> Selection {
+    let bundleID = source.displayBundleIdentifier
+    guard !bundleID.isEmpty else {
+      return Selection(mode: .auto, priorityList: priorityList)
+    }
+    return Selection(
+      mode: .prioritized,
+      priorityList: [bundleID] + priorityList.filter { $0 != bundleID })
+  }
+
+  static func accessibilityLabel(appName: String, isPlaying: Bool, isPrimary: Bool) -> String {
+    "\(appName), \(isPlaying ? "Playing" : "Paused"), \(isPrimary ? "Primary source" : "Additional source")"
+  }
+
+  static func accessibilityHint(appName: String) -> String {
+    "Makes \(appName) the primary player"
+  }
+}

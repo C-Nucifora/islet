@@ -89,7 +89,6 @@ struct SystemPresenceGate: Equatable {
 
   private(set) var isActive = false
   private(set) var reason: Reason?
-
   private var cpuState = SustainedState()
   private var thermalState = SustainedState()
   private var memoryState = SustainedState()
