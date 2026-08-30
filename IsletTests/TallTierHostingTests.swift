@@ -36,7 +36,9 @@ final class TallTierHostingTests: XCTestCase {
   private func host(_ vm: NotchViewModel) -> (NotchPanel, PanelInstance) {
     let panel = NotchPanel(frame: vm.panelFrame)
     panel.contentView = NotchHosting.view(for: vm)
-    let instance = PanelInstance(screenUUID: "hosting-test", panel: panel, viewModel: vm)
+    let instance = PanelInstance(
+      display: ManagedDisplay(id: "hosting-test", hardwareIdentity: nil), panel: panel,
+      viewModel: vm)
     panel.orderFrontRegardless()
     instance.syncActualFrame()
     return (panel, instance)

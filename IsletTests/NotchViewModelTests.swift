@@ -141,7 +141,10 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(restored.selectedActivityID, "system")
     XCTAssertEqual(restored.expandedWidth, source.expandedWidth)
     XCTAssertEqual(restored.expandedHeight, Metrics.tallExpandedHeight)
-    XCTAssertEqual(restored.panelFrame, expandedPanel(restored))
+    XCTAssertEqual(
+      restored.panelFrame,
+      expandedPanel(
+        restored, width: source.expandedWidth, height: Metrics.tallExpandedHeight))
   }
 
   func testInitialPresentationRestoresTemporaryActivityException() {
