@@ -47,6 +47,13 @@ struct MediaSourceTable: Equatable {
     let isNew = states[key] == nil
     states[key] = state
     if isNew { firstSeen[key] = now }
+    updateIdleDeadline(for: key, state: state, now: now)
+    return isNew
+  }
+
+  private mutating func updateIdleDeadline(
+    for key: SourceID, state: PlaybackState, now: Date
+  ) {
     if isEffectivelyPlaying(key, state: state) {
       idleDeadlines[key] = nil
     } else if idleDeadlines[key] == nil {
@@ -54,7 +61,6 @@ struct MediaSourceTable: Equatable {
       // back — otherwise a chatty player keeps a paused track on screen forever.
       idleDeadlines[key] = now.addingTimeInterval(idleTimeout)
     }
-    return isNew
   }
 
   /// Removes a source. Returns true when something was actually removed.
@@ -82,6 +88,22 @@ struct MediaSourceTable: Equatable {
         idleDeadlines[key] = now.addingTimeInterval(idleTimeout)
       }
     }
+  }
+
+  /// Applies a validated local seek immediately. The next adapter record always wins, even when
+  /// its position contradicts this optimistic value: the transport exposes no sequence number or
+  /// acknowledgement marker that could distinguish a delayed record from a newer external seek.
+  @discardableResult
+  mutating func seek(_ key: SourceID, to requestedPosition: TimeInterval, now: Date)
+    -> TimeInterval?
+  {
+    guard var state = states[key], state.seekability == .seekable, requestedPosition.isFinite
+    else { return nil }
+    let target = min(max(0, requestedPosition), state.duration)
+    state.elapsed = target
+    state.elapsedAt = now
+    states[key] = state
+    return target
   }
 
   /// Evicts every source whose paused deadline has passed. Returns the keys removed.

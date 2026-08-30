@@ -62,10 +62,18 @@ enum AdapterParser {
     }
     if let v = payload["playing"] as? Bool { state.isPlaying = v }
     if let v = payload["duration"] as? Double { state.duration = v }
+    if payload["duration"] is NSNull { state.duration = 0 }
     if let v = payload["elapsedTime"] as? Double {
       state.elapsed = v
       state.elapsedAt = Date()
     }
+    if payload.keys.contains("isLive") {
+      state.isLive = payload["isLive"] as? Bool ?? false
+    } else if payload.keys.contains("isLiveStream") {
+      state.isLive = payload["isLiveStream"] as? Bool ?? false
+    }
+    if let v = payload["supportsSeeking"] as? Bool { state.supportsSeeking = v }
+    if payload["supportsSeeking"] is NSNull { state.supportsSeeking = nil }
     if let v = payload["artworkData"] as? String {
       let policy = ArtworkDecodePolicy.standard
       state.artwork =
