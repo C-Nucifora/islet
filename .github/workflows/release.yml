@@ -1,0 +1,220 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: Validate release source
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  release:
+    name: Sign, notarize, and publish
+    needs: ci
+    runs-on: macos-26
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      contents: write
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DERIVED_DATA: ${{ github.workspace }}/DerivedData
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release tag
+        id: version
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Release tags must use vMAJOR.MINOR.PATCH." >&2
+            exit 1
+          fi
+
+          release_commit=$(git rev-parse 'HEAD^{commit}')
+          git fetch origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$release_commit" origin/main; then
+            echo "The release commit must be on origin/main." >&2
+            exit 1
+          fi
+
+          echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "commit=$release_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Install XcodeGen
+        run: |
+          Scripts/install-xcodegen.sh "$RUNNER_TEMP/xcodegen"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate
+          resolved_dir=Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+          mkdir -p "$resolved_dir"
+          install -m 0644 Package.resolved "$resolved_dir/Package.resolved"
+
+      - name: Resolve pinned packages
+        run: |
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project Islet.xcodeproj \
+            -scheme Islet \
+            -derivedDataPath "$DERIVED_DATA" \
+            -onlyUsePackageVersionsFromResolvedFile
+          cmp Package.resolved Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+      - name: Build universal app
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          xcodebuild \
+            -project Islet.xcodeproj \
+            -scheme Islet \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            -disableAutomaticPackageResolution \
+            ARCHS='arm64 x86_64' \
+            ONLY_ACTIVE_ARCH=NO \
+            MARKETING_VERSION="$RELEASE_VERSION" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_HARDENED_RUNTIME=YES \
+            build
+
+      - name: Verify app contents
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          app="$DERIVED_DATA/Build/Products/Release/Islet.app"
+          architectures=$(lipo -archs "$app/Contents/MacOS/Islet")
+          [[ "$architectures" == *arm64* && "$architectures" == *x86_64* ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" == "dev.islet" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" == "$RELEASE_VERSION" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" == "$GITHUB_RUN_NUMBER" ]]
+
+      - name: Sign app
+        env:
+          CERTIFICATE_P12_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_P12 }}
+          CERTIFICATE_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+        run: |
+          test -n "$CERTIFICATE_P12_BASE64" || { echo "Missing secret: DEVELOPER_ID_APPLICATION_P12" >&2; exit 1; }
+          test -n "$CERTIFICATE_P12_PASSWORD" || { echo "Missing secret: DEVELOPER_ID_APPLICATION_P12_PASSWORD" >&2; exit 1; }
+
+          app="$DERIVED_DATA/Build/Products/Release/Islet.app"
+          framework="$app/Contents/Frameworks/MediaRemoteAdapter.framework"
+          keychain_path="$RUNNER_TEMP/islet-signing.keychain-db"
+          keychain_password=$(openssl rand -base64 32)
+          certificate_path="$RUNNER_TEMP/developer-id.p12"
+          cleanup() {
+            security delete-keychain "$keychain_path" >/dev/null 2>&1 || true
+            rm -f "$certificate_path"
+          }
+          trap cleanup EXIT
+
+          printf '%s' "$CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$CERTIFICATE_P12_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+          signing_identity=$(
+            security find-identity -v -p codesigning "$keychain_path" |
+              sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' |
+              head -1
+          )
+          if [[ -z "$signing_identity" ]]; then
+            echo "The certificate is not a Developer ID Application identity." >&2
+            exit 1
+          fi
+
+          codesign --force --sign "$signing_identity" --options runtime --timestamp "$framework"
+          codesign --force --sign "$signing_identity" --options runtime --timestamp "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --display --verbose=4 "$app" 2>&1 | grep -F "Authority=Developer ID Application:"
+          codesign --display --verbose=4 "$app" 2>&1 | grep -F "runtime"
+
+      - name: Notarize and package app
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+          NOTARY_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          NOTARY_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          test -n "$NOTARY_KEY_ID" || { echo "Missing secret: APP_STORE_CONNECT_KEY_ID" >&2; exit 1; }
+          test -n "$NOTARY_ISSUER_ID" || { echo "Missing secret: APP_STORE_CONNECT_ISSUER_ID" >&2; exit 1; }
+          test -n "$NOTARY_PRIVATE_KEY" || { echo "Missing secret: APP_STORE_CONNECT_PRIVATE_KEY" >&2; exit 1; }
+
+          app="$DERIVED_DATA/Build/Products/Release/Islet.app"
+          notary_key="$RUNNER_TEMP/AuthKey_${NOTARY_KEY_ID}.p8"
+          submission="$RUNNER_TEMP/Islet-notarization.zip"
+          output_dir="$RUNNER_TEMP/release"
+          artifact_name="Islet-${RELEASE_VERSION}.zip"
+          artifact="$output_dir/$artifact_name"
+          trap 'rm -f "$notary_key"' EXIT
+
+          printf '%s' "$NOTARY_PRIVATE_KEY" > "$notary_key"
+          ditto -c -k --keepParent "$app" "$submission"
+          xcrun notarytool submit "$submission" \
+            --key "$notary_key" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID" \
+            --wait
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+
+          mkdir -p "$output_dir"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$artifact"
+          (cd "$output_dir" && shasum -a 256 "$artifact_name" > "$artifact_name.sha256")
+          echo "RELEASE_ARTIFACT=$artifact" >> "$GITHUB_ENV"
+
+      - name: Publish GitHub release
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+          RELEASE_COMMIT: ${{ steps.version.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          remote_commit=$(
+            git ls-remote --exit-code origin \
+              "refs/tags/$GITHUB_REF_NAME" \
+              "refs/tags/$GITHUB_REF_NAME^{}" |
+              awk '$2 ~ /\^\{\}$/ { peeled = $1 } $2 !~ /\^\{\}$/ { direct = $1 } END { print peeled ? peeled : direct }'
+          )
+          if [[ "$remote_commit" != "$RELEASE_COMMIT" ]]; then
+            echo "Remote tag $GITHUB_REF_NAME no longer points to $RELEASE_COMMIT." >&2
+            exit 1
+          fi
+
+          gh release create "$GITHUB_REF_NAME" \
+            "$RELEASE_ARTIFACT" \
+            "$RELEASE_ARTIFACT.sha256" \
+            --verify-tag \
+            --target "$RELEASE_COMMIT" \
+            --generate-notes \
+            --title "Islet $RELEASE_VERSION"

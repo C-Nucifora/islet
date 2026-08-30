@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
@@ -35,10 +35,10 @@
 	<string>Islet shows your next event and today's agenda in the notch.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Islet shows the name of the Wi-Fi network you join. macOS requires location access to read network names; deny this and Islet will simply say 'Wi-Fi connected'.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Islet connects to T3 Code on your Macs to show active agents in the notch.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Islet shows the name of the Wi-Fi network you join. macOS requires location access to read network names; deny this and Islet will simply say 'Wi-Fi connected'.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Islet shows your reminders in the notch and lets you complete them.</string>
 	<key>NSRemindersUsageDescription</key>

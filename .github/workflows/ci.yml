@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Build, test, and analyze
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DERIVED_DATA: ${{ github.workspace }}/DerivedData
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install XcodeGen
+        run: |
+          Scripts/install-xcodegen.sh "$RUNNER_TEMP/xcodegen"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Check toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          xcodegen --version
+
+      - name: Lint source and integration files
+        run: |
+          xcrun swift-format lint --strict --recursive Islet IsletTests Tools
+          xcrun swiftc -typecheck Tools/islet-pulse.swift
+          jq empty Integrations/Pulse/providers.json Integrations/Pulse/pulse-command.schema.json
+          sh -n Integrations/Pulse/examples/github-actions.sh Scripts/*.sh
+
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate
+          resolved_dir=Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+          mkdir -p "$resolved_dir"
+          install -m 0644 Package.resolved "$resolved_dir/Package.resolved"
+          git diff --exit-code -- Islet/Info.plist
+
+      - name: Resolve pinned packages
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project Islet.xcodeproj \
+            -scheme Islet \
+            -derivedDataPath "$DERIVED_DATA" \
+            -onlyUsePackageVersionsFromResolvedFile | xcbeautify
+          cmp Package.resolved Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+      - name: Run tests
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Islet.xcodeproj \
+            -scheme Islet \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$DERIVED_DATA" \
+            -disableAutomaticPackageResolution \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGN_STYLE=Manual \
+            test | xcbeautify
+
+      - name: Run static analysis
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Islet.xcodeproj \
+            -scheme Islet \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            -disableAutomaticPackageResolution \
+            CODE_SIGNING_ALLOWED=NO \
+            analyze | xcbeautify
