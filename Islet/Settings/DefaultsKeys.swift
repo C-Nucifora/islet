@@ -179,4 +179,6 @@ extension Defaults.Keys {
   static let pulseEnabled = Key<Bool>("pulseEnabled", default: true)
   static let t3RemoteEnvironments = Key<[T3EnvironmentProfile]>(
     "t3RemoteEnvironments", default: [])
+  static let timerSessionData = Key<Data?>("timerSessionData")
+  static let timerLastPresetData = Key<Data?>("timerLastPresetData")
 }
