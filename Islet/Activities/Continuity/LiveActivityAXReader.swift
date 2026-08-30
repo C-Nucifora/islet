@@ -4,6 +4,7 @@ import ApplicationServices
 enum LiveActivityAXCompatibilityError: Error, Equatable {
   case missingAttribute(attribute: String)
   case noReadableIdentifiers(childCount: Int)
+  case accessibilityFailure(attribute: String, code: Int32)
   case unexpectedCFType(attribute: String, expected: CFTypeID, actual: CFTypeID)
   case unexpectedAXValueType(attribute: String, expected: UInt32, actual: UInt32)
   case unreadableAXValue(attribute: String, type: UInt32)
@@ -14,12 +15,29 @@ enum LiveActivityAXCompatibilityError: Error, Equatable {
       "Missing \(attribute)"
     case .noReadableIdentifiers(let childCount):
       "No AXIdentifier on \(childCount) menu bar item(s)"
+    case .accessibilityFailure(let attribute, let code):
+      "Accessibility read failed for \(attribute) (\(code))"
     case .unexpectedCFType(let attribute, _, _):
       "Unexpected value type for \(attribute)"
     case .unexpectedAXValueType(let attribute, _, _):
       "Unexpected AX value type for \(attribute)"
     case .unreadableAXValue(let attribute, _):
       "Unreadable \(attribute)"
+    }
+  }
+}
+
+enum LiveActivityAXAttributeCopy {
+  static func value(
+    _ value: AnyObject?, status: AXError, attribute: String
+  ) throws(LiveActivityAXCompatibilityError) -> AnyObject? {
+    switch status {
+    case .success:
+      return value
+    case .noValue, .attributeUnsupported:
+      return nil
+    default:
+      throw .accessibilityFailure(attribute: attribute, code: status.rawValue)
     }
   }
 }
@@ -141,6 +159,19 @@ enum LiveActivityAXReadResult: Equatable {
   case controlCenterUnavailable
   case schemaChanged(LiveActivityAXCompatibilityError)
   case success([MenuBarLiveActivity])
+
+  static func classify(_ error: LiveActivityAXCompatibilityError) -> Self {
+    guard case .accessibilityFailure(_, let code) = error else {
+      return .schemaChanged(error)
+    }
+    if code == AXError.apiDisabled.rawValue { return .permissionDenied }
+    if [AXError.cannotComplete, .invalidUIElement, .failure].contains(where: {
+      $0.rawValue == code
+    }) {
+      return .controlCenterUnavailable
+    }
+    return .schemaChanged(error)
+  }
 }
 
 /// Reads iPhone Live Activities out of ControlCenter's menu bar over the Accessibility API.
@@ -185,31 +216,31 @@ final class LiveActivityAXReader {
     let app = AXUIElementCreateApplication(pid)
     let hierarchy = LiveActivityAXHierarchyReader<AXUIElement>(
       element: {
-        [weak self] (element: AXUIElement, attribute: String)
+        (element: AXUIElement, attribute: String)
           throws(LiveActivityAXCompatibilityError) -> AXUIElement in
-        guard let value = self?.copy(element, attribute) else {
+        guard let value = try self.copy(element, attribute) else {
           throw LiveActivityAXCompatibilityError.missingAttribute(attribute: attribute)
         }
         return try LiveActivityAXConversion.element(from: value, attribute: attribute)
       },
       children: {
-        [weak self] (element: AXUIElement, attribute: String)
+        (element: AXUIElement, attribute: String)
           throws(LiveActivityAXCompatibilityError) -> [AXUIElement] in
-        guard let value = self?.copy(element, attribute) else {
+        guard let value = try self.copy(element, attribute) else {
           throw LiveActivityAXCompatibilityError.missingAttribute(attribute: attribute)
         }
         return try LiveActivityAXConversion.elements(from: value, attribute: attribute)
       },
       optionalString: {
-        [weak self] (element: AXUIElement, attribute: String)
+        (element: AXUIElement, attribute: String)
           throws(LiveActivityAXCompatibilityError) -> String? in
-        guard let value = self?.copy(element, attribute) else { return nil }
+        guard let value = try self.copy(element, attribute) else { return nil }
         return try LiveActivityAXConversion.string(from: value, attribute: attribute)
       },
       rect: {
-        [weak self] (element: AXUIElement, attribute: String)
+        (element: AXUIElement, attribute: String)
           throws(LiveActivityAXCompatibilityError) -> CGRect in
-        guard let value = self?.copy(element, attribute) else {
+        guard let value = try self.copy(element, attribute) else {
           throw LiveActivityAXCompatibilityError.missingAttribute(attribute: attribute)
         }
         return try LiveActivityAXConversion.rect(from: value, attribute: attribute)
@@ -217,7 +248,7 @@ final class LiveActivityAXReader {
     do {
       return .success(try hierarchy.read(from: app))
     } catch {
-      return .schemaChanged(error)
+      return .classify(error)
     }
   }
 
@@ -307,10 +338,12 @@ final class LiveActivityAXReader {
 
   // MARK: - Accessibility plumbing
 
-  private func copy(_ element: AXUIElement, _ attribute: String) -> AnyObject? {
+  private func copy(_ element: AXUIElement, _ attribute: String)
+    throws(LiveActivityAXCompatibilityError) -> AnyObject?
+  {
     var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success
-    else { return nil }
-    return value as AnyObject?
+    let status = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+    return try LiveActivityAXAttributeCopy.value(
+      value as AnyObject?, status: status, attribute: attribute)
   }
 }

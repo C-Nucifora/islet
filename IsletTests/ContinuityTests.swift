@@ -1,3 +1,4 @@
+import ApplicationServices
 import XCTest
 
 @testable import Islet
@@ -349,6 +350,30 @@ final class LiveActivityAXHierarchyReaderTests: XCTestCase {
 }
 
 final class LiveActivityAXConversionTests: XCTestCase {
+  func testAXFailuresKeepPermissionAndProcessErrorsDistinct() {
+    let attribute = "AXExtrasMenuBar"
+
+    XCTAssertEqual(
+      LiveActivityAXReadResult.classify(
+        .accessibilityFailure(attribute: attribute, code: AXError.apiDisabled.rawValue)),
+      .permissionDenied)
+    for error: AXError in [.cannotComplete, .invalidUIElement, .failure] {
+      XCTAssertEqual(
+        LiveActivityAXReadResult.classify(
+          .accessibilityFailure(attribute: attribute, code: error.rawValue)),
+        .controlCenterUnavailable)
+    }
+  }
+
+  func testMissingAttributeStatusesRemainCompatibilitySignals() throws {
+    XCTAssertNil(
+      try LiveActivityAXAttributeCopy.value(
+        nil, status: .noValue, attribute: "AXDescription"))
+    XCTAssertNil(
+      try LiveActivityAXAttributeCopy.value(
+        nil, status: .attributeUnsupported, attribute: "AXIdentifier"))
+  }
+
   func testConvertsAXUIElementAfterTypeCheck() throws {
     let input = AXUIElementCreateSystemWide()
 
