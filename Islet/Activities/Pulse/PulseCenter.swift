@@ -158,17 +158,12 @@ final class PulseCenter: ObservableObject {
         if command.operation == .event, payload.expiresAt == nil {
           payload.expiresAt = now.addingTimeInterval(8)
         }
-        let normalizedIncomingID = try PulseItem.normalizedIdentifier(payload.id)
-        let previous = storedItems.first { $0.id == normalizedIncomingID }
+        let incomingID = try PulseItem.ID(
+          source: payload.source, providerIdentifier: payload.id)
+        let previous = storedItems.first { $0.id == incomingID }
         let item = try PulseItem(
           payload: payload, now: now, previous: previous,
           staleTimeout: stalenessPolicy.timeout, symbolAvailability: symbolAvailability)
-        if let previous, sourceKey(previous.source) != sourceKey(item.source) {
-          record(operation: command.operation, item: nil, result: .rejected, date: now)
-          return .failure(
-            "id is already active under a different source", code: .identifierConflict,
-            requestID: command.requestID)
-        }
         guard policy(for: item.source) != .revoked else {
           record(operation: command.operation, item: nil, result: .rejected, date: now)
           return .failure(
@@ -187,7 +182,7 @@ final class PulseCenter: ObservableObject {
           result: visible ? (previous == nil ? .shown : .updated) : .suppressed, date: now)
         refreshVisibleItems()
         return .success(
-          id: item.id, warning: item.symbolWarning?.localizedDescription,
+          id: item.providerIdentifier, warning: item.symbolWarning?.localizedDescription,
           requestID: command.requestID)
       case .end:
         guard let rawIdentifier = command.id ?? command.activity?.id else {
@@ -196,17 +191,25 @@ final class PulseCenter: ObservableObject {
             "id is required for end", code: .invalidCommand, requestID: command.requestID)
         }
         let identifier = try PulseItem.normalizedIdentifier(rawIdentifier)
-        let normalizedEndSource = try command.source.map(PulseItem.normalizedSource)
-        if let item = storedItems.first(where: { $0.id == identifier }) {
-          if let normalizedEndSource {
-            guard sourceKey(normalizedEndSource) == sourceKey(item.source) else {
-              record(operation: .end, item: nil, result: .rejected, date: now)
-              return .failure(
-                "id belongs to a different source", code: .sourceMismatch,
-                requestID: command.requestID)
-            }
+        let matchingItems = storedItems.filter { $0.providerIdentifier == identifier }
+        if let source = command.source {
+          let scopedID = try PulseItem.ID(source: source, providerIdentifier: identifier)
+          if let item = storedItems.first(where: { $0.id == scopedID }) {
+            storedItems.removeAll { $0.id == scopedID }
+            record(operation: .end, item: item, result: .ended, date: now)
+          } else if !matchingItems.isEmpty {
+            record(operation: .end, item: nil, result: .rejected, date: now)
+            return .failure(
+              "id belongs to a different source", code: .sourceMismatch,
+              requestID: command.requestID)
           }
-          storedItems.removeAll { $0.id == identifier }
+        } else if matchingItems.count > 1 {
+          record(operation: .end, item: nil, result: .rejected, date: now)
+          return .failure(
+            "source is required because multiple providers use this id",
+            code: .ambiguousIdentifier, requestID: command.requestID)
+        } else if let item = matchingItems.first {
+          storedItems.removeAll { $0.id == item.id }
           record(operation: .end, item: item, result: .ended, date: now)
         }
         refreshVisibleItems()
@@ -222,7 +225,7 @@ final class PulseCenter: ObservableObject {
     }
   }
 
-  func dismiss(_ id: String, now suppliedNow: Date? = nil) {
+  func dismiss(_ id: PulseItem.ID, now suppliedNow: Date? = nil) {
     let now = suppliedNow ?? clock.now
     guard let item = storedItems.first(where: { $0.id == id }) else { return }
     storedItems.removeAll { $0.id == id }
@@ -231,7 +234,7 @@ final class PulseCenter: ObservableObject {
     scheduleDeadline()
   }
 
-  func keepStale(_ id: String, now suppliedNow: Date? = nil) {
+  func keepStale(_ id: PulseItem.ID, now suppliedNow: Date? = nil) {
     let now = suppliedNow ?? clock.now
     guard let index = storedItems.firstIndex(where: { $0.id == id && $0.state == .stale })
     else { return }
@@ -449,7 +452,8 @@ final class PulseCenter: ObservableObject {
     history.insert(
       PulseHistoryEntry(
         id: UUID(), date: date, operation: operation, source: item?.source,
-        state: item?.state, priority: item?.priority, result: result),
+        providerIdentifier: item?.providerIdentifier, state: item?.state,
+        priority: item?.priority, result: result),
       at: 0)
     if history.count > Self.maximumHistoryEntries {
       history.removeLast(history.count - Self.maximumHistoryEntries)
@@ -486,6 +490,6 @@ final class PulseCenter: ObservableObject {
   }
 
   private static func sourceKey(_ source: String) -> String {
-    source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    (try? PulseItem.normalizedSourceKey(source)) ?? ""
   }
 }
