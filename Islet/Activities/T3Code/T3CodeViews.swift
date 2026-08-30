@@ -154,17 +154,29 @@ struct T3SettingsSection: View {
       )
       .font(.caption2).foregroundStyle(.secondary)
       machineRows
+      if hasBlockedSavedHTTPProfile {
+        Text(
+          "Saved plain-HTTP machines are blocked by this version. Pair them again with HTTPS, then remove the old entries."
+        )
+        .font(.caption2).foregroundStyle(.orange)
+      }
       HStack {
         SecureField("Paste a T3 Code pairing link", text: $pairingLink)
         Button(isPairing ? "Pairing…" : "Add") { pair() }
           .disabled(
-            pairingLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPairing)
+            pairingLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPairing
+              || pairingIsBlockedRemoteHTTP)
       }
-      if pairingUsesPlainHTTP {
+      if pairingUsesPlainRemoteHTTP, pairingRemoteHTTPIsApproved {
         Toggle("Allow plain HTTP for this pairing", isOn: $allowInsecureHTTP)
           .font(.caption)
         Text(
-          "Plain HTTP exposes the pairing credential. Use it only on a network you trust. HTTPS and Tailscale encrypt the connection."
+          "Plain HTTP exposes the pairing credential. This build approves only this exact address. Use it only on a network you trust."
+        )
+        .font(.caption2).foregroundStyle(.orange)
+      } else if pairingUsesPlainRemoteHTTP {
+        Text(
+          "This build blocks plain HTTP for that address. Use an HTTPS pairing link. An administrator can approve an exact HTTP address in a reviewed build."
         )
         .font(.caption2).foregroundStyle(.orange)
       }
@@ -195,17 +207,38 @@ struct T3SettingsSection: View {
     }
   }
 
-  private var pairingUsesPlainHTTP: Bool {
+  private var pairingEndpointURL: URL? {
     let trimmed = pairingLink.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let link = URL(string: trimmed),
       let components = URLComponents(url: link, resolvingAgainstBaseURL: false)
-    else { return false }
+    else { return nil }
     if link.host?.lowercased() == "app.t3.codes", link.path == "/pair",
       let host = components.queryItems?.first(where: { $0.name == "host" })?.value
     {
-      return URL(string: host)?.scheme?.lowercased() == "http"
+      return URL(string: host)
     }
-    return link.scheme?.lowercased() == "http"
+    return link
+  }
+
+  private var pairingUsesPlainRemoteHTTP: Bool {
+    guard let url = pairingEndpointURL else { return false }
+    return url.scheme?.lowercased() == "http" && !T3Endpoint.isLoopbackHost(url.host)
+  }
+
+  private var pairingRemoteHTTPIsApproved: Bool {
+    guard let url = pairingEndpointURL else { return false }
+    return T3TransportPolicy.app.permitsInsecureRemoteHTTP(url)
+  }
+
+  private var pairingIsBlockedRemoteHTTP: Bool {
+    pairingUsesPlainRemoteHTTP && (!pairingRemoteHTTPIsApproved || !allowInsecureHTTP)
+  }
+
+  private var hasBlockedSavedHTTPProfile: Bool {
+    profiles.contains { profile in
+      guard let url = URL(string: profile.baseURL) else { return false }
+      return T3TransportPolicy.app.requiresHTTPSMigration(url)
+    }
   }
 
   @ViewBuilder private var machineRows: some View {
