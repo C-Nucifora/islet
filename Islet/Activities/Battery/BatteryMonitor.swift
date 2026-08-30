@@ -309,5 +309,6 @@ extension BatteryMetrics {
     designCycleCount = previous.designCycleCount
     condition = previous.condition
     inputPortType = previous.inputPortType
+    telemetryStatus[.health] = previous.telemetryStatus[.health]
   }
 }

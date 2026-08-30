@@ -29,6 +29,13 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertFalse(o.hasAny)
   }
 
+  func testTelemetryStatusDoesNotMakeAnEmptyMetricsSnapshotPresent() {
+    var metrics = BatteryMetrics()
+    metrics.telemetryStatus[.temperature] = .unsupported
+    XCTAssertFalse(metrics.hasAny)
+    XCTAssertEqual(metrics.unavailableTelemetry.map(\.field), [.temperature])
+  }
+
   func testInternalBatterySelectionDoesNotMistakeAUPSForTheMacBattery() {
     let descriptions: [[String: Any]] = [
       ["Type": "UPS", "Name": "Desk UPS"],
@@ -112,6 +119,22 @@ final class BatteryMetricsTests: XCTestCase {
     ["BatteryHealth": "Good", "BatteryHealthCondition": ""]
   }
 
+  /// A deliberately smaller dictionary shaped like the older Intel-era reports that omit the
+  /// Apple Silicon power-flow block. Its absent keys are capability gaps, not failed samples.
+  static var limitedSmartBattery: [String: Any] {
+    [
+      "Voltage": 11_500,
+      "Amperage": -850,
+      "DesignCapacity": 7_330,
+      "NominalChargeCapacity": 5_940,
+      "CycleCount": 412,
+      "AvgTimeToEmpty": 185,
+      "IsCharging": false,
+      "FullyCharged": false,
+      "ExternalConnected": false,
+    ]
+  }
+
   // MARK: - Health
 
   func testHealthUsesNominalChargeCapacityOverDesign() {
@@ -156,6 +179,27 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertNil(m.designCapacityMAh)
     XCTAssertNil(m.designCycleCount)
     XCTAssertNil(BatteryMetricsParser.percentage(5533, of: 0))
+  }
+
+  func testHealthStatusSeparatesAnAbsentKeyFromAnUnreadableValue() {
+    var unsupported = BatteryMetrics()
+    BatteryMetricsParser.applyHealth(&unsupported, from: [:])
+    XCTAssertEqual(unsupported.status(for: .health), .unsupported)
+
+    var unreadable = BatteryMetrics()
+    BatteryMetricsParser.applyHealth(
+      &unreadable, from: ["DesignCapacity": "bad", "NominalChargeCapacity": 5000])
+    XCTAssertEqual(unreadable.status(for: .health), .unavailable(.unreadable))
+  }
+
+  func testHealthKeepsTheRawReadingWhenTheNominalReadingIsMissing() {
+    var metrics = BatteryMetrics()
+    BatteryMetricsParser.applyHealth(
+      &metrics,
+      from: ["DesignCapacity": 6000, "AppleRawMaxCapacity": 5400])
+    XCTAssertNil(metrics.healthPercent)
+    XCTAssertEqual(metrics.rawHealthPercent, 90)
+    XCTAssertEqual(metrics.status(for: .health), .available)
   }
 
   // MARK: - Instantaneous readings
@@ -213,6 +257,19 @@ final class BatteryMetricsTests: XCTestCase {
     BatteryMetricsParser.applyInstant(&zeroed, from: ["AvgTimeToEmpty": 0, "AvgTimeToFull": 0])
     XCTAssertNil(zeroed.timeToEmptyMinutes)
     XCTAssertNil(zeroed.timeToFullMinutes)
+    XCTAssertEqual(zeroed.status(for: .timeToEmpty), .unavailable(.inactive))
+    XCTAssertEqual(zeroed.status(for: .timeToFull), .unavailable(.inactive))
+  }
+
+  func testTimeStatusesExplainUnsupportedAndCalculatingReadings() {
+    var unsupported = BatteryMetrics()
+    BatteryMetricsParser.applyInstant(&unsupported, from: [:])
+    XCTAssertEqual(unsupported.status(for: .timeToFull), .unsupported)
+    XCTAssertEqual(unsupported.status(for: .timeToEmpty), .unsupported)
+
+    var calculating = BatteryMetrics()
+    BatteryMetricsParser.applyInstant(&calculating, from: ["AvgTimeToFull": 65535])
+    XCTAssertEqual(calculating.status(for: .timeToFull), .unavailable(.calculating))
   }
 
   // MARK: - Charger
@@ -266,6 +323,7 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertNil(m.adapterAmps)
     XCTAssertTrue(m.pdLadder.isEmpty)
     XCTAssertFalse(m.hasAny)
+    XCTAssertEqual(m.status(for: .charger), .unavailable(.inactive))
   }
 
   // MARK: - Power flow
@@ -309,6 +367,17 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertNil(m.systemLoadWatts)
     XCTAssertNil(m.batteryPowerWatts)
     XCTAssertNil(m.adapterLossWatts)
+    XCTAssertEqual(m.status(for: .systemInput), .unsupported)
+    XCTAssertEqual(m.status(for: .systemLoad), .unsupported)
+    XCTAssertEqual(m.status(for: .batteryPower), .unsupported)
+  }
+
+  func testMalformedPowerTelemetryIsAReadFailureNotUnsupportedHardware() {
+    var m = BatteryMetrics()
+    BatteryMetricsParser.applyTelemetry(&m, from: ["PowerTelemetryData": "bad"])
+    XCTAssertEqual(m.status(for: .systemInput), .unavailable(.unreadable))
+    XCTAssertEqual(m.status(for: .systemLoad), .unavailable(.unreadable))
+    XCTAssertEqual(m.status(for: .batteryPower), .unavailable(.unreadable))
   }
 
   func testUSBPowerOutputParsesPerPortMilliunits() throws {
@@ -341,6 +410,29 @@ final class BatteryMetricsTests: XCTestCase {
         ] as [[String: Any]]
       ])
     XCTAssertTrue(m.usbPowerOutputs.isEmpty)
+    XCTAssertEqual(m.status(for: .usbPowerOutput), .unavailable(.inactive))
+  }
+
+  func testUSBPowerOutputTreatsAnUnreadableEntryAsAReadFailure() {
+    var m = BatteryMetrics()
+    BatteryMetricsParser.applyPowerOutputs(&m, from: ["PowerOutDetails": "bad"])
+    XCTAssertEqual(m.status(for: .usbPowerOutput), .unavailable(.unreadable))
+  }
+
+  func testCPUPowerStatusRetainsTheReadingStateFromTheSharedSampler() {
+    var fresh = BatteryMetrics()
+    BatteryMetricsParser.applyCPUPower(&fresh, reading: .fresh(watts: 4.5))
+    XCTAssertEqual(fresh.cpuPowerWatts, 4.5)
+    XCTAssertEqual(fresh.status(for: .cpuPower), .available)
+
+    var stale = BatteryMetrics()
+    BatteryMetricsParser.applyCPUPower(&stale, reading: .stale(watts: 4.5))
+    XCTAssertNil(stale.cpuPowerWatts)
+    XCTAssertEqual(stale.status(for: .cpuPower), .unavailable(.stale))
+
+    var unsampled = BatteryMetrics()
+    BatteryMetricsParser.applyCPUPower(&unsampled, reading: .unavailable)
+    XCTAssertEqual(unsampled.status(for: .cpuPower), .unavailable(.noSample))
   }
 
   // MARK: - Power-flow model
@@ -577,6 +669,11 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertEqual(m.externalConnected, true)
     XCTAssertNil(m.timeToFullMinutes)
     XCTAssertEqual(m.timeToEmptyMinutes, 142)
+    XCTAssertEqual(m.status(for: .health), .available)
+    XCTAssertEqual(m.status(for: .temperature), .available)
+    XCTAssertEqual(m.status(for: .timeToFull), .unavailable(.calculating))
+    XCTAssertEqual(m.status(for: .systemInput), .available)
+    XCTAssertEqual(m.status(for: .usbPowerOutput), .unavailable(.inactive))
   }
 
   func testParseOfAnEmptyRegistryReadsNothing() {
@@ -585,6 +682,24 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertFalse(m.hasAny)
     XCTAssertNil(m.condition)
     XCTAssertTrue(m.pdLadder.isEmpty)
+  }
+
+  func testLimitedBatteryFixtureKeepsItsPartialReadingsAndMarksUnsupportedTelemetry() throws {
+    let metrics = BatteryMetricsParser.parse(
+      smartBattery: Self.limitedSmartBattery,
+      adapter: nil,
+      powerSource: nil,
+      lowPowerMode: false)
+
+    XCTAssertEqual(try XCTUnwrap(metrics.voltage), 11.5, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(metrics.amperage), -0.85, accuracy: 0.0001)
+    XCTAssertEqual(metrics.healthPercent, 81)
+    XCTAssertEqual(metrics.timeToEmptyMinutes, 185)
+    XCTAssertEqual(metrics.status(for: .temperature), .unsupported)
+    XCTAssertEqual(metrics.status(for: .systemInput), .unsupported)
+    XCTAssertEqual(metrics.status(for: .systemLoad), .unsupported)
+    XCTAssertEqual(metrics.status(for: .batteryPower), .unsupported)
+    XCTAssertEqual(metrics.status(for: .charger), .unavailable(.inactive))
   }
 
   // MARK: - Formatting

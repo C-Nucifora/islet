@@ -43,7 +43,6 @@ enum SmartBatteryReader {
     // Do not render an old CPU split as though it belonged to this battery snapshot. The service
     // retains stale values for diagnostics and future clients, but the power-flow graph gets only
     // a reading inside the current freshness window.
-    let cpuPowerWatts = cpuPowerReading.freshWatts
 
     // The registry dict is primary: it carries the description ("pd charger") and the negotiated
     // PD ladder, which the public IOPS dict strips down to little more than the wattage — showing
@@ -56,7 +55,7 @@ enum SmartBatteryReader {
       adapter: adapter,
       powerSource: primaryPowerSource(),
       lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
-    metrics.cpuPowerWatts = cpuPowerWatts
+    BatteryMetricsParser.applyCPUPower(&metrics, reading: cpuPowerReading)
     if includeStable { metrics.inputPortType = PowerConnectorReader.activeInputPortType() }
 
     return metrics.hasAny ? metrics : nil
