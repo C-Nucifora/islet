@@ -21,6 +21,7 @@ final class SettingsSearchTests: XCTestCase {
       .pulse: "clear history",
       .permissions: "location wifi names",
       .diagnostics: "USB reader retry enumeration",
+      .settingsTransfer: "portable JSON",
       .reset: "restore appearance",
     ]
 

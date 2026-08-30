@@ -14,6 +14,8 @@ private let usage = """
     --priority PRIORITY      low|normal|high|critical
     --expires SECONDS        Expire after 2 through 86400 seconds
     --action TITLE URL       Add an HTTP(S) action (up to three)
+
+  The client reads Islet's active loopback port from the pulse-port file beside pulse-token.
   """ + "\n"
 
 private struct Response: Decodable {
@@ -26,8 +28,7 @@ private struct Response: Decodable {
 /// Network callbacks run on a private serial queue. Completion is separately lock-protected so a
 /// timeout and a callback cannot race to choose the process exit status.
 private final class PulseClient: @unchecked Sendable {
-  private let connection = NWConnection(
-    host: "127.0.0.1", port: NWEndpoint.Port(rawValue: 47_717)!, using: .tcp)
+  private let connection: NWConnection
   private let queue = DispatchQueue(label: "dev.islet.pulse-cli", qos: .utility)
   private let semaphore = DispatchSemaphore(value: 0)
   private let lock = NSLock()
@@ -36,6 +37,10 @@ private final class PulseClient: @unchecked Sendable {
   private var sent = false  // queue-confined
   private var buffer = Data()  // queue-confined
   private var expectedRequestID = ""
+
+  init(port: NWEndpoint.Port) {
+    connection = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
+  }
 
   func run(payload: Data, requestID: String) -> Int32 {
     expectedRequestID = requestID
@@ -270,6 +275,13 @@ if operation == "end" {
 let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
   .appendingPathComponent("Islet", isDirectory: true)
 let tokenURL = support.appendingPathComponent("pulse-token")
+let activePortURL = support.appendingPathComponent("pulse-port")
+let storedPort = (try? String(contentsOf: activePortURL, encoding: .utf8)).flatMap {
+  UInt16($0.trimmingCharacters(in: .whitespacesAndNewlines))
+}
+let port =
+  storedPort.flatMap { NWEndpoint.Port(rawValue: $0) }
+  ?? NWEndpoint.Port(rawValue: 47_717)!
 var tokenInfo = stat()
 guard
   lstat(tokenURL.path, &tokenInfo) == 0,
@@ -291,7 +303,7 @@ command["token"] = token
 do {
   var payload = try JSONSerialization.data(withJSONObject: command)
   payload.append(0x0A)
-  exit(PulseClient().run(payload: payload, requestID: requestID))
+  exit(PulseClient(port: port).run(payload: payload, requestID: requestID))
 } catch {
   FileHandle.standardError.write(
     Data("could not encode command: \(error.localizedDescription)\n".utf8))

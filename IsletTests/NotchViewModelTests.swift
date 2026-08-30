@@ -4,6 +4,107 @@ import XCTest
 
 @testable import Islet
 
+final class DisplayStateReconcilerTests: XCTestCase {
+  private let builtin = DisplayHardwareIdentity.builtin
+  private let external = DisplayHardwareIdentity.external(vendor: 10, model: 20, serial: 30)
+
+  private func display(_ id: String, identity: DisplayHardwareIdentity? = nil) -> ManagedDisplay {
+    ManagedDisplay(id: id, hardwareIdentity: identity)
+  }
+
+  private func presentation(
+    _ state: NotchState, selection: String? = nil
+  ) -> PanelPresentationState {
+    PanelPresentationState(notchState: state, selectedActivityID: selection)
+  }
+
+  private func state(
+    _ display: ManagedDisplay, _ presentation: PanelPresentationState
+  ) -> ManagedDisplayState {
+    ManagedDisplayState(display: display, presentation: presentation)
+  }
+
+  func testConnectPreservesExistingDisplayAndInitializesNewDisplay() {
+    let first = display("first", identity: builtin)
+    let second = display("second", identity: external)
+    let openTimer = presentation(.expanded(pinned: true), selection: "timer")
+
+    let result = DisplayStateReconciler.reconcile(
+      previous: [state(first, openTimer)], current: [first, second],
+      preferredDisplayID: first.id)
+
+    XCTAssertEqual(result[first.id], openTimer)
+    XCTAssertEqual(result[second.id], .initial)
+  }
+
+  func testDisconnectMovesOpenPresentationToPreferredSurvivingDisplay() {
+    let first = display("first", identity: builtin)
+    let second = display("second", identity: external)
+    let openShelf = presentation(.expanded(pinned: false), selection: "shelf")
+
+    let result = DisplayStateReconciler.reconcile(
+      previous: [state(first, .initial), state(second, openShelf)], current: [first],
+      preferredDisplayID: first.id)
+
+    XCTAssertEqual(result[first.id], openShelf)
+  }
+
+  func testRearrangeUsesDisplayIdentifiersInsteadOfTargetOrder() {
+    let first = display("first", identity: builtin)
+    let second = display("second", identity: external)
+    let firstPresentation = presentation(.expanded(pinned: true), selection: "system")
+    let secondPresentation = presentation(.peek)
+
+    let result = DisplayStateReconciler.reconcile(
+      previous: [state(first, firstPresentation), state(second, secondPresentation)],
+      current: [second, first], preferredDisplayID: second.id)
+
+    XCTAssertEqual(result[first.id], firstPresentation)
+    XCTAssertEqual(result[second.id], secondPresentation)
+  }
+
+  func testWakeMapsChangedIdentifierThroughUniqueHardwareIdentity() {
+    let beforeWake = display("before-wake", identity: external)
+    let afterWake = display("after-wake", identity: external)
+    let openBattery = presentation(.expanded(pinned: true), selection: "battery")
+
+    let result = DisplayStateReconciler.reconcile(
+      previous: [state(beforeWake, openBattery)], current: [afterWake],
+      preferredDisplayID: afterWake.id)
+
+    XCTAssertEqual(result[afterWake.id], openBattery)
+  }
+
+  func testAmbiguousHardwareIdentityDoesNotCrossMapClosedState() {
+    let oldFirst = display("old-first", identity: external)
+    let oldSecond = display("old-second", identity: external)
+    let newFirst = display("new-first", identity: external)
+    let newSecond = display("new-second", identity: external)
+
+    let result = DisplayStateReconciler.reconcile(
+      previous: [
+        state(oldFirst, presentation(.closed, selection: "timer")),
+        state(oldSecond, presentation(.closed, selection: "battery")),
+      ], current: [newFirst, newSecond], preferredDisplayID: newFirst.id)
+
+    XCTAssertEqual(result[newFirst.id], .initial)
+    XCTAssertEqual(result[newSecond.id], .initial)
+  }
+
+  func testVanishedPresentationDoesNotReplaceOpenSurvivingDisplay() {
+    let first = display("first", identity: builtin)
+    let second = display("second", identity: external)
+    let firstPresentation = presentation(.expanded(pinned: true), selection: "system")
+    let secondPresentation = presentation(.expanded(pinned: false), selection: "shelf")
+
+    let result = DisplayStateReconciler.reconcile(
+      previous: [state(first, firstPresentation), state(second, secondPresentation)],
+      current: [first], preferredDisplayID: first.id)
+
+    XCTAssertEqual(result[first.id], firstPresentation)
+  }
+}
+
 @MainActor
 final class NotchViewModelTests: XCTestCase {
   func makeVM(
@@ -21,6 +122,48 @@ final class NotchViewModelTests: XCTestCase {
   func expandedPanel(_ vm: NotchViewModel) -> CGRect {
     vm.geometry.panelFrame(
       width: vm.maximumExpandedWidth, height: Metrics.tallExpandedHeight)
+  }
+
+  func testInitialPresentationRestoresExpansionSelectionAndSize() {
+    let source = makeVM(mode: .clickToPin)
+    source.handleMouseDown(CGPoint(x: 864, y: 1110))
+    source.selectActivity("system")
+    source.setExpandedWidth(700)
+    source.setExpandedHeight(Metrics.tallExpandedHeight)
+
+    let restored = NotchViewModel(
+      geometry: source.geometry, modeOverride: .clickToPin,
+      initialPresentation: source.presentationState)
+
+    XCTAssertEqual(restored.state, .expanded(pinned: true))
+    XCTAssertEqual(restored.selectedActivityID, "system")
+    XCTAssertEqual(restored.expandedWidth, source.expandedWidth)
+    XCTAssertEqual(restored.expandedHeight, Metrics.tallExpandedHeight)
+    XCTAssertEqual(restored.panelFrame, expandedPanel(restored))
+  }
+
+  func testOrdinaryCloseStillClearsSelection() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.handleMouseDown(CGPoint(x: 864, y: 1110))
+    vm.selectActivity("system")
+
+    vm.handleMouseDown(CGPoint(x: 100, y: 500))
+
+    XCTAssertEqual(vm.state, .closed)
+    XCTAssertNil(vm.selectedActivityID)
+  }
+
+  func testRestoredPeekUsesPeekGeometryAndClosesWhenPointerIsOutside() {
+    let vm = NotchViewModel(
+      geometry: makeVM().geometry, modeOverride: .hover,
+      initialPresentation: PanelPresentationState(notchState: .peek))
+
+    XCTAssertEqual(vm.state, .peek)
+    XCTAssertGreaterThan(vm.panelFrame.height, vm.geometry.collapsedPanelFrame().height)
+
+    vm.resumePointerTracking(at: CGPoint(x: 100, y: 500))
+
+    XCTAssertEqual(vm.state, .closed)
   }
 
   func testMouseIntoHitRectPeeks() {

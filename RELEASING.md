@@ -9,6 +9,29 @@ submits it to Apple's notary service, staples the ticket, verifies it with Gatek
 the app zip and its SHA-256 checksum to a GitHub release. It will not publish an unsigned or
 unnotarized build.
 
+## Run a formatted build locally
+
+CI installs xcbeautify 3.2.1 from its official universal macOS release and checks the archive's
+SHA-256 before installing it. CI caches the immutable archive by version and checksum, then verifies
+it again after every restore. To run the same kind of formatted xcodebuild command locally:
+
+```sh
+Scripts/install-xcbeautify.sh "$PWD/.build-tools" "$PWD/.build-tools-cache"
+export PATH="$PWD/.build-tools/bin:$PATH"
+set -o pipefail
+xcodebuild \
+  -project Islet.xcodeproj \
+  -scheme Islet \
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath DerivedData \
+  -disableAutomaticPackageResolution \
+  ARCHS=arm64 \
+  ONLY_ACTIVE_ARCH=NO \
+  CODE_SIGN_IDENTITY=- \
+  CODE_SIGN_STYLE=Manual \
+  test | xcbeautify
+```
+
 ## One-time repository setup
 
 Create a GitHub environment named `release`. Protect it with required reviewers if releases should
