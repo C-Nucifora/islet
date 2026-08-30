@@ -10,7 +10,8 @@ the commit, date, result, and any skipped coverage when the check is run.
 |---|---|---|
 | Pinned upstream contract review | Complete | `pingdotgg/t3code@2daff8c25adf701fddd062ae93b94cc57d420ec2` |
 | No-credential production smoke | Passed on 2026-08-31 | Hosted page returned 200; relay inventory without authorization returned 401 |
-| CI-parity validation at the final PR head | Pending | Run the complete command block below after all feature commits |
+| Local arm64 CI validation | Passed on 2026-08-31 | Source `42c0611b8e29cf5caed76e9b63a00af19627b207`: 985 passed, 0 failed, 1 expected Accessibility skip; provenance, generated plist, package pinning, arm64 slices, and static analysis passed |
+| GitHub Intel validation | Pending | Required `Build and test (x86_64)` pull-request check |
 | Credentialed real-account acceptance | Not run | Requires a human's T3 account, linked environment, and active agent |
 
 Do not change the last row to passed unless a human completed every applicable credentialed step
@@ -33,6 +34,8 @@ Use immutable links during review:
   supplies the authorization-code and refresh exchange forms.
 - [`environment-auth.md`](https://github.com/pingdotgg/t3code/blob/2daff8c25adf701fddd062ae93b94cc57d420ec2/docs/internals/environment-auth.md)
   records the environment token exchange, DPoP session method, and scope model.
+- [`relay.ts`](https://github.com/pingdotgg/t3code/blob/2daff8c25adf701fddd062ae93b94cc57d420ec2/packages/contracts/src/relay.ts)
+  defines the relay client identifier, exchange grant type, and environment-connect scope.
 
 The production constants under review are:
 
@@ -82,12 +85,14 @@ T3 Connect may add only these generic-password items under Keychain service `dev
 
 | Account | Contents | Removal |
 |---|---|---|
-| `t3-connect-oauth-v1` | Versioned OAuth grant with access token, refresh token, expiry, grant ID, and optional display identity | T3 Connect sign-out |
+| `t3-connect-oauth-v1` | Versioned OAuth grant with access token, refresh token, expiry, grant ID, and optional display identity; during interrupted cleanup, it may instead contain the exact non-secret marker `{"type":"t3-connect-sign-out-pending","version":1}` | T3 Connect sign-out |
 | `t3-connect-dpop-p256-v1` | P-256 private signing key | T3 Connect sign-out |
 
 Both items use `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. The existing
 `read-only-environment-tokens-v1` item belongs to manual pairing. T3 Connect link, relink, failure,
-and sign-out must not rewrite or delete it.
+and sign-out must not rewrite or delete it. Sign-out writes the pending-cleanup marker before
+deleting the proof key, then removes the marker. If the process stops partway through, startup
+treats the marker as signed out and retries cleanup before another account can be linked.
 
 The following values must remain transient:
 
@@ -109,11 +114,11 @@ security find-generic-password -s dev.islet -a read-only-environment-tokens-v1 >
 Never add `-w` to those commands or paste Keychain values into test output, an issue, or a pull
 request.
 
-## CI-parity validation
+## Local arm64 CI validation
 
-Run this block from a clean checkout of the final pull-request commit on Apple silicon. The GitHub
-job uses `macos-26`, Xcode 26.6, and XcodeGen 2.46.0. The commands omit `xcbeautify`, which changes
-only log presentation.
+Run this block from a clean checkout of the final pull-request commit on Apple silicon. It mirrors
+the repository's arm64 GitHub job, apart from `xcbeautify`, which changes only log presentation.
+The workflow uses `macos-26`, Xcode 26.6, and XcodeGen 2.46.0.
 
 ```sh
 set -euo pipefail
@@ -122,6 +127,18 @@ export DEVELOPER_DIR=/Applications/Xcode_26.6.app/Contents/Developer
 xcodebuild -version
 swift --version
 xcodegen --version
+
+Scripts/verify-mediaremote-adapter.sh
+Scripts/rebuild-mediaremote-adapter.sh
+Scripts/verify-mediaremote-adapter.sh \
+  Vendor/mediaremote-adapter-build/MediaRemoteAdapter.framework
+diff --brief --recursive --no-dereference \
+  Vendor/MediaRemoteAdapter.framework \
+  Vendor/mediaremote-adapter-build/MediaRemoteAdapter.framework
+cmp Islet/Resources/mediaremote-adapter.pl \
+  Vendor/mediaremote-adapter-build/mediaremote-adapter.pl
+cmp Vendor/MediaRemoteAdapter-LICENSE \
+  Vendor/mediaremote-adapter-build/LICENSE
 
 xcrun swift-format lint --strict --recursive Islet IsletTests Tools
 xcrun swiftc -typecheck Tools/islet-pulse.swift
@@ -147,9 +164,16 @@ xcodebuild -quiet \
   -destination 'platform=macOS,arch=arm64' \
   -derivedDataPath "$PWD/DerivedData" \
   -disableAutomaticPackageResolution \
+  ARCHS=arm64 \
+  ONLY_ACTIVE_ARCH=NO \
   CODE_SIGN_IDENTITY=- \
   CODE_SIGN_STYLE=Manual \
   test
+
+app="$PWD/DerivedData/Build/Products/Debug/Islet.app"
+framework="$app/Contents/Frameworks/MediaRemoteAdapter.framework/MediaRemoteAdapter"
+lipo "$app/Contents/MacOS/Islet" -verify_arch arm64
+lipo "$framework" -verify_arch arm64
 
 xcodebuild -quiet \
   -project Islet.xcodeproj \
@@ -186,12 +210,10 @@ xcrun xcresulttool get test-results tests \
   | jq -r '.. | objects | select(.nodeType? == "Test Case" and .result? == "Skipped") | .nodeIdentifier'
 ```
 
-The baseline at `e2f5285a9ce1be4d145698d437cc27cbf4840502` was 567 passed, zero failed,
-and one skipped. New tests should increase the pass count. On a host without Accessibility access,
-the one known skip is
-`LiveActivityAXReaderIntegrationTests/testReadsTheLiveMenuBar()`. Investigate any failure, lower
-pass count, additional skip, generated plist change, or package mismatch before opening the pull
-request.
+The final local run must report zero failures. On a host without Accessibility access, the one
+known skip is `LiveActivityAXReaderIntegrationTests/testReadsTheLiveMenuBar()`. Investigate any
+failure, additional skip, generated plist change, package mismatch, provenance mismatch, or wrong
+binary architecture before opening the pull request.
 
 After committing the documentation and any final fixes, check the complete branch rather than only
 the clean working tree:
@@ -202,6 +224,13 @@ git status --short
 ```
 
 The final status should be empty apart from ignored generated artifacts.
+
+## GitHub Intel validation
+
+The required `Build and test (x86_64)` GitHub job provides the Intel result. It resolves the pinned
+packages, runs the complete suite with `ARCHS=x86_64` and `ONLY_ACTIVE_ARCH=NO`, and verifies the
+application and embedded MediaRemoteAdapter products with `lipo`. Do not describe local arm64
+coverage as full CI parity; record the pull-request check result separately.
 
 ## Credentialed manual acceptance
 
