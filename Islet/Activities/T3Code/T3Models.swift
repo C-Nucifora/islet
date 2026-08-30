@@ -163,7 +163,7 @@ enum T3AgentPhase: String, Codable, Sendable {
 struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
   private static let maximumFutureClockSkew: TimeInterval = 5 * 60
 
-  let environmentID: String
+  let logicalEnvironmentID: String
   let threadID: String
   let title: String
   let project: String
@@ -176,11 +176,11 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
   let totalPlanSteps: Int?
   let updatedAt: Date
 
-  var id: String { "\(environmentID):\(threadID)" }
+  var id: String { "\(logicalEnvironmentID):\(threadID)" }
 
   static func activeAgents(
     in shell: T3ShellSnapshot,
-    environmentID: String,
+    logicalEnvironmentID: String,
     now: Date = Date()
   ) -> [Self] {
     // The shell snapshot is server-controlled. Keep the first project for a duplicated id rather
@@ -193,7 +193,7 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
         let phase = phase(for: thread, now: now)
       else { return nil }
       return Self(
-        environmentID: environmentID,
+        logicalEnvironmentID: logicalEnvironmentID,
         threadID: thread.id,
         title: thread.title,
         project: projects[thread.projectId] ?? "Unknown project",
@@ -289,13 +289,22 @@ enum T3EnvironmentAction: Equatable, Sendable {
   case openSettings
 }
 
+enum T3EnvironmentSource: String, Codable, Equatable, Sendable {
+  case local
+  case connect
+  case manual
+}
+
 struct T3EnvironmentSnapshot: Equatable, Identifiable, Sendable {
   let id: String
+  let logicalEnvironmentID: String
+  let source: T3EnvironmentSource
   let label: String
   let baseURL: String
-  let isLocal: Bool
   let platform: String?
   let serverVersion: String?
   let state: T3ConnectionState
   let agents: [T3AgentSnapshot]
+
+  var isLocal: Bool { source == .local }
 }

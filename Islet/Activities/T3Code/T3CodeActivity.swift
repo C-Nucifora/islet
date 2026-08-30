@@ -15,6 +15,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   private(set) var activationDate: Date?
 
   private var credentialErrors: [String: String] = [:]
+  private var environmentCandidates: [T3EnvironmentSnapshot] = []
   private var monitorTasks: [String: Task<Void, Never>] = [:]
   private var cancellables: Set<AnyCancellable> = []
   private var workspaceCancellables: Set<AnyCancellable> = []
@@ -80,6 +81,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     // Do not carry that stale suspension into a later start after the Mac has already unlocked —
     // there would be no new didBecomeActive notification to wake the restarted monitor.
     isSystemSuspended = false
+    environmentCandidates = []
     environments = []
     activationDate = nil
   }
@@ -95,8 +97,11 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     let unauthenticated = T3Client(endpoint: target.endpoint, token: nil)
     let descriptor = try await unauthenticated.fetchDescriptor()
     let isLocal = target.endpoint.isLoopback
-    if !isLocal, let local = environments.first(where: \.isLocal),
-      local.id == Self.localSnapshotID(descriptor.environmentId)
+    if !isLocal,
+      let local = environmentCandidates.first(where: {
+        $0.source == .local && $0.id != Self.provisionalLocalSnapshotID
+      }),
+      local.logicalEnvironmentID == descriptor.environmentId
     {
       throw T3ClientError.environmentIdentityConflict
     }
@@ -208,6 +213,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   private func restartMonitors(clearSnapshots: Bool = true) {
     cancelMonitorTasks()
     if clearSnapshots {
+      environmentCandidates.removeAll()
       environments.removeAll()
       activationDate = nil
     }
@@ -247,8 +253,10 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         updateCredentialError(error, for: "local")
         upsert(
           T3EnvironmentSnapshot(
-            id: "local", label: "This Mac", baseURL: "http://127.0.0.1/",
-            isLocal: true, platform: nil, serverVersion: nil,
+            id: Self.provisionalLocalSnapshotID,
+            logicalEnvironmentID: Self.provisionalLocalSnapshotID, source: .local,
+            label: "This Mac", baseURL: "http://127.0.0.1/", platform: nil,
+            serverVersion: nil,
             state: .offline(error.localizedDescription), agents: []))
         let delay = Self.reconnectDelay(failureCount: failures, remote: false)
         try? await Task.sleep(for: .seconds(Self.jitter(delay)))
@@ -264,16 +272,17 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
           upsert(
             T3EnvironmentSnapshot(
               id: Self.localSnapshotID(descriptor.environmentId),
+              logicalEnvironmentID: descriptor.environmentId, source: .local,
               label: descriptor.label.isEmpty ? "This Mac" : descriptor.label,
-              baseURL: endpoint.baseURL.absoluteString, isLocal: true,
-              platform: nil, serverVersion: descriptor.serverVersion,
+              baseURL: endpoint.baseURL.absoluteString, platform: nil,
+              serverVersion: descriptor.serverVersion,
               state: .needsPairing, agents: []))
           try? await Task.sleep(for: .seconds(10))
           continue
         }
         updateCredentialError(nil, for: "local")
         try await poll(
-          descriptor: descriptor, endpoint: endpoint, token: token, isLocal: true,
+          descriptor: descriptor, endpoint: endpoint, token: token, source: .local,
           onConnected: { failures = 0 })
       } catch is CancellationError {
         return
@@ -308,8 +317,10 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         failures += 1
         upsert(
           T3EnvironmentSnapshot(
-            id: "local", label: "This Mac", baseURL: endpoint.baseURL.absoluteString,
-            isLocal: true, platform: nil, serverVersion: nil,
+            id: Self.provisionalLocalSnapshotID,
+            logicalEnvironmentID: Self.provisionalLocalSnapshotID, source: .local,
+            label: "This Mac", baseURL: endpoint.baseURL.absoluteString, platform: nil,
+            serverVersion: nil,
             state: .offline(error.localizedDescription), agents: []))
       }
       let delay = Self.reconnectDelay(failureCount: failures, remote: false)
@@ -347,7 +358,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
           continue
         }
         try await poll(
-          descriptor: descriptor, endpoint: endpoint, token: token, isLocal: false,
+          descriptor: descriptor, endpoint: endpoint, token: token, source: .manual,
           fallbackLabel: profile.label, onConnected: { failures = 0 })
       } catch is CancellationError {
         return
@@ -384,13 +395,13 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     descriptor: T3EnvironmentDescriptor,
     endpoint: T3Endpoint,
     token: String?,
-    isLocal: Bool,
+    source: T3EnvironmentSource,
     fallbackLabel: String? = nil,
     onConnected: () -> Void = {}
   ) async throws {
     let client = T3Client(endpoint: endpoint, token: token)
     while !Task.isCancelled {
-      if isLocal, !T3LocalDiscovery.isTrusted(endpoint) {
+      if source == .local, !T3LocalDiscovery.isTrusted(endpoint) {
         throw T3ClientError.untrustedLocalEndpoint
       }
       let shell = try await client.fetchShell()
@@ -398,26 +409,11 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       // A successful response ends the outage. Without this callback, a later unrelated failure
       // resumed at the old exponential-backoff ceiling even after days of healthy polling.
       onConnected()
-      let snapshotID =
-        isLocal
-        ? Self.localSnapshotID(descriptor.environmentId)
-        : Self.remoteSnapshotID(
-          environmentID: descriptor.environmentId,
-          baseURL: endpoint.baseURL.absoluteString)
-      let active = T3AgentSnapshot.activeAgents(in: shell, environmentID: snapshotID)
-      let platform = [descriptor.platform?.os, descriptor.platform?.arch]
-        .compactMap { $0 }.joined(separator: " · ")
-      upsert(
-        T3EnvironmentSnapshot(
-          id: snapshotID,
-          label: descriptor.label.isEmpty ? (fallbackLabel ?? "T3 Code") : descriptor.label,
-          baseURL: endpoint.baseURL.absoluteString,
-          isLocal: isLocal,
-          platform: platform.isEmpty ? nil : platform,
-          serverVersion: descriptor.serverVersion,
-          state: .connected,
-          agents: active))
-      let busy = active.contains {
+      let snapshot = Self.connectedSnapshot(
+        descriptor: descriptor, endpoint: endpoint, source: source, shell: shell,
+        fallbackLabel: fallbackLabel)
+      upsert(snapshot)
+      let busy = snapshot.agents.contains {
         [.working, .monitoring, .needsInput, .needsApproval].contains($0.phase)
       }
       let expanded = ScreenManager.shared.viewModel?.state.isExpanded ?? false
@@ -426,6 +422,39 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         energyMode: Defaults[.energyMode])
       try await Task.sleep(for: .seconds(Self.jitter(interval)))
     }
+  }
+
+  nonisolated static func connectedSnapshot(
+    descriptor: T3EnvironmentDescriptor,
+    endpoint: T3Endpoint,
+    source: T3EnvironmentSource,
+    shell: T3ShellSnapshot,
+    fallbackLabel: String? = nil,
+    now: Date = Date()
+  ) -> T3EnvironmentSnapshot {
+    let snapshotID: String
+    switch source {
+    case .local:
+      snapshotID = localSnapshotID(descriptor.environmentId)
+    case .connect:
+      snapshotID = connectSnapshotID(descriptor.environmentId)
+    case .manual:
+      snapshotID = remoteSnapshotID(
+        environmentID: descriptor.environmentId,
+        baseURL: endpoint.baseURL.absoluteString)
+    }
+    let agents = T3AgentSnapshot.activeAgents(
+      in: shell, logicalEnvironmentID: descriptor.environmentId, now: now)
+    let platform = [descriptor.platform?.os, descriptor.platform?.arch]
+      .compactMap { $0 }.joined(separator: " · ")
+    return T3EnvironmentSnapshot(
+      id: snapshotID, logicalEnvironmentID: descriptor.environmentId, source: source,
+      label: descriptor.label.isEmpty ? (fallbackLabel ?? "T3 Code") : descriptor.label,
+      baseURL: endpoint.baseURL.absoluteString,
+      platform: platform.isEmpty ? nil : platform,
+      serverVersion: descriptor.serverVersion,
+      state: .connected,
+      agents: agents)
   }
 
   private func snapshot(
@@ -438,9 +467,9 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       .compactMap { $0 }.joined(separator: " · ")
     return T3EnvironmentSnapshot(
       id: Self.remoteSnapshotID(environmentID: profile.id, baseURL: profile.baseURL),
+      logicalEnvironmentID: profile.id, source: .manual,
       label: descriptor?.label ?? profile.label,
       baseURL: profile.baseURL,
-      isLocal: false,
       platform: platform.isEmpty ? nil : platform,
       serverVersion: descriptor?.serverVersion,
       state: state,
@@ -448,7 +477,21 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   }
 
   private func upsert(_ snapshot: T3EnvironmentSnapshot) {
-    let next = Self.upserting(snapshot, into: environments)
+    let next = Self.upserting(snapshot, into: environmentCandidates)
+    guard next != environmentCandidates else { return }
+    environmentCandidates = next
+    publishResolvedCandidates()
+  }
+
+  func removeCandidates(from source: T3EnvironmentSource) {
+    let next = Self.removingCandidates(from: environmentCandidates, source: source)
+    guard next != environmentCandidates else { return }
+    environmentCandidates = next
+    publishResolvedCandidates()
+  }
+
+  private func publishResolvedCandidates() {
+    let next = T3EnvironmentResolver.resolve(environmentCandidates)
     guard next != environments else { return }
     environments = next
     activationDate = agents.isEmpty ? nil : (activationDate ?? Date())
@@ -458,18 +501,24 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     _ snapshot: T3EnvironmentSnapshot, into current: [T3EnvironmentSnapshot]
   ) -> [T3EnvironmentSnapshot] {
     var next = current
-    // Once the real local environment id is known, replace the provisional "local" row.
-    if snapshot.isLocal { next.removeAll { $0.id == "local" && $0.id != snapshot.id } }
+    // There is one local discovery task, so its newest observation replaces any older local
+    // identity. This removes the provisional row after discovery and a stale identified row when
+    // the process later disappears.
+    if snapshot.source == .local {
+      next.removeAll { $0.source == .local && $0.id != snapshot.id }
+    }
     if let index = next.firstIndex(where: { $0.id == snapshot.id }) {
       next[index] = snapshot
     } else {
       next.append(snapshot)
     }
-    next.sort {
-      if $0.isLocal != $1.isLocal { return $0.isLocal }
-      return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
-    }
     return next
+  }
+
+  nonisolated static func removingCandidates(
+    from current: [T3EnvironmentSnapshot], source: T3EnvironmentSource
+  ) -> [T3EnvironmentSnapshot] {
+    current.filter { $0.source != source }
   }
 
   nonisolated static func pollInterval(
@@ -539,6 +588,10 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     "local|\(environmentID)"
   }
 
+  nonisolated static func connectSnapshotID(_ environmentID: String) -> String {
+    "connect|\(environmentID)"
+  }
+
   nonisolated static func remoteSnapshotID(environmentID: String, baseURL: String) -> String {
     "remote|\(environmentID)|\(canonicalEndpointIdentity(baseURL))"
   }
@@ -546,6 +599,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   nonisolated private static func remoteMonitorKey(_ environmentID: String) -> String {
     "remote:\(environmentID)"
   }
+
+  nonisolated private static var provisionalLocalSnapshotID: String { "local" }
 
   private func updateCredentialError(_ error: Error?, for monitorKey: String) {
     if let error = error as? T3CredentialStoreError {

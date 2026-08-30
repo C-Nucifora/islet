@@ -186,7 +186,8 @@ final class T3CodeTests: XCTestCase {
       """
     let shell = try JSONDecoder().decode(T3ShellSnapshot.self, from: Data(json.utf8))
     let agents = T3AgentSnapshot.activeAgents(
-      in: shell, environmentID: "machine", now: Date(timeIntervalSince1970: 1_788_000_000))
+      in: shell, logicalEnvironmentID: "machine",
+      now: Date(timeIntervalSince1970: 1_788_000_000))
     XCTAssertEqual(agents.count, 1)
     XCTAssertEqual(agents[0].providerInstance, "Future Provider")
     XCTAssertEqual(agents[0].model, "future-1")
@@ -220,7 +221,8 @@ final class T3CodeTests: XCTestCase {
     let shell = try JSONDecoder().decode(T3ShellSnapshot.self, from: Data(json.utf8))
 
     let agents = T3AgentSnapshot.activeAgents(
-      in: shell, environmentID: "machine", now: Date(timeIntervalSince1970: 1_788_000_000))
+      in: shell, logicalEnvironmentID: "machine",
+      now: Date(timeIntervalSince1970: 1_788_000_000))
 
     XCTAssertEqual(agents.first?.project, "First")
   }
@@ -369,7 +371,8 @@ final class T3CodeTests: XCTestCase {
       updatedAt: now.addingTimeInterval(24 * 60 * 60), sessionStatus: "error",
       turnState: "error")
     XCTAssertTrue(
-      T3AgentSnapshot.activeAgents(in: shell, environmentID: "machine", now: now).isEmpty)
+      T3AgentSnapshot.activeAgents(in: shell, logicalEnvironmentID: "machine", now: now)
+        .isEmpty)
   }
 
   func testFutureDatedFinishedAgentIsRejected() {
@@ -378,7 +381,8 @@ final class T3CodeTests: XCTestCase {
       updatedAt: now.addingTimeInterval(24 * 60 * 60), sessionStatus: "ready",
       turnState: "completed")
     XCTAssertTrue(
-      T3AgentSnapshot.activeAgents(in: shell, environmentID: "machine", now: now).isEmpty)
+      T3AgentSnapshot.activeAgents(in: shell, logicalEnvironmentID: "machine", now: now)
+        .isEmpty)
   }
 
   func testPollingPolicySlowsInBackgroundAndLowPowerMode() {
@@ -421,11 +425,11 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(selected.first?.label, "First")
   }
 
-  func testUpsertOfUnchangedSnapshotDoesNotChangePublishedValue() {
+  func testUpsertOfUnchangedSnapshotDoesNotChangeCandidateArray() {
     let snapshot = T3EnvironmentSnapshot(
-      id: "local", label: "This Mac", baseURL: "http://127.0.0.1:3773/",
-      isLocal: true, platform: "macOS · arm64", serverVersion: "1",
-      state: .connected, agents: [])
+      id: "local|machine", logicalEnvironmentID: "machine", source: .local,
+      label: "This Mac", baseURL: "http://127.0.0.1:3773/", platform: "macOS · arm64",
+      serverVersion: "1", state: .connected, agents: [])
     let current = [snapshot]
     XCTAssertEqual(T3CodeActivity.upserting(snapshot, into: current), current)
   }
@@ -510,8 +514,87 @@ final class T3CodeTests: XCTestCase {
       T3CodeActivity.environmentActions(for: .connecting, isLocal: false), [.disable])
   }
 
+  func testUpsertingDifferentSourcesRetainsEveryFailoverCandidate() {
+    let local = Self.environmentSnapshot(
+      id: "local|same", logicalEnvironmentID: "same", source: .local)
+    let connect = Self.environmentSnapshot(
+      id: "connect|same", logicalEnvironmentID: "same", source: .connect)
+    let manual = Self.environmentSnapshot(
+      id: "remote|same|https://mini.example.com/", logicalEnvironmentID: "same",
+      source: .manual)
+
+    let withLocal = T3CodeActivity.upserting(local, into: [])
+    let withConnect = T3CodeActivity.upserting(connect, into: withLocal)
+    let candidates = T3CodeActivity.upserting(manual, into: withConnect)
+
+    XCTAssertEqual(Set(candidates.map(\.id)), [local.id, connect.id, manual.id])
+    XCTAssertEqual(T3EnvironmentResolver.resolve(candidates).map(\.id), [local.id])
+  }
+
+  func testIdentifiedLocalObservationRemovesProvisionalLocalCandidate() {
+    let provisional = Self.environmentSnapshot(
+      id: "local", logicalEnvironmentID: "local", source: .local,
+      state: .offline("Not discovered"))
+    let identified = Self.environmentSnapshot(
+      id: "local|machine", logicalEnvironmentID: "machine", source: .local)
+    let manualNamedLocal = Self.environmentSnapshot(
+      id: "remote|local|https://mini.example.com/", logicalEnvironmentID: "local",
+      source: .manual)
+
+    let candidates = T3CodeActivity.upserting(
+      identified, into: [provisional, manualNamedLocal])
+
+    XCTAssertEqual(candidates.filter(\.isLocal).map(\.id), ["local|machine"])
+    XCTAssertTrue(candidates.contains(manualNamedLocal))
+  }
+
+  func testProvisionalLocalObservationReplacesDisappearedIdentifiedLocalCandidate() {
+    let identified = Self.environmentSnapshot(
+      id: "local|machine", logicalEnvironmentID: "machine", source: .local)
+    let provisional = Self.environmentSnapshot(
+      id: "local", logicalEnvironmentID: "local", source: .local,
+      state: .offline("Not discovered"))
+
+    let candidates = T3CodeActivity.upserting(provisional, into: [identified])
+
+    XCTAssertEqual(candidates.filter(\.isLocal).map(\.id), ["local"])
+  }
+
+  func testRemovingConnectCandidatesPreservesLocalAndManualCandidates() {
+    let local = Self.environmentSnapshot(
+      id: "local|same", logicalEnvironmentID: "same", source: .local)
+    let connect = Self.environmentSnapshot(
+      id: "connect|same", logicalEnvironmentID: "same", source: .connect)
+    let manual = Self.environmentSnapshot(
+      id: "remote|same|https://mini.example.com/", logicalEnvironmentID: "same",
+      source: .manual)
+
+    let remaining = T3CodeActivity.removingCandidates(
+      from: [local, connect, manual], source: .connect)
+
+    XCTAssertEqual(remaining, [local, manual])
+  }
+
+  func testConnectedSnapshotDerivesAgentIDsFromLogicalEnvironmentID() throws {
+    let now = Date(timeIntervalSince1970: 1_788_000_000)
+    let descriptor = T3EnvironmentDescriptor(
+      environmentId: "studio", label: "Studio",
+      platform: T3EnvironmentDescriptor.Platform(os: "macOS", arch: "arm64"),
+      serverVersion: "1")
+    let endpoint = try T3Endpoint(URL(string: "https://mini.example.com")!)
+    let shell = Self.shell(updatedAt: now, sessionStatus: "running", turnState: "running")
+
+    let snapshot = T3CodeActivity.connectedSnapshot(
+      descriptor: descriptor, endpoint: endpoint, source: .manual, shell: shell, now: now)
+
+    XCTAssertEqual(snapshot.id, "remote|studio|https://mini.example.com/")
+    XCTAssertEqual(snapshot.logicalEnvironmentID, "studio")
+    XCTAssertEqual(snapshot.agents.map(\.id), ["studio:thread"])
+  }
+
   func testLocalAndRemoteEnvironmentIdentityCannotCollide() {
     XCTAssertEqual(T3CodeActivity.localSnapshotID("same"), "local|same")
+    XCTAssertEqual(T3CodeActivity.connectSnapshotID("same"), "connect|same")
     XCTAssertEqual(
       T3CodeActivity.remoteSnapshotID(
         environmentID: "same", baseURL: "https://mini.example.com/api?ignored=yes"),
@@ -591,6 +674,18 @@ final class T3CodeTests: XCTestCase {
           hasActionableProposedPlan: false, backgroundLiveness: nil, planProgress: nil)
       ],
       updatedAt: timestamp)
+  }
+
+  private static func environmentSnapshot(
+    id: String,
+    logicalEnvironmentID: String,
+    source: T3EnvironmentSource,
+    state: T3ConnectionState = .connected
+  ) -> T3EnvironmentSnapshot {
+    T3EnvironmentSnapshot(
+      id: id, logicalEnvironmentID: logicalEnvironmentID, source: source, label: id,
+      baseURL: "https://mini.example.com/", platform: nil, serverVersion: "1", state: state,
+      agents: [])
   }
 }
 
