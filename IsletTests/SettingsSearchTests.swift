@@ -45,4 +45,8 @@ final class SettingsSearchTests: XCTestCase {
   func testBlankQueryMatches() {
     XCTAssertTrue(SettingsSearch.matches("  ", in: ["Anything"]))
   }
+
+  func testPulseSearchFindsProviderSilenceTimeout() {
+    XCTAssertTrue(SettingsDetailPage.pulse.matchesSearch("silent stale timeout"))
+  }
 }

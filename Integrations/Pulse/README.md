@@ -35,6 +35,9 @@ with `featureDisabled`.
 - `end`: remove an item by `id`.
 
 Dates use ISO 8601, with or without fractional seconds. `progress` outside `0...1` is rejected.
+Islet marks nonterminal work stale when a provider stops sending valid updates. The timeout is
+configurable in Pulse settings. A stale item remains for one hour unless the user keeps or dismisses
+it, and a later valid update recovers the item and starts a fresh timeout.
 Web actions may use only host-bearing
 `http` or `https` URLs, cannot embed credentials, and are limited to 2,048 characters. Activity
 and action IDs are trimmed, bounded to 128 characters, and action IDs must be unique within one
