@@ -7,6 +7,64 @@ struct DisplaySnapshot: Equatable {
   let isBuiltin: Bool
   let isMain: Bool
   let mirrorGroupID: String
+  let isUsable: Bool
+
+  init(
+    stableID: String, legacyRuntimeID: String?, name: String, isBuiltin: Bool, isMain: Bool,
+    mirrorGroupID: String, isUsable: Bool = true
+  ) {
+    self.stableID = stableID
+    self.legacyRuntimeID = legacyRuntimeID
+    self.name = name
+    self.isBuiltin = isBuiltin
+    self.isMain = isMain
+    self.mirrorGroupID = mirrorGroupID
+    self.isUsable = isUsable
+  }
+}
+
+struct ActionDisplayGeometry: Equatable {
+  let stableID: String
+  let bounds: CGRect
+  let isMain: Bool
+}
+
+struct ActiveApplicationWindowSnapshot: Equatable {
+  let ownerProcessIdentifier: pid_t
+  let layer: Int
+  let bounds: CGRect
+}
+
+enum ActiveApplicationDisplayResolver {
+  /// Window Server returns windows from front to back. The first normal window owned by the active
+  /// app decides the display. A spanning window uses its largest intersection, with main-display
+  /// and stable-identifier tie breaks so equal overlaps never depend on screen enumeration order.
+  static func targetID(
+    processIdentifier: pid_t, windows: [ActiveApplicationWindowSnapshot],
+    displays: [ActionDisplayGeometry]
+  ) -> String? {
+    guard processIdentifier > 0 else { return nil }
+
+    for window in windows
+    where window.ownerProcessIdentifier == processIdentifier && window.layer == 0
+      && !window.bounds.isEmpty
+    {
+      let candidates = displays.compactMap {
+        display -> (display: ActionDisplayGeometry, area: CGFloat)? in
+        let intersection = window.bounds.intersection(display.bounds)
+        guard !intersection.isNull, !intersection.isEmpty else { return nil }
+        return (display, intersection.width * intersection.height)
+      }
+      .sorted { lhs, rhs in
+        if lhs.area != rhs.area { return lhs.area > rhs.area }
+        if lhs.display.isMain != rhs.display.isMain { return lhs.display.isMain }
+        return lhs.display.stableID < rhs.display.stableID
+      }
+
+      if let target = candidates.first { return target.display.stableID }
+    }
+    return nil
+  }
 }
 
 struct DisplayChoice: Equatable, Identifiable {
@@ -76,12 +134,14 @@ enum DisplaySelection {
         name: screen.localizedName,
         isBuiltin: screen.isBuiltin,
         isMain: displayID == CGMainDisplayID(),
-        mirrorGroupID: mirrorGroupID)
+        mirrorGroupID: mirrorGroupID,
+        isUsable: CGDisplayIsOnline(displayID) != 0 && CGDisplayIsActive(displayID) != 0
+          && CGDisplayIsAsleep(displayID) == 0)
     }
   }
 
   static func choices(from displays: [DisplaySnapshot]) -> [DisplayChoice] {
-    let unique = uniqueDisplays(displays)
+    let unique = usableDisplays(displays)
     let groups = Dictionary(grouping: unique, by: normalizedName)
     let nameCounts = groups.mapValues(\.count)
     let duplicateIndexes = Dictionary(
@@ -146,7 +206,7 @@ enum DisplaySelection {
   static func targetIDs(
     showOnAllDisplays: Bool, storedPreference: String, displays: [DisplaySnapshot]
   ) -> [String] {
-    let unique = uniqueDisplays(displays)
+    let unique = usableDisplays(displays)
     guard !unique.isEmpty else { return [] }
 
     if showOnAllDisplays {
@@ -170,16 +230,47 @@ enum DisplaySelection {
 
   static func actionTargetID(
     showOnAllDisplays: Bool, storedPreference: String, displays: [DisplaySnapshot],
-    displayUnderPointerID: String?
+    displayUnderPointerID: String?, activeApplicationDisplayID: String? = nil,
+    hostedPanelIDs: Set<String>? = nil
   ) -> String? {
+    let usable = usableDisplays(displays)
     let targets = targetIDs(
       showOnAllDisplays: showOnAllDisplays,
       storedPreference: storedPreference,
-      displays: displays)
-    if showOnAllDisplays, let displayUnderPointerID, targets.contains(displayUnderPointerID) {
-      return displayUnderPointerID
+      displays: usable)
+    let hosted = hostedPanelIDs ?? Set(targets)
+    if hostedPanelIDs != nil, hosted != Set(targets) { return nil }
+    let hostedTargets = targets.filter { hosted.contains($0) }
+    guard !hostedTargets.isEmpty else { return nil }
+
+    let byID = Dictionary(
+      usable.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
+    func hostedTarget(for candidateID: String?) -> String? {
+      guard let candidateID, let candidate = byID[candidateID] else { return nil }
+      if hostedTargets.contains(candidateID) { return candidateID }
+      return hostedTargets.first {
+        byID[$0]?.mirrorGroupID == candidate.mirrorGroupID
+      }
     }
-    return targets.first
+
+    let preferredID = resolvedPreferredID(
+      storedPreference: storedPreference, displays: usable)
+    let mainID = usable.filter(\.isMain).map(\.stableID).sorted().first
+    var seen: Set<String> = []
+    let candidates = [displayUnderPointerID, activeApplicationDisplayID, preferredID, mainID]
+    for candidate in candidates {
+      guard let candidate, seen.insert(candidate).inserted else { continue }
+      if let target = hostedTarget(for: candidate) { return target }
+    }
+
+    // One-display mode has exactly one possible recipient. This covers #91's automatic built-in
+    // fallback when no preferred display is configured, without adding an arbitrary fallback when
+    // several panels exist.
+    return hostedTargets.count == 1 ? hostedTargets[0] : nil
+  }
+
+  private static func usableDisplays(_ displays: [DisplaySnapshot]) -> [DisplaySnapshot] {
+    uniqueDisplays(displays).filter(\.isUsable)
   }
 
   private static func uniqueDisplays(_ displays: [DisplaySnapshot]) -> [DisplaySnapshot] {

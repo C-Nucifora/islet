@@ -117,6 +117,125 @@ final class DisplaySelectionTests: XCTestCase {
       externalID)
   }
 
+  func testActionPolicyUsesPointerThenActiveAppThenPreferenceThenMain() {
+    let fourthID = "00000000-0000-0000-0000-000000000004"
+    let displays = [
+      display(builtinID, name: "Main", isMain: true),
+      display(externalID, name: "Preferred"),
+      display(secondExternalID, name: "Active app"),
+      display(fourthID, name: "Pointer"),
+    ]
+
+    XCTAssertEqual(
+      DisplaySelection.actionTargetID(
+        showOnAllDisplays: true, storedPreference: externalID, displays: displays,
+        displayUnderPointerID: fourthID, activeApplicationDisplayID: secondExternalID),
+      fourthID)
+    XCTAssertEqual(
+      DisplaySelection.actionTargetID(
+        showOnAllDisplays: true, storedPreference: externalID, displays: displays,
+        displayUnderPointerID: nil, activeApplicationDisplayID: secondExternalID),
+      secondExternalID)
+    XCTAssertEqual(
+      DisplaySelection.actionTargetID(
+        showOnAllDisplays: true, storedPreference: externalID, displays: displays,
+        displayUnderPointerID: nil, activeApplicationDisplayID: nil),
+      externalID)
+    XCTAssertEqual(
+      DisplaySelection.actionTargetID(
+        showOnAllDisplays: true, storedPreference: "", displays: displays,
+        displayUnderPointerID: nil, activeApplicationDisplayID: nil),
+      builtinID)
+  }
+
+  func testActionPolicyMapsMirrorMembersToTheHostedRepresentative() {
+    let displays = [
+      display(builtinID, name: "Built-in", isMain: true, mirrorGroupID: builtinID),
+      display(externalID, name: "Projector", mirrorGroupID: builtinID),
+      display(secondExternalID, name: "Desk"),
+    ]
+
+    XCTAssertEqual(
+      DisplaySelection.actionTargetID(
+        showOnAllDisplays: true, storedPreference: "", displays: displays,
+        displayUnderPointerID: externalID, activeApplicationDisplayID: secondExternalID),
+      builtinID)
+  }
+
+  func testSingleDisplayModeAlwaysAddressesItsOnlyHostedPanel() {
+    let displays = [
+      display(builtinID, name: "Built-in", isBuiltin: true, isMain: true),
+      display(externalID, name: "Preferred"),
+      display(secondExternalID, name: "Pointer"),
+    ]
+
+    XCTAssertEqual(
+      DisplaySelection.actionTargetID(
+        showOnAllDisplays: false, storedPreference: externalID, displays: displays,
+        displayUnderPointerID: secondExternalID, activeApplicationDisplayID: builtinID),
+      externalID)
+  }
+
+  func testSleepingAndDisconnectedPreferencesFallThroughToMain() {
+    let sleeping = [
+      display(builtinID, name: "Main", isMain: true),
+      display(externalID, name: "Sleeping preference", isUsable: false),
+    ]
+    let disconnected = [display(builtinID, name: "Main", isMain: true)]
+
+    for displays in [sleeping, disconnected] {
+      XCTAssertEqual(
+        DisplaySelection.actionTargetID(
+          showOnAllDisplays: true, storedPreference: externalID, displays: displays,
+          displayUnderPointerID: externalID, activeApplicationDisplayID: externalID),
+        builtinID)
+    }
+  }
+
+  func testStalePanelSetDoesNotReceiveActionDuringTopologyRace() {
+    let displays = [
+      display(builtinID, name: "Main", isMain: true),
+      display(externalID, name: "Preferred"),
+    ]
+
+    XCTAssertNil(
+      DisplaySelection.actionTargetID(
+        showOnAllDisplays: false, storedPreference: externalID, displays: displays,
+        displayUnderPointerID: externalID, hostedPanelIDs: [builtinID]))
+    XCTAssertEqual(
+      DisplaySelection.actionTargetID(
+        showOnAllDisplays: false, storedPreference: externalID, displays: displays,
+        displayUnderPointerID: externalID, hostedPanelIDs: [externalID]),
+      externalID)
+  }
+
+  func testIncompleteAllDisplayPanelSetForcesTopologyRebuild() {
+    let displays = [
+      display(builtinID, name: "Main", isMain: true),
+      display(externalID, name: "New display"),
+    ]
+
+    XCTAssertNil(
+      DisplaySelection.actionTargetID(
+        showOnAllDisplays: true, storedPreference: "", displays: displays,
+        displayUnderPointerID: externalID, hostedPanelIDs: [builtinID]))
+  }
+
+  func testMultiplePanelsWithoutAnyPolicyCandidateDoNotUseCollectionOrder() {
+    let displays = [
+      display(externalID, name: "Left"),
+      display(secondExternalID, name: "Right"),
+    ]
+
+    for hosted in [Set([externalID, secondExternalID]), Set([secondExternalID, externalID])] {
+      XCTAssertNil(
+        DisplaySelection.actionTargetID(
+          showOnAllDisplays: true, storedPreference: "", displays: displays,
+          displayUnderPointerID: nil, activeApplicationDisplayID: nil,
+          hostedPanelIDs: hosted))
+    }
+  }
+
   func testMirroredDisplaysProduceOnePanelPerMirrorGroup() {
     let displays = [
       display(builtinID, name: "Built-in Display", mirrorGroupID: builtinID),
@@ -197,7 +316,8 @@ final class DisplaySelectionTests: XCTestCase {
 
   private func display(
     _ id: String, legacyRuntimeID: String? = nil, name: String,
-    isBuiltin: Bool = false, isMain: Bool = false, mirrorGroupID: String? = nil
+    isBuiltin: Bool = false, isMain: Bool = false, mirrorGroupID: String? = nil,
+    isUsable: Bool = true
   ) -> DisplaySnapshot {
     DisplaySnapshot(
       stableID: id,
@@ -205,7 +325,86 @@ final class DisplaySelectionTests: XCTestCase {
       name: name,
       isBuiltin: isBuiltin,
       isMain: isMain,
-      mirrorGroupID: mirrorGroupID ?? id)
+      mirrorGroupID: mirrorGroupID ?? id,
+      isUsable: isUsable)
+  }
+}
+
+final class ActiveApplicationDisplayResolverTests: XCTestCase {
+  private let leftID = "00000000-0000-0000-0000-000000000001"
+  private let rightID = "00000000-0000-0000-0000-000000000002"
+
+  func testUsesFrontmostNormalWindowOwnedByActiveApplication() {
+    let displays = sideBySideDisplays()
+    let windows = [
+      window(pid: 22, layer: 0, bounds: CGRect(x: 0, y: 0, width: 100, height: 100)),
+      window(pid: 11, layer: 3, bounds: CGRect(x: 100, y: 0, width: 100, height: 100)),
+      window(pid: 11, layer: 0, bounds: CGRect(x: 120, y: 10, width: 60, height: 80)),
+      window(pid: 11, layer: 0, bounds: CGRect(x: 10, y: 10, width: 60, height: 80)),
+    ]
+
+    XCTAssertEqual(
+      ActiveApplicationDisplayResolver.targetID(
+        processIdentifier: 11, windows: windows, displays: displays),
+      rightID)
+  }
+
+  func testSpanningWindowUsesLargestIntersection() {
+    XCTAssertEqual(
+      ActiveApplicationDisplayResolver.targetID(
+        processIdentifier: 11,
+        windows: [window(pid: 11, bounds: CGRect(x: 80, y: 0, width: 100, height: 100))],
+        displays: sideBySideDisplays()),
+      rightID)
+  }
+
+  func testEqualIntersectionPrefersMainThenStableIdentifier() {
+    let spanning = [window(pid: 11, bounds: CGRect(x: 50, y: 0, width: 100, height: 100))]
+    XCTAssertEqual(
+      ActiveApplicationDisplayResolver.targetID(
+        processIdentifier: 11, windows: spanning, displays: sideBySideDisplays()),
+      leftID)
+
+    let noMain = [
+      ActionDisplayGeometry(
+        stableID: rightID, bounds: CGRect(x: 100, y: 0, width: 100, height: 100),
+        isMain: false),
+      ActionDisplayGeometry(
+        stableID: leftID, bounds: CGRect(x: 0, y: 0, width: 100, height: 100),
+        isMain: false),
+    ]
+    XCTAssertEqual(
+      ActiveApplicationDisplayResolver.targetID(
+        processIdentifier: 11, windows: spanning, displays: noMain),
+      leftID)
+  }
+
+  func testMissingWindowsAndOffscreenWindowsReturnNoDisplay() {
+    XCTAssertNil(
+      ActiveApplicationDisplayResolver.targetID(
+        processIdentifier: 11, windows: [], displays: sideBySideDisplays()))
+    XCTAssertNil(
+      ActiveApplicationDisplayResolver.targetID(
+        processIdentifier: 11,
+        windows: [window(pid: 11, bounds: CGRect(x: 500, y: 500, width: 50, height: 50))],
+        displays: sideBySideDisplays()))
+  }
+
+  private func sideBySideDisplays() -> [ActionDisplayGeometry] {
+    [
+      ActionDisplayGeometry(
+        stableID: leftID, bounds: CGRect(x: 0, y: 0, width: 100, height: 100), isMain: true),
+      ActionDisplayGeometry(
+        stableID: rightID, bounds: CGRect(x: 100, y: 0, width: 100, height: 100),
+        isMain: false),
+    ]
+  }
+
+  private func window(
+    pid: pid_t, layer: Int = 0, bounds: CGRect
+  ) -> ActiveApplicationWindowSnapshot {
+    ActiveApplicationWindowSnapshot(
+      ownerProcessIdentifier: pid, layer: layer, bounds: bounds)
   }
 }
 
