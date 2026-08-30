@@ -48,6 +48,7 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
   private let timeout: Duration
   private let responseCompletionGate: @Sendable () async -> Void
   private let onResponseCompletionHandled: @Sendable () -> Void
+  private let onWaitForCallbackEntered: @Sendable () -> Void
   private let queue = DispatchQueue(label: "dev.islet.t3-oauth-callback", qos: .userInitiated)
   private var listener: NWListener?
   private var connections: [ObjectIdentifier: NWConnection] = [:]
@@ -67,12 +68,14 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
   init(
     port: UInt16, timeout: Duration,
     responseCompletionGate: @escaping @Sendable () async -> Void = {},
-    onResponseCompletionHandled: @escaping @Sendable () -> Void = {}
+    onResponseCompletionHandled: @escaping @Sendable () -> Void = {},
+    onWaitForCallbackEntered: @escaping @Sendable () -> Void = {}
   ) {
     configuredPort = port
     self.timeout = timeout
     self.responseCompletionGate = responseCompletionGate
     self.onResponseCompletionHandled = onResponseCompletionHandled
+    self.onWaitForCallbackEntered = onWaitForCallbackEntered
   }
 
   func start(state: String) async throws {
@@ -124,13 +127,14 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
 
   func waitForCallback() async throws -> T3OAuthCallbackResult {
     try Task.checkCancellation()
+    onWaitForCallbackEntered()
     if let terminalResult {
       self.terminalResult = nil
       return terminalResult
     }
     if let terminalError { throw terminalError }
     guard ready else { throw T3OAuthLoopbackError.notStarted }
-    guard callbackContinuation == nil, !completing else {
+    guard callbackContinuation == nil else {
       throw T3OAuthLoopbackError.alreadyWaiting
     }
     timeoutTask = Task { [weak self, timeout] in

@@ -178,6 +178,31 @@ final class T3OAuthLoopbackTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(result, .authorizationCode("early-code"))
   }
 
+  func testFirstWaiterMayJoinCallbackWhileResponseCompletionIsInProgress() async throws {
+    let completionGate = T3LoopbackGate()
+    let waitEntered = T3LoopbackSignal()
+    let fixture = try await LoopbackFixture(
+      responseCompletionGate: { await completionGate.suspend() },
+      onWaitForCallbackEntered: { waitEntered.signal() })
+    defer { Task { await fixture.listener.cancel() } }
+    let responseTask = Task {
+      try await send(
+        "GET /callback?state=expected-state&code=in-progress-code HTTP/1.1\r\n"
+          + "Host: 127.0.0.1\r\n\r\n",
+        port: fixture.port)
+    }
+    await completionGate.waitUntilSuspended()
+
+    let resultTask = Task { try await fixture.listener.waitForCallback() }
+    await waitEntered.wait()
+    await completionGate.resume()
+
+    let response = try await responseTask.value
+    let result = try await resultTask.value
+    XCTAssertTrue(response.hasPrefix("HTTP/1.1 200"))
+    XCTAssertEqual(result, .authorizationCode("in-progress-code"))
+  }
+
   func testCancellationWhileSuccessSendCompletionIsSuspendedCannotRetainCode() async throws {
     let completionGate = T3LoopbackGate()
     let completionHandled = T3LoopbackSignal()
@@ -297,7 +322,8 @@ private struct LoopbackFixture {
 
   init(
     responseCompletionGate: @escaping @Sendable () async -> Void = {},
-    onResponseCompletionHandled: @escaping @Sendable () -> Void = {}
+    onResponseCompletionHandled: @escaping @Sendable () -> Void = {},
+    onWaitForCallbackEntered: @escaping @Sendable () -> Void = {}
   ) async throws {
     let reservation = try LoopbackPortReservation()
     port = reservation.port
@@ -305,7 +331,8 @@ private struct LoopbackFixture {
     listener = T3OAuthLoopbackListener(
       port: port, timeout: .seconds(2),
       responseCompletionGate: responseCompletionGate,
-      onResponseCompletionHandled: onResponseCompletionHandled)
+      onResponseCompletionHandled: onResponseCompletionHandled,
+      onWaitForCallbackEntered: onWaitForCallbackEntered)
     try await listener.start(state: "expected-state")
   }
 }
