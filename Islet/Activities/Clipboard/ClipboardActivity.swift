@@ -282,21 +282,24 @@ final class ClipboardModel: ObservableObject {
     invalidatePendingCopyBacks()
     let generation = historyGeneration
     let pb = pasteboard
-    let succeeded = await ClipboardPasteboardTransaction.replace(on: pb) {
-      switch item.kind {
-      case .text(let s): pb.setString(s, forType: .string)
-      case .fileURLs(let urls): ClipboardFileURLs.write(urls, to: pb)
-      case .image(let payload):
-        pb.setData(
-          payload.data,
-          forType: NSPasteboard.PasteboardType(rawValue: payload.pasteboardTypeRawValue))
-      }
-    }
+    let succeeded = await ClipboardPasteboardTransaction.replace(
+      on: pb,
+      shouldWrite: { generation == self.historyGeneration },
+      write: {
+        switch item.kind {
+        case .text(let s): pb.setString(s, forType: .string)
+        case .fileURLs(let urls): ClipboardFileURLs.write(urls, to: pb)
+        case .image(let payload):
+          pb.setData(
+            payload.data,
+            forType: NSPasteboard.PasteboardType(rawValue: payload.pasteboardTypeRawValue))
+        }
+      })
     if succeeded {
       ownWriteChange = pb.changeCount
       lastChange = pb.changeCount
     }
-    guard generation == historyGeneration else { return succeeded }
+    guard generation == historyGeneration else { return false }
     guard succeeded else {
       lastWriteError = "Couldn’t restore that clipboard item."
       return false
@@ -441,7 +444,11 @@ enum ClipboardPasteboardTransaction {
   /// happens away from the main actor. Type and item checks run before asking lazy providers for
   /// bytes. Once materialization starts, every representation is required for an exact rollback.
   @MainActor
-  static func replace(on pasteboard: NSPasteboard, write: @MainActor () -> Bool) async -> Bool {
+  static func replace(
+    on pasteboard: NSPasteboard,
+    shouldWrite: @MainActor () -> Bool = { true },
+    write: @MainActor () -> Bool
+  ) async -> Bool {
     let expectedChangeCount = pasteboard.changeCount
     let pasteboardName = pasteboard.name
     let previous = await Task.detached(priority: .userInitiated) {
@@ -452,6 +459,7 @@ enum ClipboardPasteboardTransaction {
       return false
     }
     guard let rollbackItems = makePasteboardItems(from: previous) else { return false }
+    guard shouldWrite() else { return false }
 
     pasteboard.clearContents()
     guard write() else {
