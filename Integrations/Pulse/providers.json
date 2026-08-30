@@ -12,14 +12,14 @@
       "id": "cli",
       "name": "Pulse CLI",
       "sources": ["cli"],
-      "capabilities": ["events", "progress", "webActions"],
+      "capabilities": ["events", "persistentActivities", "progress", "webActions"],
       "setup": "Run Tools/islet-pulse.swift from this project; it connects through localhost."
     },
     {
       "id": "github-actions",
       "name": "GitHub workflow watcher",
       "sources": ["github-actions", "github"],
-      "capabilities": ["events", "progress", "webActions"],
+      "capabilities": ["events", "persistentActivities", "progress", "webActions"],
       "setup": "Run examples/github-actions.sh --repo OWNER/REPOSITORY after gh auth login."
     },
     {
@@ -47,7 +47,7 @@
       "id": "developer-tools",
       "name": "Developer tools",
       "sources": ["build", "tests", "agent"],
-      "capabilities": ["events", "progress", "webActions"],
+      "capabilities": ["events", "persistentActivities", "progress", "webActions"],
       "setup": "Use a stable source name from local automation."
     }
   ]
