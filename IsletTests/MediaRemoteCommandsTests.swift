@@ -5,87 +5,48 @@ import XCTest
 final class MediaRemoteCommandsTests: XCTestCase {
   private actor Harness {
     private var sentCommands: [(MediaCommand, SourceID?)] = []
-    private var events: [String] = []
-    private var currentTarget: SourceID?
     var acceptsCommands = true
 
-    func setCurrentTarget(_ source: SourceID?) { currentTarget = source }
-
-    func resolveCurrentTarget() -> SourceID? {
-      events.append("resolve")
-      return currentTarget
-    }
-
     func send(_ command: MediaCommand, to source: SourceID?) -> Bool {
-      events.append("send")
       sentCommands.append((command, source))
       return acceptsCommands
     }
 
     func rejectCommands() { acceptsCommands = false }
     func commands() -> [(MediaCommand, SourceID?)] { sentCommands }
-    func recordedEvents() -> [String] { events }
   }
 
   private func source(_ bundleID: String, _ pid: Int32) -> SourceID {
     SourceID(bundleIdentifier: bundleID, pid: pid, parentBundleIdentifier: "")
   }
 
-  func testVerifiedGlobalTransportResolvesTargetThenSendsGlobally() async {
+  func testCurrentGlobalTransportFailsClosedWithoutSending() async {
     let spotify = source("com.spotify.client", 10)
     let harness = Harness()
-    await harness.setCurrentTarget(spotify)
 
     let result = await MediaCommandRouter.perform(
       .togglePlayPause,
       shownSource: spotify,
       sourceIsAdapterBacked: true,
-      targeting: .verifiedGlobal,
-      resolveCurrentTarget: { await harness.resolveCurrentTarget() },
+      targeting: .unavailable,
       send: { command, source in await harness.send(command, to: source) })
 
-    XCTAssertEqual(result, .sent(target: spotify, sourceScoped: false))
-    let commands = await harness.commands()
-    XCTAssertEqual(commands.count, 1)
-    XCTAssertEqual(commands.first?.0, .togglePlayPause)
-    XCTAssertNil(commands.first?.1)
-    let events = await harness.recordedEvents()
-    XCTAssertEqual(events, ["resolve", "send"])
-  }
-
-  func testVerifiedGlobalTransportRefusesWhenCurrentTargetChanged() async {
-    let shownSource = source("com.spotify.client", 10)
-    let actualSource = source("com.apple.Music", 20)
-    let harness = Harness()
-    await harness.setCurrentTarget(actualSource)
-
-    let result = await MediaCommandRouter.perform(
-      .next,
-      shownSource: shownSource,
-      sourceIsAdapterBacked: true,
-      targeting: .verifiedGlobal,
-      resolveCurrentTarget: { await harness.resolveCurrentTarget() },
-      send: { command, source in await harness.send(command, to: source) })
-
-    XCTAssertEqual(result, .sourceTargetingUnavailable(shownSource))
+    XCTAssertEqual(result, .sourceTargetingUnavailable(spotify))
     let commands = await harness.commands()
     XCTAssertTrue(commands.isEmpty)
-    let events = await harness.recordedEvents()
-    XCTAssertEqual(events, ["resolve"])
   }
 
-  func testVerifiedGlobalTransportRequiresExactProcessIdentity() async {
+  func testGlobalTargetSwitchAfterResolutionNeverReachesSend() async {
     let shownSource = source("com.spotify.client", 10)
-    let replacementProcess = source("com.spotify.client", 11)
     let harness = Harness()
-    await harness.setCurrentTarget(replacementProcess)
 
+    // The current adapter exposes only a separate global target read and global command. Since an
+    // external player can switch between them, the router must never enter the send closure.
     let result = await MediaCommandRouter.perform(
       .next,
       shownSource: shownSource,
       sourceIsAdapterBacked: true,
-      targeting: .verifiedGlobal,
-      resolveCurrentTarget: { await harness.resolveCurrentTarget() },
+      targeting: MediaRemoteCommands.shared.targeting,
       send: { command, source in await harness.send(command, to: source) })
 
     XCTAssertEqual(result, .sourceTargetingUnavailable(shownSource))
@@ -102,7 +63,6 @@ final class MediaRemoteCommandsTests: XCTestCase {
       shownSource: call,
       sourceIsAdapterBacked: false,
       targeting: .sourceScoped,
-      resolveCurrentTarget: { await harness.resolveCurrentTarget() },
       send: { command, source in await harness.send(command, to: source) })
 
     XCTAssertEqual(result, .sourceNotControllable(call))
@@ -119,7 +79,6 @@ final class MediaRemoteCommandsTests: XCTestCase {
       shownSource: music,
       sourceIsAdapterBacked: true,
       targeting: .sourceScoped,
-      resolveCurrentTarget: { await harness.resolveCurrentTarget() },
       send: { command, source in await harness.send(command, to: source) })
 
     XCTAssertEqual(result, .sent(target: music, sourceScoped: true))
@@ -139,22 +98,21 @@ final class MediaRemoteCommandsTests: XCTestCase {
       shownSource: music,
       sourceIsAdapterBacked: true,
       targeting: .sourceScoped,
-      resolveCurrentTarget: { await harness.resolveCurrentTarget() },
       send: { command, source in await harness.send(command, to: source) })
 
     XCTAssertEqual(result, .rejected(target: music))
   }
 
-  func testCurrentAdapterPresentationLabelsVerifiedGlobalControlsHonestly() {
+  func testCurrentAdapterPresentationExplainsUnavailableControls() {
     XCTAssertEqual(
-      MediaControlPresentation.scopeLabel(appName: "Music", targeting: .verifiedGlobal),
-      "Global controls for Music")
+      MediaControlPresentation.scopeLabel(appName: "Music", targeting: .unavailable),
+      "Controls unavailable for Music")
     XCTAssertEqual(
-      MediaControlPresentation.help(action: "Pause", appName: "Music", targeting: .verifiedGlobal),
-      "Pause in Music after verifying the global media target")
+      MediaControlPresentation.help(action: "Pause", appName: "Music", targeting: .unavailable),
+      "Pause unavailable because Islet cannot target Music safely")
     XCTAssertEqual(
-      MediaControlPresentation.accessibilityLabel(action: "Pause", targeting: .verifiedGlobal),
-      "Pause, verified global media control")
+      MediaControlPresentation.accessibilityLabel(action: "Pause", targeting: .unavailable),
+      "Pause unavailable")
   }
 
   func testCommandQueueDoesNotOverlapOperations() async {

@@ -155,8 +155,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     let result = await MediaRemoteCommands.shared.perform(
       command,
       shownSource: source,
-      sourceIsAdapterBacked: sources[source] != nil,
-      resolveCurrentTarget: { [watcher] in await watcher.resolveCurrentCommandTarget() })
+      sourceIsAdapterBacked: sources[source] != nil)
     switch result {
     case .sent:
       mediaControlNotice = nil
