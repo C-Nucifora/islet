@@ -154,21 +154,12 @@ actor T3RelayClient {
         invalidation: invalidation)
     }
     environmentTasks[key] = PendingEnvironmentTask(id: taskID, task: task, waiterIDs: [])
-    do {
-      let authorization = try await waitForEnvironmentTask(
-        PendingEnvironmentTask(id: taskID, task: task, waiterIDs: []), key: key)
-      try Task.checkCancellation()
-      try requireCurrent(
-        capturedGeneration, selector: selector, invalidation: invalidation)
-      if Self.isCacheable(authorization.expiresAt, now: now()) {
-        environmentCache[key] = authorization
-      }
-      clearEnvironmentTask(key: key, id: taskID)
-      return authorization
-    } catch {
-      if !Task.isCancelled { clearEnvironmentTask(key: key, id: taskID) }
-      throw error
-    }
+    let authorization = try await waitForEnvironmentTask(
+      PendingEnvironmentTask(id: taskID, task: task, waiterIDs: []), key: key)
+    try Task.checkCancellation()
+    try requireCurrent(
+      capturedGeneration, selector: selector, invalidation: invalidation)
+    return authorization
   }
 
   func invalidateAuthorization(environmentID: String, grantID: UUID) async {
@@ -299,20 +290,13 @@ actor T3RelayClient {
         accountToken: accountToken, capturedGeneration: capturedGeneration)
     }
     relayTasks[key] = PendingRelayTask(id: taskID, task: task, waiterIDs: [])
-    do {
-      let token = try await waitForRelayTask(
-        PendingRelayTask(id: taskID, task: task, waiterIDs: []), key: key)
-      try Task.checkCancellation()
-      guard capturedGeneration == generation else {
-        throw T3RelayClientError.staleOperation
-      }
-      if Self.isCacheable(token.expiresAt, now: now()) { relayCache[key] = token }
-      clearRelayTask(key: key, id: taskID)
-      return token
-    } catch {
-      if !Task.isCancelled { clearRelayTask(key: key, id: taskID) }
-      throw error
+    let token = try await waitForRelayTask(
+      PendingRelayTask(id: taskID, task: task, waiterIDs: []), key: key)
+    try Task.checkCancellation()
+    guard capturedGeneration == generation else {
+      throw T3RelayClientError.staleOperation
     }
+    return token
   }
 
   private func mintRelayToken(
@@ -439,14 +423,6 @@ actor T3RelayClient {
     }
   }
 
-  private func clearRelayTask(key: RelayCacheKey, id: UUID) {
-    if relayTasks[key]?.id == id { relayTasks.removeValue(forKey: key) }
-  }
-
-  private func clearEnvironmentTask(key: EnvironmentCacheKey, id: UUID) {
-    if environmentTasks[key]?.id == id { environmentTasks.removeValue(forKey: key) }
-  }
-
   private func waitForRelayTask(
     _ pending: PendingRelayTask, key: RelayCacheKey
   ) async throws -> RelayToken {
@@ -456,6 +432,7 @@ actor T3RelayClient {
     let waiter = T3RelayTaskWaiter<RelayToken>()
     Task { [self] in
       let result = await pending.task.result
+      finishRelayTask(result, key: key, taskID: pending.id)
       waiter.resolve(with: result)
       releaseRelayWaiter(key: key, taskID: pending.id, waiterID: waiterID, cancelIfUnused: false)
     }
@@ -481,6 +458,7 @@ actor T3RelayClient {
     let waiter = T3RelayTaskWaiter<T3ConnectEnvironmentAuthorization>()
     Task { [self] in
       let result = await pending.task.result
+      finishEnvironmentTask(result, key: key, taskID: pending.id)
       waiter.resolve(with: result)
       releaseEnvironmentWaiter(
         key: key, taskID: pending.id, waiterID: waiterID, cancelIfUnused: false)
@@ -493,6 +471,29 @@ actor T3RelayClient {
         await self.releaseEnvironmentWaiter(
           key: key, taskID: pending.id, waiterID: waiterID, cancelIfUnused: true)
       }
+    }
+  }
+
+  private func finishRelayTask(
+    _ result: Result<RelayToken, any Error>, key: RelayCacheKey, taskID: UUID
+  ) {
+    guard relayTasks[key]?.id == taskID else { return }
+    relayTasks.removeValue(forKey: key)
+    if case .success(let token) = result, Self.isCacheable(token.expiresAt, now: now()) {
+      relayCache[key] = token
+    }
+  }
+
+  private func finishEnvironmentTask(
+    _ result: Result<T3ConnectEnvironmentAuthorization, any Error>, key: EnvironmentCacheKey,
+    taskID: UUID
+  ) {
+    guard environmentTasks[key]?.id == taskID else { return }
+    environmentTasks.removeValue(forKey: key)
+    if case .success(let authorization) = result,
+      Self.isCacheable(authorization.expiresAt, now: now())
+    {
+      environmentCache[key] = authorization
     }
   }
 

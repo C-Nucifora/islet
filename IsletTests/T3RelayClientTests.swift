@@ -947,6 +947,49 @@ final class T3RelayClientTests: XCTestCase {
     XCTAssertEqual(recorder.requests().count, 5)
   }
 
+  func testCanceledEnvironmentTaskCreatorDoesNotLeaveExpiredCompletedTask() async throws {
+    let clock = T3RelayTestClock(now: now)
+    let reused = T3RelayTestSignal()
+    let responses =
+      Self.authorizationResponses(environmentExpiresIn: 120)
+      + Self.environmentAuthorizationResponses(environmentExpiresIn: 120)
+    let recorder = T3RelayHTTPRecorder(responses: responses, suspendedResponseIndices: [5])
+    let client = makeClient(
+      recorder: recorder, signer: T3RelayProofRecorder(), now: { clock.value() },
+      onEnvironmentTaskReused: { reused.signal() })
+    let environment = Self.environment()
+    let currentGrantID = grantID
+    let creator = Task {
+      try await client.authorize(
+        environment: environment, accountToken: "account", grantID: currentGrantID)
+    }
+    await recorder.waitForRequestCount(1)
+    let survivor = Task {
+      try await client.authorize(
+        environment: environment, accountToken: "account", grantID: currentGrantID)
+    }
+    await reused.wait()
+    await recorder.waitForRequestCount(5)
+
+    creator.cancel()
+    recorder.resumeNext()
+
+    _ = try await survivor.value
+    do {
+      _ = try await creator.value
+      XCTFail("Expected the creating caller to be canceled")
+    } catch is CancellationError {
+    } catch {
+      XCTFail("Expected cancellation, got \(error)")
+    }
+    clock.advance(by: 61)
+    _ = try await client.authorize(
+      environment: environment, accountToken: "account", grantID: currentGrantID)
+
+    XCTAssertEqual(recorder.requests().filter { $0.url?.path == "/oauth/token" }.count, 2)
+    XCTAssertEqual(recorder.requests().filter { $0.url?.path == "/v1/client/dpop-token" }.count, 1)
+  }
+
   func testCancelingOneEnvironmentTaskKeepsRelayMintForAnotherEnvironmentTask() async throws {
     let canceledWaiterReturned = expectation(description: "canceled waiter returned")
     let relayReused = T3RelayTestSignal()
@@ -986,6 +1029,50 @@ final class T3RelayClientTests: XCTestCase {
     let authorization = try await second.value
     XCTAssertEqual(authorization.descriptor.environmentId, "env-one")
     XCTAssertEqual(recorder.requests().filter { $0.url?.path == "/v1/client/dpop-token" }.count, 1)
+  }
+
+  func testCanceledRelayTaskCreatorDoesNotLeaveExpiredCompletedTask() async throws {
+    let clock = T3RelayTestClock(now: now)
+    let relayReused = T3RelayTestSignal()
+    let tail = Self.environmentAuthorizationResponses(environmentExpiresIn: 3_600)
+    let responses =
+      [.relayToken(accessToken: "relay-old", expiresIn: 120)] + tail
+      + [.relayToken(accessToken: "relay-fresh", expiresIn: 120)] + tail
+    let recorder = T3RelayHTTPRecorder(responses: responses, suspendedResponseIndices: [1])
+    let client = makeClient(
+      recorder: recorder, signer: T3RelayProofRecorder(), now: { clock.value() },
+      onRelayTaskReused: { relayReused.signal() })
+    let firstEnvironment = Self.environment(host: "first.t3-relay-unit.test")
+    let secondEnvironment = Self.environment(host: "second.t3-relay-unit.test")
+    let thirdEnvironment = Self.environment(host: "third.t3-relay-unit.test")
+    let currentGrantID = grantID
+    let creator = Task {
+      try await client.authorize(
+        environment: firstEnvironment, accountToken: "account", grantID: currentGrantID)
+    }
+    await recorder.waitForRequestCount(1)
+    let survivor = Task {
+      try await client.authorize(
+        environment: secondEnvironment, accountToken: "account", grantID: currentGrantID)
+    }
+    await relayReused.wait()
+
+    creator.cancel()
+    recorder.resumeNext()
+
+    _ = try await survivor.value
+    do {
+      _ = try await creator.value
+      XCTFail("Expected the creating caller to be canceled")
+    } catch is CancellationError {
+    } catch {
+      XCTFail("Expected cancellation, got \(error)")
+    }
+    clock.advance(by: 61)
+    _ = try await client.authorize(
+      environment: thirdEnvironment, accountToken: "account", grantID: currentGrantID)
+
+    XCTAssertEqual(recorder.requests().filter { $0.url?.path == "/v1/client/dpop-token" }.count, 2)
   }
 
   func testCancelingOnlyWaiterDuringConnectStopsEnvironmentMint() async throws {
