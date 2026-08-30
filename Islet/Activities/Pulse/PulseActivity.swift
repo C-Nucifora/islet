@@ -24,10 +24,7 @@ final class PulseActivity: NotchActivity, ObservableObject {
   }
 
   var compactLeading: AnyView {
-    AnyView(
-      Image(systemName: center.primary?.symbol ?? tabIcon)
-        .font(.caption2)
-        .foregroundStyle(accent(for: center.primary)))
+    AnyView(PulseCompactIcon(item: center.primary, fallbackSymbol: tabIcon))
   }
 
   var compactTrailing: AnyView {
@@ -35,16 +32,28 @@ final class PulseActivity: NotchActivity, ObservableObject {
       Text(center.primary?.title ?? "Pulse")
         .font(.caption.weight(.semibold))
         .lineLimit(1)
-        .frame(maxWidth: 110))
+        .frame(maxWidth: 110)
+        .appThemeForeground(.pulse))
   }
 
   var expandedView: AnyView { AnyView(PulseExpandedView(center: center)) }
+}
 
-  private func accent(for item: PulseItem?) -> Color {
-    guard let item else { return .cyan }
-    if item.state == .failed { return .red }
-    if item.state == .needsAction { return .orange }
-    return Color(isletHex: item.accentHex) ?? .cyan
+private struct PulseCompactIcon: View {
+  @Environment(\.appTheme) private var appTheme
+  let item: PulseItem?
+  let fallbackSymbol: String
+
+  var body: some View {
+    Image(systemName: item?.symbol ?? fallbackSymbol)
+      .font(.caption2)
+      .foregroundStyle(color)
+  }
+
+  private var color: Color {
+    if item?.state == .failed { return .red }
+    if item?.state == .needsAction { return .orange }
+    return appTheme.color(for: .pulse)
   }
 }
 

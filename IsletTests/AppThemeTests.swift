@@ -1,4 +1,6 @@
+import AppKit
 import Defaults
+import SwiftUI
 import XCTest
 
 @testable import Islet
@@ -20,6 +22,19 @@ final class AppThemeTests: XCTestCase {
     for theme in AppTheme.allCases {
       Defaults[.appTheme] = theme
       XCTAssertEqual(Defaults[.appTheme], theme)
+    }
+  }
+
+  func testEveryRoleChangesAcrossThemes() throws {
+    for role in AppThemeRole.allCases {
+      let colors = try Set(
+        AppTheme.allCases.map { theme in
+          let color = try XCTUnwrap(NSColor(theme.color(for: role)).usingColorSpace(.sRGB))
+          return [
+            color.redComponent, color.greenComponent, color.blueComponent, color.alphaComponent,
+          ]
+        })
+      XCTAssertGreaterThan(colors.count, 1, "\(role) ignores the selected theme")
     }
   }
 

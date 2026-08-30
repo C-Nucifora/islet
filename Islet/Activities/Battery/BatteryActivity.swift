@@ -81,16 +81,15 @@ final class BatteryActivity: NotchActivity, ObservableObject {
 
   var compactLeading: AnyView {
     AnyView(
-      Image(systemName: Self.compactSymbol(for: monitor.state))
-        .foregroundStyle(Self.tint(for: monitor.state).color)
-        .font(.caption2))
+      BatteryCompactIcon(
+        symbol: Self.compactSymbol(for: monitor.state), tint: Self.tint(for: monitor.state)))
   }
 
   var compactTrailing: AnyView {
     AnyView(
       BatteryPercentText(
         percent: monitor.state?.percent ?? 0,
-        color: Self.tint(for: monitor.state).color))
+        tint: Self.tint(for: monitor.state)))
   }
 
   // These three are pure and marked `nonisolated` so the tests can call them without hopping to the
@@ -115,7 +114,7 @@ final class BatteryActivity: NotchActivity, ObservableObject {
     }
   }
 
-  /// Green while power is coming in, red under 20% on battery, neutral otherwise.
+  /// Themed for ordinary power states, but always red under 20% on battery.
   nonisolated static func tint(for state: BatteryState?) -> BatteryTint {
     guard let state else { return .normal }
     if state.onAC { return .charging }
@@ -128,13 +127,26 @@ final class BatteryActivity: NotchActivity, ObservableObject {
 }
 
 struct BatteryPercentText: View {
+  @Environment(\.appTheme) private var appTheme
   let percent: Int
-  let color: Color
+  let tint: BatteryTint
 
   var body: some View {
     Text("\(percent)%")
       .font(.caption.weight(.semibold)).monospacedDigit()
-      .foregroundStyle(color)
+      .foregroundStyle(tint.color(for: appTheme))
+  }
+}
+
+private struct BatteryCompactIcon: View {
+  @Environment(\.appTheme) private var appTheme
+  let symbol: String
+  let tint: BatteryTint
+
+  var body: some View {
+    Image(systemName: symbol)
+      .foregroundStyle(tint.color(for: appTheme))
+      .font(.caption2)
   }
 }
 
@@ -143,11 +155,10 @@ struct BatteryPercentText: View {
 enum BatteryTint: Equatable {
   case charging, low, normal
 
-  var color: Color {
+  func color(for theme: AppTheme) -> Color {
     switch self {
-    case .charging: .green
+    case .charging, .normal: theme.color(for: .battery)
     case .low: .red
-    case .normal: .secondary
     }
   }
 }

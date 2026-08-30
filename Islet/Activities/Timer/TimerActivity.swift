@@ -162,7 +162,7 @@ struct TimerRingView: View {
         Circle()
           .trim(from: 0, to: activity.progressNow)
           .stroke(
-            activity.finished ? Color.green : appTheme.color(for: .timer),
+            appTheme.color(for: TimerPresentation.tintRole(finished: activity.finished)),
             style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
           )
           .rotationEffect(.degrees(-90))
@@ -183,7 +183,9 @@ struct TimerCountdownText: View {
     TimelineView(.animation(minimumInterval: 0.5, paused: !activity.isRunning)) { _ in
       Text(TimerFormat.mmss(activity.remainingNow))
         .font(.caption.weight(.semibold)).monospacedDigit()
-        .foregroundStyle(activity.finished ? Color.green : appTheme.color(for: .timer))
+        .foregroundStyle(
+          appTheme.color(for: TimerPresentation.tintRole(finished: activity.finished))
+        )
         .accessibilityLabel(activity.label.map { "\($0) timer" } ?? "Timer")
         .accessibilityValue(
           activity.finished
@@ -206,7 +208,7 @@ struct TimerExpandedView: View {
           Circle()
             .trim(from: 0, to: activity.progressNow)
             .stroke(
-              activity.finished ? Color.green : appTheme.color(for: .timer),
+              appTheme.color(for: TimerPresentation.tintRole(finished: activity.finished)),
               style: StrokeStyle(lineWidth: 6, lineCap: .round)
             )
             .rotationEffect(.degrees(-90))
@@ -223,7 +225,9 @@ struct TimerExpandedView: View {
 
       VStack(spacing: 10) {
         if activity.finished {
-          Text("Done").font(.headline).foregroundStyle(.green)
+          Text("Done").font(.headline)
+            .foregroundStyle(
+              appTheme.color(for: TimerPresentation.tintRole(finished: activity.finished)))
           HStack {
             Button("Repeat") { activity.restartLastTimer() }
               .buttonStyle(.borderedProminent).tint(appTheme.color(for: .timer))
@@ -260,6 +264,16 @@ struct TimerExpandedView: View {
     }
     .buttonStyle(.plain)
     .accessibilityLabel(label)
+  }
+}
+
+enum TimerPresentation {
+  /// Completion changes the copy and controls, but the selected theme remains the visual identity
+  /// in both compact and expanded presentations.
+  nonisolated static func tintRole(finished: Bool) -> AppThemeRole {
+    switch finished {
+    case false, true: .timer
+    }
   }
 }
 

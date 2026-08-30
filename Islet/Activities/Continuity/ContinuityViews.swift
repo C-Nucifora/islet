@@ -10,7 +10,7 @@ struct ContinuityCompactLeading: View {
   var body: some View {
     Image(systemName: activity.promoted?.symbol ?? LiveActivityAppStyle.fallbackSymbol)
       .font(.caption2)
-      .foregroundStyle(continuityAccent)
+      .appThemeForeground(.continuity)
   }
 }
 
@@ -24,11 +24,11 @@ struct ContinuityCompactTrailing: View {
     if cards.count > 1 {
       Text("\(cards.count)")
         .font(.caption.weight(.semibold)).monospacedDigit()
-        .foregroundStyle(continuityAccent)
+        .appThemeForeground(.continuity)
     } else if let card = cards.first {
       Text(card.appName)
         .font(.caption.weight(.semibold))
-        .foregroundStyle(continuityAccent)
+        .appThemeForeground(.continuity)
         .lineLimit(1)
         .frame(maxWidth: 110)
     }
