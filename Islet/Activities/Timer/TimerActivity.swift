@@ -23,14 +23,17 @@ final class TimerActivity: NotchActivity, ObservableObject {
   private(set) var lastLabel: String?
   private let persistenceStore: TimerPersistenceStore
   private let completionNotifier: any TimerCompletionNotifying
+  private let completionDisplayDuration: Duration
   private var completionID = UUID()
 
   init(
     persistenceStore: TimerPersistenceStore = .defaults, now: Date = Date(),
-    completionNotifier: any TimerCompletionNotifying = TimerCompletionNotifications.shared
+    completionNotifier: any TimerCompletionNotifying = TimerCompletionNotifications.shared,
+    completionDisplayDuration: Duration = .seconds(6)
   ) {
     self.persistenceStore = persistenceStore
     self.completionNotifier = completionNotifier
+    self.completionDisplayDuration = completionDisplayDuration
     restore(now: now)
   }
 
@@ -131,18 +134,22 @@ final class TimerActivity: NotchActivity, ObservableObject {
     start(lastDuration, label: lastLabel)
   }
 
-  func presentCompletionFromNotification(title: String) {
-    guard !isActive else { return }
+  func presentCompletionFromNotification(_ snapshot: TimerCompletionSnapshot) {
+    guard !isRunning, !isPaused else { return }
     completionTask?.cancel()
     endDate = nil
     isPaused = false
     pausedRemaining = nil
     finished = true
-    total = lastDuration ?? 1
-    label = Self.label(fromCompletionTitle: title)
+    total = snapshot.duration
+    label = snapshot.label
+    lastDuration = snapshot.duration
+    lastLabel = snapshot.label
+    persistLastPreset()
     activationDate = Date()
     notificationFallbackMessage = nil
     persistenceStore.writeSessionData(nil)
+    scheduleFinishedAutoClear()
   }
 
   func cancel() {
@@ -240,14 +247,21 @@ final class TimerActivity: NotchActivity, ObservableObject {
           accentHex: EventAccent.warning, motion: .chargeComplete, urgency: .alert, duration: 4,
           announcement: title))
       completionNotifier.notifyTimerFinished(
-        completionID: completionID, title: title, body: "Your timer finished."
+        completionID: completionID,
+        snapshot: TimerCompletionSnapshot(duration: total, label: label), title: title,
+        body: "Your timer finished."
       ) { [weak self] in
         self?.notificationFallbackMessage = TimerActivity.notificationFallbackMessage
       }
     }
-    // Auto-clear the finished state after a few seconds.
+    scheduleFinishedAutoClear()
+  }
+
+  private func scheduleFinishedAutoClear() {
+    completionTask?.cancel()
+    let displayDuration = completionDisplayDuration
     completionTask = Task { [weak self] in
-      try? await Task.sleep(for: .seconds(6))
+      try? await Task.sleep(for: displayDuration)
       guard !Task.isCancelled else { return }
       self?.cancel()
     }
@@ -262,12 +276,6 @@ final class TimerActivity: NotchActivity, ObservableObject {
   private static let notificationFallbackMessage =
     "Timer notifications are off. Islet will still play its completion sound and show Done in the island."
 
-  private static func label(fromCompletionTitle title: String) -> String? {
-    let suffix = " done"
-    guard title.hasSuffix(suffix) else { return nil }
-    let value = title.dropLast(suffix.count).trimmingCharacters(in: .whitespacesAndNewlines)
-    return value.isEmpty || value == "Timer" ? nil : value
-  }
 }
 
 /// A thin progress ring driven live off the activity, ticking only while running.
@@ -366,12 +374,12 @@ struct TimerExpandedView: View {
           }
           Text(activity.isPaused ? "Paused" : "Running")
             .font(.caption2).foregroundStyle(.secondary)
-          if let message = activity.notificationFallbackMessage {
-            Text(message)
-              .font(.caption2)
-              .foregroundStyle(.orange)
-              .multilineTextAlignment(.center)
-          }
+        }
+        if let message = activity.notificationFallbackMessage {
+          Text(message)
+            .font(.caption2)
+            .foregroundStyle(.orange)
+            .multilineTextAlignment(.center)
         }
       }
     }

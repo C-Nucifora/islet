@@ -142,6 +142,22 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(restored.panelFrame, expandedPanel(restored))
   }
 
+  func testInitialPresentationRestoresTemporaryActivityException() {
+    let saved = Defaults[.disabledActivities]
+    defer { Defaults[.disabledActivities] = saved }
+    Defaults[.disabledActivities] = ["timer"]
+    let source = makeVM(mode: .clickToPin)
+    source.open(activityID: "timer", allowingDisabledActivity: true)
+
+    let restored = NotchViewModel(
+      geometry: source.geometry, modeOverride: .clickToPin,
+      initialPresentation: source.presentationState)
+
+    XCTAssertEqual(restored.selectedActivityID, "timer")
+    XCTAssertEqual(restored.temporarilyPresentedActivityID, "timer")
+    XCTAssertTrue(restored.isPresenting(activityID: "timer"))
+  }
+
   func testOrdinaryCloseStillClearsSelection() {
     let vm = makeVM(mode: .clickToPin)
     vm.handleMouseDown(CGPoint(x: 864, y: 1110))
@@ -161,6 +177,38 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(vm.state, .expanded(pinned: true))
     XCTAssertEqual(vm.selectedActivityID, "timer")
     XCTAssertTrue(vm.isPresenting(activityID: "timer"))
+  }
+
+  func testProgrammaticOpenCanTemporarilyPresentADisabledActivity() {
+    let vm = makeVM(mode: .clickToPin)
+
+    vm.open(activityID: "timer", allowingDisabledActivity: true)
+
+    XCTAssertEqual(vm.temporarilyPresentedActivityID, "timer")
+    XCTAssertEqual(vm.selectedActivityID, "timer")
+  }
+
+  func testDisabledSelectionIsPresentedOnlyThroughTemporaryException() {
+    let saved = Defaults[.disabledActivities]
+    defer { Defaults[.disabledActivities] = saved }
+    Defaults[.disabledActivities] = ["timer"]
+    let vm = makeVM(mode: .clickToPin)
+
+    vm.open(activityID: "timer")
+    XCTAssertFalse(vm.isPresenting(activityID: "timer"))
+
+    vm.open(activityID: "timer", allowingDisabledActivity: true)
+    XCTAssertTrue(vm.isPresenting(activityID: "timer"))
+  }
+
+  func testTemporaryActivityPresentationClearsWhenItsContentDisappears() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.open(activityID: "timer", allowingDisabledActivity: true)
+
+    vm.clearTemporaryPresentationIfUnavailable(availableActivityIDs: [])
+
+    XCTAssertNil(vm.temporarilyPresentedActivityID)
+    XCTAssertNil(vm.selectedActivityID)
   }
 
   func testRestoredPeekUsesPeekGeometryAndClosesWhenPointerIsOutside() {
