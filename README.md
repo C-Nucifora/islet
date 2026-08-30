@@ -76,6 +76,9 @@ identity once:
 ```sh
 Scripts/create-signing-certificate.sh
 xcodegen generate
+resolved_dir=Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+mkdir -p "$resolved_dir"
+install -m 0644 Package.resolved "$resolved_dir/Package.resolved"
 open Islet.xcodeproj
 ```
 
@@ -97,7 +100,9 @@ permissions to the new app identity.
 | Tests | [`IsletTests`](IsletTests) | Holds the unit tests. Tests use the `Islet` app as their host, while app startup skips hardware monitors under XCTest. |
 
 To add an activity, create its directory under `Islet/Activities`, implement `NotchActivity`, add
-its metadata to `ActivityCatalog`, and register it in `AppState` and `AppDelegate`. To add a system
+its metadata to `ActivityCatalog`, and register it in `AppState` and `AppDelegate`. Activities with
+observers must also be classified in `ActivityCatalog.lifecycleManagedIDs` or
+`persistentLifecycleIDs` and wired into `AppDelegate.configureActivityLifecycles`. To add a system
 event, implement `SystemEventSource` under `Islet/Events/Sources`, add it to `SourceCatalog`, and
 register it in `AppState.eventSources`. Settings renders activity and source controls from those
 catalogues.
@@ -130,10 +135,17 @@ Several optional features use undocumented macOS interfaces:
 - Native fullscreen detection calls undocumented CoreGraphics WindowServer symbols, with a public
   window-list fallback.
 - Apple Silicon CPU power sampling loads `libIOReport.dylib` at runtime.
+- Battery details read undocumented AppleSmartBattery and IORegistry keys. Missing or changed keys
+  remove only the affected metrics from the panel.
+- Focus mode reads the private `~/Library/DoNotDisturb/DB/Assertions.json` schema. Missing,
+  unreadable, or unrecognised data produces no Focus event and is reported in diagnostics.
+- Screen lock and unlock use undocumented distributed-notification names. If those names change,
+  lock events stop; the independent Caps Lock observer continues to work.
 
-These integrations resolve symbols dynamically and fall back or disable the affected metric when
-macOS no longer provides one. They can still break after an operating system update. The adapter's
-source, patch, binary provenance, and rebuild procedure are documented in
+Runtime-loaded frameworks resolve symbols dynamically and fall back or disable the affected
+feature when macOS no longer provides one. File, registry-key, and notification dependencies are
+handled defensively but can still stop producing events or metrics after an operating system
+update. The adapter's source, patch, binary provenance, and rebuild procedure are documented in
 [`Vendor/README.md`](Vendor/README.md).
 
 ## Network and storage boundaries
@@ -147,9 +159,14 @@ Islet has no analytics or telemetry client. Its network code is limited to Pulse
 - T3 Code reads a current local runtime descriptor and verifies the owning process before using a
   loopback endpoint. Other Macs must be paired explicitly. Remote endpoints use HTTPS unless a
   reviewed build and the user both approve one exact plain HTTP origin. Bearer tokens stay in the
-  login Keychain with `ThisDeviceOnly` protection.
+  default Keychain with `ThisDeviceOnly` protection.
 
-Data remains on the Mac, with these retention rules:
+Islet does not operate a cloud service. Data leaves the Mac only through configured system
+services and explicit actions: paired T3 requests go to the selected endpoint, AirDrop sends Shelf
+files selected by the user, and opening a meeting or Pulse link hands its URL to the chosen app.
+Calendar and reminder data may also follow the system accounts configured in macOS.
+
+Local retention follows these rules:
 
 - Interface settings, activity order, paired T3 endpoint metadata, hidden calendar identifiers,
   and timer state use local Defaults. A stale timer session is discarded after 30 days.
@@ -161,9 +178,10 @@ Data remains on the Mac, with these retention rules:
   and common credential formats, but callers should not treat the filter as a secret scanner.
 - Calendar and reminder records stay in memory. Completing or rescheduling a reminder writes that
   change back through EventKit.
-- Pulse items and its payload-free history stay in memory until Islet quits. The history is capped
-  at 200 entries and omits titles, subtitles, links, tokens, and error text. The Pulse token itself
-  persists with user-only file permissions until it is rotated.
+- Pulse active items and its payload-free history are memory-only and never survive quit. Items
+  leave when they end, expire, are dismissed, or Pulse stops; history can be cleared separately.
+  The history is capped at 200 entries and omits titles, subtitles, links, tokens, and error text.
+  The Pulse token itself persists with user-only file permissions until it is rotated.
 - Live T3 agent snapshots and system metric samples stay in memory. T3 credentials persist only in
   Keychain.
 
