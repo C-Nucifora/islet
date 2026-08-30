@@ -413,10 +413,14 @@ final class PulseServer: ObservableObject {
 
   func revokeCredential(_ id: String) throws {
     let source = credentialStore.credentials.first { $0.id == id }?.source
+    defer {
+      if credentialStore.credentials.first(where: { $0.id == id })?.isRevoked == true {
+        rateLimiters[id] = nil
+        if let source { PulseCenter.shared.removeItems(forSource: source) }
+        disconnectProvider(id)
+      }
+    }
     try credentialStore.revoke(id)
-    rateLimiters[id] = nil
-    if let source { PulseCenter.shared.removeItems(forSource: source) }
-    disconnectProvider(id)
   }
 
   private func disconnectProvider(_ credentialID: String) {
