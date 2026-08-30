@@ -1,21 +1,22 @@
 # Pulse Shortcuts starter kit
 
-These are signed macOS Shortcut files for Islet 1.0 on macOS 26 or later. Open a `.shortcut`
-file in Finder, review the actions in Shortcuts, then choose **Add Shortcut**. Islet must be
-installed before import so Shortcuts can resolve the `dev.islet` App Intents.
+These macOS Shortcuts require Islet 1.0 and macOS 26 or later. Open a release `.shortcut` file,
+review the actions in Shortcuts, then choose **Add Shortcut**. Islet must be installed before import
+so Shortcuts can resolve the `dev.islet` App Intents.
 
-The files are normal signed Shortcut payloads. They are not JSON exports. The readable `.wflow`
-sources are kept beside them so changes can be reviewed and re-signed with Apple's `shortcuts`
-tool.
+The readable `.wflow` files in `sources` are authoritative. The release workflow signs them with
+Apple's `shortcuts` tool and attaches the resulting opaque payloads to each GitHub release. Islet
+and this guide link only to those generated release assets, never to a separately checked-in signed
+payload.
 
 | Shortcut | What it sends to Islet |
 | --- | --- |
-| [01-transient-event.shortcut](01-transient-event.shortcut) | A succeeded event with a title, details, normal priority, and an eight-second expiry. |
-| [02-progress-task.shortcut](02-progress-task.shortcut) | Two progress updates at 15% and 75%, then an end command, all for `shortcuts.islet.report-export`. |
-| [03-failed-task.shortcut](03-failed-task.shortcut) | A high-priority failed event that stays visible for 30 seconds. |
-| [04-guarded-completion.shortcut](04-guarded-completion.shortcut) | An 80% progress item, a local text confirmation, then a succeeded update and end for `shortcuts.islet.guarded-sync`. |
-| [05-focus-profile.shortcut](05-focus-profile.shortcut) | The local Pulse delivery profile changes to Focus for ten seconds, then returns to Everything. It sends no Pulse item. |
-| [06-focus-timer.shortcut](06-focus-timer.shortcut) | A 25-minute `Focus session` timer and an eight-second event confirming that it started. |
+| [01-transient-event.shortcut](https://github.com/C-Nucifora/islet/releases/latest/download/01-transient-event.shortcut) | A succeeded event with a title, details, normal priority, and an eight-second expiry. |
+| [02-progress-task.shortcut](https://github.com/C-Nucifora/islet/releases/latest/download/02-progress-task.shortcut) | Two progress updates at 15% and 75%, then an end command, all for `shortcuts.islet.report-export`. |
+| [03-failed-task.shortcut](https://github.com/C-Nucifora/islet/releases/latest/download/03-failed-task.shortcut) | A high-priority failed event that stays visible for 30 seconds. |
+| [04-guarded-completion.shortcut](https://github.com/C-Nucifora/islet/releases/latest/download/04-guarded-completion.shortcut) | An 80% progress item with a five-minute safety expiry, a local text confirmation, then a succeeded update and end for `shortcuts.islet.guarded-sync`. |
+| [05-focus-profile.shortcut](https://github.com/C-Nucifora/islet/releases/latest/download/05-focus-profile.shortcut) | The local Pulse delivery profile changes to Focus for ten seconds, then returns to Everything. It sends no Pulse item. |
+| [06-focus-timer.shortcut](https://github.com/C-Nucifora/islet/releases/latest/download/06-focus-timer.shortcut) | A 25-minute `Focus session` timer and an eight-second event confirming that it started. |
 
 None of these shortcuts read files, contacts, calendar data, network credentials, or Pulse's
 provider token. Their only app calls are Islet App Intents. The Focus and timer samples change
@@ -56,27 +57,27 @@ required pattern.
 
 ## Maintaining the files
 
-Run the ordinary release check to confirm the six signed files, their source workflows, and this
-guide are present:
+Run the ordinary release check to confirm all six source workflows and release links are present,
+and that no opaque `.shortcut` payload has been checked in:
 
 ```sh
 Scripts/validate-pulse-shortcuts.sh
 ```
 
-On macOS, the deeper check asks the system Shortcuts tool to parse each source workflow and to
-re-sign each bundled payload. It does not import anything into your Shortcut library:
+On macOS, the deeper check asks the system Shortcuts tool to sign each source workflow into a
+temporary directory. It does not import anything into your Shortcut library:
 
 ```sh
 Scripts/validate-pulse-shortcuts.sh --verify-importability
 ```
 
-When changing a source workflow, create a replacement signed file with the system tool:
+To inspect an importable build of a changed source locally, sign it outside the repository:
 
 ```sh
 shortcuts sign --mode anyone \
   --input Integrations/Pulse/shortcuts/sources/01-transient-event.wflow \
-  --output Integrations/Pulse/shortcuts/01-transient-event.shortcut
+  --output /tmp/01-transient-event.shortcut
 ```
 
-Use a neutral signing mode, never a personal sharing mode. The checked-in `.shortcut` files are
-the files people import; the `.wflow` files are their reviewable sources.
+Use a neutral signing mode, never a personal sharing mode. Do not check in the generated file; the
+tagged release workflow creates the files people import directly from the reviewed sources.

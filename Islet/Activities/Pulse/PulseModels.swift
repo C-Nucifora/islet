@@ -550,8 +550,7 @@ struct PulseProviderDocumentationLink: Identifiable, Equatable, Sendable {
   ]
 
   private static func link(_ title: String, _ filename: String) -> Self {
-    let baseURL =
-      "https://raw.githubusercontent.com/C-Nucifora/islet/main/Integrations/Pulse/shortcuts"
+    let baseURL = "https://github.com/C-Nucifora/islet/releases/latest/download"
     return Self(title: title, url: URL(string: "\(baseURL)/\(filename).shortcut")!)
   }
 }

@@ -20,16 +20,18 @@ test -f "$guide"
 
 for name in 01-transient-event 02-progress-task 03-failed-task 04-guarded-completion 05-focus-profile 06-focus-timer; do
   source="$kit/sources/$name.wflow"
-  shortcut="$kit/$name.shortcut"
   test -s "$source"
-  test -s "$shortcut"
+  test ! -e "$kit/$name.shortcut"
   plutil -lint "$source" >/dev/null
-  grep -Fq "$name.shortcut" "$guide"
-  grep -Fq "$name.shortcut" "$root/Integrations/Pulse/providers.json"
+  asset_url="https://github.com/C-Nucifora/islet/releases/latest/download/$name.shortcut"
+  grep -Fq "$asset_url" "$guide"
+  grep -Fq "$asset_url" "$root/Integrations/Pulse/providers.json"
 done
 
 grep -Fq 'Stable identifiers' "$guide"
 grep -Fq 'Troubleshooting' "$guide"
+plutil -extract WFWorkflowActions xml1 -o - \
+  "$kit/sources/04-guarded-completion.wflow" | grep -Fq '<key>expirySeconds</key>'
 
 if ! "$verify_importability"; then
   exit 0
@@ -42,5 +44,5 @@ trap 'rm -rf "$temporary_directory"' EXIT HUP INT TERM
 for source in "$kit"/sources/*.wflow; do
   name=$(basename "$source" .wflow)
   shortcuts sign --mode anyone --input "$source" --output "$temporary_directory/$name.shortcut"
-  shortcuts sign --mode anyone --input "$kit/$name.shortcut" --output "$temporary_directory/$name-resigned.shortcut"
+  test -s "$temporary_directory/$name.shortcut"
 done
