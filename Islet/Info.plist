@@ -42,9 +42,9 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Islet shows the name of the Wi-Fi network you join. macOS requires location access to read network names; deny this and Islet will simply say 'Wi-Fi connected'.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
-	<string>Islet shows your reminders in the notch and lets you complete them.</string>
+	<string>Islet shows and manages your reminders in the notch.</string>
 	<key>NSRemindersUsageDescription</key>
-	<string>Islet shows your reminders in the notch and lets you complete them.</string>
+	<string>Islet shows and manages your reminders in the notch.</string>
 	<key>T3ApprovedInsecureHTTPOrigins</key>
 	<array/>
 </dict>

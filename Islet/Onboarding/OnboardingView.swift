@@ -471,7 +471,7 @@ private struct OnboardingView: View {
         Toggle(isOn: $remindersEnabled) {
           permissionLabel(
             title: "Reminders",
-            detail: "Shows incomplete reminders on Home and lets you complete them.",
+            detail: "Shows and manages reminders from Home.",
             status: reminders.authorization.summary)
         }
         .toggleStyle(.checkbox)

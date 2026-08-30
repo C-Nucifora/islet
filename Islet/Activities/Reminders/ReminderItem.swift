@@ -9,10 +9,12 @@ struct ReminderItem: Identifiable, Equatable, Sendable {
   var hasDueTime: Bool
   var priority: Int  // EventKit: 0 none, 1 high … 9 low
   var listColorHex: String?
+  var listID: String?
+  var listTitle: String?
 
   init(
     id: String, title: String, dueDate: Date?, hasDueTime: Bool = true, priority: Int,
-    listColorHex: String?
+    listColorHex: String?, listID: String? = nil, listTitle: String? = nil
   ) {
     self.id = id
     self.title = title
@@ -20,6 +22,8 @@ struct ReminderItem: Identifiable, Equatable, Sendable {
     self.hasDueTime = dueDate != nil && hasDueTime
     self.priority = priority
     self.listColorHex = listColorHex
+    self.listID = listID
+    self.listTitle = listTitle
   }
 }
 
