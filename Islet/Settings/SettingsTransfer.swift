@@ -213,7 +213,8 @@ enum SettingsTransfer {
     "clipboardClearHistoryOnPause", "clipboardExcludedBundleIdentifiers",
     "clipboardManuallyPaused", "clipboardPausedFocusIdentifiers", "clipboardPausedLoginSession",
     "clipboardPausedUntil",
-    "contextManualOverride", "contextRules", "continuityEnabled", "hiddenCalendarIDs",
+    "commandPaletteRecentResultIDs", "commandPaletteShortcut", "contextManualOverride",
+    "contextRules", "continuityEnabled", "hiddenCalendarIDs",
     "onboardingVersion", "portsEnabled", "pulseEnabled", "systemEnabled", "t3CodeEnabled",
     "t3RemoteEnvironments",
   ]
