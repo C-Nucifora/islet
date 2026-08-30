@@ -1553,6 +1553,7 @@ struct SettingsView: View {
     let text =
       permissions.diagnostics.text
       + "\nMedia adapter: \(nowPlaying.adapterStatus)"
+      + (nowPlaying.adapterFailure.map { "\nMedia adapter failure: \($0)" } ?? "")
       + "\nHUD event tap: \(hud.eventTapStatus.summary)"
       + "\nFocus event source: \(focus.health.summary)"
       + "\nFocus last parsed: \(focus.lastSuccessfulParse?.formatted() ?? "Never")"

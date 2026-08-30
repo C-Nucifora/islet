@@ -20,6 +20,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   /// which carry no metadata at all — only "this app is producing audio".
   @Published private(set) var strip: [SourceID] = []
   @Published private(set) var adapterStatus = "Starting…"
+  @Published private(set) var adapterFailure: String?
   private(set) var activationDate: Date?
 
   private var table = MediaSourceTable()
@@ -59,6 +60,9 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     isMonitoring = true
     watcher.onStatus = { status in
       Task { @MainActor [weak self] in self?.adapterStatus = status }
+    }
+    watcher.onDiagnostic = { diagnostic in
+      Task { @MainActor [weak self] in self?.adapterFailure = diagnostic }
     }
     watcher.start()
     audio.start()
@@ -131,6 +135,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     resolvedBundleIdentifiers = []
     activationDate = nil
     adapterStatus = "Stopped"
+    adapterFailure = nil
   }
 
   /// Tapping a source makes its display identity the first configured primary player, then asks
