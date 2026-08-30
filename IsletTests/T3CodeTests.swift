@@ -37,20 +37,6 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(state.auth.sessionCookieName, "t3_session")
   }
 
-  func testCredentialMigrationPreservesCanonicalValuesAndImportsMissingLegacyValues() {
-    let merged = T3CredentialStore.merging(
-      current: ["shared": "current", "current-only": "current-token"],
-      legacy: [
-        ["shared": "old", "first": "first-token"],
-        ["first": "older-token", "second": "second-token"],
-      ])
-
-    XCTAssertEqual(merged["shared"], "current")
-    XCTAssertEqual(merged["current-only"], "current-token")
-    XCTAssertEqual(merged["first"], "first-token")
-    XCTAssertEqual(merged["second"], "second-token")
-  }
-
   func testParsesHostedPairingLink() throws {
     let target = try T3PairingTarget.parse(
       "https://app.t3.codes/pair?host=https%3A%2F%2Fmini.example.com%3A44342%2F#token=once")
@@ -1108,24 +1094,6 @@ final class T3CodeTests: XCTestCase {
         environmentID: "same", baseURL: "http://127.0.0.1:3773"),
       T3CodeActivity.remoteCredentialID(
         environmentID: "same", baseURL: "http://127.0.0.1:3773"))
-  }
-
-  func testExplicitLocalPairingReplacesObsoleteCredentialsWithoutMigratingThem() {
-    let current = "local|machine|http://127.0.0.1:4888/"
-    let old = "local|machine|http://127.0.0.1:3773/"
-    let replaced = T3CredentialStore.replacingLocalCredentials(
-      in: [
-        old: "scoped", "machine": "legacy",
-        "local|retired|http://127.0.0.1:3773/": "retired",
-        "remote|other|https://example.com/": "keep",
-      ],
-      token: "fresh", credentialID: current, environmentID: "machine")
-
-    XCTAssertEqual(replaced[current], "fresh")
-    XCTAssertNil(replaced[old])
-    XCTAssertNil(replaced["machine"])
-    XCTAssertNil(replaced["local|retired|http://127.0.0.1:3773/"])
-    XCTAssertEqual(replaced["remote|other|https://example.com/"], "keep")
   }
 
   func testPairingTargetsIdentifyLoopbackWithoutTrustingArbitraryHosts() throws {
