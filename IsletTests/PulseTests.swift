@@ -1,12 +1,21 @@
+import Defaults
 import Network
 import XCTest
 
 @testable import Islet
 
 final class PulseTests: XCTestCase {
+  private let deliveryProfileSuiteName = "PulseTests.\(UUID().uuidString)"
+  private lazy var deliveryProfileSuite = UserDefaults(suiteName: deliveryProfileSuiteName)!
+
+  override func tearDown() {
+    deliveryProfileSuite.removePersistentDomain(forName: deliveryProfileSuiteName)
+    super.tearDown()
+  }
+
   @MainActor
   func testOrdersUrgentItemsAndUpdatesWithoutDuplicating() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     let normal = PulsePayload(
       id: "normal", source: "tests", title: "Normal", subtitle: nil, symbol: nil,
@@ -30,7 +39,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testEventGetsDefaultExpiryAndUnsafeActionIsRejected() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     var payload = PulsePayload(
       id: "event", source: "tests", title: "Event", subtitle: nil, symbol: nil,
@@ -45,7 +54,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testRejectsInvalidAccentAndDuplicateActionIdentity() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     var payload = PulsePayload(
       id: "invalid", source: "tests", title: "Invalid", subtitle: nil, symbol: nil,
@@ -64,7 +73,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testEndNormalizesIdentifier() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     let payload = PulsePayload(
       id: "build", source: "tests", title: "Build", subtitle: nil, symbol: nil,
@@ -82,7 +91,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testCrossSourceIdentifierCollisionAndMismatchedEndAreRejected() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     let first = PulsePayload(
       id: "shared", source: "build", title: "Build", subtitle: nil, symbol: nil,
@@ -108,7 +117,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testProgressOutsideProtocolRangeIsRejected() {
-    let center = PulseCenter()
+    let center = makeCenter()
     let payload = PulsePayload(
       id: "overflow", source: "tests", title: "Overflow", subtitle: nil, symbol: nil,
       accentHex: nil, progress: 1.01, state: .progress, priority: .normal,
@@ -138,7 +147,7 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(invalid.symbol, PulseSymbolValidator.fallbackSymbol)
     XCTAssertEqual(invalid.symbolWarning, .invalid)
 
-    let center = PulseCenter(symbolAvailability: { _ in false })
+    let center = makeCenter(symbolAvailability: { _ in false })
     let response = center.apply(command(.show, invalidPayload), now: now)
     XCTAssertTrue(response.ok)
     XCTAssertEqual(center.items.first?.symbol, PulseSymbolValidator.fallbackSymbol)
@@ -155,7 +164,7 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(empty.symbol, PulseSymbolValidator.fallbackSymbol)
     XCTAssertEqual(empty.symbolWarning, .empty)
 
-    let emptyCenter = PulseCenter(symbolAvailability: { _ in true })
+    let emptyCenter = makeCenter(symbolAvailability: { _ in true })
     let emptyResponse = emptyCenter.apply(command(.show, payload), now: now)
     XCTAssertTrue(emptyResponse.ok)
     XCTAssertEqual(emptyResponse.warning, PulseSymbolWarning.empty.localizedDescription)
@@ -167,7 +176,7 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(unavailable.symbol, PulseSymbolValidator.fallbackSymbol)
     XCTAssertEqual(unavailable.symbolWarning, .platformUnavailable)
 
-    let center = PulseCenter(symbolAvailability: { _ in nil })
+    let center = makeCenter(symbolAvailability: { _ in nil })
     let response = center.apply(command(.show, payload), now: now)
     XCTAssertTrue(response.ok)
     XCTAssertEqual(response.warning, PulseSymbolWarning.platformUnavailable.localizedDescription)
@@ -175,7 +184,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testFocusProfileSuppressesNormalUpdatesButKeepsUrgentWork() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     center.deliveryProfile = .focused
     let now = Date(timeIntervalSince1970: 1_000)
     var payload = PulsePayload(
@@ -200,8 +209,44 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testDeliveryProfileSurvivesCenterRecreationBeforeFirstItem() throws {
+    let suiteName = "PulseTests.delivery-profile.\(UUID().uuidString)"
+    let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defer { suite.removePersistentDomain(forName: suiteName) }
+    let key = Defaults.Key<PulseDeliveryProfile>(
+      "pulseDeliveryProfile", default: .everything, suite: suite)
+
+    let firstLaunch = PulseCenter(deliveryProfileKey: key)
+    firstLaunch.deliveryProfile = .focused
+
+    let relaunched = PulseCenter(deliveryProfileKey: key)
+    XCTAssertEqual(relaunched.deliveryProfile, .focused)
+    let normal = PulsePayload(
+      id: "background", source: "tests", title: "Background", subtitle: nil,
+      symbol: nil, accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    XCTAssertTrue(relaunched.apply(command(.show, normal)).ok)
+    XCTAssertTrue(relaunched.items.isEmpty)
+    XCTAssertEqual(relaunched.history.first?.result, .suppressed)
+  }
+
+  @MainActor
+  func testUnknownPersistedDeliveryProfileUsesSafeFallback() throws {
+    let suiteName = "PulseTests.delivery-profile-fallback.\(UUID().uuidString)"
+    let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defer { suite.removePersistentDomain(forName: suiteName) }
+    let key = Defaults.Key<PulseDeliveryProfile>(
+      "pulseDeliveryProfile", default: .everything, suite: suite)
+    suite.set("future-profile", forKey: key.name)
+
+    let center = PulseCenter(deliveryProfileKey: key)
+
+    XCTAssertEqual(center.deliveryProfile, .everything)
+  }
+
+  @MainActor
   func testSourcePolicyCanMuteRevealAndRevokeAProvider() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     let payload = PulsePayload(
       id: "build", source: "build", title: "Running", subtitle: nil, symbol: nil,
@@ -225,7 +270,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testHistoryIsBoundedAndStoresOnlyWireMetadata() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     for index in 0..<(PulseCenter.maximumHistoryEntries + 25) {
       let payload = PulsePayload(
@@ -245,7 +290,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testProviderHealthUsesActiveItemsThenSessionHistory() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     let payload = PulsePayload(
       id: "cli-job", source: "CLI", title: "Running", subtitle: nil, symbol: nil,
@@ -262,7 +307,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testRejectedPayloadHistoryDoesNotRetainUnvalidatedContent() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     let payload = PulsePayload(
       id: "invalid", source: "secret-source", title: "private", subtitle: "private",
@@ -313,7 +358,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testCapacityRejectionDoesNotReportAnImmediatelyEvictedItemAsShown() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     for index in 0..<PulseCenter.maximumItems {
       let payload = PulsePayload(
@@ -454,7 +499,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testDisabledPulseRejectsAndDoesNotRetainPrivatePayload() {
-    let center = PulseCenter()
+    let center = makeCenter()
     let payload = PulsePayload(
       id: "private", source: "shortcuts", title: "Private title", subtitle: "Private details",
       symbol: nil, accentHex: nil, progress: 0.5, state: .progress, priority: .normal,
@@ -469,6 +514,15 @@ final class PulseTests: XCTestCase {
 
   private func command(_ operation: PulseOperation, _ payload: PulsePayload) -> PulseCommand {
     PulseCommand(token: "test", operation: operation, activity: payload, id: nil)
+  }
+
+  @MainActor
+  private func makeCenter(
+    symbolAvailability: @escaping (String) -> Bool? = PulseSymbolValidator.platformAvailability
+  ) -> PulseCenter {
+    let key = Defaults.Key<PulseDeliveryProfile>(
+      "pulseDeliveryProfile", default: .everything, suite: deliveryProfileSuite)
+    return PulseCenter(symbolAvailability: symbolAvailability, deliveryProfileKey: key)
   }
 
   private static let testToken = Data(repeating: 0, count: 32).base64EncodedString()
