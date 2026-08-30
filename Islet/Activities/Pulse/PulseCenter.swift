@@ -113,7 +113,7 @@ final class PulseCenter: ObservableObject {
   private let symbolAvailability: (String) -> Bool?
   private var storedItems: [PulseItem] = []
   private var revisionRecords: [PulseItem.ID: PulseRevisionRecord]
-  private let revisionStore: PulseRevisionPersistenceStore?
+  private let revisionWriter: PulseRevisionPersistenceWriter?
   private var deadlineTask: PulseDeadlineTask?
   private let clock: any PulseClock
   private let deadlineScheduler: any PulseDeadlineScheduling
@@ -125,6 +125,7 @@ final class PulseCenter: ObservableObject {
     clock: (any PulseClock)? = nil,
     scheduler: (any PulseDeadlineScheduling)? = nil,
     revisionStore: PulseRevisionPersistenceStore? = nil,
+    revisionPersistenceDelay: TimeInterval = PulseRevisionPersistenceWriter.defaultCoalescingDelay,
     symbolAvailability: @escaping (String) -> Bool? = PulseSymbolValidator.platformAvailability,
     deliveryProfileKey: Defaults.Key<PulseDeliveryProfile> = .pulseDeliveryProfile,
     sourcePoliciesKey: Defaults.Key<[String: String]> = .pulseSourcePolicies
@@ -135,15 +136,22 @@ final class PulseCenter: ObservableObject {
     stalenessPolicy = PulseStalenessPolicy(
       timeout: staleTimeout, retention: staleRetention)
     self.symbolAvailability = symbolAvailability
-    self.revisionStore = revisionStore
-    revisionRecords =
-      revisionStore.map {
-        PulseRevisionPersistence.restore(
-          from: $0, now: resolvedClock.now, maximumRecords: Self.maximumRevisionRecords)
-      } ?? [:]
     self.deliveryProfileKey = deliveryProfileKey
     self.sourcePoliciesKey = sourcePoliciesKey
     deliveryProfile = Defaults[deliveryProfileKey]
+    if let revisionStore {
+      let restoration = PulseRevisionPersistence.restore(
+        from: revisionStore, now: resolvedClock.now,
+        maximumRecords: Self.maximumRevisionRecords)
+      let writer = PulseRevisionPersistenceWriter(
+        store: revisionStore, coalescingDelay: revisionPersistenceDelay)
+      revisionRecords = restoration.records
+      revisionWriter = writer
+      if restoration.requiresRewrite { writer.submit(restoration.records) }
+    } else {
+      revisionRecords = [:]
+      revisionWriter = nil
+    }
     let rawStoredPolicies = sourcePoliciesKey.suite.dictionary(forKey: sourcePoliciesKey.name)
     let storageIsValid =
       sourcePoliciesKey.suite.object(forKey: sourcePoliciesKey.name) == nil
@@ -163,6 +171,10 @@ final class PulseCenter: ObservableObject {
     ruleDeliveryProfile ?? deliveryProfile
   }
   var staleTimeout: TimeInterval { stalenessPolicy.timeout }
+
+  func flushRevisionPersistence() {
+    revisionWriter?.flush()
+  }
 
   @discardableResult
   func applyIfEnabled(
@@ -382,8 +394,7 @@ final class PulseCenter: ObservableObject {
   }
 
   private func persistRevisionRecords() {
-    guard let revisionStore else { return }
-    PulseRevisionPersistence.save(revisionRecords, to: revisionStore)
+    revisionWriter?.submit(revisionRecords)
   }
 
   func policy(for source: String) -> PulseSourcePolicy {
