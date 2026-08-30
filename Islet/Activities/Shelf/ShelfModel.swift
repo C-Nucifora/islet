@@ -91,6 +91,9 @@ struct ShelfItem: Identifiable, Equatable, Sendable {
   let id: UUID
   let url: URL
   let name: String
+  var stackID: UUID
+  let importedAt: Date
+  var expiresAt: Date?
   var thumbnail: Data?  // PNG; Sendable-friendly so it can cross the QL callback boundary
 }
 
@@ -103,6 +106,7 @@ struct ShelfThumbnailMetadata: Hashable, Sendable {
 enum ShelfStorageFailure: Equatable, Sendable {
   case initialization
   case listing
+  case metadata
 
   var message: String {
     switch self {
@@ -110,6 +114,8 @@ enum ShelfStorageFailure: Equatable, Sendable {
       "Shelf storage couldn't be prepared."
     case .listing:
       "Shelf storage couldn't be read."
+    case .metadata:
+      "Shelf workspace data couldn't be read."
     }
   }
 
@@ -117,6 +123,7 @@ enum ShelfStorageFailure: Equatable, Sendable {
     switch self {
     case .initialization: "initialization"
     case .listing: "listing"
+    case .metadata: "metadata loading"
     }
   }
 }
@@ -131,6 +138,7 @@ final class ShelfModel: ObservableObject {
 
   private struct ImportBatch {
     let urls: [URL]
+    let stackID: UUID
     let generation: UInt
   }
 
@@ -160,6 +168,8 @@ final class ShelfModel: ObservableObject {
   typealias MeasureAvailableCapacity = @Sendable (URL) async -> Result<Int64, Error>
   typealias ThumbnailMetadata = @Sendable (URL) -> ShelfThumbnailMetadata?
   typealias GenerateThumbnail = @Sendable (URL) async -> Data?
+  typealias LoadManifest = @Sendable (URL) -> Result<ShelfManifest?, Error>
+  typealias SaveManifest = @Sendable (ShelfManifest, URL) async -> Result<Void, Error>
 
   @Published private(set) var items: [ShelfItem] = []
   @Published private(set) var lastError: String?
@@ -169,6 +179,10 @@ final class ShelfModel: ObservableObject {
   @Published private(set) var presentationRequest: UUID?
   @Published private(set) var currentUsageBytes: Int64?
   @Published private(set) var lastRejectedImportBytes: Int64?
+  @Published private(set) var stacks: [ShelfStack]
+  @Published var selectedStackID: UUID
+  @Published var sameFileDuplicatePolicy: ShelfSameFileDuplicatePolicy
+  @Published var sameNameDuplicatePolicy: ShelfSameNameDuplicatePolicy
 
   private let dir: URL
   let storagePolicy: ShelfStoragePolicy
@@ -181,6 +195,18 @@ final class ShelfModel: ObservableObject {
   private let measureAvailableCapacity: MeasureAvailableCapacity
   private let thumbnailMetadata: ThumbnailMetadata
   private let generateThumbnailData: GenerateThumbnail
+  private let loadManifest: LoadManifest
+  private let saveManifest: SaveManifest
+  private var manifest: ShelfManifest
+  private let manifestURL: URL
+  private let quickLookController = ShelfQuickLookController()
+  private var useCounts: [UUID: Int] = [:]
+  private var expiryTask: Task<Void, Never>?
+  private var reservedOrigins: [ShelfOriginIdentity: URL] = [:]
+  private var originWaiters: [ShelfOriginIdentity: [CheckedContinuation<ShelfItem?, Never>]] = [:]
+  private var reservedNames: [String: URL] = [:]
+  private var nameWaiters: [String: [CheckedContinuation<ShelfItem?, Never>]] = [:]
+  private var manifestSaveTail: Task<Result<Void, Error>, Never>?
   private var itemUsageBytes: [URL: Int64] = [:]
   private var reservedImports: [URL: StorageReservation] = [:]
   private var importQueue: [ImportBatch] = []
@@ -207,6 +233,8 @@ final class ShelfModel: ObservableObject {
     measureAvailableCapacity: MeasureAvailableCapacity? = nil,
     thumbnailMetadata: ThumbnailMetadata? = nil,
     generateThumbnailData: GenerateThumbnail? = nil,
+    loadManifest: LoadManifest? = nil,
+    saveManifest: SaveManifest? = nil,
     storagePolicy: ShelfStoragePolicy = .standard
   ) {
     let base =
@@ -275,12 +303,24 @@ final class ShelfModel: ObservableObject {
           modificationDate: values.contentModificationDate, fileSize: values.fileSize)
       }
     self.generateThumbnailData = generateThumbnailData ?? Self.thumbnailData(for:)
+    self.loadManifest = loadManifest ?? ShelfManifestStore.load
+    self.saveManifest = saveManifest ?? ShelfManifestStore.save
     self.storagePolicy = storagePolicy
     dir = base
+    manifestURL = base.appendingPathExtension("json")
+    let defaultStack = ShelfStack(id: UUID(), name: "Shelf", expiryRule: .never)
+    let initialManifest = ShelfManifest.empty(defaultStack: defaultStack)
+    manifest = initialManifest
+    stacks = initialManifest.stacks
+    selectedStackID = defaultStack.id
+    sameFileDuplicatePolicy = initialManifest.sameFilePolicy
+    sameNameDuplicatePolicy = initialManifest.sameNamePolicy
     refreshStorage()
   }
 
   var urls: [URL] { items.map(\.url) }
+  var selectedItems: [ShelfItem] { items.filter { $0.stackID == selectedStackID } }
+  var selectedStack: ShelfStack? { stacks.first { $0.id == selectedStackID } }
   /// True while at least one notch window is under the current file drag.
   var isDragActive: Bool { dropState.isTargeted }
   /// Keeps the Shelf selected until every provider resolves and every copy finishes.
@@ -324,6 +364,139 @@ final class ShelfModel: ObservableObject {
     lastError = nil
   }
 
+  @discardableResult
+  func createStack(named rawName: String) async -> ShelfStack? {
+    let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty else {
+      lastError = "Workspace names can't be empty."
+      return nil
+    }
+    guard !stacks.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
+      lastError = "A workspace named \(name) already exists."
+      return nil
+    }
+    let stack = ShelfStack(id: UUID(), name: name, expiryRule: .never)
+    let previous = manifest
+    manifest.stacks.append(stack)
+    guard await persistManifest(reportingError: true) else {
+      manifest = previous
+      return nil
+    }
+    stacks = manifest.stacks
+    selectedStackID = stack.id
+    lastError = nil
+    return stack
+  }
+
+  func renameStack(_ stack: ShelfStack, to rawName: String) async -> Bool {
+    let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty,
+      !stacks.contains(where: {
+        $0.id != stack.id && $0.name.caseInsensitiveCompare(name) == .orderedSame
+      }),
+      let index = manifest.stacks.firstIndex(where: { $0.id == stack.id })
+    else {
+      lastError = "Workspace names must be unique and non-empty."
+      return false
+    }
+    let previous = manifest
+    manifest.stacks[index].name = name
+    guard await persistManifest(reportingError: true) else {
+      manifest = previous
+      return false
+    }
+    stacks = manifest.stacks
+    lastError = nil
+    return true
+  }
+
+  func setExpiryRule(_ rule: ShelfExpiryRule, for stack: ShelfStack) async -> Bool {
+    guard let index = manifest.stacks.firstIndex(where: { $0.id == stack.id }) else {
+      return false
+    }
+    let previous = manifest
+    manifest.stacks[index].expiryRule = rule
+    let now = Date.now
+    for itemIndex in manifest.items.indices where manifest.items[itemIndex].stackID == stack.id {
+      manifest.items[itemIndex].expiresAt = rule.interval.map {
+        manifest.items[itemIndex].importedAt.addingTimeInterval($0)
+      }
+    }
+    guard await persistManifest(reportingError: true) else {
+      manifest = previous
+      return false
+    }
+    stacks = manifest.stacks
+    applyManifestItems()
+    scheduleExpiry()
+    await cleanupExpired(at: now)
+    return true
+  }
+
+  func setSameFileDuplicatePolicy(_ policy: ShelfSameFileDuplicatePolicy) async {
+    let previous = manifest
+    manifest.sameFilePolicy = policy
+    guard await persistManifest(reportingError: true) else {
+      manifest = previous
+      return
+    }
+    sameFileDuplicatePolicy = policy
+  }
+
+  func setSameNameDuplicatePolicy(_ policy: ShelfSameNameDuplicatePolicy) async {
+    let previous = manifest
+    manifest.sameNamePolicy = policy
+    guard await persistManifest(reportingError: true) else {
+      manifest = previous
+      return
+    }
+    sameNameDuplicatePolicy = policy
+  }
+
+  func move(_ item: ShelfItem, to stack: ShelfStack) async -> Bool {
+    guard manifest.stacks.contains(where: { $0.id == stack.id }),
+      let index = manifest.items.firstIndex(where: { $0.id == item.id })
+    else { return false }
+    let previous = manifest
+    manifest.items[index].stackID = stack.id
+    manifest.items[index].expiresAt = stack.expiryRule.interval.map {
+      manifest.items[index].importedAt.addingTimeInterval($0)
+    }
+    guard await persistManifest(reportingError: true) else {
+      manifest = previous
+      return false
+    }
+    applyManifestItems()
+    scheduleExpiry()
+    await cleanupExpired()
+    return true
+  }
+
+  private func persistManifest(reportingError: Bool) async -> Bool {
+    let task = enqueueManifestSave()
+    switch await task.value {
+    case .success:
+      return true
+    case .failure(let error):
+      if reportingError { lastError = "Couldn't save Shelf workspace data." }
+      Log.app.error("Shelf metadata save failed: \(error.localizedDescription)")
+      return false
+    }
+  }
+
+  private func enqueueManifestSave() -> Task<Result<Void, Error>, Never> {
+    let previous = manifestSaveTail
+    let snapshot = manifest
+    let destination = manifestURL
+    let save = saveManifest
+    let task = Task {
+      if let previous { _ = await previous.value }
+      return await save(snapshot, destination)
+    }
+    manifestSaveTail = task
+    return task
+  }
+
   private func refreshStorage() {
     switch createDirectory(dir) {
     case .success:
@@ -336,25 +509,87 @@ final class ShelfModel: ObservableObject {
     switch listDirectory(dir) {
     case .success(let found):
       cleanAbandonedStagingEntries(in: found)
+      let loadedManifest: ShelfManifest
+      switch loadManifest(manifestURL) {
+      case .success(let stored):
+        loadedManifest = stored ?? manifest
+      case .failure(let error):
+        setStorageFailure(.metadata, error: error)
+        return
+      }
       storageFailure = nil
       lastError = nil
-      setItems(from: found)
+      setItems(from: found, loadedManifest: loadedManifest)
     case .failure(let error):
       setStorageFailure(.listing, error: error)
     }
   }
 
-  private func setItems(from found: [URL]) {
+  private func setItems(from found: [URL], loadedManifest: ShelfManifest) {
     cancelAllThumbnailWork()
-    items = found.filter { !isStagingURL($0) }
-      .sorted { modDate($0) < modDate($1) }
-      .map { ShelfItem(id: UUID(), url: $0, name: $0.lastPathComponent, thumbnail: nil) }
+    var recovered = repairedManifest(loadedManifest, found: found)
+    let storedURLs = found.filter { !isInternalURL($0) }
+    let urlsByName = Dictionary(uniqueKeysWithValues: storedURLs.map { ($0.lastPathComponent, $0) })
+    let recordedNames = Set(recovered.items.map(\.fileName))
+    let defaultStackID = recovered.stacks[0].id
+    for url in storedURLs where !recordedNames.contains(url.lastPathComponent) {
+      recovered.items.append(
+        ShelfItemRecord(
+          id: UUID(), fileName: url.lastPathComponent, stackID: defaultStackID,
+          importedAt: modDate(url), expiresAt: nil, origin: nil))
+    }
+    recovered.items.removeAll { urlsByName[$0.fileName] == nil }
+    manifest = recovered
+    stacks = recovered.stacks
+    sameFileDuplicatePolicy = recovered.sameFilePolicy
+    sameNameDuplicatePolicy = recovered.sameNamePolicy
+    if !stacks.contains(where: { $0.id == selectedStackID }) {
+      selectedStackID = stacks[0].id
+    }
+    items = recovered.items.compactMap { record in
+      guard let url = urlsByName[record.fileName] else { return nil }
+      return ShelfItem(
+        id: record.id, url: url, name: record.fileName, stackID: record.stackID,
+        importedAt: record.importedAt, expiresAt: record.expiresAt, thumbnail: nil)
+    }.sorted { $0.importedAt < $1.importedAt }
     let retainedURLs = Set(items.map(\.url))
     thumbnailCache = thumbnailCache.filter { retainedURLs.contains($0.key.url) }
     usageMutationGeneration &+= 1
     itemUsageBytes = [:]
     currentUsageBytes = nil
     scheduleUsageScan()
+    scheduleExpiry()
+    if recovered != loadedManifest { _ = enqueueManifestSave() }
+    if items.contains(where: { $0.expiresAt.map { $0 <= .now } == true }) {
+      Task { [weak self] in await self?.cleanupExpired() }
+    }
+  }
+
+  private func repairedManifest(_ loaded: ShelfManifest, found: [URL]) -> ShelfManifest {
+    var repaired = loaded
+    if repaired.stacks.isEmpty {
+      repaired.stacks = [ShelfStack(id: UUID(), name: "Shelf", expiryRule: .never)]
+    }
+    let validStackIDs = Set(repaired.stacks.map(\.id))
+    let defaultStackID = repaired.stacks[0].id
+    for index in repaired.items.indices where !validStackIDs.contains(repaired.items[index].stackID)
+    {
+      repaired.items[index].stackID = defaultStackID
+    }
+    let foundNames = Set(found.filter { !isInternalURL($0) }.map(\.lastPathComponent))
+    for pending in repaired.pendingImports where foundNames.contains(pending.fileName) {
+      if !repaired.items.contains(where: { $0.id == pending.id }) {
+        repaired.items.append(
+          ShelfItemRecord(
+            id: pending.id, fileName: pending.fileName,
+            stackID: validStackIDs.contains(pending.stackID) ? pending.stackID : defaultStackID,
+            importedAt: pending.importedAt, expiresAt: pending.expiresAt,
+            origin: pending.origin))
+      }
+    }
+    repaired.pendingImports.removeAll()
+    repaired.items.removeAll { !foundNames.contains($0.fileName) }
+    return repaired
   }
 
   private func scheduleUsageScan() {
@@ -407,6 +642,10 @@ final class ShelfModel: ObservableObject {
     }
   }
 
+  private func isInternalURL(_ url: URL) -> Bool {
+    isStagingURL(url) || url.lastPathComponent == ShelfManifestStore.fileName
+  }
+
   private func setStorageFailure(_ failure: ShelfStorageFailure, error: Error) {
     cancelAllThumbnailWork()
     items = []
@@ -432,14 +671,21 @@ final class ShelfModel: ObservableObject {
   /// hover/click animation while FileManager performs disk I/O.
   @discardableResult
   func add(_ source: URL) async -> Bool {
-    let result = await add(source, updatesLastError: true)
+    let result = await add(source, to: selectedStackID, updatesLastError: true)
+    return result.error == nil
+  }
+
+  @discardableResult
+  func add(_ source: URL, to stackID: UUID) async -> Bool {
+    let result = await add(source, to: stackID, updatesLastError: true)
     return result.error == nil
   }
 
   private func add(
-    _ source: URL, updatesLastError: Bool,
+    _ source: URL, to stackID: UUID, updatesLastError: Bool,
     expectedImportGeneration: UInt? = nil
   ) async -> (item: ShelfItem?, error: String?, rejectedBytes: Int64?) {
+    guard !isClearing else { return (nil, "Shelf is being cleared.", nil) }
     if let expectedImportGeneration, expectedImportGeneration != importGeneration {
       return (nil, nil, nil)
     }
@@ -448,22 +694,48 @@ final class ShelfModel: ObservableObject {
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
+    guard source.isFileURL else {
+      let error = "Only files and folders can be added."
+      setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
+      return (nil, error, nil)
+    }
+    guard let targetStack = stacks.first(where: { $0.id == stackID }) else {
+      let error = "That Shelf workspace no longer exists."
+      setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
+      return (nil, error, nil)
+    }
+    guard FileManager.default.fileExists(atPath: source.path) else {
+      let error = "That item is no longer available."
+      setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
+      return (nil, error, nil)
+    }
+    let origin = ShelfOriginIdentity.read(from: source)
+    if let duplicate = duplicateItem(for: origin, sourceName: source.lastPathComponent) {
+      if updatesLastError {
+        lastError = nil
+        lastRejectedImportBytes = nil
+      }
+      return (duplicate, nil, nil)
+    }
+    if sameFileDuplicatePolicy == .reuseExisting, reservedOrigins[origin] != nil {
+      if let item = await waitForImport(of: origin) { return (item, nil, nil) }
+      return await add(
+        source, to: stackID, updatesLastError: updatesLastError,
+        expectedImportGeneration: expectedImportGeneration)
+    }
+    let nameKey = duplicateNameKey(source.lastPathComponent)
+    if sameNameDuplicatePolicy == .reuseExisting, reservedNames[nameKey] != nil {
+      if let item = await waitForImport(named: nameKey) { return (item, nil, nil) }
+      return await add(
+        source, to: stackID, updatesLastError: updatesLastError,
+        expectedImportGeneration: expectedImportGeneration)
+    }
     guard
       ShelfLogic.hasCapacity(
         currentCount: items.count, pendingCount: reservedImports.count,
         maximum: Self.maximumItemCount)
     else {
       let error = "Shelf is full (\(Self.maximumItemCount) items)."
-      setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
-      return (nil, error, nil)
-    }
-    guard source.isFileURL else {
-      let error = "Only files and folders can be added."
-      setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
-      return (nil, error, nil)
-    }
-    guard FileManager.default.fileExists(atPath: source.path) else {
-      let error = "That item is no longer available."
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
@@ -478,11 +750,26 @@ final class ShelfModel: ObservableObject {
       return (nil, error, nil)
     }
     guard importIsCurrent(expectedImportGeneration) else { return (nil, nil, nil) }
+    if let duplicate = duplicateItem(for: origin, sourceName: source.lastPathComponent) {
+      return (duplicate, nil, nil)
+    }
     guard await refreshUsageForImport(expectedImportGeneration: expectedImportGeneration) else {
       guard importIsCurrent(expectedImportGeneration) else { return (nil, nil, nil) }
       let error = "Couldn't calculate current Shelf storage usage."
       setImportError(error, rejectedBytes: estimatedBytes, updatesLastError: updatesLastError)
       return (nil, error, estimatedBytes)
+    }
+    if sameFileDuplicatePolicy == .reuseExisting, reservedOrigins[origin] != nil {
+      if let item = await waitForImport(of: origin) { return (item, nil, nil) }
+      return await add(
+        source, to: stackID, updatesLastError: updatesLastError,
+        expectedImportGeneration: expectedImportGeneration)
+    }
+    if sameNameDuplicatePolicy == .reuseExisting, reservedNames[nameKey] != nil {
+      if let item = await waitForImport(named: nameKey) { return (item, nil, nil) }
+      return await add(
+        source, to: stackID, updatesLastError: updatesLastError,
+        expectedImportGeneration: expectedImportGeneration)
     }
     guard
       ShelfLogic.hasCapacity(
@@ -493,9 +780,16 @@ final class ShelfModel: ObservableObject {
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
-
-    let dest = reserveDestination(named: source.lastPathComponent, bytes: estimatedBytes)
-    defer { reservedImports.removeValue(forKey: dest) }
+    let dest = reserveDestination(
+      named: source.lastPathComponent, bytes: estimatedBytes, origin: origin)
+    var committedItem: ShelfItem?
+    defer {
+      reservedImports.removeValue(forKey: dest)
+      if reservedOrigins[origin] == dest { reservedOrigins.removeValue(forKey: origin) }
+      if reservedNames[nameKey] == dest { reservedNames.removeValue(forKey: nameKey) }
+      resolveImportWaiters(for: origin, item: committedItem)
+      resolveImportWaiters(named: nameKey, item: committedItem)
+    }
     if let error = await reservationError(
       destination: dest, sourceName: source.lastPathComponent,
       rejectedBytes: estimatedBytes)
@@ -554,6 +848,21 @@ final class ShelfModel: ObservableObject {
         return (nil, nil, nil)
       }
 
+      let importedAt = Date.now
+      let pending = ShelfPendingImport(
+        id: UUID(), fileName: dest.lastPathComponent, stackID: targetStack.id,
+        importedAt: importedAt,
+        expiresAt: targetStack.expiryRule.interval.map { importedAt.addingTimeInterval($0) },
+        origin: origin)
+      manifest.pendingImports.append(pending)
+      guard await persistManifest(reportingError: false) else {
+        manifest.pendingImports.removeAll { $0.id == pending.id }
+        removeStagingItem(staging)
+        let error = "Couldn't save Shelf workspace data."
+        setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
+        return (nil, error, nil)
+      }
+
       let moveResult = await moveItem(staging, dest)
       if !importIsCurrent(expectedImportGeneration) {
         switch moveResult {
@@ -564,21 +873,37 @@ final class ShelfModel: ObservableObject {
         case .failure:
           removeStagingItem(staging)
         }
+        manifest.pendingImports.removeAll { $0.id == pending.id }
+        _ = await persistManifest(reportingError: false)
         return (nil, nil, nil)
       }
       switch moveResult {
       case .success:
+        manifest.pendingImports.removeAll { $0.id == pending.id }
+        manifest.items.append(
+          ShelfItemRecord(
+            id: pending.id, fileName: pending.fileName, stackID: pending.stackID,
+            importedAt: pending.importedAt, expiresAt: pending.expiresAt,
+            origin: pending.origin))
+        let metadataSaved = await persistManifest(reportingError: false)
         if updatesLastError {
-          lastError = nil
+          lastError = metadataSaved ? nil : "Couldn't finish saving Shelf workspace data."
           lastRejectedImportBytes = nil
         }
-        let item = ShelfItem(id: UUID(), url: dest, name: dest.lastPathComponent, thumbnail: nil)
+        let item = ShelfItem(
+          id: pending.id, url: dest, name: dest.lastPathComponent,
+          stackID: pending.stackID, importedAt: pending.importedAt,
+          expiresAt: pending.expiresAt, thumbnail: nil)
         items.append(item)
+        committedItem = item
         usageMutationGeneration &+= 1
         itemUsageBytes[dest] = stagedBytes
         currentUsageBytes = ShelfLogic.totalBytes(itemUsageBytes.values)
+        scheduleExpiry()
         return (item, nil, nil)
       case .failure(let error):
+        manifest.pendingImports.removeAll { $0.id == pending.id }
+        _ = await persistManifest(reportingError: false)
         removeStagingItem(staging)
         let message = "Couldn’t add \(source.lastPathComponent)."
         setImportError(message, rejectedBytes: nil, updatesLastError: updatesLastError)
@@ -679,18 +1004,25 @@ final class ShelfModel: ObservableObject {
     }.value
     switch result {
     case .success:
+      quickLookController.close(itemID: item.id)
       cancelThumbnailWork(for: item.id, removingCachedThumbnailFor: item.url)
       items.removeAll { $0.id == item.id }
+      manifest.items.removeAll { $0.id == item.id }
+      useCounts.removeValue(forKey: item.id)
       didRemoveStoredItem(at: item.url)
-      lastError = nil
+      let saved = await persistManifest(reportingError: true)
+      if saved { lastError = nil }
       lastRejectedImportBytes = nil
     case .failure(let error as CocoaError) where error.code == .fileNoSuchFile:
       // Finder or another process may already have removed the persistent copy. The requested
       // final state is still achieved, so do not strand a ghost tile on the Shelf.
       cancelThumbnailWork(for: item.id, removingCachedThumbnailFor: item.url)
       items.removeAll { $0.id == item.id }
+      manifest.items.removeAll { $0.id == item.id }
+      useCounts.removeValue(forKey: item.id)
       didRemoveStoredItem(at: item.url)
-      lastError = nil
+      let saved = await persistManifest(reportingError: true)
+      if saved { lastError = nil }
       lastRejectedImportBytes = nil
     case .failure(let error):
       lastError = "Couldn’t remove \(item.name)."
@@ -726,6 +1058,7 @@ final class ShelfModel: ObservableObject {
       return removed
     }.value
     items.removeAll { removedIDs.contains($0.id) }
+    manifest.items.removeAll { removedIDs.contains($0.id) }
     // A failed deletion leaves its tile in place. Restore any visible request that Clear cancelled;
     // SwiftUI does not call `onAppear` again for a view whose identity never changed.
     for item in items where previouslyVisibleThumbnailIDs.contains(item.id) {
@@ -746,14 +1079,106 @@ final class ShelfModel: ObservableObject {
       originalIDs.subtracting(removedIDs).isEmpty
       ? nil : "Some Shelf items couldn’t be removed."
     if lastError == nil { lastRejectedImportBytes = nil }
+    _ = await persistManifest(reportingError: lastError == nil)
+    scheduleExpiry()
   }
 
   func open(_ item: ShelfItem) {
+    beginUsing(item)
     guard NSWorkspace.shared.open(item.url) else {
+      endUsing(item)
       lastError = "Couldn’t open \(item.name)."
       return
     }
+    // Keep the path stable while LaunchServices hands it to the destination app. Once that app has
+    // opened the file, removing the Shelf directory entry cannot invalidate its open descriptor.
+    Task { [weak self] in
+      try? await Task.sleep(for: .seconds(10))
+      self?.endUsing(item)
+    }
     lastError = nil
+  }
+
+  func quickLook(_ item: ShelfItem) {
+    beginUsing(item)
+    guard quickLookController.present(item, onClose: { [weak self] in self?.endUsing(item) }) else {
+      endUsing(item)
+      lastError =
+        FileManager.default.fileExists(atPath: item.url.path)
+        ? "Quick Look isn't available for \(item.name)."
+        : "\(item.name) is no longer available."
+      return
+    }
+    lastError = nil
+  }
+
+  func beginUsing(_ item: ShelfItem) {
+    guard items.contains(where: { $0.id == item.id }) else { return }
+    useCounts[item.id, default: 0] += 1
+  }
+
+  func endUsing(_ item: ShelfItem) {
+    guard let count = useCounts[item.id] else { return }
+    if count <= 1 {
+      useCounts.removeValue(forKey: item.id)
+    } else {
+      useCounts[item.id] = count - 1
+    }
+    if items.first(where: { $0.id == item.id })?.expiresAt.map({ $0 <= .now }) == true {
+      Task { [weak self] in await self?.cleanupExpired() }
+    }
+  }
+
+  func itemProvider(for item: ShelfItem) -> NSItemProvider {
+    beginUsing(item)
+    return ShelfDragItemProvider(item: item) { [weak self] in
+      self?.endUsing(item)
+    }
+  }
+
+  func expirationText(for item: ShelfItem, now: Date = .now) -> String? {
+    guard let expiry = item.expiresAt else { return nil }
+    if expiry <= now { return useCounts[item.id] == nil ? "Expired" : "Expires after use" }
+    return "Expires \(expiry.formatted(.relative(presentation: .named)))"
+  }
+
+  func cleanupStorage() async {
+    await cleanupItems(at: .now, includeMissing: true)
+  }
+
+  func cleanupExpired(at date: Date = .now) async {
+    await cleanupItems(at: date, includeMissing: false)
+  }
+
+  private func cleanupItems(at date: Date, includeMissing: Bool) async {
+    let candidates = items.filter { item in
+      guard useCounts[item.id] == nil else { return false }
+      let expired = item.expiresAt.map { $0 <= date } == true
+      let missing = includeMissing && !FileManager.default.fileExists(atPath: item.url.path)
+      return expired || missing
+    }
+    for item in candidates { await remove(item) }
+    scheduleExpiry()
+  }
+
+  private func scheduleExpiry() {
+    expiryTask?.cancel()
+    guard let next = items.compactMap(\.expiresAt).filter({ $0 > .now }).min() else { return }
+    expiryTask = Task { [weak self] in
+      let interval = max(0, next.timeIntervalSinceNow)
+      try? await Task.sleep(for: .seconds(interval))
+      guard !Task.isCancelled else { return }
+      await self?.cleanupExpired()
+    }
+  }
+
+  private func applyManifestItems() {
+    let records = Dictionary(uniqueKeysWithValues: manifest.items.map { ($0.id, $0) })
+    for index in items.indices {
+      guard let record = records[items[index].id] else { continue }
+      items[index].stackID = record.stackID
+      items[index].expiresAt = record.expiresAt
+    }
   }
 
   func dismissError() {
@@ -772,12 +1197,53 @@ final class ShelfModel: ObservableObject {
     }
   }
 
-  private func reserveDestination(named name: String, bytes: Int64) -> URL {
+  private func duplicateItem(for origin: ShelfOriginIdentity, sourceName: String) -> ShelfItem? {
+    if sameFileDuplicatePolicy == .reuseExisting,
+      let record = manifest.items.first(where: { $0.origin == origin })
+    {
+      return items.first { $0.id == record.id }
+    }
+    if sameNameDuplicatePolicy == .reuseExisting {
+      return items.first { $0.name.caseInsensitiveCompare(sourceName) == .orderedSame }
+    }
+    return nil
+  }
+
+  private func waitForImport(of origin: ShelfOriginIdentity) async -> ShelfItem? {
+    await withCheckedContinuation { continuation in
+      originWaiters[origin, default: []].append(continuation)
+    }
+  }
+
+  private func resolveImportWaiters(for origin: ShelfOriginIdentity, item: ShelfItem?) {
+    let waiters = originWaiters.removeValue(forKey: origin) ?? []
+    for waiter in waiters { waiter.resume(returning: item) }
+  }
+
+  private func waitForImport(named nameKey: String) async -> ShelfItem? {
+    await withCheckedContinuation { continuation in
+      nameWaiters[nameKey, default: []].append(continuation)
+    }
+  }
+
+  private func resolveImportWaiters(named nameKey: String, item: ShelfItem?) {
+    let waiters = nameWaiters.removeValue(forKey: nameKey) ?? []
+    for waiter in waiters { waiter.resume(returning: item) }
+  }
+
+  private func duplicateNameKey(_ name: String) -> String {
+    name.lowercased()
+  }
+
+  private func reserveDestination(
+    named name: String, bytes: Int64, origin: ShelfOriginIdentity
+  ) -> URL {
     var candidate = name
     var i = 1
     let stem = (name as NSString).deletingPathExtension
     let ext = (name as NSString).pathExtension
-    while FileManager.default.fileExists(atPath: dir.appendingPathComponent(candidate).path)
+    while isReservedInternalName(candidate)
+      || FileManager.default.fileExists(atPath: dir.appendingPathComponent(candidate).path)
       || reservedImports[dir.appendingPathComponent(candidate)] != nil
     {
       candidate = ext.isEmpty ? "\(stem) \(i)" : "\(stem) \(i).\(ext)"
@@ -785,7 +1251,14 @@ final class ShelfModel: ObservableObject {
     }
     let destination = dir.appendingPathComponent(candidate)
     reservedImports[destination] = StorageReservation(bytes: bytes, isStaged: false)
+    reservedOrigins[origin] = destination
+    reservedNames[duplicateNameKey(name)] = destination
     return destination
+  }
+
+  private func isReservedInternalName(_ name: String) -> Bool {
+    name == ShelfManifestStore.fileName
+      || isStagingURL(dir.appendingPathComponent(name))
   }
 
   private func stagingDestination() -> URL {
@@ -943,7 +1416,8 @@ final class ShelfModel: ObservableObject {
     guard !fileURLs.isEmpty else { return false }
 
     dropState.beginImports(fileURLs.count)
-    importQueue.append(ImportBatch(urls: fileURLs, generation: importGeneration))
+    importQueue.append(
+      ImportBatch(urls: fileURLs, stackID: selectedStackID, generation: importGeneration))
     startImportWorkerIfNeeded()
     return true
   }
@@ -965,7 +1439,8 @@ final class ShelfModel: ObservableObject {
       for url in batch.urls {
         guard generation == importGeneration, !Task.isCancelled else { return }
         let result = await add(
-          url, updatesLastError: false, expectedImportGeneration: generation)
+          url, to: batch.stackID, updatesLastError: false,
+          expectedImportGeneration: generation)
         guard generation == importGeneration, !Task.isCancelled else { return }
         if firstError == nil, let error = result.error {
           firstError = error

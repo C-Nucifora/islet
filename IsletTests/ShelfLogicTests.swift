@@ -75,6 +75,16 @@ final class ShelfLogicTests: XCTestCase {
     }
   }
 
+  private actor FailingSecondManifestSave {
+    private var callCount = 0
+
+    func save(_ manifest: ShelfManifest, to url: URL) async -> Result<Void, Error> {
+      callCount += 1
+      if callCount == 2 { return .failure(CopyFailure.expected) }
+      return await ShelfManifestStore.save(manifest, to: url)
+    }
+  }
+
   private actor ThumbnailGeneratorProbe {
     private var requestedURLs: [URL] = []
     private var activeCount = 0
@@ -1175,5 +1185,359 @@ final class ShelfLogicTests: XCTestCase {
     let folderBytes = try ShelfFileMeasurements.estimatedCopyBytes(at: folder).get()
 
     XCTAssertEqual(folderBytes, 4_096 + fileBytes * 2)
+  }
+
+  @MainActor
+  func testConcurrentSameFileImportsReuseOneShelfCopy() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    let source = root.appendingPathComponent("same.txt")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try Data("one source".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let gate = StagedCopyGate()
+    let model = ShelfModel(
+      directory: shelf,
+      copyItem: { source, destination in await gate.copy(source: source, to: destination) })
+
+    let first = Task { await model.add(source) }
+    for _ in 0..<100 where !(await gate.hasStarted()) {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let second = Task { await model.add(source) }
+    await gate.release()
+    let firstAdded = await first.value
+    let secondAdded = await second.value
+
+    XCTAssertTrue(secondAdded)
+    XCTAssertTrue(firstAdded)
+    XCTAssertEqual(model.items.map(\.name), ["same.txt"])
+  }
+
+  @MainActor
+  func testConcurrentSameNameImportsHonorReusePolicy() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    let firstFolder = root.appendingPathComponent("first", isDirectory: true)
+    let secondFolder = root.appendingPathComponent("second", isDirectory: true)
+    try FileManager.default.createDirectory(at: firstFolder, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: secondFolder, withIntermediateDirectories: true)
+    let firstSource = firstFolder.appendingPathComponent("report.txt")
+    let secondSource = secondFolder.appendingPathComponent("report.txt")
+    try Data("first".utf8).write(to: firstSource)
+    try Data("second".utf8).write(to: secondSource)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let gate = StagedCopyGate()
+    let model = ShelfModel(
+      directory: shelf,
+      copyItem: { source, destination in await gate.copy(source: source, to: destination) })
+    await model.setSameNameDuplicatePolicy(.reuseExisting)
+
+    let first = Task { await model.add(firstSource) }
+    for _ in 0..<100 where !(await gate.hasStarted()) {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let second = Task { await model.add(secondSource) }
+    await Task.yield()
+    await gate.release()
+
+    let firstAdded = await first.value
+    let secondAdded = await second.value
+    XCTAssertTrue(firstAdded)
+    XCTAssertTrue(secondAdded)
+    XCTAssertEqual(model.items.map(\.name), ["report.txt"])
+    XCTAssertEqual(try String(contentsOf: model.items[0].url, encoding: .utf8), "first")
+  }
+
+  @MainActor
+  func testDuplicateReuseStillWorksWhenShelfIsFull() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    let sourceFolder = root.appendingPathComponent("source", isDirectory: true)
+    try FileManager.default.createDirectory(at: shelf, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: sourceFolder, withIntermediateDirectories: true)
+    for index in 0..<ShelfModel.maximumItemCount {
+      try Data([UInt8(index % 255)]).write(
+        to: shelf.appendingPathComponent("item-\(index).txt"))
+    }
+    let duplicate = sourceFolder.appendingPathComponent("item-0.txt")
+    try Data("replacement must not be copied".utf8).write(to: duplicate)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = ShelfModel(directory: shelf)
+    await model.setSameNameDuplicatePolicy(.reuseExisting)
+
+    let duplicateReused = await model.add(duplicate)
+    XCTAssertTrue(duplicateReused)
+    XCTAssertEqual(model.items.count, ShelfModel.maximumItemCount)
+    XCTAssertEqual(
+      try Data(contentsOf: shelf.appendingPathComponent("item-0.txt")), Data([0]))
+  }
+
+  @MainActor
+  func testDifferentFilesWithTheSameNameGetPredictableNumberedNames() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    let firstFolder = root.appendingPathComponent("first", isDirectory: true)
+    let secondFolder = root.appendingPathComponent("second", isDirectory: true)
+    try FileManager.default.createDirectory(at: firstFolder, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: secondFolder, withIntermediateDirectories: true)
+    let first = firstFolder.appendingPathComponent("report.txt")
+    let second = secondFolder.appendingPathComponent("report.txt")
+    try Data("first".utf8).write(to: first)
+    try Data("second".utf8).write(to: second)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = ShelfModel(directory: shelf)
+
+    let firstAdded = await model.add(first)
+    let secondAdded = await model.add(second)
+
+    XCTAssertTrue(firstAdded)
+    XCTAssertTrue(secondAdded)
+    XCTAssertEqual(model.items.map(\.name), ["report.txt", "report 1.txt"])
+    XCTAssertEqual(try String(contentsOf: model.items[1].url, encoding: .utf8), "second")
+  }
+
+  @MainActor
+  func testSameNameReusePolicyKeepsTheExistingContents() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    let firstFolder = root.appendingPathComponent("first", isDirectory: true)
+    let secondFolder = root.appendingPathComponent("second", isDirectory: true)
+    try FileManager.default.createDirectory(at: firstFolder, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: secondFolder, withIntermediateDirectories: true)
+    let first = firstFolder.appendingPathComponent("report.txt")
+    let second = secondFolder.appendingPathComponent("report.txt")
+    try Data("retained".utf8).write(to: first)
+    try Data("ignored".utf8).write(to: second)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = ShelfModel(directory: shelf)
+    await model.setSameNameDuplicatePolicy(.reuseExisting)
+
+    let firstAdded = await model.add(first)
+    let secondAdded = await model.add(second)
+
+    XCTAssertTrue(firstAdded)
+    XCTAssertTrue(secondAdded)
+    XCTAssertEqual(model.items.map(\.name), ["report.txt"])
+    XCTAssertEqual(try String(contentsOf: model.items[0].url, encoding: .utf8), "retained")
+  }
+
+  @MainActor
+  func testExpiryWaitsForUseAndNeverDeletesTheOriginal() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    let source = root.appendingPathComponent("expiring.txt")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try Data("original".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = ShelfModel(directory: shelf)
+    let createdWorkspace = await model.createStack(named: "Scratch")
+    let workspace = try XCTUnwrap(createdWorkspace)
+    let expirySaved = await model.setExpiryRule(.oneHour, for: workspace)
+    let added = await model.add(source, to: workspace.id)
+    XCTAssertTrue(expirySaved)
+    XCTAssertTrue(added)
+    let item = try XCTUnwrap(model.items.first)
+    let afterExpiry = try XCTUnwrap(item.expiresAt).addingTimeInterval(1)
+
+    model.beginUsing(item)
+    await model.cleanupExpired(at: afterExpiry)
+    XCTAssertEqual(model.items.map(\.id), [item.id])
+    XCTAssertTrue(FileManager.default.fileExists(atPath: item.url.path))
+
+    model.endUsing(item)
+    await model.cleanupExpired(at: afterExpiry)
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+    XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "original")
+  }
+
+  @MainActor
+  func testExpiryChangedDuringUseCleansUpWhenTheLeaseEnds() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    try FileManager.default.createDirectory(at: shelf, withIntermediateDirectories: true)
+    let stored = shelf.appendingPathComponent("old.txt")
+    try Data("old".utf8).write(to: stored)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let stack = ShelfStack(id: UUID(), name: "Scratch", expiryRule: .never)
+    let record = ShelfItemRecord(
+      id: UUID(), fileName: stored.lastPathComponent, stackID: stack.id,
+      importedAt: Date.now.addingTimeInterval(-7_200), expiresAt: nil, origin: nil)
+    let manifest = ShelfManifest(
+      stacks: [stack], items: [record], pendingImports: [],
+      sameFilePolicy: .reuseExisting, sameNamePolicy: .keepBoth)
+    try await ShelfManifestStore.save(manifest, to: shelf.appendingPathExtension("json")).get()
+    let model = ShelfModel(directory: shelf)
+    let itemBeforeRuleChange = try XCTUnwrap(model.items.first)
+
+    model.beginUsing(itemBeforeRuleChange)
+    let ruleChanged = await model.setExpiryRule(.oneHour, for: stack)
+    XCTAssertTrue(ruleChanged)
+    XCTAssertEqual(model.items.map(\.id), [record.id])
+    model.endUsing(itemBeforeRuleChange)
+    for _ in 0..<200 where !model.items.isEmpty {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: stored.path))
+  }
+
+  @MainActor
+  func testMovingAnOldItemIntoAnExpiringWorkspaceCleansItUpImmediately() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    try FileManager.default.createDirectory(at: shelf, withIntermediateDirectories: true)
+    let stored = shelf.appendingPathComponent("old.txt")
+    try Data("old".utf8).write(to: stored)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let permanent = ShelfStack(id: UUID(), name: "Permanent", expiryRule: .never)
+    let scratch = ShelfStack(id: UUID(), name: "Scratch", expiryRule: .oneHour)
+    let record = ShelfItemRecord(
+      id: UUID(), fileName: stored.lastPathComponent, stackID: permanent.id,
+      importedAt: Date.now.addingTimeInterval(-7_200), expiresAt: nil, origin: nil)
+    let manifest = ShelfManifest(
+      stacks: [permanent, scratch], items: [record], pendingImports: [],
+      sameFilePolicy: .reuseExisting, sameNamePolicy: .keepBoth)
+    try await ShelfManifestStore.save(manifest, to: shelf.appendingPathExtension("json")).get()
+    let model = ShelfModel(directory: shelf)
+
+    let moved = await model.move(try XCTUnwrap(model.items.first), to: scratch)
+    XCTAssertTrue(moved)
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: stored.path))
+  }
+
+  @MainActor
+  func testCleanupRemovesMissingItemMetadata() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    let source = root.appendingPathComponent("missing.txt")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try Data("source".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = ShelfModel(directory: shelf)
+    let added = await model.add(source)
+    XCTAssertTrue(added)
+    try FileManager.default.removeItem(at: try XCTUnwrap(model.items.first?.url))
+
+    await model.cleanupStorage()
+
+    XCTAssertTrue(model.items.isEmpty)
+    let relaunched = ShelfModel(directory: shelf)
+    XCTAssertTrue(relaunched.items.isEmpty)
+  }
+
+  @MainActor
+  func testStacksItemsAndPoliciesPersistAcrossRelaunch() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    let source = root.appendingPathComponent("persisted.txt")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try Data("persisted".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = ShelfModel(directory: shelf)
+    let createdWorkspace = await model.createStack(named: "Project Alpha")
+    let workspace = try XCTUnwrap(createdWorkspace)
+    let expirySaved = await model.setExpiryRule(.oneWeek, for: workspace)
+    await model.setSameFileDuplicatePolicy(.keepBoth)
+    let added = await model.add(source, to: workspace.id)
+    XCTAssertTrue(expirySaved)
+    XCTAssertTrue(added)
+
+    let relaunched = ShelfModel(directory: shelf)
+
+    XCTAssertEqual(relaunched.stacks.first(where: { $0.id == workspace.id })?.name, "Project Alpha")
+    XCTAssertEqual(relaunched.stacks.first(where: { $0.id == workspace.id })?.expiryRule, .oneWeek)
+    XCTAssertEqual(relaunched.items.first?.stackID, workspace.id)
+    XCTAssertNotNil(relaunched.items.first?.expiresAt)
+    XCTAssertEqual(relaunched.sameFileDuplicatePolicy, .keepBoth)
+  }
+
+  @MainActor
+  func testMetadataFailureBeforeCommitLeavesNoPartialItem() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    let source = root.appendingPathComponent("metadata-fails.txt")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try Data("source".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = ShelfModel(
+      directory: shelf,
+      saveManifest: { _, _ in .failure(CopyFailure.expected) })
+
+    let added = await model.add(source)
+    XCTAssertFalse(added)
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertEqual(
+      try FileManager.default.contentsOfDirectory(at: shelf, includingPropertiesForKeys: nil), [])
+  }
+
+  @MainActor
+  func testRelaunchRecoversDestinationCommittedWithPendingMetadata() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    try FileManager.default.createDirectory(at: shelf, withIntermediateDirectories: true)
+    let destination = shelf.appendingPathComponent("recovered.txt")
+    try Data("complete".utf8).write(to: destination)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let stack = ShelfStack(id: UUID(), name: "Recovered Workspace", expiryRule: .oneDay)
+    let importedAt = Date.now
+    let pending = ShelfPendingImport(
+      id: UUID(), fileName: destination.lastPathComponent, stackID: stack.id,
+      importedAt: importedAt, expiresAt: importedAt.addingTimeInterval(86_400),
+      origin: ShelfOriginIdentity(
+        standardizedPath: "/original/recovered.txt", resourceIdentifier: nil))
+    let manifest = ShelfManifest(
+      stacks: [stack], items: [], pendingImports: [pending],
+      sameFilePolicy: .reuseExisting, sameNamePolicy: .keepBoth)
+    try await ShelfManifestStore.save(manifest, to: shelf.appendingPathExtension("json")).get()
+
+    let relaunched = ShelfModel(directory: shelf)
+
+    XCTAssertEqual(relaunched.items.first?.id, pending.id)
+    XCTAssertEqual(relaunched.items.first?.stackID, stack.id)
+    XCTAssertEqual(
+      try XCTUnwrap(relaunched.items.first?.expiresAt).timeIntervalSince1970,
+      try XCTUnwrap(pending.expiresAt).timeIntervalSince1970, accuracy: 1)
+  }
+
+  @MainActor
+  func testRelaunchRecoversAfterFinalMetadataSaveFails() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    let source = root.appendingPathComponent("committed.txt")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try Data("complete".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let saver = FailingSecondManifestSave()
+    let model = ShelfModel(directory: shelf, saveManifest: saver.save)
+
+    let added = await model.add(source)
+    XCTAssertTrue(added)
+    XCTAssertEqual(model.lastError, "Couldn't finish saving Shelf workspace data.")
+    let committedID = try XCTUnwrap(model.items.first?.id)
+    let committedStackID = try XCTUnwrap(model.items.first?.stackID)
+
+    let relaunched = ShelfModel(directory: shelf)
+    XCTAssertEqual(relaunched.items.first?.id, committedID)
+    XCTAssertEqual(relaunched.items.first?.stackID, committedStackID)
+    XCTAssertEqual(
+      try String(contentsOf: try XCTUnwrap(relaunched.items.first?.url), encoding: .utf8),
+      "complete")
   }
 }
