@@ -23,8 +23,12 @@ settings:
     # Create the certificate with Scripts/create-signing-certificate.sh.
     CODE_SIGN_IDENTITY: "$(ISLET_CODE_SIGN_IDENTITY)"
     CODE_SIGN_STYLE: Manual
-    ENABLE_HARDENED_RUNTIME: false
     MACOSX_DEPLOYMENT_TARGET: "26.0"
+  configs:
+    Debug:
+      ENABLE_HARDENED_RUNTIME: false
+    Release:
+      ENABLE_HARDENED_RUNTIME: true
 targets:
   Islet:
     type: application
