@@ -28,6 +28,19 @@ final class SystemMetricsTests: XCTestCase {
     XCTAssertTrue(live.allowsRemotePolling)
   }
 
+  func testEverySystemEnergyCadenceProducesAUsableRateWindow() {
+    for mode in EnergyMode.allCases {
+      for systemLowPowerMode in [false, true] {
+        let policy = EnergyPolicy(mode: mode, systemLowPowerMode: systemLowPowerMode)
+        for viewIsLive in [false, true] {
+          XCTAssertLessThanOrEqual(
+            policy.systemInterval(viewIsLive: viewIsLive), metricsMaxSampleGap,
+            "\(mode), low power: \(systemLowPowerMode), live: \(viewIsLive)")
+        }
+      }
+    }
+  }
+
   func testLowEnergySlowsBatteryAndT3EvenWhenMacOSLowPowerModeIsOff() {
     let automatic = EnergyPolicy(mode: .automatic, systemLowPowerMode: false)
     let lowEnergy = EnergyPolicy(mode: .lowEnergy, systemLowPowerMode: false)
