@@ -10,6 +10,92 @@ struct CalendarChoice: Identifiable, Equatable, Sendable {
   let colorHex: String?
 }
 
+enum CalendarMeetingLinkTrust: Equatable, Sendable {
+  case nativeCall
+  case knownProvider(host: String)
+  case unrecognized(host: String)
+
+  var requiresConfirmation: Bool {
+    if case .unrecognized = self { return true }
+    return false
+  }
+
+  var destinationHost: String? {
+    switch self {
+    case .nativeCall: return nil
+    case .knownProvider(let host), .unrecognized(let host): return host
+    }
+  }
+}
+
+struct CalendarMeetingLink: Equatable, Sendable {
+  let url: URL
+  let trust: CalendarMeetingLinkTrust
+}
+
+enum CalendarMeetingLinkPolicy {
+  /// Add providers here only when the registrable domain is controlled by the meeting service.
+  /// Matching happens at a DNS-label boundary, so provider names inside an attacker's domain do
+  /// not inherit trust.
+  static let knownProviderDomains: Set<String> = [
+    "8x8.vc",
+    "chime.aws",
+    "meet.google.com",
+    "meet.jit.si",
+    "teams.live.com",
+    "teams.microsoft.com",
+    "webex.com",
+    "whereby.com",
+    "zoom.us",
+  ]
+
+  /// A custom provider must identify itself in a complete hostname label. A path such as
+  /// `/meeting/notes` is not enough because event URLs, locations, and notes can all contain links
+  /// unrelated to a call.
+  private static let enterpriseHostLabels: Set<String> = [
+    "call", "calls", "conference", "meet", "meeting", "meetings", "video", "webinar",
+  ]
+
+  static func candidate(_ url: URL) -> CalendarMeetingLink? {
+    guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+      let scheme = components.scheme?.lowercased()
+    else { return nil }
+
+    if ["facetime", "facetime-audio"].contains(scheme) {
+      guard components.password == nil,
+        components.user != nil || components.host != nil || !components.path.isEmpty
+      else { return nil }
+      return CalendarMeetingLink(url: url, trust: .nativeCall)
+    }
+
+    guard scheme == "https", components.user == nil, components.password == nil,
+      let host = components.host?.lowercased(), !host.isEmpty
+    else { return nil }
+
+    if knownProviderDomains.contains(where: { host == $0 || host.hasSuffix("." + $0) }) {
+      return CalendarMeetingLink(url: url, trust: .knownProvider(host: host))
+    }
+    // Do not downgrade a provider-shaped lookalike into a generic candidate. A host such as
+    // `meet.google.com.attacker.example` should disappear rather than borrow Google's name in a
+    // confirmation prompt.
+    if knownProviderDomains.contains(where: { containsDomainLabels($0, in: host) }) { return nil }
+
+    let hostLabels = Set(host.split(separator: ".").map(String.init))
+    guard !hostLabels.isDisjoint(with: enterpriseHostLabels) else { return nil }
+
+    return CalendarMeetingLink(url: url, trust: .unrecognized(host: host))
+  }
+
+  private static func containsDomainLabels(_ domain: String, in host: String) -> Bool {
+    let hostLabels = host.split(separator: ".")
+    let domainLabels = domain.split(separator: ".")
+    guard hostLabels.count >= domainLabels.count else { return false }
+    return (0...(hostLabels.count - domainLabels.count)).contains { start in
+      hostLabels[start..<(start + domainLabels.count)].elementsEqual(domainLabels)
+    }
+  }
+}
+
 @MainActor
 final class CalendarActivity: NotchActivity, ObservableObject {
   enum LoadState: Equatable {
@@ -211,64 +297,30 @@ final class CalendarActivity: NotchActivity, ObservableObject {
     }
   }
 
-  /// Pull a video-call link from the event's URL or notes.
+  /// Pull a video-call link from the event's dedicated URL or unstructured text. EventKit's URL
+  /// field wins even when a known provider also appears in the notes.
   nonisolated static func joinURL(from event: EKEvent) -> URL? {
-    if let url = event.url, Self.isMeetingLink(url) { return url }
     let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    var detectedURLs: [URL] = []
     for text in [event.location, event.structuredLocation?.title, event.notes].compactMap({ $0 }) {
       let range = NSRange(text.startIndex..., in: text)
-      if let match = detector?.matches(in: text, range: range)
-        .compactMap(\.url)
-        .first(where: Self.isMeetingLink)
-      {
-        return match
-      }
+      detectedURLs.append(
+        contentsOf: detector?.matches(in: text, range: range).compactMap(\.url) ?? [])
     }
-    return nil
+    return selectJoinURL(structuredURL: event.url, detectedURLs: detectedURLs)
+  }
+
+  nonisolated static func selectJoinURL(
+    structuredURL: URL?, detectedURLs: [URL]
+  ) -> URL? {
+    if let structuredURL, CalendarMeetingLinkPolicy.candidate(structuredURL) != nil {
+      return structuredURL
+    }
+    return detectedURLs.first { CalendarMeetingLinkPolicy.candidate($0) != nil }
   }
 
   nonisolated static func isMeetingLink(_ url: URL) -> Bool {
-    guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-      let scheme = components.scheme?.lowercased()
-    else { return false }
-
-    // Native call links are useful join targets and do not pass through a browser.
-    if ["facetime", "facetime-audio"].contains(scheme) { return true }
-    guard scheme == "https", components.user == nil,
-      components.password == nil, let host = components.host?.lowercased(), !host.isEmpty
-    else { return false }
-
-    // Keep known services for links whose paths are opaque, but match at DNS-label boundaries so
-    // a hostname such as `zoom.us.attacker.example` is never accepted.
-    let knownDomains = [
-      "zoom.us", "meet.google.com", "teams.microsoft.com", "teams.live.com",
-      "webex.com", "whereby.com", "around.co", "meet.jit.si", "chime.aws",
-    ]
-    if knownDomains.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return true }
-
-    // Corporate and new providers should work without an app release. Prefer semantic host/path
-    // and query markers rather than an ever-growing provider allow-list.
-    let markers: Set<String> = [
-      "call", "calls", "conference", "join", "meet", "meeting", "meetings", "room",
-      "video", "videocall", "webinar",
-    ]
-    if !Set(host.split(separator: ".").map(String.init)).isDisjoint(with: markers) { return true }
-
-    let pathMarkers = Set(
-      components.path.split(separator: "/").map {
-        $0.lowercased().replacingOccurrences(of: "-", with: "")
-      })
-    if !pathMarkers.isDisjoint(with: markers) { return true }
-
-    let queryMarkers: Set<String> = [
-      "callid", "conferenceid", "confno", "meetingid", "roomid", "webinarid",
-    ]
-    return components.queryItems?.contains {
-      queryMarkers.contains(
-        $0.name.lowercased()
-          .replacingOccurrences(of: "_", with: "")
-          .replacingOccurrences(of: "-", with: ""))
-    } == true
+    CalendarMeetingLinkPolicy.candidate(url) != nil
   }
 
   let tabIcon = "calendar"
@@ -319,20 +371,64 @@ struct CalendarAgendaView: View {
             }
             Text(event.title).font(.callout).foregroundStyle(.white).lineLimit(1)
             Spacer()
-            if let url = event.joinURL {
-              Button {
-                NSWorkspace.shared.open(url)
-              } label: {
-                Image(systemName: "video.fill").foregroundStyle(.green)
-              }
-              .buttonStyle(.plain)
-              .help("Join \(event.title)")
-              .accessibilityLabel("Join \(event.title)")
+            if let url = event.joinURL, let link = CalendarMeetingLinkPolicy.candidate(url) {
+              CalendarMeetingLinkButton(link: link, eventTitle: event.title)
             }
           }
         }
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+  }
+}
+
+struct CalendarMeetingLinkButton: View {
+  let link: CalendarMeetingLink
+  let eventTitle: String
+  @State private var confirmationPresented = false
+
+  var body: some View {
+    Button {
+      if link.trust.requiresConfirmation {
+        confirmationPresented = true
+      } else {
+        NSWorkspace.shared.open(link.url)
+      }
+    } label: {
+      if case .unrecognized(let host) = link.trust {
+        Label(host, systemImage: "video.fill")
+          .font(.caption2)
+          .lineLimit(1)
+          .foregroundStyle(.green)
+      } else {
+        Image(systemName: "video.fill").foregroundStyle(.green)
+      }
+    }
+    .buttonStyle(.plain)
+    .help(link.trust.destinationHost.map { "Join \(eventTitle) at \($0)" } ?? "Join \(eventTitle)")
+    .accessibilityLabel(
+      link.trust.destinationHost.map { "Join \(eventTitle) at \($0)" } ?? "Join \(eventTitle)"
+    )
+    .confirmationDialog(
+      confirmationTitle,
+      isPresented: $confirmationPresented,
+      titleVisibility: .visible
+    ) {
+      if let host = link.trust.destinationHost {
+        Button("Open \(host)") { NSWorkspace.shared.open(link.url) }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      if let host = link.trust.destinationHost {
+        Text(
+          "Islet does not recognize \(host) as a meeting provider. Check the address before opening it."
+        )
+      }
+    }
+  }
+
+  private var confirmationTitle: String {
+    guard let host = link.trust.destinationHost else { return "Open meeting link?" }
+    return "Open \(host)?"
   }
 }

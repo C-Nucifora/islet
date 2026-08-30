@@ -39,7 +39,13 @@ final class ContinuityMonitor: ObservableObject {
   }
 
   private func refresh() {
-    let items = reader.read()
+    let items: [MenuBarLiveActivity]?
+    do {
+      items = try reader.read()
+    } catch {
+      Log.app.error("Continuity: incompatible accessibility value: \(String(describing: error))")
+      items = nil
+    }
     let fresh = LiveActivityCatalog.cards(
       from: items ?? [],
       isInstalledLocally: { bundleIdentifier in

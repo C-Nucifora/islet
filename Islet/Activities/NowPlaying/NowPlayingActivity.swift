@@ -26,11 +26,14 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   /// The most recent command result. The view uses the accompanying notice only for failures,
   /// while this preserves the success or failure result for observers and tests.
   @Published private(set) var lastMediaCommandResult: MediaCommandResult?
+  @Published private(set) var adapterFailure: String?
   private(set) var activationDate: Date?
 
   private var table = MediaSourceTable()
   private var artworkPayloads: [SourceID: Data] = [:]
   private var artworkImages: [SourceID: NSImage] = [:]
+  private var artworkDecodeTasks: [SourceID: Task<Void, Never>] = [:]
+  private var artworkRequestIDs: [SourceID: UUID] = [:]
   private var appNames: [String: String] = [:]
   private var appIcons: [String: NSImage] = [:]
   private var resolvedBundleIdentifiers: Set<String> = []
@@ -75,6 +78,9 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     isMonitoring = true
     watcher.onStatus = { status in
       Task { @MainActor [weak self] in self?.adapterStatus = status }
+    }
+    watcher.onDiagnostic = { diagnostic in
+      Task { @MainActor [weak self] in self?.adapterFailure = diagnostic }
     }
     watcher.start()
     audio.start()
@@ -139,6 +145,9 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     strip = []
     artworkPayloads = [:]
     artworkImages = [:]
+    for task in artworkDecodeTasks.values { task.cancel() }
+    artworkDecodeTasks = [:]
+    artworkRequestIDs = [:]
     appNames = [:]
     appIcons = [:]
     resolvedBundleIdentifiers = []
@@ -146,6 +155,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     adapterStatus = "Stopped"
     mediaControlRequest &+= 1
     clearMediaControlFeedback()
+    adapterFailure = nil
   }
 
   /// Tapping a source makes its display identity the first configured preference and brings the
@@ -326,18 +336,41 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   /// AppKit workspace and image-decoding work there caused avoidable UI and energy spikes.
   private func reconcileArtwork(with states: [SourceID: PlaybackState]) {
     let activeKeys = Set(states.keys)
+    let staleKeys = artworkDecodeTasks.keys.filter { !activeKeys.contains($0) }
+    for key in staleKeys {
+      artworkDecodeTasks[key]?.cancel()
+      artworkDecodeTasks[key] = nil
+      artworkRequestIDs[key] = nil
+    }
     artworkPayloads = artworkPayloads.filter { activeKeys.contains($0.key) }
     artworkImages = artworkImages.filter { activeKeys.contains($0.key) }
     for (key, state) in states {
       guard artworkPayloads[key] != state.artwork else { continue }
-      if let data = state.artwork, let image = NSImage(data: data) {
-        artworkPayloads[key] = data
-        artworkImages[key] = image
-      } else {
-        artworkPayloads[key] = nil
-        artworkImages[key] = nil
+      artworkDecodeTasks[key]?.cancel()
+      artworkDecodeTasks[key] = nil
+      artworkRequestIDs[key] = nil
+      artworkPayloads[key] = state.artwork
+      artworkImages[key] = nil
+      guard let data = state.artwork else { continue }
+
+      let requestID = UUID()
+      artworkRequestIDs[key] = requestID
+      artworkDecodeTasks[key] = Task.detached(priority: .utility) { [weak self] in
+        let decoded = ArtworkDecoder.decode(data)
+        guard !Task.isCancelled else { return }
+        await self?.acceptArtwork(decoded, payload: data, requestID: requestID, for: key)
       }
     }
+  }
+
+  private func acceptArtwork(
+    _ decoded: DecodedArtwork?, payload: Data, requestID: UUID, for key: SourceID
+  ) {
+    guard artworkPayloads[key] == payload, artworkRequestIDs[key] == requestID else { return }
+    artworkDecodeTasks[key] = nil
+    artworkRequestIDs[key] = nil
+    artworkImages[key] = decoded.map { NSImage(cgImage: $0.cgImage, size: .zero) }
+    objectWillChange.send()
   }
 
   private func resolveApplication(for bundleIdentifier: String) {

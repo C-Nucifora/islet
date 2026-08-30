@@ -215,7 +215,10 @@ struct ExpandedPlayerView: View {
   private func scrubber(_ pb: PlaybackState, source: SourceID?) -> some View {
     let canSeek = source.map { activity.canPerform(.seek(to: 0), for: $0) } ?? false
     // Only tick while actually playing; a paused track's position is fixed, so no redraw is needed.
-    return TimelineView(.animation(minimumInterval: 0.5, paused: pb.isPlaying == false)) { _ in
+    TimelineView(.animation(minimumInterval: 0.5, paused: pb.isPlaying == false)) { _ in
+      let elapsedText = MediaDurationFormatter.string(
+        for: scrubbing ? scrubValue : pb.currentElapsed)
+      let durationText = MediaDurationFormatter.string(for: pb.duration)
       VStack(spacing: 2) {
         Slider(
           value: Binding(
@@ -229,15 +232,13 @@ struct ExpandedPlayerView: View {
           }
         }
         .accessibilityLabel("Playback position")
-        .accessibilityValue(
-          "\(format(scrubbing ? scrubValue : pb.currentElapsed)) of \(format(pb.duration))"
-        )
+        .accessibilityValue("\(elapsedText) of \(durationText)")
         .disabled(!canSeek)
         .opacity(canSeek ? 1 : 0.4)
         HStack {
-          Text(format(pb.currentElapsed)).monospacedDigit()
+          Text(elapsedText).monospacedDigit()
           Spacer()
-          Text(format(pb.duration)).monospacedDigit()
+          Text(durationText).monospacedDigit()
         }
         .font(.caption2).foregroundStyle(.secondary)
       }
@@ -323,11 +324,48 @@ struct ExpandedPlayerView: View {
     guard let source else { return action }
     return activity.mediaControlHelp(action: action, for: source)
   }
+}
 
-  private func format(_ t: TimeInterval) -> String {
-    guard t.isFinite else { return "0:00" }
-    let s = max(0, Int(t.rounded()))
-    return String(format: "%d:%02d", s / 60, s % 60)
+enum MediaDurationFormatter {
+  static func string(for duration: TimeInterval, locale: Locale = .current) -> String {
+    guard duration.isFinite else {
+      let zero = localizedInteger(0, locale: locale)
+      let paddedZero = localizedInteger(0, minimumDigits: 2, locale: locale)
+      return "\(zero):\(paddedZero)"
+    }
+
+    let roundedSeconds = max(0, duration.rounded())
+    let seconds = Int(roundedSeconds.truncatingRemainder(dividingBy: 60))
+    let minutes = Int((roundedSeconds / 60).truncatingRemainder(dividingBy: 60))
+
+    if roundedSeconds < 3_600 {
+      let minutesText = localizedInteger(minutes, locale: locale)
+      let secondsText = localizedInteger(seconds, minimumDigits: 2, locale: locale)
+      return "\(minutesText):\(secondsText)"
+    }
+
+    let hours = (roundedSeconds / 3_600).rounded(.down)
+    let hoursText = localizedNumber(hours, locale: locale)
+    let minutesText = localizedInteger(minutes, minimumDigits: 2, locale: locale)
+    let secondsText = localizedInteger(seconds, minimumDigits: 2, locale: locale)
+    return "\(hoursText):\(minutesText):\(secondsText)"
   }
 
+  private static func localizedInteger(
+    _ value: Int, minimumDigits: Int = 1, locale: Locale
+  ) -> String {
+    localizedNumber(Double(value), minimumDigits: minimumDigits, locale: locale)
+  }
+
+  private static func localizedNumber(
+    _ value: Double, minimumDigits: Int = 1, locale: Locale
+  ) -> String {
+    let formatter = NumberFormatter()
+    formatter.locale = locale
+    formatter.numberStyle = .decimal
+    formatter.usesGroupingSeparator = false
+    formatter.minimumIntegerDigits = minimumDigits
+    formatter.maximumFractionDigits = 0
+    return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.0f", value)
+  }
 }

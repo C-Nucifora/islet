@@ -9,6 +9,7 @@ use warnings;
 use DynaLoader;
 use File::Spec;
 use File::Basename;
+use Time::HiRes ();
 
 sub print_help() {
   print <<'HELP';
@@ -52,6 +53,8 @@ OPTIONS:
       To determine a more accurate time without polling "get" continuously,
       calculate it using the "elapsedTime" and "timestamp" keys. "elapsedTime"
       contains the elapsed time at the time that is stored in "timestamp".
+    --timeout=N: Exits if the one-shot request has not completed after N seconds.
+      The caller should still enforce and reap against its own hard deadline.
   stream
     --no-diff: Disable diffing and always dump all metadata
     --debounce=N: Delay in milliseconds to prevent spam (0 by default)
@@ -181,6 +184,7 @@ sub set_env_option_value {
 }
 
 my $symbol_name = "adapter_$function_name";
+my $execution_timeout;
 if ($function_name eq "send") {
   my $id = shift @ARGV;
   fail "Missing ID for '$function_name' command" unless defined $id;
@@ -229,6 +233,13 @@ elsif ($function_name eq "get") {
     elsif ($key eq "now") {
       set_env_option($options, $key);
     }
+    elsif ($key eq "timeout") {
+      my $value = $options->{$key};
+      fail "Missing value for option '$key'" unless defined $value;
+      fail "Invalid timeout '$value'" unless $value =~ /\A(?:\d+(?:\.\d*)?|\.\d+)\z/
+        && $value > 0 && $value <= 300;
+      $execution_timeout = $value;
+    }
     else {
       fail "Unrecognized option '$key'";
     }
@@ -272,9 +283,14 @@ my $symbol = DynaLoader::dl_find_symbol($handle, "$symbol_name")
 DynaLoader::dl_install_xsub("main::$function_name", $symbol);
 
 eval {
+  local $SIG{ALRM} = sub { die "Timed out after $execution_timeout seconds\n" }
+    if defined $execution_timeout;
+  Time::HiRes::alarm($execution_timeout) if defined $execution_timeout;
   no strict "refs";
   &{"main::$function_name"}();
+  Time::HiRes::alarm(0) if defined $execution_timeout;
 };
+Time::HiRes::alarm(0) if defined $execution_timeout;
 if ($@) {
   fail "Error executing $function_name: $@";
 }

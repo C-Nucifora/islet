@@ -28,6 +28,19 @@ final class SystemMetricsTests: XCTestCase {
     XCTAssertTrue(live.allowsRemotePolling)
   }
 
+  func testEverySystemEnergyCadenceProducesAUsableRateWindow() {
+    for mode in EnergyMode.allCases {
+      for systemLowPowerMode in [false, true] {
+        let policy = EnergyPolicy(mode: mode, systemLowPowerMode: systemLowPowerMode)
+        for viewIsLive in [false, true] {
+          XCTAssertLessThanOrEqual(
+            policy.systemInterval(viewIsLive: viewIsLive), metricsMaxSampleGap,
+            "\(mode), low power: \(systemLowPowerMode), live: \(viewIsLive)")
+        }
+      }
+    }
+  }
+
   func testLowEnergySlowsBatteryAndT3EvenWhenMacOSLowPowerModeIsOff() {
     let automatic = EnergyPolicy(mode: .automatic, systemLowPowerMode: false)
     let lowEnergy = EnergyPolicy(mode: .lowEnergy, systemLowPowerMode: false)
@@ -90,6 +103,64 @@ final class SystemMetricsTests: XCTestCase {
       MetricDisplayStyle.effective(for: .thermal, requested: .combined), .combined)
     XCTAssertEqual(
       MetricDisplayStyle.effective(for: .cpu, requested: .sparkline), .sparkline)
+  }
+
+  func testThermalPresentationNamesEverySystemPressureState() {
+    let cases: [(rawValue: Int, pressure: SystemThermalPresentation.Pressure, text: String)] = [
+      (0, .nominal, "System: nominal"),
+      (1, .fair, "System: fair"),
+      (2, .serious, "System: serious"),
+      (3, .critical, "System: critical"),
+    ]
+
+    for item in cases {
+      let presentation = SystemThermalPresentation(
+        thermalState: item.rawValue, batteryTemperatureC: nil)
+      XCTAssertEqual(presentation.pressure, item.pressure)
+      XCTAssertEqual(presentation.pressureText, item.text)
+    }
+  }
+
+  func testThermalPresentationMarksMissingAndUnknownPressureAsUnavailable() {
+    for rawValue in [nil, -1, 4] as [Int?] {
+      let presentation = SystemThermalPresentation(
+        thermalState: rawValue, batteryTemperatureC: 31.2)
+      XCTAssertEqual(presentation.pressure, .unavailable)
+      XCTAssertEqual(presentation.pressureText, "System: unavailable")
+    }
+  }
+
+  func testThermalPresentationDistinguishesZeroBatteryTemperatureFromUnavailable() {
+    let zero = SystemThermalPresentation(thermalState: 0, batteryTemperatureC: 0)
+    let unavailable = SystemThermalPresentation(thermalState: 0, batteryTemperatureC: nil)
+
+    XCTAssertEqual(zero.batteryTemperatureC, 0)
+    XCTAssertEqual(zero.batteryTemperatureText, "Battery: 0.0 °C")
+    XCTAssertNil(unavailable.batteryTemperatureC)
+    XCTAssertEqual(unavailable.batteryTemperatureText, "Battery: unavailable")
+  }
+
+  func testThermalPresentationRejectsNonfiniteBatteryTemperatures() {
+    for temperature in [Double.nan, .infinity, -.infinity] {
+      let presentation = SystemThermalPresentation(
+        thermalState: 0, batteryTemperatureC: temperature)
+      XCTAssertNil(presentation.batteryTemperatureC)
+      XCTAssertEqual(presentation.batteryTemperatureText, "Battery: unavailable")
+    }
+  }
+
+  func testThermalPresentationAccessibilityNamesBothSeparateReadings() {
+    let available = SystemThermalPresentation(thermalState: 2, batteryTemperatureC: 31.25)
+    XCTAssertEqual(
+      available.accessibilityValue,
+      "System thermal pressure serious. Battery temperature 31.2 degrees Celsius. "
+        + "The readings do not map directly.")
+
+    let unavailable = SystemThermalPresentation(thermalState: nil, batteryTemperatureC: nil)
+    XCTAssertEqual(
+      unavailable.accessibilityValue,
+      "System thermal pressure unavailable. Battery temperature unavailable. "
+        + "The readings do not map directly.")
   }
 
   // MARK: - CPU tick deltas

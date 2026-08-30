@@ -79,6 +79,21 @@ final class AdapterParserTests: XCTestCase {
     XCTAssertNil(try XCTUnwrap(state).artwork)
   }
 
+  func testArtworkOverEncodedDataBudgetIsDropped() throws {
+    let artwork = String(
+      repeating: "A", count: ArtworkDecodePolicy.standard.maximumBase64Characters + 4)
+    let data = try JSONSerialization.data(withJSONObject: [
+      "type": "data",
+      "diff": false,
+      "payload": ["title": "Track", "artworkData": artwork],
+    ])
+    let line = try XCTUnwrap(String(data: data, encoding: .utf8))
+
+    guard case .nowPlaying(_, let state) = AdapterParser.parse(line: line, current: nil)
+    else { return XCTFail("expected nowPlaying") }
+    XCTAssertNil(state.artwork)
+  }
+
   func testDiffWithoutCurrentIgnored() throws {
     let lines = try fixtureLines()
     XCTAssertEqual(AdapterParser.parse(line: lines[2], current: nil), .ignored)

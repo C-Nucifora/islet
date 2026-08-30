@@ -142,13 +142,14 @@ struct EventTrailingView: View {
 extension Sneak {
   /// Renders an event into the transient-presentation type the queue already understands.
   ///
-  /// `source` becomes the event's `sourceID`, which is what gives the queue its existing coalescing
-  /// behaviour for free: a second Wi-Fi event replaces a queued one instead of stacking behind it
-  /// (`SneakLogic.enqueue`).
+  /// `source` becomes the event's `sourceID`, so a second Wi-Fi event replaces its queued sneak
+  /// instead of stacking behind it. The event's urgency also reaches `SneakLogic`, where queued
+  /// alerts bypass lower-priority work without interrupting an active presentation.
   @MainActor
   init(event: SystemEvent) {
     self.init(
       source: event.sourceID,
+      urgency: event.urgency,
       duration: event.duration,
       leading: AnyView(EventLeadingView(event: event)),
       trailing: AnyView(EventTrailingView(event: event)),
