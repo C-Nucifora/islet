@@ -294,6 +294,86 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(T3CodeActivity.upserting(snapshot, into: current), current)
   }
 
+  func testVisibleEnvironmentsIncludeHealthyEmptyAndUnhealthyConfiguredRemotes() {
+    let profiles = [
+      T3EnvironmentProfile(id: "healthy", label: "Healthy", baseURL: "https://healthy.example"),
+      T3EnvironmentProfile(id: "offline", label: "Offline", baseURL: "https://offline.example"),
+      T3EnvironmentProfile(
+        id: "reconnecting", label: "Reconnecting", baseURL: "https://reconnecting.example"),
+      T3EnvironmentProfile(id: "unpaired", label: "Unpaired", baseURL: "https://unpaired.example"),
+      T3EnvironmentProfile(
+        id: "credentials", label: "Credential", baseURL: "https://credentials.example"),
+      T3EnvironmentProfile(id: "pending", label: "Pending", baseURL: "https://pending.example"),
+      T3EnvironmentProfile(
+        id: "disabled", label: "Disabled", baseURL: "https://disabled.example", enabled: false),
+    ]
+    let snapshots = [
+      T3EnvironmentSnapshot(
+        id: T3CodeActivity.remoteSnapshotID(
+          environmentID: "healthy", baseURL: "https://healthy.example"),
+        label: "Healthy", baseURL: "https://healthy.example", isLocal: false,
+        platform: nil, serverVersion: nil, state: .connected, agents: []),
+      T3EnvironmentSnapshot(
+        id: T3CodeActivity.remoteSnapshotID(
+          environmentID: "offline", baseURL: "https://offline.example"),
+        label: "Offline", baseURL: "https://offline.example", isLocal: false,
+        platform: nil, serverVersion: nil, state: .offline("No route"), agents: []),
+      T3EnvironmentSnapshot(
+        id: T3CodeActivity.remoteSnapshotID(
+          environmentID: "reconnecting", baseURL: "https://reconnecting.example"),
+        label: "Reconnecting", baseURL: "https://reconnecting.example", isLocal: false,
+        platform: nil, serverVersion: nil, state: .reconnecting("No route"), agents: []),
+      T3EnvironmentSnapshot(
+        id: T3CodeActivity.remoteSnapshotID(
+          environmentID: "unpaired", baseURL: "https://unpaired.example"),
+        label: "Unpaired", baseURL: "https://unpaired.example", isLocal: false,
+        platform: nil, serverVersion: nil, state: .needsPairing, agents: []),
+      T3EnvironmentSnapshot(
+        id: T3CodeActivity.remoteSnapshotID(
+          environmentID: "credentials", baseURL: "https://credentials.example"),
+        label: "Credential", baseURL: "https://credentials.example", isLocal: false,
+        platform: nil, serverVersion: nil,
+        state: .credentialError("Keychain unavailable"), agents: []),
+    ]
+
+    let visible = T3CodeActivity.visibleEnvironments(snapshots: snapshots, profiles: profiles)
+
+    XCTAssertEqual(
+      visible.map(\.label),
+      ["Credential", "Healthy", "Offline", "Pending", "Reconnecting", "Unpaired"])
+    let states = Dictionary(uniqueKeysWithValues: visible.map { ($0.label, $0.state) })
+    XCTAssertEqual(states["Healthy"], .connected)
+    XCTAssertTrue(visible.first(where: { $0.label == "Healthy" })?.agents.isEmpty == true)
+    XCTAssertEqual(states["Offline"], .offline("No route"))
+    XCTAssertEqual(states["Pending"], .connecting)
+    XCTAssertEqual(states["Reconnecting"], .reconnecting("No route"))
+    XCTAssertEqual(states["Unpaired"], .needsPairing)
+    XCTAssertEqual(states["Credential"], .credentialError("Keychain unavailable"))
+  }
+
+  func testEnvironmentActionsMatchConnectionStateAndMachineType() {
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(for: .needsPairing, isLocal: true), [.pair])
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(for: .needsPairing, isLocal: false), [.pair, .disable])
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(for: .offline("No route"), isLocal: false),
+      [.retry, .disable])
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(for: .reconnecting("No route"), isLocal: true),
+      [.retry])
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(
+        for: .credentialError("Keychain unavailable"), isLocal: false),
+      [.openSettings, .disable])
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(for: .connected, isLocal: true), [])
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(for: .connected, isLocal: false), [.disable])
+    XCTAssertEqual(
+      T3CodeActivity.environmentActions(for: .connecting, isLocal: false), [.disable])
+  }
+
   func testLocalAndRemoteEnvironmentIdentityCannotCollide() {
     XCTAssertEqual(T3CodeActivity.localSnapshotID("same"), "local|same")
     XCTAssertEqual(
