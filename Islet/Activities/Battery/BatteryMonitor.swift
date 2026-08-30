@@ -59,6 +59,9 @@ final class BatteryMonitor: ObservableObject {
   @Published private(set) var metrics: BatteryMetrics?
   @Published private(set) var peripherals: [PeripheralBattery] = []
   @Published private(set) var cpuPowerReading = CPUPowerReading.unavailable
+  @Published private(set) var insightSnapshot = BatteryInsightSnapshot()
+  @Published private(set) var lastLiveRefresh: Date?
+  @Published private(set) var lastStableRefresh: Date?
 
   /// Seeded snapshots keep off-screen previews deterministic without starting the IOKit readers.
   init(
@@ -162,6 +165,9 @@ final class BatteryMonitor: ObservableObject {
     metrics = nil
     peripherals = []
     cpuPowerReading = .unavailable
+    insightSnapshot = BatteryInsightSnapshot()
+    lastLiveRefresh = nil
+    lastStableRefresh = nil
     lastStableRead = nil
     stateGracePeriod.reset()
   }
@@ -195,6 +201,7 @@ final class BatteryMonitor: ObservableObject {
   /// Every value here is `Equatable`; assigning an unchanged snapshot still redraws the whole
   /// expanded island, so manual/test reads follow the same diff-before-publish policy.
   func refresh() {
+    let refreshedAt = Date()
     applyState(Self.readState())
 
     let reading = cpuPowerSamplingService.cachedReading()
@@ -206,7 +213,20 @@ final class BatteryMonitor: ObservableObject {
 
     let freshPeripherals = PeripheralBatteryReader.read()
     if freshPeripherals != peripherals { peripherals = freshPeripherals }
-    lastStableRead = Date()
+    publishCompletedRefresh(at: refreshedAt)
+    lastStableRefresh = refreshedAt
+    lastStableRead = refreshedAt
+  }
+
+  /// Published only after a complete refresh has applied its state and metrics. Consumers that
+  /// need elapsed-time evidence must observe this completion pulse rather than `$metrics`, because
+  /// unchanged telemetry is deliberately not republished.
+  func publishCompletedRefresh(at date: Date) {
+    lastLiveRefresh = date
+  }
+
+  func updateInsights(_ snapshot: BatteryInsightSnapshot) {
+    if snapshot != insightSnapshot { insightSnapshot = snapshot }
   }
 
   /// IOKit and IOPS can bridge sizeable property dictionaries. Keep that work off the main actor;
@@ -262,6 +282,7 @@ final class BatteryMonitor: ObservableObject {
   }
 
   private func apply(_ snapshot: BatteryReadSnapshot, includeStable: Bool) {
+    let refreshedAt = Date()
     applyState(snapshot.state)
     if snapshot.cpuPowerReading != cpuPowerReading {
       cpuPowerReading = snapshot.cpuPowerReading
@@ -279,7 +300,11 @@ final class BatteryMonitor: ObservableObject {
     if let nextPeripherals = snapshot.peripherals, nextPeripherals != peripherals {
       peripherals = nextPeripherals
     }
-    if includeStable { lastStableRead = Date() }
+    publishCompletedRefresh(at: refreshedAt)
+    if includeStable {
+      lastStableRefresh = refreshedAt
+      lastStableRead = refreshedAt
+    }
   }
 
   private func applyState(_ sample: BatteryState?, now: Date = Date()) {
