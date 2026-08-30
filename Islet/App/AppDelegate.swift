@@ -91,19 +91,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let owner = SingleInstanceOwner.current()
     do {
       let coordinator = try SingleInstanceCoordinator(bundleIdentifier: owner.bundleIdentifier)
-      switch try coordinator.claim(owner: owner) {
+      let resolution = try SingleInstanceLaunchResolver.resolve(
+        coordinator: coordinator,
+        owner: owner,
+        activate: {
+          ExistingInstanceActivator.activate(
+            owner: $0, bundleIdentifier: owner.bundleIdentifier)
+        })
+      switch resolution {
       case .primary:
         singleInstanceCoordinator = coordinator
         shouldStartServices = true
-      case .secondary(let existingOwner):
-        let activated = ExistingInstanceActivator.activate(
-          owner: existingOwner,
-          bundleIdentifier: owner.bundleIdentifier)
-        if activated {
-          Log.app.info("Activated the existing Islet process")
-        } else {
-          Log.app.warning("Another Islet process owns the instance lock but is not yet activatable")
-        }
+      case .activatedExisting:
+        Log.app.info("Activated the existing Islet process")
+      case .secondaryStillOwned:
+        Log.app.warning("Another Islet process owns the instance lock but is not yet activatable")
       }
     } catch {
       // A lock setup failure should not make a single installed copy unusable. Fall back to the
