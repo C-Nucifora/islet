@@ -1,3 +1,4 @@
+import Network
 import XCTest
 
 @testable import Islet
@@ -286,6 +287,80 @@ final class PulseTests: XCTestCase {
     XCTAssertFalse(PulseServer.canAcceptConnection(activeCount: -1))
   }
 
+  @MainActor
+  func testOccupiedDefaultPortMovesToStableLoopbackFallbackAndPublishesIt() async throws {
+    var requestedPorts: [UInt16] = []
+    var requestedHosts: [NWEndpoint.Host] = []
+    var listeners: [FakePulseListener] = []
+    var publishedPorts: [UInt16] = []
+    let server = PulseServer(
+      listenerFactory: { parameters, port in
+        requestedPorts.append(port.rawValue)
+        if case .hostPort(let host, _) = parameters.requiredLocalEndpoint {
+          requestedHosts.append(host)
+        }
+        let listener = FakePulseListener(port: port)
+        listeners.append(listener)
+        return listener
+      },
+      tokenLoader: { Self.testToken },
+      activePortWriter: { publishedPorts.append($0) },
+      activePortRemover: {})
+
+    server.start()
+    XCTAssertEqual(requestedPorts, [47_717])
+    listeners[0].emit(.failed(.posix(.EADDRINUSE)))
+    await Task.yield()
+
+    XCTAssertEqual(requestedPorts, [47_717, 47_718])
+    XCTAssertEqual(requestedHosts, ["127.0.0.1", "127.0.0.1"])
+    XCTAssertFalse(server.isRunning)
+    XCTAssertNil(server.activePort)
+
+    listeners[1].emit(.ready)
+    await Task.yield()
+
+    XCTAssertTrue(server.isRunning)
+    XCTAssertEqual(server.activePort, 47_718)
+    XCTAssertEqual(server.listeningAddress, "127.0.0.1:47718")
+    XCTAssertEqual(publishedPorts, [47_718])
+    XCTAssertNil(server.lastError)
+    XCTAssertNotNil(server.portRecoveryMessage)
+    server.stop()
+  }
+
+  @MainActor
+  func testOccupiedFallbacksEndInActionableStoppedState() {
+    var requestedPorts: [UInt16] = []
+    var removedPortFile = false
+    let server = PulseServer(
+      listenerFactory: { _, port in
+        requestedPorts.append(port.rawValue)
+        throw NWError.posix(.EADDRINUSE)
+      },
+      tokenLoader: { Self.testToken },
+      activePortWriter: { _ in XCTFail("An occupied listener must not publish a port") },
+      activePortRemover: { removedPortFile = true })
+
+    server.start()
+
+    XCTAssertEqual(requestedPorts, PulsePaths.candidatePorts.map(\.rawValue))
+    XCTAssertFalse(server.isRunning)
+    XCTAssertNil(server.activePort)
+    XCTAssertEqual(
+      server.lastError,
+      "Pulse could not start because ports 47717 through 47727 are in use. Free one, then retry.")
+    XCTAssertTrue(removedPortFile)
+  }
+
+  func testAddressInUseClassificationDoesNotConsumeOtherListenerFailures() {
+    XCTAssertTrue(PulseServer.isAddressInUse(NWError.posix(.EADDRINUSE)))
+    XCTAssertTrue(
+      PulseServer.isAddressInUse(
+        NSError(domain: NSPOSIXErrorDomain, code: Int(EADDRINUSE))))
+    XCTAssertFalse(PulseServer.isAddressInUse(NWError.posix(.ECONNREFUSED)))
+  }
+
   func testTerminalPipelineFailureStaysBehindAcceptedCommands() async {
     let pipeline = PulseCommandPipeline()
     let command = Data("accepted".utf8)
@@ -340,4 +415,20 @@ final class PulseTests: XCTestCase {
   private func command(_ operation: PulseOperation, _ payload: PulsePayload) -> PulseCommand {
     PulseCommand(token: "test", operation: operation, activity: payload, id: nil)
   }
+
+  private static let testToken = Data(repeating: 0, count: 32).base64EncodedString()
+}
+
+private final class FakePulseListener: PulseListening, @unchecked Sendable {
+  var newConnectionHandler: (@Sendable (NWConnection) -> Void)?
+  var stateUpdateHandler: (@Sendable (NWListener.State) -> Void)?
+  let port: NWEndpoint.Port?
+
+  init(port: NWEndpoint.Port) {
+    self.port = port
+  }
+
+  func start(queue: DispatchQueue) {}
+  func cancel() {}
+  func emit(_ state: NWListener.State) { stateUpdateHandler?(state) }
 }

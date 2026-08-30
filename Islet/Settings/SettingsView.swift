@@ -1278,7 +1278,7 @@ struct SettingsView: View {
         PermissionStatusRow(
           title: "Local activity API", icon: "waveform.path.ecg",
           status: pulseServer.lastError
-            ?? (pulseServer.isRunning ? "Listening on 127.0.0.1:47717" : "Stopped"),
+            ?? (pulseServer.listeningAddress.map { "Listening on \($0)" } ?? "Stopped"),
           color: pulseServer.lastError == nil ? (pulseServer.isRunning ? .green : .secondary) : .red
         )
         LabeledContent("Pulse items") {
@@ -1293,9 +1293,20 @@ struct SettingsView: View {
           Text("Shared bearer token").foregroundStyle(.secondary)
         }
         Text(
-          "Local scripts publish status and web actions over 127.0.0.1:47717. A private token authenticates each connection."
+          "Local scripts publish status and web actions over \(pulseServer.listeningAddress ?? "127.0.0.1:47717"). A private token authenticates each connection."
         )
         .font(.caption).foregroundStyle(.secondary)
+        if let recovery = pulseServer.portRecoveryMessage {
+          Text(recovery)
+            .font(.caption).foregroundStyle(.orange)
+          Text(
+            "Tools/islet-pulse.swift reads the active port from the token folder. Set other clients to \(pulseServer.activePort ?? 47_717)."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+          Button("Retry port 47717") { pulseServer.retryDefaultPort() }
+        } else if pulseServer.lastError != nil {
+          Button("Retry Pulse listener") { pulseServer.retryDefaultPort() }
+        }
         Text(
           "Turning Pulse off under Activity order closes the listener and disconnects providers."
         )
