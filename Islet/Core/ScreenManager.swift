@@ -139,7 +139,8 @@ final class ScreenManager {
         Task { @MainActor in
           if let instances = self?.instances.values {
             for instance in instances {
-              instance.panel.sharingType = change.newValue ? .none : .readOnly
+              instance.panel.sharingType = ScreenCaptureExclusionPolicy.current.sharingType(
+                exclusionRequested: change.newValue)
             }
           }
         }
@@ -205,7 +206,8 @@ final class ScreenManager {
       panel.alphaValue = 0
       panel.orderFrontRegardless()
       panel.setFrame(vm.reservedPanelFrame, display: true)
-      panel.sharingType = Defaults[.hideFromScreenRecording] ? .none : .readOnly
+      panel.sharingType = ScreenCaptureExclusionPolicy.current.sharingType(
+        exclusionRequested: Defaults[.hideFromScreenRecording])
 
       inst.syncActualFrame()  // seed from the window we just placed, before anything is drawn
       inst.updateMousePassthrough()
