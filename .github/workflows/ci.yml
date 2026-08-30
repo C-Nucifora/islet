@@ -25,6 +25,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Install XcodeGen
         run: |
@@ -47,7 +49,21 @@ jobs:
       - name: Generate Xcode project
         run: |
           xcodegen generate
+          resolved_dir=Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+          mkdir -p "$resolved_dir"
+          install -m 0644 Package.resolved "$resolved_dir/Package.resolved"
           git diff --exit-code -- Islet/Info.plist
+
+      - name: Resolve pinned packages
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project Islet.xcodeproj \
+            -scheme Islet \
+            -derivedDataPath "$DERIVED_DATA" \
+            -onlyUsePackageVersionsFromResolvedFile | xcbeautify
+          cmp Package.resolved Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
       - name: Run tests
         run: |
@@ -57,6 +73,7 @@ jobs:
             -scheme Islet \
             -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath "$DERIVED_DATA" \
+            -disableAutomaticPackageResolution \
             CODE_SIGN_IDENTITY=- \
             CODE_SIGN_STYLE=Manual \
             test | xcbeautify
@@ -69,5 +86,6 @@ jobs:
             -scheme Islet \
             -destination 'generic/platform=macOS' \
             -derivedDataPath "$DERIVED_DATA" \
+            -disableAutomaticPackageResolution \
             CODE_SIGNING_ALLOWED=NO \
             analyze | xcbeautify

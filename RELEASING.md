@@ -24,6 +24,10 @@ need approval. Add these environment secrets:
 The certificate must contain a Developer ID Application identity. The workflow signs the
 `dev.islet` bundle identifier. Store these values as secrets, not repository variables or files.
 
+Add a repository ruleset for tags matching `v*`. Restrict tag creation to release managers and
+block tag updates and deletion. The workflow also serializes runs for each tag and verifies the
+remote tag target again immediately before it publishes the release.
+
 ## Publish a release
 
 Start from an up-to-date, clean `main` checkout, then create and push an annotated tag:
