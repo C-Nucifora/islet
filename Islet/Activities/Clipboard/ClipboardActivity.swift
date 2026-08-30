@@ -157,6 +157,46 @@ enum ClipboardPrivacyPolicy {
   }
 }
 
+/// `NSPasteboard` has no public change notification for the general pasteboard. This policy keeps
+/// its fallback polling bounded: it is responsive during active copying, then progressively backs
+/// off and stops altogether whenever monitoring is paused or disabled.
+struct ClipboardPollingPolicy {
+  struct State: Equatable {
+    var isEnabled = false
+    var isPaused = false
+    var isAppActive = false
+    var isLowPowerMode = false
+    var lastActivity: Date?
+  }
+
+  /// The injected clock makes cadence tests deterministic without sleeping or starting timers.
+  var now: () -> Date
+
+  init(now: @escaping () -> Date = Date.init) { self.now = now }
+
+  func nextDelay(for state: State) -> TimeInterval? {
+    guard state.isEnabled, !state.isPaused else { return nil }
+
+    let idleTime = max(0, now().timeIntervalSince(state.lastActivity ?? now()))
+    let delay: TimeInterval
+    switch idleTime {
+    case ..<5: delay = 0.25
+    case ..<30: delay = 1
+    case ..<120: delay = 3
+    case ..<600: delay = 10
+    default: delay = 30
+    }
+    let multiplier = (state.isLowPowerMode ? 2.0 : 1.0) * (state.isAppActive ? 1.0 : 2.0)
+    return min(delay * multiplier, 60)
+  }
+
+  func stateRecordingActivity(from state: State) -> State {
+    var state = state
+    state.lastActivity = now()
+    return state
+  }
+}
+
 /// Session-only clipboard history: polls the pasteboard, keeps recent copies, and lets you re-copy.
 /// Off by default (it would otherwise capture everything copied, including passwords).
 @MainActor
@@ -184,23 +224,28 @@ final class ClipboardModel: ObservableObject {
   private let loginSession: () -> String?
   private var lastChange: Int
   private var ownWriteChange = -1
-  private var timer: AnyCancellable?
+  private var pollingTimer: Timer?
+  private var cancellables: Set<AnyCancellable> = []
   private var isRunning = false
   private var historyGeneration: UInt64 = 0
   private let pasteboardTransactions = ClipboardPasteboardTransaction.Pipeline()
+  private let pollingPolicy: ClipboardPollingPolicy
+  private var pollingState = ClipboardPollingPolicy.State()
 
   init(
     pasteboard: NSPasteboard = .general,
     privacyStore: (any ClipboardPrivacyStoring)? = nil,
     contextMonitor: (any ClipboardContextMonitoring)? = nil,
     now: @escaping () -> Date = Date.init,
-    loginSession: @escaping () -> String? = ClipboardLoginSession.currentIdentifier
+    loginSession: @escaping () -> String? = ClipboardLoginSession.currentIdentifier,
+    pollingPolicy: ClipboardPollingPolicy = ClipboardPollingPolicy()
   ) {
     self.pasteboard = pasteboard
     self.privacyStore = privacyStore ?? DefaultsClipboardPrivacyStore()
     self.contextMonitor = contextMonitor ?? WorkspaceClipboardContextMonitor()
     self.now = now
     self.loginSession = loginSession
+    self.pollingPolicy = pollingPolicy
     self.lastChange = pasteboard.changeCount
     self.privacyStore.onChange = { [weak self] in self?.privacyConfigurationDidChange() }
     self.contextMonitor.onChange = { [weak self] context in self?.contextDidChange(context) }
@@ -214,7 +259,28 @@ final class ClipboardModel: ObservableObject {
     currentFocusIdentifier = contextMonitor.context.focusIdentifier
     lastChange = pasteboard.changeCount
     refreshPrivacyState()
-    startPolling()
+    pollingState.isEnabled = true
+    pollingState.isPaused = isPaused
+    pollingState.isAppActive = NSApp.isActive
+    pollingState.isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+    pollingState = pollingPolicy.stateRecordingActivity(from: pollingState)
+
+    Defaults.publisher(.clipboardEnabled)
+      .dropFirst()
+      .sink { [weak self] change in
+        self?.setMonitoringEnabled(change.newValue)
+      }
+      .store(in: &cancellables)
+    NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)
+      .sink { [weak self] _ in self?.refreshLowPowerMode() }
+      .store(in: &cancellables)
+    NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
+      .sink { [weak self] _ in self?.setAppActive(false) }
+      .store(in: &cancellables)
+    NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+      .sink { [weak self] _ in self?.setAppActive(true) }
+      .store(in: &cancellables)
+    scheduleNextPoll()
   }
 
   func stop() {
@@ -226,30 +292,74 @@ final class ClipboardModel: ObservableObject {
     currentFocusIdentifier = nil
     pauseReason = .unidentifiedApplication
     isPaused = true
-    stopPolling()
+    cancellables.removeAll()
+    pollingState.isEnabled = false
+    pollingState.isPaused = true
+    pollingState.lastActivity = nil
+    cancelPollingTimer()
+    clear()
   }
 
-  private func startPolling() {
+  private func setMonitoringEnabled(_ enabled: Bool) {
+    pollingState.isEnabled = enabled
     lastChange = pasteboard.changeCount
-    timer = Timer.publish(every: 0.7, on: .main, in: .common).autoconnect()
-      .sink { [weak self] _ in self?.pollNow() }
+    cancelPollingTimer()
+    guard enabled else {
+      pollingState.lastActivity = nil
+      clear()
+      return
+    }
+    pollingState = pollingPolicy.stateRecordingActivity(from: pollingState)
+    scheduleNextPoll()
   }
 
-  private func stopPolling() {
-    timer = nil
-    items = []
-    lastWriteError = nil
+  private func refreshLowPowerMode() {
+    pollingState.isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+    scheduleNextPoll()
+  }
+
+  private func setAppActive(_ active: Bool) {
+    pollingState.isAppActive = active
+    if active {
+      // The pasteboard may have changed while Islet was inactive. Check once on return, then let
+      // the idle policy choose the next wake-up.
+      poll()
+    } else {
+      // Clipboard History is useful for copies made in other apps. Keep one slower background
+      // wake-up instead of treating an inactive menu-bar app as fully disabled.
+      scheduleNextPoll()
+    }
+  }
+
+  private func scheduleNextPoll() {
+    cancelPollingTimer()
+    guard let delay = pollingPolicy.nextDelay(for: pollingState) else { return }
+    let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+      self?.poll()
+    }
+    pollingTimer = timer
+    RunLoop.main.add(timer, forMode: .common)
+  }
+
+  private func cancelPollingTimer() {
+    pollingTimer?.invalidate()
+    pollingTimer = nil
   }
 
   func pollNow() {
+    pollingTimer = nil
+    guard pollingPolicy.nextDelay(for: pollingState) != nil else { return }
     refreshPrivacyState()
     guard !contextMonitor.refreshApplication() else { return }
     let pb = pasteboard
-    guard pb.changeCount != lastChange else { return }
+    guard pb.changeCount != lastChange else {
+      scheduleNextPoll()
+      return
+    }
     lastChange = pb.changeCount
-    guard pb.changeCount != ownWriteChange else { return }  // ignore our own re-copy
-    guard !isPaused else { return }
-    capture(pb)
+    pollingState = pollingPolicy.stateRecordingActivity(from: pollingState)
+    if pb.changeCount != ownWriteChange { capture(pb) }  // ignore our own re-copy
+    scheduleNextPoll()
   }
 
   private func capture(_ pb: NSPasteboard) {
@@ -306,6 +416,10 @@ final class ClipboardModel: ObservableObject {
       return false
     }
     lastWriteError = nil
+    ownWriteChange = pb.changeCount
+    lastChange = pb.changeCount
+    pollingState = pollingPolicy.stateRecordingActivity(from: pollingState)
+    scheduleNextPoll()
     items.removeAll { $0.id == item.id }
     items.insert(item, at: 0)
     return true
@@ -385,11 +499,16 @@ final class ClipboardModel: ObservableObject {
     let willPause = evaluation.reason != nil
     pauseReason = evaluation.reason
     isPaused = willPause
+    pollingState.isPaused = willPause
     if !wasPaused, willPause, evaluation.configuration.clearHistoryOnPause { clear() }
     if wasPaused, !willPause {
       // Establish a fresh generation boundary before capture resumes. This prevents a copy made
       // during a timed pause from being retained when no poll ran between the copy and expiry.
       lastChange = pasteboard.changeCount
+      pollingState = pollingPolicy.stateRecordingActivity(from: pollingState)
+      scheduleNextPoll()
+    } else if !wasPaused, willPause {
+      cancelPollingTimer()
     }
   }
 
