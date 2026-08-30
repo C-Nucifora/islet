@@ -23,6 +23,50 @@ private final class LazyClipboardDataProvider: NSObject, NSPasteboardItemDataPro
   func requests() -> [String] { lock.withLock { requestedTypes } }
 }
 
+private final class BlockingClipboardDataProvider: NSObject, NSPasteboardItemDataProvider,
+  @unchecked Sendable
+{
+  private let condition = NSCondition()
+  private let data: Data
+  private var wasRequested = false
+  private var isReleased = false
+
+  init(data: Data) { self.data = data }
+
+  nonisolated func pasteboard(
+    _ pasteboard: NSPasteboard?, item: NSPasteboardItem,
+    provideDataForType type: NSPasteboard.PasteboardType
+  ) {
+    condition.lock()
+    wasRequested = true
+    condition.broadcast()
+    while !isReleased { condition.wait() }
+    condition.unlock()
+    item.setData(data, forType: type)
+  }
+
+  func waitUntilRequested() async -> Bool {
+    await Task.detached { [self] in waitUntilRequestedSynchronously() }.value
+  }
+
+  func release() {
+    condition.lock()
+    isReleased = true
+    condition.broadcast()
+    condition.unlock()
+  }
+
+  private func waitUntilRequestedSynchronously() -> Bool {
+    condition.lock()
+    defer { condition.unlock() }
+    let deadline = Date().addingTimeInterval(5)
+    while !wasRequested {
+      guard condition.wait(until: deadline) else { return false }
+    }
+    return true
+  }
+}
+
 @MainActor
 final class ClipboardPrivacyPolicyTests: XCTestCase {
   func testPrivacyIdentifiersAreNormalizedDeduplicatedAndBounded() {
@@ -382,6 +426,31 @@ final class ClipboardPrivacyPolicyTests: XCTestCase {
     XCTAssertEqual(pasteboard.string(forType: .string), "keep me")
   }
 
+  func testClearWinsWhileCopyBackIsPreparingRollback() async throws {
+    try await assertHistoryInvalidationWinsDuringCopyBack { model in
+      model.clear()
+    }
+  }
+
+  func testPauseWinsWhileCopyBackIsPreparingRollback() async throws {
+    try await assertHistoryInvalidationWinsDuringCopyBack { model in
+      model.setPaused(true)
+      XCTAssertTrue(model.isPaused)
+    }
+  }
+
+  func testRemoveWinsWhileCopyBackIsPreparingRollback() async throws {
+    try await assertHistoryInvalidationWinsDuringCopyBack { model in
+      model.remove(model.items[0])
+    }
+  }
+
+  func testStopWinsWhileCopyBackIsPreparingRollback() async throws {
+    try await assertHistoryInvalidationWinsDuringCopyBack(
+      prepare: { $0.start() },
+      invalidate: { $0.stop() })
+  }
+
   func testOversizedLazyRollbackLeavesClipboardUnchanged() async throws {
     let pasteboard = NSPasteboard(name: NSPasteboard.Name("islet-tests-large-\(UUID().uuidString)"))
     let type = NSPasteboard.PasteboardType("com.islet.tests.large")
@@ -484,6 +553,43 @@ final class ClipboardPrivacyPolicyTests: XCTestCase {
         XCTAssertEqual(restoredItem.data(forType: type), data)
       }
     }
+  }
+
+  private func assertHistoryInvalidationWinsDuringCopyBack(
+    prepare: (ClipboardModel) -> Void = { _ in },
+    invalidate: (ClipboardModel) -> Void
+  ) async throws {
+    let pasteboard = NSPasteboard(
+      name: NSPasteboard.Name("islet-tests-copy-back-race-\(UUID().uuidString)"))
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.setString("current", forType: .string))
+
+    let model = ClipboardModel(pasteboard: pasteboard)
+    prepare(model)
+    let historyItem = ClipboardItem(kind: .text("history"), date: .distantPast)
+    let initialCopySucceeded = await model.copyBack(historyItem)
+    XCTAssertTrue(initialCopySucceeded)
+    XCTAssertEqual(model.items, [historyItem])
+
+    let blockedType = NSPasteboard.PasteboardType("com.islet.tests.blocked")
+    let provider = BlockingClipboardDataProvider(data: Data([1, 2, 3]))
+    defer { provider.release() }
+    let blockedItem = NSPasteboardItem()
+    XCTAssertTrue(blockedItem.setDataProvider(provider, forTypes: [blockedType]))
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.writeObjects([blockedItem]))
+
+    let copyTask = Task { await model.copyBack(historyItem) }
+    let requested = await provider.waitUntilRequested()
+    XCTAssertTrue(requested, "Copy-back never requested the blocked rollback representation")
+
+    invalidate(model)
+    provider.release()
+
+    let copySucceeded = await copyTask.value
+    XCTAssertTrue(copySucceeded)
+    XCTAssertEqual(pasteboard.string(forType: .string), "history")
+    XCTAssertTrue(model.items.isEmpty)
   }
 
   private func testPasteboard() -> NSPasteboard {
