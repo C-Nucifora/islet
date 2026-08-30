@@ -186,7 +186,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       pageContent + [
         "Open the island", "Expand", "Push through", "Click to pin", "Push distance",
         "Collapse after", "Haptic feedback", "Strength", "Test haptics",
-        "hover squeeze snap top edge notch",
+        "Command palette shortcut", "Record shortcut", "Reset shortcut", "Disable shortcut",
+        "global hotkey keyboard quick actions hover squeeze snap top edge notch",
       ]
     case .energy:
       pageContent + [
@@ -306,6 +307,81 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     }
   }
 
+  var paletteControls: [String] {
+    switch self {
+    case .startupDisplays:
+      [
+        "Launch Islet at login", "Run setup again", "Show Islet on every display",
+        "Hide Islet while an app is fullscreen",
+      ]
+    case .appearance:
+      ["Choose theme", "Use coloured battery graph", "Use monochrome battery graph"]
+    case .interaction:
+      [
+        "Choose how to open the island", "Set push distance", "Set collapse delay",
+        "Configure command palette shortcut", "Toggle haptic feedback", "Test haptics",
+      ]
+    case .energy:
+      ["Choose energy mode", "Follow macOS Low Power Mode", "Use Low Energy mode", "Use Live mode"]
+    case .activityOrder:
+      ["Show, hide, or reorder activities"]
+        + ActivityCatalog.orderable.map { "Configure \($0.name) activity" }
+    case .calendarReminders:
+      [
+        "Show Calendar activity", "Set upcoming-event countdown", "Choose calendars",
+        "Show reminders on Home", "Manage Calendar permission", "Manage Reminders permission",
+      ]
+    case .nowPlaying:
+      ["Choose primary player", "Add detected player", "Add player by bundle identifier"]
+    case .continuity:
+      [
+        "Show iPhone Live Activities", "Keep iPhone activity visible when idle",
+        "Announce iPhone Live Activity changes", "Request Accessibility access",
+      ]
+    case .systemMetrics:
+      ["Always show System activity", "Choose metric presentation", "Customize individual metrics"]
+        + SystemMetricKind.allCases.map { "Configure \($0.displayName) metric" }
+    case .clipboard:
+      ["Pause clipboard history", "Clear clipboard history", "Open clipboard Quick Actions"]
+    case .systemHUD:
+      [
+        "Replace volume and brightness HUD", "Choose HUD style", "Test Volume", "Test Brightness",
+        "Review Accessibility permission",
+      ]
+    case .eventSources:
+      ["Configure activity notifications"]
+        + SourceCatalog.all.map { "Configure \($0.name) notifications" }
+    case .t3Code:
+      [
+        "Monitor T3 Code", "Add T3 Code machine", "Paste T3 Code pairing link", "Reconnect T3 Code",
+        "Remove T3 Code machine",
+      ]
+    case .pulse:
+      [
+        "Open Pulse Quick Actions", "Reveal Pulse token folder", "Dismiss visible Pulse items",
+        "Rotate Pulse provider token", "Configure Pulse providers", "Configure Pulse source policy",
+        "Show Pulse history", "Clear Pulse history",
+      ]
+    case .permissions:
+      [
+        "Hide Islet from screen recordings", "Request screen capture exclusion",
+        "Manage Calendar access", "Manage Reminders access", "Manage Accessibility access",
+        "Manage Location access for Wi-Fi names", "Manage Bluetooth access",
+        "Manage Local Network access",
+        "Refresh permission status",
+      ]
+    case .diagnostics:
+      [
+        "Copy diagnostics", "Open logs folder", "Restart Islet", "Quit Islet", "Retry Focus source",
+        "View integration health",
+      ]
+    case .settingsTransfer:
+      ["Export settings", "Import settings"]
+    case .reset:
+      ["Restore appearance and interaction defaults"]
+    }
+  }
+
   func matchesSearch(_ query: String) -> Bool {
     SettingsSearch.matches(query, in: searchableContent)
   }
@@ -329,11 +405,20 @@ enum SettingsSearch {
     }
   }
 
-  private static func words(in text: String) -> [String] {
+  static func words(in text: String) -> [String] {
     text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
       .lowercased()
       .components(separatedBy: CharacterSet.alphanumerics.inverted)
       .filter { !$0.isEmpty }
+  }
+
+  static func compact(_ text: String) -> String {
+    text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .unicodeScalars
+      .filter { CharacterSet.alphanumerics.contains($0) }
+      .map(String.init)
+      .joined()
+      .lowercased()
   }
 }
 
@@ -379,6 +464,7 @@ struct SettingsView: View {
   @ObservedObject private var eventSourcePreferences = EventSourcePreferences.shared
   @ObservedObject private var ports = PortMonitor.shared
   @ObservedObject private var keepAwake = KeepAwakeManager.shared
+  @ObservedObject private var shortcutManager = GlobalShortcutManager.shared
 
   @Default(.appTheme) private var appTheme
   @Default(.batteryGraphStyle) private var batteryGraphStyle
@@ -421,6 +507,7 @@ struct SettingsView: View {
   @Default(.clipboardExcludedBundleIdentifiers) private var clipboardExcludedBundleIdentifiers
   @Default(.clipboardPausedFocusIdentifiers) private var clipboardPausedFocusIdentifiers
   @Default(.clipboardClearHistoryOnPause) private var clipboardClearHistoryOnPause
+  @Default(.commandPaletteShortcut) private var commandPaletteShortcut
 
   @State private var selection: SettingsCategory?
   @State private var detailPage: SettingsDetailPage?
@@ -437,10 +524,17 @@ struct SettingsView: View {
   @State private var pulseHistoryFilter: PulseHistoryFilter = .all
   @State private var settingsImportPreview: SettingsTransferPreview?
   @State private var settingsTransferNotice: SettingsTransferNotice?
+  @State private var isRecordingShortcut = false
+  @State private var shortcutValidationMessage: String?
 
   init(destination: SettingsDestination = .overview) {
     _selection = State(initialValue: SettingsCategory(destination: destination))
     _detailPage = State(initialValue: Self.defaultDetailPage(for: destination))
+  }
+
+  init(page: SettingsDetailPage) {
+    _selection = State(initialValue: page.category)
+    _detailPage = State(initialValue: page)
   }
 
   private var filteredCategories: [SettingsCategory] {
@@ -672,6 +766,13 @@ struct SettingsView: View {
       selection = SettingsCategory(destination: destination)
       detailPage = Self.defaultDetailPage(for: destination)
       forwardDetailPage = nil
+      searchText = ""
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .isletSettingsPage)) { notification in
+      guard let rawValue = notification.object as? String,
+        let page = SettingsDetailPage(rawValue: rawValue)
+      else { return }
+      navigate(to: page)
       searchText = ""
     }
     .confirmationDialog(
@@ -984,6 +1085,51 @@ struct SettingsView: View {
             Slider(value: $collapseTimeout, in: 0.2...3.0, step: 0.1).frame(minWidth: 180)
           }
         }
+      }
+      Section("Command palette") {
+        LabeledContent("Global shortcut") {
+          Button(
+            isRecordingShortcut ? "Press shortcut…" : commandPaletteShortcut?.displayName ?? "Off"
+          ) {
+            shortcutValidationMessage = nil
+            isRecordingShortcut = true
+          }
+          .frame(minWidth: 130)
+        }
+        ShortcutCaptureView(
+          isActive: isRecordingShortcut,
+          onShortcut: { shortcut in
+            isRecordingShortcut = false
+            if let error = GlobalShortcutValidator.validate(shortcut) {
+              shortcutValidationMessage = error.localizedDescription
+              return
+            }
+            shortcutValidationMessage = nil
+            commandPaletteShortcut = shortcut
+            shortcutManager.register(shortcut)
+          },
+          onCancel: { isRecordingShortcut = false }
+        )
+        .frame(width: 0, height: 0)
+        HStack {
+          Button("Reset") {
+            shortcutValidationMessage = nil
+            commandPaletteShortcut = .default
+            shortcutManager.register(.default)
+          }
+          Button("Disable") {
+            shortcutValidationMessage = nil
+            commandPaletteShortcut = nil
+            shortcutManager.register(nil)
+          }
+          .disabled(commandPaletteShortcut == nil)
+        }
+        Text(shortcutValidationMessage ?? shortcutManager.status.message)
+          .font(.caption)
+          .foregroundStyle(shortcutStatusColor)
+        Text("Islet registers only this shortcut with macOS. It does not record other keystrokes.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
       }
       Section("Haptic feedback") {
         LabeledContent("Strength") {
@@ -1881,6 +2027,15 @@ struct SettingsView: View {
     return date.formatted(date: .abbreviated, time: .standard)
   }
 
+  private var shortcutStatusColor: Color {
+    if shortcutValidationMessage != nil { return .red }
+    return switch shortcutManager.status {
+    case .registered: Color.green
+    case .disabled: Color.secondary
+    case .conflict, .invalid, .failed: Color.red
+    }
+  }
+
   private func authorizationColor(_ status: EventKitPermissionState) -> Color {
     switch status {
     case .fullAccess: .green
@@ -2136,6 +2291,50 @@ struct SettingsView: View {
     metricStyles = [:]
     hudStyle = .bar
     Defaults[.disabledExternalBrightnessDisplays] = []
+  }
+}
+
+private struct ShortcutCaptureView: NSViewRepresentable {
+  let isActive: Bool
+  let onShortcut: (GlobalShortcut) -> Void
+  let onCancel: () -> Void
+
+  func makeNSView(context: Context) -> ShortcutCaptureNSView {
+    ShortcutCaptureNSView(onShortcut: onShortcut, onCancel: onCancel)
+  }
+
+  func updateNSView(_ view: ShortcutCaptureNSView, context: Context) {
+    view.onShortcut = onShortcut
+    view.onCancel = onCancel
+    guard isActive else {
+      if view.window?.firstResponder === view { view.window?.makeFirstResponder(nil) }
+      return
+    }
+    DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
+  }
+}
+
+private final class ShortcutCaptureNSView: NSView {
+  var onShortcut: (GlobalShortcut) -> Void
+  var onCancel: () -> Void
+
+  init(onShortcut: @escaping (GlobalShortcut) -> Void, onCancel: @escaping () -> Void) {
+    self.onShortcut = onShortcut
+    self.onCancel = onCancel
+    super.init(frame: .zero)
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { nil }
+
+  override var acceptsFirstResponder: Bool { true }
+
+  override func keyDown(with event: NSEvent) {
+    if event.keyCode == 53 {
+      onCancel()
+    } else {
+      onShortcut(GlobalShortcut(event: event))
+    }
   }
 }
 
