@@ -92,7 +92,7 @@ fi
 install -m 0755 "$source_dir/bin/mediaremote-adapter.pl" \
   "$output_dir/mediaremote-adapter.pl"
 verify_sha256 "$loader_patch_checksum" "$loader_patch"
-/usr/bin/patch --batch --forward --strip=1 --directory="$output_dir" \
+/usr/bin/patch --batch --forward -F 0 --strip=1 --directory="$output_dir" \
   < "$loader_patch"
 install -m 0644 "$source_dir/LICENSE" "$output_dir/LICENSE"
 

@@ -14,9 +14,9 @@ its Perl loader. `MediaRemoteAdapter-LICENSE` contains the upstream license.
 That commit was the tip of upstream `master` when Islet added the framework on
 2026-07-22. The vendored loader at `Islet/Resources/mediaremote-adapter.pl`
 comes from that commit with the tracked, hashed
-`MediaRemoteAdapter-loader.patch` applied. The license file matches the pinned
-commit. A clean build with the pinned toolchain and loader patch reproduces the
-checked-in artifacts byte for byte.
+`MediaRemoteAdapter-loader.patch` applied with patch fuzz disabled. The license
+file matches the pinned commit. A clean build with the pinned toolchain and
+loader patch reproduces the checked-in artifacts byte for byte.
 
 ## Rebuild and verify
 
