@@ -3,6 +3,91 @@ import Combine
 import Defaults
 import SwiftUI
 
+/// The view state that has to survive replacing a panel and its SwiftUI tree.
+struct PanelPresentationState: Equatable {
+  var notchState: NotchState = .closed
+  var selectedActivityID: String?
+  var expandedWidth: CGFloat = Metrics.expandedSize.width
+  var expandedHeight: CGFloat = Metrics.expandedSize.height
+
+  static let initial = PanelPresentationState()
+}
+
+/// A hardware identity is used only when macOS gives the same display a new UUID. External
+/// displays without a serial number are deliberately left unmatched rather than risking state
+/// moving between two identical monitors.
+enum DisplayHardwareIdentity: Hashable {
+  case builtin
+  case external(vendor: UInt32, model: UInt32, serial: UInt32)
+}
+
+struct ManagedDisplay: Equatable {
+  let id: String
+  let hardwareIdentity: DisplayHardwareIdentity?
+}
+
+struct ManagedDisplayState: Equatable {
+  let display: ManagedDisplay
+  let presentation: PanelPresentationState
+}
+
+/// Pure display-state matching policy. Keeping this independent of AppKit makes display-change
+/// behavior deterministic in tests and keeps panel creation and teardown unchanged.
+enum DisplayStateReconciler {
+  static func reconcile(
+    previous: [ManagedDisplayState], current: [ManagedDisplay], preferredDisplayID: String?
+  ) -> [String: PanelPresentationState] {
+    var result = Dictionary(
+      uniqueKeysWithValues: current.map { ($0.id, PanelPresentationState.initial) })
+    var remainingPrevious = Dictionary(uniqueKeysWithValues: previous.map { ($0.display.id, $0) })
+    var unmatchedCurrent = current
+
+    // A stable display UUID is the strongest match and remains valid across rearrangement.
+    for display in current where remainingPrevious[display.id] != nil {
+      result[display.id] = remainingPrevious.removeValue(forKey: display.id)?.presentation
+      unmatchedCurrent.removeAll { $0.id == display.id }
+    }
+
+    // A changed UUID is accepted only when one old and one new display share a reliable identity.
+    let identities = Set(unmatchedCurrent.compactMap(\.hardwareIdentity))
+    for identity in identities {
+      let oldMatches = remainingPrevious.values.filter {
+        $0.display.hardwareIdentity == identity
+      }
+      let newMatches = unmatchedCurrent.filter { $0.hardwareIdentity == identity }
+      guard oldMatches.count == 1, newMatches.count == 1,
+        let old = oldMatches.first, let new = newMatches.first
+      else { continue }
+      result[new.id] = old.presentation
+      remainingPrevious.removeValue(forKey: old.display.id)
+      unmatchedCurrent.removeAll { $0.id == new.id }
+    }
+
+    // If an open panel vanished, keep that presentation open on a surviving target. Prefer the
+    // screen under the pointer, then target-screen order. Never replace another open presentation.
+    var destinationIDs = current.map(\.id)
+    if let preferredDisplayID,
+      let index = destinationIDs.firstIndex(of: preferredDisplayID)
+    {
+      destinationIDs.remove(at: index)
+      destinationIDs.insert(preferredDisplayID, at: 0)
+    }
+    let vanishedPresentations = remainingPrevious.values
+      .filter { $0.presentation.notchState.isExpanded }
+      .sorted { $0.display.id < $1.display.id }
+    for vanished in vanishedPresentations {
+      guard
+        let destinationID = destinationIDs.first(where: {
+          result[$0]?.notchState.isExpanded == false
+        })
+      else { break }
+      result[destinationID] = vanished.presentation
+    }
+
+    return result
+  }
+}
+
 /// One notch panel plus the frame plumbing that keeps its reserved host window in place.
 ///
 /// A class rather than a struct because re-asserting a frame needs per-panel mutable state: the
@@ -10,15 +95,17 @@ import SwiftUI
 /// would call straight back into it.
 @MainActor
 private final class PanelInstance {
-  let screenUUID: String
+  let display: ManagedDisplay
   let panel: NotchPanel
   let viewModel: NotchViewModel
   var cancellables: Set<AnyCancellable> = []
   private var isApplying = false
   private let pointerMonitoringID = UUID()
 
-  init(screenUUID: String, panel: NotchPanel, viewModel: NotchViewModel) {
-    self.screenUUID = screenUUID
+  var screenUUID: String { display.id }
+
+  init(display: ManagedDisplay, panel: NotchPanel, viewModel: NotchViewModel) {
+    self.display = display
     self.panel = panel
     self.viewModel = viewModel
   }
@@ -169,11 +256,22 @@ final class ScreenManager {
   }
 
   func rebuild() {
+    let previous = instances.values.map {
+      ManagedDisplayState(display: $0.display, presentation: $0.viewModel.presentationState)
+    }
+    let targets = targetScreens().compactMap { screen -> (NSScreen, ManagedDisplay)? in
+      guard let id = screen.displayUUID else { return nil }
+      return (screen, ManagedDisplay(id: id, hardwareIdentity: screen.displayHardwareIdentity))
+    }
+    let presentations = DisplayStateReconciler.reconcile(
+      previous: previous, current: targets.map(\.1),
+      preferredDisplayID: NSScreen.screenWithMouse?.displayUUID)
+
     for instance in instances.values { instance.stop() }
     instances.removeAll()
 
-    for screen in targetScreens() {
-      guard let uuid = screen.displayUUID else { continue }
+    for (screen, display) in targets {
+      let uuid = display.id
       let raw = screen.notchReading
       let reading = stickiness.resolve(
         displayUUID: uuid, isBuiltin: screen.isBuiltin, reading: raw)
@@ -184,11 +282,12 @@ final class ScreenManager {
           "Display \(uuid, privacy: .public) reported no notch; keeping \(kept, privacy: .public)")
       }
       let geometry = screen.notchGeometry(reading: reading)
-      let vm = NotchViewModel(geometry: geometry)
+      let vm = NotchViewModel(
+        geometry: geometry, initialPresentation: presentations[uuid] ?? .initial)
       let panel = NotchPanel(frame: vm.reservedPanelFrame)
       let dropZoneID = UUID()
       panel.contentView = NotchHosting.view(for: vm)
-      let inst = PanelInstance(screenUUID: uuid, panel: panel, viewModel: vm)
+      let inst = PanelInstance(display: display, panel: panel, viewModel: vm)
       panel.acceptsFileDrops = {
         ActivityCenter.shared.isAvailableInExpandedSwitcher("shelf")
           && !vm.shouldIgnorePanelMouseEvents(
@@ -208,6 +307,7 @@ final class ScreenManager {
       panel.sharingType = Defaults[.hideFromScreenRecording] ? .none : .readOnly
 
       inst.syncActualFrame()  // seed from the window we just placed, before anything is drawn
+      vm.resumePointerTracking(at: NSEvent.mouseLocation)
       inst.updateMousePassthrough()
       panel.alphaValue = 1  // alpha-flash hides ghost frames
       Publishers.CombineLatest4(
