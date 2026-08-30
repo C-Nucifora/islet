@@ -86,6 +86,7 @@ final class PulseServer: ObservableObject {
   private var lifecycleGeneration = 0
   private let listenerFactory: ListenerFactory
   private let tokenLoader: () throws -> String
+  private let tokenRotator: () throws -> String
   private let activePortWriter: (UInt16) throws -> Void
   private let activePortRemover: () -> Void
   private let now: () -> Date
@@ -96,6 +97,7 @@ final class PulseServer: ObservableObject {
       try NWListener(using: parameters, on: port)
     },
     tokenLoader: (() throws -> String)? = nil,
+    tokenRotator: (() throws -> String)? = nil,
     activePortWriter: ((UInt16) throws -> Void)? = nil,
     activePortRemover: (() -> Void)? = nil,
     now: @escaping () -> Date = Date.init,
@@ -105,6 +107,7 @@ final class PulseServer: ObservableObject {
   ) {
     self.listenerFactory = listenerFactory
     self.tokenLoader = tokenLoader ?? Self.loadOrCreateToken
+    self.tokenRotator = tokenRotator ?? { try Self.createToken(replacingExisting: true) }
     self.activePortWriter = activePortWriter ?? Self.writeActivePort
     self.activePortRemover = activePortRemover ?? Self.removeActivePort
     self.now = now
@@ -366,10 +369,10 @@ final class PulseServer: ObservableObject {
   /// Invalidates the one shared provider credential, disconnects every current client, and
   /// atomically replaces the token before optionally restoring the listener.
   func rotateToken() throws {
-    let shouldRestart = listener != nil
+    let shouldRestart = listener != nil || retryTask != nil
     stop()
     do {
-      token = try Self.createToken(replacingExisting: true)
+      token = try tokenRotator()
       rateLimiter = PulseRateLimiter()
       tokenRotatedAt = Date()
       if shouldRestart { start() }

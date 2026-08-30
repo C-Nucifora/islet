@@ -678,6 +678,42 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testRotatingTokenDuringBackoffRestartsPulseAndCancelsQueuedRetry() async throws {
+    let scheduler = TestPulseRetryScheduler()
+    var listeners: [FakePulseListener] = []
+    var storedToken = Self.testToken
+    let replacementToken = Data(repeating: 1, count: 32).base64EncodedString()
+    let server = PulseServer(
+      listenerFactory: { _, port in
+        let listener = FakePulseListener(port: port)
+        listeners.append(listener)
+        return listener
+      },
+      tokenLoader: { storedToken },
+      tokenRotator: {
+        storedToken = replacementToken
+        return replacementToken
+      },
+      activePortWriter: { _ in }, activePortRemover: {}, retryScheduler: scheduler.schedule)
+
+    server.start()
+    listeners[0].emit(.failed(.posix(.ETIMEDOUT)))
+    await Task.yield()
+    XCTAssertEqual(listeners.count, 1)
+    XCTAssertNotNil(server.nextRetryAt)
+
+    try server.rotateToken()
+
+    XCTAssertEqual(server.token, replacementToken)
+    XCTAssertEqual(listeners.count, 2)
+    XCTAssertTrue(scheduler.tasks[0].cancelled)
+    XCTAssertNil(server.nextRetryAt)
+    scheduler.fire(at: 0)
+    XCTAssertEqual(listeners.count, 2)
+    server.stop()
+  }
+
+  @MainActor
   func testStableReadyPeriodResetsRetryBackoff() async {
     let scheduler = TestPulseRetryScheduler()
     var listeners: [FakePulseListener] = []
