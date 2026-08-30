@@ -218,6 +218,253 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testRevisionOrderingRejectsReorderedAndRetriedCommandsWithoutSideEffects() throws {
+    let center = PulseCenter()
+    let now = Date(timeIntervalSince1970: 1_000)
+    var payload = PulsePayload(
+      id: "ordered", source: "build", title: "Revision 1", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: 0.1, state: .progress, priority: .normal,
+      expiresAt: nil, actions: nil)
+    XCTAssertTrue(center.apply(command(.show, payload, revision: 1), now: now).ok)
+
+    payload.title = "Revision 3"
+    payload.progress = 0.3
+    XCTAssertTrue(
+      center.apply(command(.update, payload, revision: 3), now: now.addingTimeInterval(3)).ok)
+    let accepted = try XCTUnwrap(center.items.first)
+    let historyCount = center.history.count
+
+    payload.title = "Delayed revision 2"
+    payload.progress = 0.2
+    let delayed = center.apply(
+      command(.update, payload, revision: 2), now: now.addingTimeInterval(4))
+    XCTAssertFalse(delayed.ok)
+    XCTAssertEqual(delayed.errorCode, .staleRevision)
+
+    payload.title = "Retried revision 3"
+    let firstRetry = center.apply(
+      command(.update, payload, revision: 3), now: now.addingTimeInterval(5))
+    let secondRetry = center.apply(
+      command(.update, payload, revision: 3), now: now.addingTimeInterval(6))
+    XCTAssertEqual(firstRetry, secondRetry)
+    XCTAssertEqual(firstRetry.errorCode, .staleRevision)
+    XCTAssertEqual(center.items.first, accepted)
+    XCTAssertEqual(center.history.count, historyCount)
+  }
+
+  @MainActor
+  func testConcurrentRevisionArrivalConvergesOnTheHighestRevision() async throws {
+    let center = PulseCenter()
+    let now = Date(timeIntervalSince1970: 2_000)
+
+    await withTaskGroup(of: Void.self) { group in
+      for revision in 1...40 {
+        group.addTask { @MainActor in
+          let payload = PulsePayload(
+            id: "concurrent", source: "build", title: "Revision \(revision)", subtitle: nil,
+            symbol: nil, accentHex: nil, progress: Double(revision) / 40, state: .progress,
+            priority: .normal, expiresAt: nil, actions: nil)
+          _ = center.apply(
+            self.command(.update, payload, revision: UInt64(revision)), now: now)
+        }
+      }
+    }
+
+    let item = try XCTUnwrap(center.items.first)
+    XCTAssertEqual(item.title, "Revision 40")
+    XCTAssertEqual(item.progress, 1)
+  }
+
+  @MainActor
+  func testLegacyStreamUsesArrivalOrderUntilItOptsIntoRevisions() throws {
+    let center = PulseCenter()
+    let now = Date(timeIntervalSince1970: 3_000)
+    var payload = PulsePayload(
+      id: "legacy", source: "build", title: "First", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    XCTAssertTrue(center.apply(command(.show, payload), now: now).ok)
+    payload.title = "Arrival order"
+    XCTAssertTrue(center.apply(command(.update, payload), now: now).ok)
+    XCTAssertEqual(center.items.first?.title, "Arrival order")
+
+    payload.title = "Ordered"
+    XCTAssertTrue(center.apply(command(.update, payload, revision: 8), now: now).ok)
+    payload.title = "Late legacy request"
+    let missingRevision = center.apply(command(.update, payload), now: now)
+    XCTAssertEqual(missingRevision.errorCode, .revisionRequired)
+    XCTAssertEqual(center.items.first?.title, "Ordered")
+  }
+
+  @MainActor
+  func testOrderedEndClosesGenerationUntilANewerShow() throws {
+    let center = PulseCenter()
+    let now = Date(timeIntervalSince1970: 4_000)
+    var payload = PulsePayload(
+      id: "generation", source: "build", title: "Running", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: 0.5, state: .progress, priority: .normal,
+      expiresAt: nil, actions: nil)
+    XCTAssertTrue(center.apply(command(.show, payload, revision: 10), now: now).ok)
+    let end = PulseCommand(
+      token: "test", operation: .end, activity: nil, id: payload.id,
+      source: payload.source, revision: 11)
+    XCTAssertTrue(center.apply(end, now: now).ok)
+    XCTAssertTrue(center.items.isEmpty)
+
+    payload.title = "Delayed"
+    XCTAssertEqual(
+      center.apply(command(.update, payload, revision: 10), now: now).errorCode,
+      .staleRevision)
+    payload.title = "Accidental revival"
+    XCTAssertEqual(
+      center.apply(command(.update, payload, revision: 12), now: now).errorCode,
+      .generationEnded)
+    XCTAssertTrue(center.items.isEmpty)
+
+    payload.title = "New lifecycle"
+    XCTAssertTrue(center.apply(command(.show, payload, revision: 12), now: now).ok)
+    XCTAssertEqual(center.items.first?.title, "New lifecycle")
+    XCTAssertEqual(center.apply(end, now: now).errorCode, .staleRevision)
+  }
+
+  @MainActor
+  func testOrderedEndBeforeShowLeavesATombstone() {
+    let center = PulseCenter()
+    let now = Date(timeIntervalSince1970: 5_000)
+    let end = PulseCommand(
+      token: "test", operation: .end, activity: nil, id: "queued", source: "build",
+      revision: 5)
+    XCTAssertTrue(center.apply(end, now: now).ok)
+
+    let payload = PulsePayload(
+      id: "queued", source: "build", title: "Old work", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    XCTAssertEqual(
+      center.apply(command(.show, payload, revision: 4), now: now).errorCode,
+      .staleRevision)
+    XCTAssertEqual(
+      center.apply(command(.update, payload, revision: 6), now: now).errorCode,
+      .generationEnded)
+    XCTAssertTrue(center.apply(command(.show, payload, revision: 6), now: now).ok)
+  }
+
+  @MainActor
+  func testOrderedEndRequiresSourceEvenWhenIdentityIsActive() {
+    let center = PulseCenter()
+    let payload = PulsePayload(
+      id: "active", source: "build", title: "Running", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    XCTAssertTrue(center.apply(command(.show, payload, revision: 1)).ok)
+    let end = PulseCommand(
+      token: "test", operation: .end, activity: nil, id: "active", revision: 2)
+
+    let response = center.apply(end)
+
+    XCTAssertFalse(response.ok)
+    XCTAssertEqual(response.errorCode, .invalidCommand)
+    XCTAssertEqual(center.items.first?.title, "Running")
+  }
+
+  @MainActor
+  func testRevisionHighWaterMarkIsSessionScopedAcrossRestart() {
+    let now = Date(timeIntervalSince1970: 6_000)
+    let payload = PulsePayload(
+      id: "restart", source: "build", title: "Current", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    let firstProcess = PulseCenter()
+    XCTAssertTrue(firstProcess.apply(command(.show, payload, revision: 100), now: now).ok)
+    XCTAssertTrue(
+      firstProcess.apply(
+        PulseCommand(
+          token: "test", operation: .end, activity: nil, id: payload.id,
+          source: payload.source, revision: 101), now: now
+      ).ok)
+
+    let restartedProcess = PulseCenter()
+    XCTAssertTrue(
+      restartedProcess.apply(command(.update, payload, revision: 1), now: now).ok)
+    XCTAssertEqual(restartedProcess.items.first?.title, "Current")
+  }
+
+  @MainActor
+  func testClearingItemsKeepsRevisionOrderingUntilProcessRestart() {
+    let center = PulseCenter()
+    let now = Date(timeIntervalSince1970: 6_500)
+    var payload = PulsePayload(
+      id: "disabled", source: "build", title: "Before disable", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    XCTAssertTrue(center.apply(command(.show, payload, revision: 5), now: now).ok)
+
+    center.removeAll(now: now)
+    XCTAssertTrue(center.items.isEmpty)
+    payload.title = "Delayed while restarting"
+    XCTAssertEqual(
+      center.apply(command(.update, payload, revision: 4), now: now).errorCode,
+      .staleRevision)
+
+    payload.title = "Provider reconnected"
+    XCTAssertTrue(center.apply(command(.update, payload, revision: 6), now: now).ok)
+    XCTAssertEqual(center.items.first?.title, "Provider reconnected")
+  }
+
+  @MainActor
+  func testRevisionOrderingIsIndependentPerSourceNamespace() {
+    let center = PulseCenter()
+    let now = Date(timeIntervalSince1970: 7_000)
+    let build = PulsePayload(
+      id: "shared", source: "build", title: "Build", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    var agent = build
+    agent.source = "agent"
+    agent.title = "Agent"
+
+    XCTAssertTrue(center.apply(command(.show, build, revision: 20), now: now).ok)
+    XCTAssertTrue(center.apply(command(.show, agent, revision: 1), now: now).ok)
+    XCTAssertEqual(center.items.count, 2)
+  }
+
+  @MainActor
+  func testRevisionTrackingCapacityKeepsExistingStreamsUsable() {
+    let center = PulseCenter()
+    for index in 0..<PulseCenter.maximumRevisionRecords {
+      let end = PulseCommand(
+        token: "test", operation: .end, activity: nil, id: "item-\(index)",
+        source: "build", revision: 0)
+      XCTAssertTrue(center.apply(end).ok)
+    }
+
+    let overflow = PulseCommand(
+      token: "test", operation: .end, activity: nil, id: "overflow", source: "build",
+      revision: 0)
+    XCTAssertEqual(center.apply(overflow).errorCode, .capacityExceeded)
+    let existing = PulseCommand(
+      token: "test", operation: .end, activity: nil, id: "item-0", source: "build",
+      revision: 1)
+    XCTAssertTrue(center.apply(existing).ok)
+  }
+
+  @MainActor
+  func testDirectCommandsRejectRevisionsAboveThePortableJSONLimit() {
+    let center = PulseCenter()
+    let payload = PulsePayload(
+      id: "too-large", source: "build", title: "Too large", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+
+    let response = center.apply(
+      command(.show, payload, revision: PulseRevision.maximum + 1))
+
+    XCTAssertFalse(response.ok)
+    XCTAssertEqual(response.errorCode, .validationFailed)
+    XCTAssertTrue(center.items.isEmpty)
+  }
+
+  @MainActor
   func testProgressOutsideProtocolRangeIsRejected() {
     let center = makeCenter()
     let payload = PulsePayload(
@@ -568,6 +815,23 @@ final class PulseTests: XCTestCase {
       #"{"token":"token","operation":"show","activity":{"id":"id","source":"tests","title":"Title","actions":[{"id":"open","title":"Open","url":"https://example.com","script":"no"}]}}"#
         .utf8)
     XCTAssertThrowsError(try PulseWireValidator.validate(unknownAction))
+  }
+
+  func testWireValidatorAndDecoderEnforceSafeIntegerRevisions() throws {
+    let valid = Data(
+      #"{"token":"token","operation":"end","id":"id","source":"tests","revision":9007199254740991}"#
+        .utf8)
+    XCTAssertNoThrow(try PulseWireValidator.validate(valid))
+    XCTAssertEqual(
+      try PulseWireCodec.decoder().decode(PulseCommand.self, from: valid).revision,
+      PulseRevision.maximum)
+
+    for value in ["-1", "1.5", "true", "9007199254740992"] {
+      let invalid = Data(
+        "{\"token\":\"token\",\"operation\":\"end\",\"id\":\"id\",\"revision\":\(value)}"
+          .utf8)
+      XCTAssertThrowsError(try PulseWireValidator.validate(invalid))
+    }
   }
 
   func testWireDecoderAcceptsFractionalISO8601Expiry() throws {
@@ -1108,8 +1372,12 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(center.retainedItemCount, 0)
   }
 
-  private func command(_ operation: PulseOperation, _ payload: PulsePayload) -> PulseCommand {
-    PulseCommand(token: "test", operation: operation, activity: payload, id: nil)
+  private func command(
+    _ operation: PulseOperation, _ payload: PulsePayload, revision: UInt64? = nil
+  ) -> PulseCommand {
+    PulseCommand(
+      token: "test", operation: operation, activity: payload, id: nil,
+      revision: revision)
   }
 
   @MainActor

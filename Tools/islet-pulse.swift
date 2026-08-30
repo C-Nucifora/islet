@@ -3,12 +3,15 @@ import Darwin
 import Foundation
 import Network
 
+private let maximumRevision: UInt64 = 9_007_199_254_740_991
+
 private let usage = """
-  usage: islet-pulse end <id> [--source NAME]
+  usage: islet-pulse end <id> [--source NAME] [--revision NUMBER]
          islet-pulse <show|update|event> <id> <title> [subtitle] [options]
 
   options:
     --source NAME            Stable provider source (default: cli; use with end)
+    --revision NUMBER        Monotonic integer from 0 through \(maximumRevision)
     --progress NUMBER        Progress from 0 through 1
     --state STATE            active|progress|needsAction|succeeded|failed|cancelled
     --priority PRIORITY      low|normal|high|critical
@@ -149,22 +152,40 @@ guard !identifier.isEmpty, identifier.count <= 128 else {
 let requestID = UUID().uuidString
 var command: [String: Any] = ["operation": operation, "requestID": requestID]
 if operation == "end" {
-  guard arguments.count == 2 || arguments.count == 4 else {
-    FileHandle.standardError.write(Data(usage.utf8))
-    exit(64)
-  }
   command["id"] = identifier
-  if arguments.count == 4 {
-    guard arguments[2] == "--source" else {
-      FileHandle.standardError.write(Data(usage.utf8))
+  var index = 2
+  while index < arguments.count {
+    switch arguments[index] {
+    case "--source":
+      guard index + 1 < arguments.count else {
+        FileHandle.standardError.write(Data("--source requires a value\n".utf8))
+        exit(64)
+      }
+      let source = arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !source.isEmpty, source.count <= 80 else {
+        FileHandle.standardError.write(Data("source must contain 1...80 characters\n".utf8))
+        exit(64)
+      }
+      command["source"] = source
+      index += 2
+    case "--revision":
+      guard index + 1 < arguments.count, let revision = UInt64(arguments[index + 1]),
+        revision <= maximumRevision
+      else {
+        FileHandle.standardError.write(
+          Data("revision must be an integer from 0 through \(maximumRevision)\n".utf8))
+        exit(64)
+      }
+      command["revision"] = revision
+      index += 2
+    default:
+      FileHandle.standardError.write(Data("unknown option: \(arguments[index])\n\(usage)".utf8))
       exit(64)
     }
-    let source = arguments[3].trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !source.isEmpty, source.count <= 80 else {
-      FileHandle.standardError.write(Data("source must contain 1...80 characters\n".utf8))
-      exit(64)
-    }
-    command["source"] = source
+  }
+  if command["revision"] != nil, command["source"] == nil {
+    FileHandle.standardError.write(Data("--revision on end also requires --source\n".utf8))
+    exit(64)
   }
 } else {
   guard arguments.count >= 3 else {
@@ -211,6 +232,16 @@ if operation == "end" {
         exit(64)
       }
       activity["progress"] = progress
+      index += 2
+    case "--revision":
+      guard index + 1 < arguments.count, let revision = UInt64(arguments[index + 1]),
+        revision <= maximumRevision
+      else {
+        FileHandle.standardError.write(
+          Data("revision must be an integer from 0 through \(maximumRevision)\n".utf8))
+        exit(64)
+      }
+      command["revision"] = revision
       index += 2
     case "--state":
       let allowed = Set([
