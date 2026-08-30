@@ -282,12 +282,12 @@ final class T3CodeTests: XCTestCase {
 
   func testT3ResponseGrowthIsBounded() {
     XCTAssertTrue(
-      T3Client.acceptsResponseGrowth(
-        currentBytes: T3Client.maximumResponseBytes - 1, additionalBytes: 1))
+      T3HTTPTransport.acceptsResponseGrowth(
+        currentBytes: T3HTTPTransport.maximumResponseBytes - 1, additionalBytes: 1))
     XCTAssertFalse(
-      T3Client.acceptsResponseGrowth(
-        currentBytes: T3Client.maximumResponseBytes, additionalBytes: 1))
-    XCTAssertFalse(T3Client.acceptsResponseGrowth(currentBytes: -1, additionalBytes: 1))
+      T3HTTPTransport.acceptsResponseGrowth(
+        currentBytes: T3HTTPTransport.maximumResponseBytes, additionalBytes: 1))
+    XCTAssertFalse(T3HTTPTransport.acceptsResponseGrowth(currentBytes: -1, additionalBytes: 1))
   }
 
   func testT3RequestHasATotalDeadlineEvenWhileBytesKeepArriving() async throws {
@@ -596,7 +596,7 @@ private final class T3TestURLProtocol: URLProtocol, @unchecked Sendable {
     if url.host == "oversized.t3-unit.test" {
       let response = HTTPURLResponse(
         url: url, statusCode: 200, httpVersion: "HTTP/1.1",
-        headerFields: ["Content-Length": String(T3Client.maximumResponseBytes + 1)])!
+        headerFields: ["Content-Length": String(T3HTTPTransport.maximumResponseBytes + 1)])!
       client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
       client?.urlProtocolDidFinishLoading(self)
       return

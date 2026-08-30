@@ -229,15 +229,23 @@ struct T3TokenExchange: Decodable, Sendable {
 }
 
 struct T3Client: Sendable {
-  nonisolated static let maximumResponseBytes = 2 * 1024 * 1024
-
   let endpoint: T3Endpoint
-  let token: String?
+  let authorization: T3Authorization
   let session: URLSession
 
   init(endpoint: T3Endpoint, token: String?, session: URLSession = .shared) {
     self.endpoint = endpoint
-    self.token = token
+    authorization = token.map(T3Authorization.bearer) ?? .none
+    self.session = session
+  }
+
+  init(
+    endpoint: T3Endpoint,
+    authorization: T3Authorization,
+    session: URLSession = .shared
+  ) {
+    self.endpoint = endpoint
+    self.authorization = authorization
     self.session = session
   }
 
@@ -268,7 +276,7 @@ struct T3Client: Sendable {
     request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     request.httpBody = Self.formEncode(fields)
-    return try await perform(request, as: T3TokenExchange.self)
+    return try await perform(request, as: T3TokenExchange.self, authorization: .none)
   }
 
   private func get<T: Decodable>(
@@ -277,14 +285,19 @@ struct T3Client: Sendable {
     var request = URLRequest(url: endpoint.url(path))
     request.timeoutInterval = timeoutInterval
     request.setValue("application/json", forHTTPHeaderField: "Accept")
-    if authorized, let token {
-      request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-    }
-    return try await perform(request, as: type)
+    return try await perform(request, as: type, authorization: authorized ? authorization : .none)
   }
 
-  private func perform<T: Decodable>(_ request: URLRequest, as type: T.Type) async throws -> T {
-    let response = try await Self.boundedResponse(for: request, session: session)
+  private func perform<T: Decodable>(
+    _ request: URLRequest, as type: T.Type, authorization: T3Authorization
+  ) async throws -> T {
+    let origin = try T3HTTPOrigin(
+      endpoint.baseURL, allowInsecureHTTP: endpoint.baseURL.scheme == "http")
+    let response = try await T3HTTPTransport(session: session).send(
+      request,
+      authorization: authorization,
+      expectedOrigin: origin,
+      deadline: request.timeoutInterval)
     if response.statusCode == 401 || response.statusCode == 403 {
       throw T3ClientError.unauthorized
     }
@@ -298,54 +311,6 @@ struct T3Client: Sendable {
     }
   }
 
-  nonisolated static func acceptsResponseGrowth(currentBytes: Int, additionalBytes: Int) -> Bool {
-    currentBytes >= 0 && additionalBytes >= 0
-      && currentBytes <= maximumResponseBytes - additionalBytes
-  }
-
-  private struct BoundedResponse: Sendable {
-    let data: Data
-    let statusCode: Int
-  }
-
-  private static func boundedResponse(
-    for request: URLRequest, session: URLSession
-  ) async throws -> BoundedResponse {
-    let totalDeadline = max(0.1, request.timeoutInterval)
-    return try await withThrowingTaskGroup(of: BoundedResponse.self) { group in
-      group.addTask {
-        let (bytes, response) = try await session.bytes(
-          for: request, delegate: T3NoRedirectDelegate.shared)
-        guard let http = response as? HTTPURLResponse else {
-          throw T3ClientError.invalidResponse
-        }
-        if response.expectedContentLength > Int64(maximumResponseBytes) {
-          throw T3ClientError.responseTooLarge
-        }
-        var data = Data()
-        data.reserveCapacity(
-          min(max(0, Int(response.expectedContentLength)), maximumResponseBytes))
-        for try await byte in bytes {
-          try Task.checkCancellation()
-          guard acceptsResponseGrowth(currentBytes: data.count, additionalBytes: 1) else {
-            throw T3ClientError.responseTooLarge
-          }
-          data.append(byte)
-        }
-        return BoundedResponse(data: data, statusCode: http.statusCode)
-      }
-      group.addTask {
-        try await Task.sleep(for: .seconds(totalDeadline))
-        throw T3ClientError.requestTimedOut
-      }
-      defer { group.cancelAll() }
-      guard let response = try await group.next() else {
-        throw T3ClientError.invalidResponse
-      }
-      return response
-    }
-  }
-
   private static func formEncode(_ fields: [(String, String)]) -> Data {
     var allowed = CharacterSet.alphanumerics
     allowed.insert(charactersIn: "-._~")
@@ -355,20 +320,6 @@ struct T3Client: Sendable {
       return "\(escapedKey)=\(escapedValue)"
     }.joined(separator: "&")
     return Data(body.utf8)
-  }
-}
-
-private final class T3NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-  static let shared = T3NoRedirectDelegate()
-
-  func urlSession(
-    _ session: URLSession,
-    task: URLSessionTask,
-    willPerformHTTPRedirection response: HTTPURLResponse,
-    newRequest request: URLRequest,
-    completionHandler: @escaping (URLRequest?) -> Void
-  ) {
-    completionHandler(T3RedirectPolicy.requestToFollow(request, from: response))
   }
 }
 
