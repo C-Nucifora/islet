@@ -67,7 +67,7 @@ final class ActivityCenter: ObservableObject {
     cachedActiveActivities =
       activities
       .filter(\.isActive)
-      .filter { !disabled.contains($0.id) }
+      .filter { ActivityEnablement.isEnabled($0.id, disabledActivities: disabled) }
       .sorted {
         let ra = rank($0)
         let rb = rank($1)
@@ -88,7 +88,8 @@ final class ActivityCenter: ObservableObject {
     let disabled = Set(Defaults[.disabledActivities])
     return sorted(
       activities.filter {
-        ($0.isActive || $0.isAvailableWhenInactive) && !disabled.contains($0.id)
+        ($0.isActive || $0.isAvailableWhenInactive)
+          && ActivityEnablement.isEnabled($0.id, disabledActivities: disabled)
       },
       order: order)
   }

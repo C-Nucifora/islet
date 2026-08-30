@@ -128,6 +128,73 @@ extension HUDStyle: Defaults.Serializable {}
 extension EnergyMode: Defaults.Serializable {}
 extension HapticStrength: Defaults.Serializable {}
 
+/// The persisted activity switch. `disabledActivities` is an exclusion list so activities added by
+/// a newer build start enabled, and an older build can retain ids it does not understand.
+enum ActivityEnablement {
+  static let migrationVersion = 1
+  static let migrationVersionKey = "activityEnablementMigrationVersion"
+  static let disabledActivitiesKey = "disabledActivities"
+  static let sharedProviderIDs: Set<String> = ["calendar"]
+  static let legacyFlagActivityIDs: Set<String> = [
+    "battery", "calendar", "clipboard", "ports", "system", "continuity", "t3Code", "pulse",
+  ]
+
+  static func isEnabled<Disabled: Collection>(
+    _ activityID: String, disabledActivities: Disabled
+  ) -> Bool where Disabled.Element == String {
+    !disabledActivities.contains(activityID)
+  }
+
+  static func isEnabled(_ activityID: String) -> Bool {
+    isEnabled(activityID, disabledActivities: Defaults[.disabledActivities])
+  }
+
+  static func updating(
+    _ disabledActivities: [String], activityID: String, enabled: Bool
+  ) -> [String] {
+    if enabled { return disabledActivities.filter { $0 != activityID } }
+    guard !disabledActivities.contains(activityID) else { return disabledActivities }
+    return disabledActivities + [activityID]
+  }
+
+  /// Before this migration, visibility and runtime could disagree. Either old switch being off
+  /// wins, so migration never starts or reveals something the user had switched off. Calendar's
+  /// provider flag remains stored separately after contributing to this initial canonical value.
+  static func migratedDisabledActivities(
+    existing: [String], legacyEnabled: [String: Bool]
+  ) -> [String] {
+    let knownIDs = Set(ActivityCatalog.defaultOrder)
+    let previouslyDisabled = Set(existing)
+    let unknown = existing.filter { !knownIDs.contains($0) }
+    let disabledKnown = ActivityCatalog.defaultOrder.filter { activityID in
+      guard let featureEnabled = legacyEnabled[activityID] else {
+        return previouslyDisabled.contains(activityID)
+      }
+      return previouslyDisabled.contains(activityID) || !featureEnabled
+    }
+    return unknown + disabledKnown
+  }
+
+  @MainActor
+  static func migrateLegacyPreferencesIfNeeded(force: Bool = false) {
+    guard force || Defaults[.activityEnablementMigrationVersion] < migrationVersion else { return }
+    let legacyEnabled = [
+      "battery": Defaults[.legacyBatteryEnabled],
+      "calendar": Defaults[.calendarEnabled],
+      "clipboard": Defaults[.legacyClipboardEnabled],
+      "ports": Defaults[.legacyPortsEnabled],
+      "system": Defaults[.legacySystemEnabled],
+      "continuity": Defaults[.legacyContinuityEnabled],
+      "t3Code": Defaults[.legacyT3CodeEnabled],
+      "pulse": Defaults[.legacyPulseEnabled],
+    ]
+    let migrated = migratedDisabledActivities(
+      existing: Defaults[.disabledActivities], legacyEnabled: legacyEnabled)
+    if migrated != Defaults[.disabledActivities] { Defaults[.disabledActivities] = migrated }
+    Defaults[.activityEnablementMigrationVersion] = migrationVersion
+  }
+}
+
 extension Defaults.Keys {
   static let onboardingVersion = Key<Int>("onboardingVersion", default: 0)
   static let appTheme = Key<AppTheme>("appTheme", default: .classic)
@@ -144,9 +211,11 @@ extension Defaults.Keys {
     "barrierPushDistance", default: Double(Metrics.barrierPushDistance))
   static let energyMode = Key<EnergyMode>("energyMode", default: .automatic)
   static let hideFromScreenRecording = Key<Bool>("hideFromScreenRecording", default: false)
-  static let batteryEnabled = Key<Bool>("batteryEnabled", default: true)
+  /// Retained only as input to the one-time activity enablement migration.
+  static let legacyBatteryEnabled = Key<Bool>("batteryEnabled", default: true)
   static let hudEnabled = Key<Bool>("hudEnabled", default: false)
   static let hudStyle = Key<HUDStyle>("hudStyle", default: .bar)
+  /// Provider setting shared by the Calendar activity and Home agenda, not an activity switch.
   static let calendarEnabled = Key<Bool>("calendarEnabled", default: true)
   static let calendarLeadMinutes = Key<Int>("calendarLeadMinutes", default: 10)
   static let hiddenCalendarIDs = Key<[String]>("hiddenCalendarIDs", default: [])
@@ -155,14 +224,19 @@ extension Defaults.Keys {
   static let hideInFullscreen = Key<Bool>("hideInFullscreen", default: false)
   static let launchAtLogin = Key<Bool>("launchAtLogin", default: false)
   static let activityOrder = Key<[String]>("activityOrder", default: ActivityCatalog.defaultOrder)
-  static let disabledActivities = Key<[String]>("disabledActivities", default: [])
-  static let clipboardEnabled = Key<Bool>("clipboardEnabled", default: false)
-  static let portsEnabled = Key<Bool>("portsEnabled", default: true)
+  static let disabledActivities = Key<[String]>(
+    ActivityEnablement.disabledActivitiesKey, default: [])
+  static let activityEnablementMigrationVersion = Key<Int>(
+    ActivityEnablement.migrationVersionKey, default: 0)
+  /// Retained only as input to the one-time activity enablement migration.
+  static let legacyClipboardEnabled = Key<Bool>("clipboardEnabled", default: false)
+  static let legacyPortsEnabled = Key<Bool>("portsEnabled", default: true)
   /// Event sources the user has switched off. Inferred sources start off because they can be late
   /// or ambiguous; a user can explicitly enable the ones they find useful.
   static let disabledEventSources = Key<[String]>(
     "disabledEventSources", default: ["airdropOut", "airdropIn", "focus", "vpn"])
-  static let systemEnabled = Key<Bool>("systemEnabled", default: true)
+  /// Retained only as input to the one-time activity enablement migration.
+  static let legacySystemEnabled = Key<Bool>("systemEnabled", default: true)
   /// Off: the System tab appears only while `SystemPresenceGate` is hot. On: it is always in the
   /// switcher, which is how you look at an idle machine's stats.
   static let systemAlwaysVisible = Key<Bool>("systemAlwaysVisible", default: false)
@@ -170,13 +244,15 @@ extension Defaults.Keys {
   /// strings so an unknown value from a future build resolves to the fallback instead of failing
   /// to decode the whole dictionary.
   static let metricStyles = Key<[String: String]>("metricStyles", default: [:])
-  static let continuityEnabled = Key<Bool>("continuityEnabled", default: true)
+  /// Retained only as input to the one-time activity enablement migration.
+  static let legacyContinuityEnabled = Key<Bool>("continuityEnabled", default: true)
   /// Off: the iPhone tab appears only while the phone has something running. On: it stays in the
   /// switcher so the empty state can explain why nothing is arriving. Mirrors `systemAlwaysVisible`.
   static let continuityAlwaysVisible = Key<Bool>("continuityAlwaysVisible", default: false)
   static let continuitySneaks = Key<Bool>("continuitySneaks", default: true)
-  static let t3CodeEnabled = Key<Bool>("t3CodeEnabled", default: true)
-  static let pulseEnabled = Key<Bool>("pulseEnabled", default: true)
+  /// Retained only as input to the one-time activity enablement migration.
+  static let legacyT3CodeEnabled = Key<Bool>("t3CodeEnabled", default: true)
+  static let legacyPulseEnabled = Key<Bool>("pulseEnabled", default: true)
   static let t3RemoteEnvironments = Key<[T3EnvironmentProfile]>(
     "t3RemoteEnvironments", default: [])
 }
