@@ -11,7 +11,7 @@ the commit, date, result, and any skipped coverage when the check is run.
 | Pinned upstream contract review | Complete | `pingdotgg/t3code@2daff8c25adf701fddd062ae93b94cc57d420ec2` |
 | No-credential production smoke | Passed on 2026-08-31 | Hosted page returned 200; relay inventory without authorization returned 401 |
 | Local arm64 CI validation | Passed on 2026-08-31 | Source `42c0611b8e29cf5caed76e9b63a00af19627b207`: 985 passed, 0 failed, 1 expected Accessibility skip; provenance, generated plist, package pinning, arm64 slices, and static analysis passed |
-| GitHub Intel validation | Pending | Required `Build and test (x86_64)` pull-request check |
+| GitHub Intel validation | Passed on 2026-08-31 | PR #190 run `33324807541` at `4243aa55ced58db7ff3377cdba11ecb1359927a9`: tests and x86_64 product-slice checks passed |
 | Credentialed real-account acceptance | Not run | Requires a human's T3 account, linked environment, and active agent |
 
 Do not change the last row to passed unless a human completed every applicable credentialed step
