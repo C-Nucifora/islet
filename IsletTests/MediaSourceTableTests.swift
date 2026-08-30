@@ -141,6 +141,20 @@ final class MediaSourceTableTests: XCTestCase {
       spotify)
   }
 
+  func testChooserSelectionMakesTheRequestedVisibleSourcePrimary() {
+    var table = MediaSourceTable()
+    let music = key("com.apple.Music", 2)
+    let spotify = key("com.spotify.client", 1)
+    table.upsert(spotify, state("A", playing: true), now: t0)
+    table.upsert(music, state("B", playing: true), now: t0)
+
+    let selection = MediaSourceChooser.selection(
+      for: music, priorityList: ["com.spotify.client", "com.apple.Music"])
+
+    XCTAssertEqual(
+      table.primaryKey(mode: selection.mode, priorityList: selection.priorityList), music)
+  }
+
   func testOrderedRanksByDisplayIdentityNotTheHelperBundle() {
     var table = MediaSourceTable()
     let safari = key("com.apple.WebKit.GPU", 6712, parent: "com.apple.Safari")

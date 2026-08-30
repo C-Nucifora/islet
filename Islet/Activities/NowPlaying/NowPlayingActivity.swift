@@ -128,8 +128,14 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     adapterStatus = "Stopped"
   }
 
-  /// Tapping a chip. See `MediaRemoteCommands.promote` for what "promote" can actually mean today.
+  /// Tapping a source makes its display identity the first configured primary player, then asks
+  /// MediaRemote to focus it. See `MediaRemoteCommands.promote` for the activation fallback.
   func promote(_ source: SourceID) {
+    let selection = MediaSourceChooser.selection(
+      for: source, priorityList: Defaults[.mediaPriorityList])
+    Defaults[.mediaSourceMode] = selection.mode
+    Defaults[.mediaPriorityList] = selection.priorityList
+    publish()
     MediaRemoteCommands.shared.promote(source)
   }
 
@@ -143,6 +149,17 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
 
   func sourceName(for source: SourceID) -> String {
     appNames[source.displayBundleIdentifier] ?? source.displayBundleIdentifier
+  }
+
+  func sourceAccessibilityLabel(for source: SourceID, isPrimary: Bool) -> String {
+    MediaSourceChooser.accessibilityLabel(
+      appName: sourceName(for: source),
+      isPlaying: sources[source]?.isPlaying ?? true,
+      isPrimary: isPrimary)
+  }
+
+  func sourceSelectionAccessibilityHint(for source: SourceID) -> String {
+    MediaSourceChooser.accessibilityHint(appName: sourceName(for: source))
   }
 
   var knownBundleIdentifiers: [String] {

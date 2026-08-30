@@ -90,7 +90,8 @@ struct ExpandedPlayerView: View {
   /// the ceiling of the non-fork approach, and it is why the design spec's "Upgrade path — fork the
   /// MediaRemote adapter for true per-source media" section exists.
   private var sourceStrip: some View {
-    let layout = SourceStrip.layout(activity.strip)
+    let layout = MediaSourceChooser.layout(
+      primary: activity.primaryKey, secondary: activity.strip)
     return HStack(spacing: 6) {
       ForEach(layout.shown, id: \.self) { source in
         Button {
@@ -99,21 +100,72 @@ struct ExpandedPlayerView: View {
           chip(source)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(
-          "Switch to \(activity.sourceName(for: source))")
+        .accessibilityLabel(activity.sourceAccessibilityLabel(for: source, isPrimary: false))
+        .accessibilityHint(activity.sourceSelectionAccessibilityHint(for: source))
       }
-      if layout.overflow > 0 {
-        Text("+\(layout.overflow)")
-          .font(.caption2.weight(.semibold)).monospacedDigit()
-          .foregroundStyle(.secondary)
-          .padding(.horizontal, 6)
-          .frame(height: 22)
-          .background(Capsule().fill(.white.opacity(0.08)))
-          .accessibilityLabel("\(layout.overflow) more sources")
+      if !layout.hidden.isEmpty {
+        sourceChooser(layout)
       }
       Spacer(minLength: 0)
     }
     .frame(height: 22)
+  }
+
+  @ViewBuilder
+  private func sourceChooser(_ layout: MediaSourceChooser.Layout) -> some View {
+    Menu {
+      if let primary = layout.primary {
+        Section("Primary source") {
+          sourceChooserRow(primary, isPrimary: true)
+            .accessibilityLabel(activity.sourceAccessibilityLabel(for: primary, isPrimary: true))
+        }
+      }
+      Section("More sources") {
+        ForEach(layout.hidden, id: \.self) { source in
+          Button {
+            activity.promote(source)
+          } label: {
+            sourceChooserRow(source, isPrimary: false)
+          }
+          .accessibilityLabel(activity.sourceAccessibilityLabel(for: source, isPrimary: false))
+          .accessibilityHint(activity.sourceSelectionAccessibilityHint(for: source))
+        }
+      }
+    } label: {
+      Text("+\(layout.hidden.count)")
+        .font(.caption2.weight(.semibold)).monospacedDigit()
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 6)
+        .frame(height: 22)
+        .background(Capsule().fill(.white.opacity(0.08)))
+    }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .fixedSize()
+    .accessibilityLabel("Choose from \(layout.hidden.count) more sources")
+    .accessibilityHint("Opens a list of additional media sources")
+  }
+
+  private func sourceChooserRow(_ source: SourceID, isPrimary: Bool) -> some View {
+    let isPlaying = activity.sources[source]?.isPlaying ?? true
+    return HStack(spacing: 8) {
+      if let icon = activity.sourceIcon(for: source) {
+        Image(nsImage: icon).resizable().frame(width: 16, height: 16)
+      } else {
+        Image(systemName: "speaker.wave.2.fill").frame(width: 16, height: 16)
+      }
+      VStack(alignment: .leading, spacing: 1) {
+        Text(activity.sourceName(for: source))
+        Text(isPlaying ? "Playing" : "Paused")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      if isPrimary {
+        Text("Primary")
+          .font(.caption.weight(.medium))
+          .foregroundStyle(.secondary)
+      }
+    }
   }
 
   private func chip(_ source: SourceID) -> some View {
