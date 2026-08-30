@@ -309,6 +309,18 @@ final class RemindersProvider: ObservableObject {
     return draft
   }
 
+  func draft(for item: ReminderItem) -> ReminderDraft? {
+    switch writes.draft(for: item) {
+    case .success(let draft):
+      lastActionError = nil
+      return draft
+    case .failure(let error):
+      report(error, action: "open \(item.title) for editing")
+      availableLists = writes.lists()
+      return nil
+    }
+  }
+
   private func apply(
     _ result: Result<ReminderItem, ReminderWriteError>, replacing original: ReminderItem,
     action: String
