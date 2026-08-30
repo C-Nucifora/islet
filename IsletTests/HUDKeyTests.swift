@@ -43,6 +43,74 @@ final class HUDKeyTests: XCTestCase {
     XCTAssertEqual(shifted[2] ?? -1, 0.7, accuracy: 1e-6)
   }
 
+  func testSparseMultichannelDeviceMovesEveryReportedChannel() {
+    var device = FakeVolumeDevice(
+      elements: [17, 3, 42], values: [3: 0.4, 17: 0.6, 42: 0.2])
+
+    XCTAssertTrue(
+      VolumeControlLayout.apply(
+        target: 0.5,
+        reportedElements: device.elements,
+        read: { device.values[$0] },
+        write: { element, value in device.write(element, value: value) }))
+
+    XCTAssertEqual(device.values[3] ?? -1, 0.5, accuracy: 1e-6)
+    XCTAssertEqual(device.values[17] ?? -1, 0.7, accuracy: 1e-6)
+    XCTAssertEqual(device.values[42] ?? -1, 0.3, accuracy: 1e-6)
+    XCTAssertEqual(device.writes, [3, 17, 42])
+  }
+
+  func testVirtualMasterAvoidsChangingIndividualChannels() {
+    var device = FakeVolumeDevice(
+      elements: [0, 3, 42], values: [0: 0.4, 3: 0.2, 42: 0.8])
+
+    XCTAssertTrue(
+      VolumeControlLayout.apply(
+        target: 0.5,
+        reportedElements: device.elements,
+        read: { device.values[$0] },
+        write: { element, value in device.write(element, value: value) }))
+
+    XCTAssertEqual(device.values[0] ?? -1, 0.5, accuracy: 1e-6)
+    XCTAssertEqual(device.values[3] ?? -1, 0.2, accuracy: 1e-6)
+    XCTAssertEqual(device.values[42] ?? -1, 0.8, accuracy: 1e-6)
+    XCTAssertEqual(device.writes, [0])
+  }
+
+  func testMultichannelWriteFailureRestoresPriorChannels() {
+    var device = FakeVolumeDevice(
+      elements: [3, 17, 42], values: [3: 0.4, 17: 0.6, 42: 0.2], failingElement: 42)
+
+    XCTAssertFalse(
+      VolumeControlLayout.apply(
+        target: 0.5,
+        reportedElements: device.elements,
+        read: { device.values[$0] },
+        write: { element, value in device.write(element, value: value) }))
+
+    XCTAssertEqual(device.values, [3: 0.4, 17: 0.6, 42: 0.2])
+    XCTAssertEqual(device.writes, [3, 17, 42, 17, 3])
+  }
+
+  func testMultichannelReadbackFailureRestoresEveryChannel() {
+    var device = FakeVolumeDevice(
+      elements: [3, 17, 42], values: [3: 0.4, 17: 0.6, 42: 0.2])
+    var reads = 0
+
+    XCTAssertFalse(
+      VolumeControlLayout.apply(
+        target: 0.5,
+        reportedElements: device.elements,
+        read: { element in
+          reads += 1
+          return reads > 3 && element == 42 ? nil : device.values[element]
+        },
+        write: { element, value in device.write(element, value: value) }))
+
+    XCTAssertEqual(device.values, [3: 0.4, 17: 0.6, 42: 0.2])
+    XCTAssertEqual(device.writes, [3, 17, 42, 42, 17, 3])
+  }
+
   func testBrightnessClassification() {
     XCTAssertTrue(HUDKey.brightnessUp.isBrightness)
     XCTAssertFalse(HUDKey.volumeUp.isBrightness)
@@ -116,5 +184,25 @@ final class HUDKeyTests: XCTestCase {
     XCTAssertTrue(state.recordKeyDown(.brightnessDown, applied: true))
     XCTAssertFalse(state.recordKeyDown(.brightnessDown, applied: false))
     XCTAssertFalse(state.shouldConsumeKeyUp(.brightnessDown))
+  }
+}
+
+private struct FakeVolumeDevice {
+  let elements: [UInt32]
+  var values: [UInt32: Float]
+  let failingElement: UInt32?
+  var writes: [UInt32] = []
+
+  init(elements: [UInt32], values: [UInt32: Float], failingElement: UInt32? = nil) {
+    self.elements = elements
+    self.values = values
+    self.failingElement = failingElement
+  }
+
+  mutating func write(_ element: UInt32, value: Float) -> Bool {
+    writes.append(element)
+    guard element != failingElement else { return false }
+    values[element] = value
+    return true
   }
 }

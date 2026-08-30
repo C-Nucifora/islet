@@ -4,15 +4,51 @@ import IOKit.usb
 import SwiftUI
 
 struct PortDevice: Identifiable, Equatable {
-  let id: String  // locationID hex — unique per physical port path
+  /// A registry-entry ID plus the IOService path. The path is part of the key so moving a device
+  /// to a different physical port is intentionally reported as a detach followed by an attach.
+  let id: String
   let name: String
   let vendor: String?
   let speed: String?
+  let locationID: UInt32?
 
   /// A short port label derived from the location ID's controller nibble.
   var portLabel: String {
-    guard id.hasPrefix("0x"), let value = UInt32(id.dropFirst(2), radix: 16) else { return id }
-    return String(format: "Port %X", (value >> 24) & 0xFF)
+    guard let locationID else { return "Port unavailable" }
+    return String(format: "Port %X", (locationID >> 24) & 0xFF)
+  }
+}
+
+/// The identity inputs IOKit exposes for one USB registry entry. Keeping them separate from
+/// `PortDevice` lets the identity rule be tested without a physical USB device.
+struct USBDeviceRegistryEntry {
+  let registryEntryID: UInt64?
+  let servicePath: String?
+  let locationID: UInt32?
+  let productName: String?
+  let vendorName: String?
+  let deviceSpeed: Int?
+}
+
+enum PortDeviceIdentity {
+  /// Builds a key from data owned by the registry entry, never from a display property such as a
+  /// product name. The registry ID is stable for the connected entry. The service path identifies
+  /// its physical attachment point, so a move gets a new identity even if IOKit reuses an ID.
+  ///
+  /// If neither source is available, there is no stable unique key to publish. The reader omits
+  /// that entry rather than creating a product-name collision in SwiftUI or device diffs.
+  static func make(registryEntryID: UInt64?, servicePath: String?) -> String? {
+    let path = servicePath?.trimmingCharacters(in: .whitespacesAndNewlines)
+    switch (registryEntryID, path?.isEmpty == false ? path : nil) {
+    case (let entryID?, let path?):
+      return String(format: "registry:%016llX|path:%@", entryID, path)
+    case (let entryID?, nil):
+      return String(format: "registry:%016llX", entryID)
+    case (nil, let path?):
+      return "path:\(path)"
+    case (nil, nil):
+      return nil
+    }
   }
 }
 
@@ -29,19 +65,36 @@ enum PortsReader {
     var out: [PortDevice] = []
     var service = IOIteratorNext(iterator)
     while service != 0 {
-      if let name = strProp(service, "USB Product Name") {
-        let loc =
-          intProp(service, "locationID")
-          .map { String(format: "0x%08X", UInt32(truncatingIfNeeded: $0)) } ?? name
-        out.append(
-          PortDevice(
-            id: loc, name: name, vendor: strProp(service, "USB Vendor Name"),
-            speed: speedString(intProp(service, "Device Speed"))))
-      }
+      if let device = device(from: registryEntry(for: service)) { out.append(device) }
       IOObjectRelease(service)
       service = IOIteratorNext(iterator)
     }
     return out.sorted { $0.id < $1.id }
+  }
+
+  static func device(from entry: USBDeviceRegistryEntry) -> PortDevice? {
+    guard
+      let id = PortDeviceIdentity.make(
+        registryEntryID: entry.registryEntryID, servicePath: entry.servicePath)
+    else { return nil }
+    let name = entry.productName?.isEmpty == false ? entry.productName : nil
+
+    return PortDevice(
+      id: id,
+      name: name ?? "USB Device",
+      vendor: entry.vendorName,
+      speed: speedString(entry.deviceSpeed),
+      locationID: entry.locationID)
+  }
+
+  private static func registryEntry(for service: io_service_t) -> USBDeviceRegistryEntry {
+    USBDeviceRegistryEntry(
+      registryEntryID: registryEntryID(service),
+      servicePath: registryPath(service),
+      locationID: intProp(service, "locationID").map { UInt32(truncatingIfNeeded: $0) },
+      productName: strProp(service, "USB Product Name"),
+      vendorName: strProp(service, "USB Vendor Name"),
+      deviceSpeed: intProp(service, "Device Speed"))
   }
 
   private static func speedString(_ speed: Int?) -> String? {
@@ -64,6 +117,21 @@ enum PortsReader {
   private static func intProp(_ service: io_service_t, _ key: String) -> Int? {
     (IORegistryEntryCreateCFProperty(service, key as CFString, kCFAllocatorDefault, 0)?
       .takeRetainedValue() as? NSNumber)?.intValue
+  }
+
+  private static func registryEntryID(_ service: io_service_t) -> UInt64? {
+    var entryID: UInt64 = 0
+    guard IORegistryEntryGetRegistryEntryID(service, &entryID) == KERN_SUCCESS else { return nil }
+    return entryID
+  }
+
+  private static func registryPath(_ service: io_service_t) -> String? {
+    var path = [CChar](repeating: 0, count: 1_024)
+    let result = path.withUnsafeMutableBufferPointer {
+      IORegistryEntryGetPath(service, kIOServicePlane, $0.baseAddress)
+    }
+    guard result == KERN_SUCCESS else { return nil }
+    return String(cString: path)
   }
 }
 

@@ -7,11 +7,138 @@ import XCTest
 final class ShelfLogicTests: XCTestCase {
   private enum CopyFailure: Error { case expected }
 
+  private final class RetryableStorage: @unchecked Sendable {
+    private let lock = NSLock()
+    private var available = false
+
+    func setAvailable(_ available: Bool) {
+      lock.lock()
+      self.available = available
+      lock.unlock()
+    }
+
+    func createDirectory(at _: URL) -> Result<Void, Error> {
+      lock.lock()
+      defer { lock.unlock() }
+      return available ? .success(()) : .failure(CopyFailure.expected)
+    }
+
+    func listDirectory(at _: URL) -> Result<[URL], Error> {
+      lock.lock()
+      defer { lock.unlock() }
+      return available ? .success([]) : .failure(CopyFailure.expected)
+    }
+  }
+
   private actor CopyProbe {
     private var started = false
 
     func markStarted() { started = true }
     func hasStarted() -> Bool { started }
+  }
+
+  private actor StagedCopyGate {
+    private var started = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func copy(source: URL, to staging: URL) async -> Result<Void, Error> {
+      let result = Result { try FileManager.default.copyItem(at: source, to: staging) }
+      started = true
+      await withCheckedContinuation { continuation = $0 }
+      return result
+    }
+
+    func hasStarted() -> Bool { started }
+
+    func release() {
+      continuation?.resume()
+      continuation = nil
+    }
+  }
+
+  private actor CompletedMoveGate {
+    private var started = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func move(source: URL, to destination: URL) async -> Result<Void, Error> {
+      let result = Result { try FileManager.default.moveItem(at: source, to: destination) }
+      started = true
+      await withCheckedContinuation { continuation = $0 }
+      return result
+    }
+
+    func hasStarted() -> Bool { started }
+
+    func release() {
+      continuation?.resume()
+      continuation = nil
+    }
+  }
+
+  private actor ThumbnailGeneratorProbe {
+    private var requestedURLs: [URL] = []
+    private var activeCount = 0
+    private var maximumActiveCount = 0
+    private var cancellationURLs: [URL] = []
+    private var continuations: [CheckedContinuation<Data?, Never>] = []
+
+    func generate(_ url: URL) async -> Data? {
+      requestedURLs.append(url)
+      activeCount += 1
+      maximumActiveCount = max(maximumActiveCount, activeCount)
+      let data = await withTaskCancellationHandler(
+        operation: {
+          await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+          }
+        },
+        onCancel: {
+          Task { await self.recordCancellation(of: url) }
+        })
+      activeCount -= 1
+      return data
+    }
+
+    func requestCount() -> Int { requestedURLs.count }
+    func requests() -> [URL] { requestedURLs }
+    func maximumActiveRequests() -> Int { maximumActiveCount }
+    func cancellationCount() -> Int { cancellationURLs.count }
+
+    func releaseNext(with data: Data? = Data([1])) {
+      guard !continuations.isEmpty else { return }
+      continuations.removeFirst().resume(returning: data)
+    }
+
+    func releaseAll() {
+      let waiting = continuations
+      continuations.removeAll()
+      for continuation in waiting { continuation.resume(returning: Data([1])) }
+    }
+
+    private func recordCancellation(of url: URL) {
+      cancellationURLs.append(url)
+    }
+  }
+
+  private final class ThumbnailMetadataStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [URL: ShelfThumbnailMetadata]
+
+    init(_ values: [URL: ShelfThumbnailMetadata]) {
+      self.values = values
+    }
+
+    func metadata(for url: URL) -> ShelfThumbnailMetadata? {
+      lock.lock()
+      defer { lock.unlock() }
+      return values[url]
+    }
+
+    func set(_ metadata: ShelfThumbnailMetadata, for url: URL) {
+      lock.lock()
+      values[url] = metadata
+      lock.unlock()
+    }
   }
 
   func testShelfHasBoundedCapacity() {
@@ -25,6 +152,305 @@ final class ShelfLogicTests: XCTestCase {
     XCTAssertFalse(ShelfLogic.hasCapacity(currentCount: -1, pendingCount: 0, maximum: 100))
     XCTAssertFalse(ShelfLogic.hasCapacity(currentCount: 0, pendingCount: -1, maximum: 100))
     XCTAssertFalse(ShelfLogic.hasCapacity(currentCount: 0, pendingCount: 0, maximum: 0))
+  }
+
+  @MainActor
+  func testVisibleShelfItemsLoadFirstWithBoundedThumbnailConcurrency() async {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let first = shelf.appendingPathComponent("first.pdf")
+    let second = shelf.appendingPathComponent("second.pdf")
+    let third = shelf.appendingPathComponent("third.pdf")
+    let metadata = ThumbnailMetadataStore(
+      [first, second, third].reduce(into: [:]) { values, url in
+        values[url] = ShelfThumbnailMetadata(modificationDate: .now, fileSize: 1)
+      })
+    let renderer = ThumbnailGeneratorProbe()
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([first, second, third]) },
+      measureItem: { _ in .success(0) },
+      thumbnailMetadata: metadata.metadata,
+      generateThumbnailData: renderer.generate)
+
+    let itemsByURL = Dictionary(uniqueKeysWithValues: model.items.map { ($0.url, $0) })
+    model.setThumbnailVisibility(for: itemsByURL[first]!, isVisible: true)
+    model.setThumbnailVisibility(for: itemsByURL[second]!, isVisible: true)
+    model.setThumbnailVisibility(for: itemsByURL[third]!, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+
+    let initialRequests = await renderer.requests()
+    let initialMaximum = await renderer.maximumActiveRequests()
+    XCTAssertEqual(initialRequests, [first, second])
+    XCTAssertEqual(initialMaximum, 2)
+    await renderer.releaseNext()
+    for _ in 0..<100 where await renderer.requestCount() < 3 { await Task.yield() }
+    let allRequests = await renderer.requests()
+    let maximum = await renderer.maximumActiveRequests()
+    XCTAssertEqual(allRequests, [first, second, third])
+    XCTAssertEqual(maximum, ShelfModel.maximumConcurrentThumbnailRequests)
+    await renderer.releaseAll()
+  }
+
+  @MainActor
+  func testThumbnailCacheUsesModificationMetadataAsItsVersion() async {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let stored = shelf.appendingPathComponent("cached.pdf")
+    let originalDate = Date.now
+    let originalMetadata = ShelfThumbnailMetadata(modificationDate: originalDate, fileSize: 1)
+    let metadata = ThumbnailMetadataStore([stored: originalMetadata])
+    let renderer = ThumbnailGeneratorProbe()
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([stored]) },
+      measureItem: { _ in .success(0) },
+      thumbnailMetadata: metadata.metadata,
+      generateThumbnailData: renderer.generate)
+    guard let item = model.items.first else {
+      XCTFail("Expected the stored Shelf item")
+      return
+    }
+
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 1 { await Task.yield() }
+    await renderer.releaseNext()
+    for _ in 0..<100 where model.items.first?.thumbnail == nil { await Task.yield() }
+    XCTAssertNotNil(model.items.first?.thumbnail)
+
+    model.setThumbnailVisibility(for: item, isVisible: false)
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    for _ in 0..<10 { await Task.yield() }
+    let cachedRequestCount = await renderer.requestCount()
+    XCTAssertEqual(cachedRequestCount, 1)
+
+    model.setThumbnailVisibility(for: item, isVisible: false)
+    metadata.set(
+      ShelfThumbnailMetadata(
+        modificationDate: originalDate.addingTimeInterval(1), fileSize: 1),
+      for: stored)
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+    let refreshedRequestCount = await renderer.requestCount()
+    XCTAssertEqual(refreshedRequestCount, 2)
+    await renderer.releaseAll()
+  }
+
+  @MainActor
+  func testThumbnailResultIsDiscardedWhenItsFileMetadataBecomesStale() async {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let stored = shelf.appendingPathComponent("changing.pdf")
+    let originalDate = Date.now
+    let metadata = ThumbnailMetadataStore(
+      [stored: ShelfThumbnailMetadata(modificationDate: originalDate, fileSize: 1)])
+    let renderer = ThumbnailGeneratorProbe()
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([stored]) },
+      measureItem: { _ in .success(0) },
+      thumbnailMetadata: metadata.metadata,
+      generateThumbnailData: renderer.generate)
+    guard let item = model.items.first else {
+      XCTFail("Expected the stored Shelf item")
+      return
+    }
+
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 1 { await Task.yield() }
+    metadata.set(
+      ShelfThumbnailMetadata(modificationDate: originalDate.addingTimeInterval(1), fileSize: 1),
+      for: stored)
+    await renderer.releaseNext()
+    for _ in 0..<100 { await Task.yield() }
+    XCTAssertNil(model.items.first?.thumbnail)
+
+    model.setThumbnailVisibility(for: item, isVisible: false)
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+    let requestCount = await renderer.requestCount()
+    XCTAssertEqual(requestCount, 2)
+    await renderer.releaseAll()
+  }
+
+  @MainActor
+  func testOffscreenThumbnailCancellationDoesNotStrandAReappearingItem() async {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let stored = shelf.appendingPathComponent("reappearing.pdf")
+    let metadata = ThumbnailMetadataStore(
+      [stored: ShelfThumbnailMetadata(modificationDate: .now, fileSize: 1)])
+    let renderer = ThumbnailGeneratorProbe()
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([stored]) },
+      measureItem: { _ in .success(0) },
+      thumbnailMetadata: metadata.metadata,
+      generateThumbnailData: renderer.generate)
+    guard let item = model.items.first else {
+      XCTFail("Expected the stored Shelf item")
+      return
+    }
+
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 1 { await Task.yield() }
+    model.setThumbnailVisibility(for: item, isVisible: false)
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    await renderer.releaseNext()
+    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+    await renderer.releaseNext()
+    for _ in 0..<100 where model.items.first?.thumbnail == nil { await Task.yield() }
+
+    XCTAssertNotNil(model.items.first?.thumbnail)
+  }
+
+  @MainActor
+  func testRemovingOrClearingVisibleItemsCancelsTheirThumbnailRequests() async {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let first = shelf.appendingPathComponent("remove.pdf")
+    let second = shelf.appendingPathComponent("clear.pdf")
+    let metadata = ThumbnailMetadataStore(
+      [first, second].reduce(into: [:]) { values, url in
+        values[url] = ShelfThumbnailMetadata(modificationDate: .now, fileSize: 1)
+      })
+    let renderer = ThumbnailGeneratorProbe()
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([first, second]) },
+      measureItem: { _ in .success(0) },
+      thumbnailMetadata: metadata.metadata,
+      generateThumbnailData: renderer.generate)
+    let itemsByURL = Dictionary(uniqueKeysWithValues: model.items.map { ($0.url, $0) })
+    model.setThumbnailVisibility(for: itemsByURL[first]!, isVisible: true)
+    model.setThumbnailVisibility(for: itemsByURL[second]!, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+
+    await model.remove(itemsByURL[first]!)
+    await model.clear()
+    for _ in 0..<100 where await renderer.cancellationCount() < 2 { await Task.yield() }
+
+    let cancellationCount = await renderer.cancellationCount()
+    XCTAssertEqual(cancellationCount, 2)
+    XCTAssertTrue(model.items.isEmpty)
+    await renderer.releaseAll()
+  }
+
+  @MainActor
+  func testFailedClearRestartsThumbnailWorkForTheVisibleRetainedItem() async {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let retained = shelf.appendingPathComponent("retained.pdf")
+    let metadata = ThumbnailMetadataStore(
+      [retained: ShelfThumbnailMetadata(modificationDate: .now, fileSize: 1)])
+    let renderer = ThumbnailGeneratorProbe()
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([retained]) },
+      removeItem: { _ in .failure(CopyFailure.expected) },
+      measureItem: { _ in .success(0) },
+      thumbnailMetadata: metadata.metadata,
+      generateThumbnailData: renderer.generate)
+    guard let item = model.items.first else {
+      XCTFail("Expected the stored Shelf item")
+      return
+    }
+
+    model.setThumbnailVisibility(for: item, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 1 { await Task.yield() }
+    await model.clear()
+    for _ in 0..<100 where await renderer.cancellationCount() < 1 { await Task.yield() }
+
+    await renderer.releaseNext()
+    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+    await renderer.releaseNext(with: Data([9]))
+    for _ in 0..<100 where model.items.first?.thumbnail == nil { await Task.yield() }
+
+    XCTAssertEqual(model.items.map(\.id), [item.id])
+    XCTAssertEqual(model.items.first?.thumbnail, Data([9]))
+    XCTAssertEqual(model.lastError, "Some Shelf items couldn’t be removed.")
+  }
+
+  func testStorageBudgetAcceptsExactByteAndFreeSpaceBoundaries() {
+    let policy = ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 25)
+
+    XCTAssertEqual(
+      ShelfLogic.storageDecision(
+        currentBytes: 40, reservedBytes: [60], unstagedBytes: [60],
+        availableBytes: 85, policy: policy),
+      .accepted)
+  }
+
+  func testStorageBudgetRejectsOneByteOverEitherLimit() {
+    let policy = ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 25)
+
+    XCTAssertEqual(
+      ShelfLogic.storageDecision(
+        currentBytes: 41, reservedBytes: [60], unstagedBytes: [60],
+        availableBytes: 1_000, policy: policy),
+      .overBudget)
+    XCTAssertEqual(
+      ShelfLogic.storageDecision(
+        currentBytes: 40, reservedBytes: [60], unstagedBytes: [60],
+        availableBytes: 84, policy: policy),
+      .lowFreeSpace)
+  }
+
+  func testStorageBudgetFailsClosedForOverflowAndNegativeMeasurements() {
+    let policy = ShelfStoragePolicy(maximumBytes: .max, minimumFreeSpaceBytes: 0)
+
+    XCTAssertEqual(
+      ShelfLogic.storageDecision(
+        currentBytes: .max, reservedBytes: [1], unstagedBytes: [],
+        availableBytes: .max, policy: policy),
+      .invalidMeasurement)
+    XCTAssertEqual(
+      ShelfLogic.storageDecision(
+        currentBytes: 0, reservedBytes: [-1], unstagedBytes: [],
+        availableBytes: .max, policy: policy),
+      .invalidMeasurement)
+  }
+
+  @MainActor
+  func testStorageInitializationFailureIsNotAnEmptyShelf() {
+    let model = ShelfModel(
+      directory: URL(fileURLWithPath: "/unavailable-shelf"),
+      createDirectory: { _ in .failure(CopyFailure.expected) },
+      listDirectory: { _ in .success([]) })
+
+    XCTAssertEqual(model.storageFailure, .initialization)
+    XCTAssertFalse(model.isStorageAvailable)
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertTrue(model.canRevealStorageLocation)
+  }
+
+  @MainActor
+  func testStorageListingFailureIsNotAnEmptyShelf() {
+    let model = ShelfModel(
+      directory: URL(fileURLWithPath: "/unreadable-shelf"),
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .failure(CopyFailure.expected) })
+
+    XCTAssertEqual(model.storageFailure, .listing)
+    XCTAssertFalse(model.isStorageAvailable)
+    XCTAssertTrue(model.items.isEmpty)
+  }
+
+  @MainActor
+  func testRetryClearsStorageFailureAfterStorageRecovers() {
+    let storage = RetryableStorage()
+    let model = ShelfModel(
+      directory: URL(fileURLWithPath: "/recoverable-shelf"),
+      createDirectory: storage.createDirectory,
+      listDirectory: storage.listDirectory)
+    XCTAssertEqual(model.storageFailure, .initialization)
+
+    storage.setAvailable(true)
+    model.retryStorage()
+
+    XCTAssertNil(model.storageFailure)
+    XCTAssertTrue(model.isStorageAvailable)
+    XCTAssertTrue(model.items.isEmpty)
   }
 
   func testDropTargetCanLeaveAndReenter() {
@@ -98,6 +524,91 @@ final class ShelfLogicTests: XCTestCase {
     XCTAssertFalse(model.isDropPresentationActive)
     XCTAssertEqual(model.items.map(\.name), ["appkit-drop.txt"])
     XCTAssertEqual(try String(contentsOf: model.items[0].url, encoding: .utf8), "appkit drop")
+  }
+
+  @MainActor
+  func testSuccessfulImportPublishesOnlyAfterStagingRename() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("atomic.txt")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data("complete contents".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+    let gate = StagedCopyGate()
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      copyItem: { source, staging in await gate.copy(source: source, to: staging) })
+
+    let importTask = Task { await model.add(source) }
+    for _ in 0..<100 {
+      if await gate.hasStarted() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let copyStarted = await gate.hasStarted()
+    XCTAssertTrue(copyStarted)
+
+    let beforeRename = try FileManager.default.contentsOfDirectory(
+      at: shelfDirectory, includingPropertiesForKeys: nil)
+    XCTAssertTrue(model.items.isEmpty)
+    let finalURL = shelfDirectory.appendingPathComponent("atomic.txt")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: finalURL.path))
+    XCTAssertEqual(beforeRename.count, 1)
+    XCTAssertTrue(beforeRename[0].lastPathComponent.hasPrefix(".islet-shelf-staging-"))
+
+    await gate.release()
+    let added = await importTask.value
+    XCTAssertTrue(added)
+    XCTAssertEqual(model.items.map(\.name), ["atomic.txt"])
+    XCTAssertEqual(try String(contentsOf: model.items[0].url, encoding: .utf8), "complete contents")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: beforeRename[0].path))
+  }
+
+  @MainActor
+  func testLaunchCleansStagingFromAnInterruptedImportWithoutLoadingIt() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let interrupted = shelfDirectory.appendingPathComponent(
+      ".islet-shelf-staging-\(UUID().uuidString)")
+    let retained = shelfDirectory.appendingPathComponent("retained.txt")
+    try FileManager.default.createDirectory(at: shelfDirectory, withIntermediateDirectories: true)
+    try Data("partial".utf8).write(to: interrupted)
+    try Data("complete".utf8).write(to: retained)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(directory: shelfDirectory)
+
+    XCTAssertEqual(model.items.map(\.name), ["retained.txt"])
+    XCTAssertFalse(FileManager.default.fileExists(atPath: interrupted.path))
+  }
+
+  @MainActor
+  func testUnremovableStagingEntryNeverLoadsAsAShelfItem() throws {
+    let shelfDirectory = URL(fileURLWithPath: "/Shelf")
+    let staging = shelfDirectory.appendingPathComponent(
+      ".islet-shelf-staging-\(UUID().uuidString)")
+    let retained = shelfDirectory.appendingPathComponent("retained.txt")
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([staging, retained]) },
+      removeItem: { _ in .failure(CopyFailure.expected) })
+
+    XCTAssertTrue(model.isStorageAvailable)
+    XCTAssertEqual(model.items.map(\.name), ["retained.txt"])
+  }
+
+  @MainActor
+  func testOrdinaryFileWithStagingPrefixRemainsVisible() {
+    let shelfDirectory = URL(fileURLWithPath: "/Shelf")
+    let prefixed = shelfDirectory.appendingPathComponent(".islet-shelf-staging-not-internal.txt")
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([prefixed]) })
+
+    XCTAssertEqual(model.items.map(\.name), [".islet-shelf-staging-not-internal.txt"])
   }
 
   @MainActor
@@ -202,6 +713,44 @@ final class ShelfLogicTests: XCTestCase {
     let remaining =
       (try? FileManager.default.contentsOfDirectory(
         at: shelfDirectory, includingPropertiesForKeys: nil)) ?? []
+    XCTAssertTrue(remaining.isEmpty)
+  }
+
+  @MainActor
+  func testClearRemovesDestinationRenamedWhileClearWasRunning() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("renamed-during-clear.txt")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data("complete".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+    let gate = CompletedMoveGate()
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      moveItem: { source, destination in
+        await gate.move(source: source, to: destination)
+      })
+
+    XCTAssertTrue(model.importDroppedURLs([source]))
+    for _ in 0..<100 {
+      if await gate.hasStarted() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let moveStarted = await gate.hasStarted()
+    XCTAssertTrue(moveStarted)
+
+    let clearTask = Task { await model.clear() }
+    for _ in 0..<100 where !model.isClearing {
+      await Task.yield()
+    }
+    XCTAssertTrue(model.isClearing)
+    await gate.release()
+    await clearTask.value
+
+    XCTAssertTrue(model.items.isEmpty)
+    let remaining = try FileManager.default.contentsOfDirectory(
+      at: shelfDirectory, includingPropertiesForKeys: nil)
     XCTAssertTrue(remaining.isEmpty)
   }
 
@@ -315,6 +864,28 @@ final class ShelfLogicTests: XCTestCase {
   }
 
   @MainActor
+  func testStagedRenameFailureRemovesTheCompletedStagingCopy() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("rename-fails.txt")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data("source".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      moveItem: { _, _ in .failure(CopyFailure.expected) })
+
+    let added = await model.add(source)
+    XCTAssertFalse(added)
+    XCTAssertTrue(model.items.isEmpty)
+    let remaining = try FileManager.default.contentsOfDirectory(
+      at: shelfDirectory, includingPropertiesForKeys: nil)
+    XCTAssertTrue(remaining.isEmpty)
+  }
+
+  @MainActor
   func testClearTreatsAnAlreadyMissingFileAsRemoved() async throws {
     let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
       UUID().uuidString, isDirectory: true)
@@ -332,5 +903,277 @@ final class ShelfLogicTests: XCTestCase {
 
     XCTAssertTrue(model.items.isEmpty)
     XCTAssertNil(model.lastError)
+  }
+
+  @MainActor
+  func testExactBudgetBoundaryCommitsAndPublishesUsage() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("boundary.bin")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data([0]).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      measureItem: { _ in .success(100) },
+      measureAvailableCapacity: { _ in .success(125) },
+      storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 25))
+
+    let added = await model.add(source)
+    XCTAssertTrue(added)
+    XCTAssertEqual(model.currentUsageBytes, 100)
+    XCTAssertEqual(model.items.map(\.name), ["boundary.bin"])
+  }
+
+  @MainActor
+  func testOverBudgetImportReportsRejectedSizeWithoutCopying() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("too-large.bin")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data([0]).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      measureItem: { _ in .success(101) },
+      measureAvailableCapacity: { _ in .success(10_000) },
+      storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 25))
+
+    let added = await model.add(source)
+    XCTAssertFalse(added)
+    XCTAssertEqual(model.lastRejectedImportBytes, 101)
+    XCTAssertEqual(
+      model.lastError,
+      "Can't add too-large.bin (101 bytes). The Shelf limit is 100 bytes.")
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertEqual(
+      try FileManager.default.contentsOfDirectory(
+        at: shelfDirectory, includingPropertiesForKeys: nil),
+      [])
+  }
+
+  @MainActor
+  func testLowDiskImportReportsSizeAndPreservesFreeSpaceReserve() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("low-disk.bin")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data([0]).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      measureItem: { _ in .success(60) },
+      measureAvailableCapacity: { _ in .success(84) },
+      storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 25))
+
+    let added = await model.add(source)
+    XCTAssertFalse(added)
+    XCTAssertEqual(model.lastRejectedImportBytes, 60)
+    XCTAssertEqual(
+      model.lastError,
+      "Can't add low-disk.bin (60 bytes). Islet keeps 25 bytes free for other apps.")
+    XCTAssertTrue(model.items.isEmpty)
+  }
+
+  @MainActor
+  func testStagedCopyIsRemeasuredBeforeCommitWhenTheSourceEstimateChanges() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let source = temporaryRoot.appendingPathComponent("growing.bin")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data([0]).write(to: source)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      measureItem: { url in
+        .success(url.lastPathComponent.hasPrefix(".islet-shelf-staging-") ? 101 : 40)
+      },
+      measureAvailableCapacity: { _ in .success(10_000) },
+      storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 0))
+
+    let added = await model.add(source)
+
+    XCTAssertFalse(added)
+    XCTAssertEqual(model.lastRejectedImportBytes, 101)
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertEqual(
+      try FileManager.default.contentsOfDirectory(
+        at: shelfDirectory, includingPropertiesForKeys: nil),
+      [])
+  }
+
+  @MainActor
+  func testConcurrentImportsCannotSpendTheSameBudgetTwice() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let first = temporaryRoot.appendingPathComponent("first.bin")
+    let second = temporaryRoot.appendingPathComponent("second.bin")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data([1]).write(to: first)
+    try Data([2]).write(to: second)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+    let gate = StagedCopyGate()
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      copyItem: { source, staging in await gate.copy(source: source, to: staging) },
+      measureItem: { _ in .success(60) },
+      measureAvailableCapacity: { _ in .success(10_000) },
+      storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 0))
+
+    let firstTask = Task { await model.add(first) }
+    for _ in 0..<100 {
+      if await gate.hasStarted() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let copyStarted = await gate.hasStarted()
+    XCTAssertTrue(copyStarted)
+
+    let secondAdded = await model.add(second)
+    XCTAssertFalse(secondAdded)
+    XCTAssertEqual(model.lastRejectedImportBytes, 60)
+    await gate.release()
+    let firstAdded = await firstTask.value
+    XCTAssertTrue(firstAdded)
+    XCTAssertEqual(model.items.map(\.name), ["first.bin"])
+    XCTAssertEqual(model.currentUsageBytes, 60)
+  }
+
+  @MainActor
+  func testClearReleasesAStorageReservationForTheNextImport() async throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelfDirectory = temporaryRoot.appendingPathComponent("Shelf", isDirectory: true)
+    let pending = temporaryRoot.appendingPathComponent("pending.bin")
+    let next = temporaryRoot.appendingPathComponent("next.bin")
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    try Data([1]).write(to: pending)
+    try Data([2]).write(to: next)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+    let gate = StagedCopyGate()
+    let model = ShelfModel(
+      directory: shelfDirectory,
+      copyItem: { source, staging in
+        if source.lastPathComponent == "pending.bin" {
+          return await gate.copy(source: source, to: staging)
+        }
+        return Result { try FileManager.default.copyItem(at: source, to: staging) }
+      },
+      measureItem: { _ in .success(100) },
+      measureAvailableCapacity: { _ in .success(10_000) },
+      storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 0))
+
+    XCTAssertTrue(model.importDroppedURLs([pending]))
+    for _ in 0..<100 {
+      if await gate.hasStarted() { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let clearTask = Task { await model.clear() }
+    for _ in 0..<100 where !model.isClearing { await Task.yield() }
+    await gate.release()
+    await clearTask.value
+
+    let nextAdded = await model.add(next)
+    XCTAssertTrue(nextAdded)
+    XCTAssertEqual(model.items.map(\.name), ["next.bin"])
+    XCTAssertEqual(model.currentUsageBytes, 100)
+  }
+
+  @MainActor
+  func testStorageUsageTextIncludesCurrentLimitAndAccessibleFreeSpacePolicy() async throws {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let stored = shelf.appendingPathComponent("stored.bin")
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([stored]) },
+      measureItem: { _ in .success(12) },
+      storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 25))
+    for _ in 0..<100 where model.currentUsageBytes == nil { await Task.yield() }
+
+    XCTAssertEqual(model.currentUsageBytes, 12)
+    XCTAssertEqual(model.storageUsageText, "12 bytes of 100 bytes")
+    XCTAssertEqual(
+      model.storageUsageAccessibilityText,
+      "Shelf storage: 12 bytes used of 100 bytes. Keeps at least 25 bytes free for other apps."
+    )
+  }
+
+  func testFolderAndPackageMeasurementsIncludeTheirDescendants() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let package = temporaryRoot.appendingPathComponent("Example.app", isDirectory: true)
+    let contents = package.appendingPathComponent("Contents", isDirectory: true)
+    let payload = contents.appendingPathComponent("payload.bin")
+    try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+    try Data(repeating: 1, count: 16_384).write(to: payload)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let packageBytes = try ShelfFileMeasurements.estimatedCopyBytes(at: package).get()
+    let payloadBytes = try ShelfFileMeasurements.estimatedCopyBytes(at: payload).get()
+
+    XCTAssertGreaterThan(packageBytes, payloadBytes)
+    XCTAssertGreaterThanOrEqual(packageBytes, payloadBytes + 8_192)
+  }
+
+  func testSparseFileUsesLogicalSizeRatherThanAllocatedBlocks() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    let sparse = temporaryRoot.appendingPathComponent("sparse.bin")
+    let descriptor = open(sparse.path, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR)
+    XCTAssertGreaterThanOrEqual(descriptor, 0)
+    defer {
+      if descriptor >= 0 { close(descriptor) }
+      try? FileManager.default.removeItem(at: temporaryRoot)
+    }
+    XCTAssertEqual(ftruncate(descriptor, 8 * 1024 * 1024), 0)
+
+    let bytes = try ShelfFileMeasurements.estimatedCopyBytes(at: sparse).get()
+
+    XCTAssertEqual(bytes, 8 * 1024 * 1024)
+  }
+
+  func testSymlinkMeasurementDoesNotFollowItsTarget() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let folder = temporaryRoot.appendingPathComponent("links", isDirectory: true)
+    let target = temporaryRoot.appendingPathComponent("large-target.bin")
+    let symlink = folder.appendingPathComponent("shortcut")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try Data(repeating: 1, count: 1024 * 1024).write(to: target)
+    try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: target)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let folderBytes = try ShelfFileMeasurements.estimatedCopyBytes(at: folder).get()
+    let targetBytes = try ShelfFileMeasurements.estimatedCopyBytes(at: target).get()
+
+    XCTAssertEqual(folderBytes, 8_192)
+    XCTAssertLessThan(folderBytes, targetBytes)
+  }
+
+  func testHardLinkedPathsEachReserveTheirFullCopySize() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let folder = temporaryRoot.appendingPathComponent("hard-links", isDirectory: true)
+    let first = folder.appendingPathComponent("first.bin")
+    let second = folder.appendingPathComponent("second.bin")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try Data(repeating: 1, count: 16_384).write(to: first)
+    XCTAssertEqual(link(first.path, second.path), 0)
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    let fileBytes = try ShelfFileMeasurements.estimatedCopyBytes(at: first).get()
+    let folderBytes = try ShelfFileMeasurements.estimatedCopyBytes(at: folder).get()
+
+    XCTAssertEqual(folderBytes, 4_096 + fileBytes * 2)
   }
 }

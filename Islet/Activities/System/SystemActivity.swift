@@ -49,7 +49,6 @@ final class SystemActivity: NotchActivity, ObservableObject {
   }
 
   var isActive: Bool {
-    guard Defaults[.systemEnabled] else { return false }
     return Defaults[.systemAlwaysVisible] || gate.isActive
   }
 
