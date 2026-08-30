@@ -590,7 +590,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       let busy = snapshot.agents.contains {
         [.working, .monitoring, .needsInput, .needsApproval].contains($0.phase)
       }
-      let expanded = ScreenManager.shared.viewModel?.state.isExpanded ?? false
+      let expanded = ScreenManager.shared.isAnyPanelExpanded
       let interval = Self.pollInterval(
         busy: busy, expanded: expanded, lowPowerMode: lowPowerMode,
         energyMode: ContextRuleCenter.shared.effectiveEnergyMode(

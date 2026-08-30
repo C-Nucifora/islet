@@ -72,36 +72,6 @@ struct DisplayChoice: Equatable, Identifiable {
   let name: String
 }
 
-struct ScreenManagerDisplayTransition: Equatable {
-  let panelIDs: [String]
-  let addedIDs: Set<String>
-  let removedIDs: Set<String>
-}
-
-struct ScreenManagerDisplayState {
-  private(set) var panelIDs: [String] = []
-
-  mutating func reconcile(
-    showOnAllDisplays: Bool, storedPreference: String, displays: [DisplaySnapshot]
-  ) -> ScreenManagerDisplayTransition {
-    let nextIDs = DisplaySelection.targetIDs(
-      showOnAllDisplays: showOnAllDisplays,
-      storedPreference: storedPreference,
-      displays: displays)
-    let previous = Set(panelIDs)
-    let next = Set(nextIDs)
-    panelIDs = nextIDs
-    return ScreenManagerDisplayTransition(
-      panelIDs: nextIDs,
-      addedIDs: next.subtracting(previous),
-      removedIDs: previous.subtracting(next))
-  }
-
-  mutating func reset() {
-    panelIDs = []
-  }
-}
-
 enum DisplaySelection {
   private static let legacyPrefixes = ["display:", "uuid:"]
 
@@ -110,34 +80,36 @@ enum DisplaySelection {
   }
 
   static func snapshots(from screens: [NSScreen] = NSScreen.screens) -> [DisplaySnapshot] {
-    screens.compactMap { screen -> DisplaySnapshot? in
-      guard
-        let displayID = screen.displayID,
-        let stableID = screen.displayUUID.flatMap(Self.stableID)
-      else { return nil }
+    screens.compactMap(snapshot)
+  }
 
-      let mirroredDisplayID = CGDisplayMirrorsDisplay(displayID)
-      let mirrorGroupID: String
-      if mirroredDisplayID != kCGNullDirectDisplay,
-        let mirroredUUID = CGDisplayCreateUUIDFromDisplayID(mirroredDisplayID)?.takeRetainedValue(),
-        let mirroredStableID = Self.stableID(
-          from: CFUUIDCreateString(nil, mirroredUUID) as String)
-      {
-        mirrorGroupID = mirroredStableID
-      } else {
-        mirrorGroupID = stableID
-      }
+  static func snapshot(from screen: NSScreen) -> DisplaySnapshot? {
+    guard
+      let displayID = screen.displayID,
+      let stableID = screen.displayUUID.flatMap(Self.stableID)
+    else { return nil }
 
-      return DisplaySnapshot(
-        stableID: stableID,
-        legacyRuntimeID: String(displayID),
-        name: screen.localizedName,
-        isBuiltin: screen.isBuiltin,
-        isMain: displayID == CGMainDisplayID(),
-        mirrorGroupID: mirrorGroupID,
-        isUsable: CGDisplayIsOnline(displayID) != 0 && CGDisplayIsActive(displayID) != 0
-          && CGDisplayIsAsleep(displayID) == 0)
+    let mirroredDisplayID = CGDisplayMirrorsDisplay(displayID)
+    let mirrorGroupID: String
+    if mirroredDisplayID != kCGNullDirectDisplay,
+      let mirroredUUID = CGDisplayCreateUUIDFromDisplayID(mirroredDisplayID)?.takeRetainedValue(),
+      let mirroredStableID = Self.stableID(
+        from: CFUUIDCreateString(nil, mirroredUUID) as String)
+    {
+      mirrorGroupID = mirroredStableID
+    } else {
+      mirrorGroupID = stableID
     }
+
+    return DisplaySnapshot(
+      stableID: stableID,
+      legacyRuntimeID: String(displayID),
+      name: screen.localizedName,
+      isBuiltin: screen.isBuiltin,
+      isMain: displayID == CGMainDisplayID(),
+      mirrorGroupID: mirrorGroupID,
+      isUsable: CGDisplayIsOnline(displayID) != 0 && CGDisplayIsActive(displayID) != 0
+        && CGDisplayIsAsleep(displayID) == 0)
   }
 
   static func choices(from displays: [DisplaySnapshot]) -> [DisplayChoice] {
