@@ -7,9 +7,9 @@ final class MediaRemoteCommandsTests: XCTestCase {
     private var sentCommands: [(MediaCommand, SourceID?)] = []
     var acceptsCommands = true
 
-    func send(_ command: MediaCommand, to source: SourceID?) -> Bool {
+    func send(_ command: MediaCommand, to source: SourceID?) -> MediaCommandDelivery {
       sentCommands.append((command, source))
-      return acceptsCommands
+      return acceptsCommands ? .accepted : .rejected
     }
 
     func rejectCommands() { acceptsCommands = false }
@@ -103,6 +103,31 @@ final class MediaRemoteCommandsTests: XCTestCase {
     XCTAssertEqual(result, .rejected(target: music))
   }
 
+  func testSourceScopedTransportPreservesUnconfirmedDelivery() async {
+    let music = source("com.apple.Music", 20)
+
+    let result = await MediaCommandRouter.perform(
+      .seek(to: 42),
+      shownSource: music,
+      sourceIsAdapterBacked: true,
+      targeting: .sourceScoped,
+      send: { _, _ in .unconfirmed })
+
+    XCTAssertEqual(result, .unconfirmed(target: music))
+  }
+
+  func testVoidSeekTransportReportsUnconfirmedDelivery() {
+    var requestedPositions: [Double] = []
+
+    let delivery = MediaCommandDispatch.send(
+      .seek(to: 42),
+      sendCommand: { _ in true },
+      setElapsed: { requestedPositions.append($0) })
+
+    XCTAssertEqual(delivery, .unconfirmed)
+    XCTAssertEqual(requestedPositions, [42])
+  }
+
   func testCurrentAdapterPresentationExplainsUnavailableControls() {
     XCTAssertEqual(
       MediaControlPresentation.scopeLabel(appName: "Music", targeting: .unavailable),
@@ -158,6 +183,16 @@ final class MediaRemoteCommandsTests: XCTestCase {
     XCTAssertEqual(
       MediaControlFeedback.logReason(for: .sourceTargetingUnavailable(privateSource)),
       "source-targeting-unavailable")
+  }
+
+  func testFeedbackExplainsUnconfirmedSeek() {
+    let source = source("com.example.Player", 20)
+
+    XCTAssertEqual(
+      MediaControlFeedback.message(for: .seek(to: 42), result: .unconfirmed(target: source)),
+      "Couldn't confirm seek: the player didn't report a result")
+    XCTAssertEqual(
+      MediaControlFeedback.logReason(for: .unconfirmed(target: source)), "unconfirmed")
   }
 }
 

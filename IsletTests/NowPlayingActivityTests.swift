@@ -100,6 +100,25 @@ final class NowPlayingActivityTests: XCTestCase {
       ["Media control error: Can't go to the previous track: the player rejected it"])
   }
 
+  func testUnconfirmedSeekPublishesAndAnnouncesStatus() async {
+    let source = SourceID(
+      bundleIdentifier: "com.example.Player", pid: 42, parentBundleIdentifier: "")
+    let announcements = AnnouncementRecorder()
+    let activity = NowPlayingActivity(
+      commandPerformer: { _, source, _ in .unconfirmed(target: source) },
+      announce: { announcements.messages.append($0) })
+
+    await activity.perform(.seek(to: 42), for: source)
+
+    XCTAssertEqual(activity.lastMediaCommandResult, .unconfirmed(target: source))
+    XCTAssertEqual(
+      activity.mediaControlNotice,
+      "Couldn't confirm seek: the player didn't report a result")
+    XCTAssertEqual(
+      announcements.messages,
+      ["Media control error: Couldn't confirm seek: the player didn't report a result"])
+  }
+
   func testControlAvailabilityFailsClosedForUnknownSourceAndUnseekableMedia() {
     let source = SourceID(
       bundleIdentifier: "com.example.Player", pid: 42, parentBundleIdentifier: "")

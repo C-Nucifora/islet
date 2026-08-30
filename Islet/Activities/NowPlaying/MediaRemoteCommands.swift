@@ -40,12 +40,13 @@ enum MediaCommand: Equatable, Sendable {
 
 enum MediaCommandResult: Equatable, Sendable {
   case sent(target: SourceID, sourceScoped: Bool)
+  case unconfirmed(target: SourceID)
   case sourceNotControllable(SourceID)
   case sourceTargetingUnavailable(SourceID)
   case rejected(target: SourceID)
 }
 
-/// A short explanation shown beside the media controls when the attempted action did not run.
+/// A short explanation shown beside the media controls when an action did not report success.
 /// Source identities stay out of this copy because the card itself already names the app.
 enum MediaControlFeedback {
   static func message(for command: MediaCommand, result: MediaCommandResult) -> String? {
@@ -53,6 +54,8 @@ enum MediaControlFeedback {
     switch result {
     case .sent:
       return nil
+    case .unconfirmed:
+      return "Couldn't confirm \(action): the player didn't report a result"
     case .sourceNotControllable:
       return "Can't \(action): this audio source has no media controls"
     case .sourceTargetingUnavailable:
@@ -66,6 +69,7 @@ enum MediaControlFeedback {
     switch result {
     case .sent:
       return nil
+    case .unconfirmed: return "unconfirmed"
     case .sourceNotControllable: return "source-not-controllable"
     case .sourceTargetingUnavailable: return "source-targeting-unavailable"
     case .rejected: return "rejected"
@@ -84,7 +88,7 @@ enum MediaCommandTargeting: Equatable, Sendable {
 /// global target check cannot authorize a later global send because another app may become current
 /// between the two operations.
 enum MediaCommandRouter {
-  typealias Send = @Sendable (MediaCommand, SourceID?) async -> Bool
+  typealias Send = @Sendable (MediaCommand, SourceID?) async -> MediaCommandDelivery
 
   static func perform(
     _ command: MediaCommand,
@@ -103,9 +107,41 @@ enum MediaCommandRouter {
     case .unavailable:
       return .sourceTargetingUnavailable(shownSource)
     }
-    return await send(command, target)
-      ? .sent(target: shownSource, sourceScoped: sourceScoped)
-      : .rejected(target: shownSource)
+    switch await send(command, target) {
+    case .accepted:
+      return .sent(target: shownSource, sourceScoped: sourceScoped)
+    case .unconfirmed:
+      return .unconfirmed(target: shownSource)
+    case .rejected:
+      return .rejected(target: shownSource)
+    }
+  }
+}
+
+enum MediaCommandDelivery: Equatable, Sendable {
+  case accepted
+  case unconfirmed
+  case rejected
+}
+
+/// Converts the private MediaRemote functions into an honest delivery result. The command API
+/// returns a Boolean, while the seek API returns no result and therefore cannot claim acceptance.
+enum MediaCommandDispatch {
+  typealias SendCommand = (Int) -> Bool
+  typealias SetElapsed = (Double) -> Void
+
+  static func send(
+    _ command: MediaCommand,
+    sendCommand: SendCommand?,
+    setElapsed: SetElapsed?
+  ) -> MediaCommandDelivery {
+    if case .seek(let seconds) = command {
+      guard seconds.isFinite, seconds >= 0, let setElapsed else { return .rejected }
+      setElapsed(seconds)
+      return .unconfirmed
+    }
+    guard let code = command.commandCode, let sendCommand else { return .rejected }
+    return sendCommand(code) ? .accepted : .rejected
   }
 }
 
@@ -245,17 +281,20 @@ final class MediaRemoteCommands: @unchecked Sendable {
     }
   }
 
-  private func send(_ command: MediaCommand, to source: SourceID?) async -> Bool {
+  private func send(
+    _ command: MediaCommand, to source: SourceID?
+  ) async -> MediaCommandDelivery {
     // The current transport cannot address a source. Refuse rather than silently treating a
     // scoped request as global if the capability declaration and implementation diverge.
-    guard source == nil else { return false }
-    if case .seek(let seconds) = command {
-      guard seconds.isFinite, seconds >= 0, let setElapsed else { return false }
-      setElapsed(seconds)
-      return true
-    }
-    guard let code = command.commandCode, let sendCommand else { return false }
-    return sendCommand(code, nil)
+    guard source == nil else { return .rejected }
+    return MediaCommandDispatch.send(
+      command,
+      sendCommand: sendCommand.map { implementation in
+        { code in implementation(code, nil) }
+      },
+      setElapsed: setElapsed.map { implementation in
+        { seconds in implementation(seconds) }
+      })
   }
 
 }
