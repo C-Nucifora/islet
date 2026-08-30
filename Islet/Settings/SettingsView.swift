@@ -1,6 +1,7 @@
 import AppKit
 import Defaults
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum SettingsCategory: String, CaseIterable, Identifiable {
   case general = "General"
@@ -74,6 +75,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
   case pulse
   case permissions
   case diagnostics
+  case settingsTransfer
   case reset
 
   var id: Self { self }
@@ -96,6 +98,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .pulse: "Pulse providers"
     case .permissions: "App permissions"
     case .diagnostics: "Diagnostics"
+    case .settingsTransfer: "Import and export"
     case .reset: "Reset"
     }
   }
@@ -118,6 +121,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .pulse: "Local API, providers and access token"
     case .permissions: "macOS access used by each feature"
     case .diagnostics: "App identity and integration status"
+    case .settingsTransfer: "Back up or move portable preferences"
     case .reset: "Restore interface defaults"
     }
   }
@@ -140,6 +144,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .pulse: "waveform.path.ecg"
     case .permissions: "lock.shield"
     case .diagnostics: "stethoscope"
+    case .settingsTransfer: "arrow.up.arrow.down.document"
     case .reset: "arrow.counterclockwise"
     }
   }
@@ -153,7 +158,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .eventSources: .notifications
     case .t3Code, .pulse: .integrations
     case .permissions: .privacy
-    case .diagnostics, .reset: .advanced
+    case .diagnostics, .settingsTransfer, .reset: .advanced
     }
   }
 
@@ -259,6 +264,11 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "T3 Code credentials", "Pulse", "Media-key HUD", "signing support status", "About",
         "GitHub contributors C-Nucifora nedlane",
       ]
+    case .settingsTransfer:
+      pageContent + [
+        "Settings backup", "Export settings", "Import settings", "Preview changes",
+        "portable preferences JSON backup move another Mac privacy secrets credentials permissions",
+      ]
     case .reset:
       pageContent + [
         "Appearance and interaction", "Restore appearance and interaction", "Reset defaults",
@@ -317,6 +327,12 @@ private enum PulseHistoryFilter: String, CaseIterable, Identifiable {
   }
 }
 
+private struct SettingsTransferNotice: Identifiable {
+  let id = UUID()
+  let title: String
+  let message: String
+}
+
 struct SettingsView: View {
   @ObservedObject private var calendar = AppState.calendar
   @ObservedObject private var reminders = RemindersProvider.shared
@@ -367,6 +383,8 @@ struct SettingsView: View {
   @State private var pulseTokenRotationResult: String?
   @State private var showPulseHistory = false
   @State private var pulseHistoryFilter: PulseHistoryFilter = .all
+  @State private var settingsImportPreview: SettingsTransferPreview?
+  @State private var settingsTransferNotice: SettingsTransferNotice?
 
   init(destination: SettingsDestination = .overview) {
     _selection = State(initialValue: SettingsCategory(destination: destination))
@@ -633,6 +651,24 @@ struct SettingsView: View {
     } message: {
       Text(pulseTokenRotationResult ?? "")
     }
+    .sheet(item: $settingsImportPreview) { preview in
+      SettingsImportPreviewSheet(
+        preview: preview,
+        cancel: { settingsImportPreview = nil },
+        apply: {
+          SettingsTransfer.apply(preview) { SettingsTransferDefaults.apply($0) }
+          settingsImportPreview = nil
+          settingsTransferNotice = SettingsTransferNotice(
+            title: "Settings imported",
+            message:
+              "Applied \(preview.changes.count) change\(preview.changes.count == 1 ? "" : "s").")
+        })
+    }
+    .alert(item: $settingsTransferNotice) { notice in
+      Alert(
+        title: Text(notice.title), message: Text(notice.message),
+        dismissButton: .default(Text("OK")))
+    }
   }
 
   @ViewBuilder private var categoryView: some View {
@@ -651,7 +687,7 @@ struct SettingsView: View {
     case .privacy:
       settingsLanding(pages: [.permissions])
     case .advanced:
-      settingsLanding(pages: [.diagnostics, .reset])
+      settingsLanding(pages: [.diagnostics, .settingsTransfer, .reset])
     }
   }
 
@@ -673,6 +709,7 @@ struct SettingsView: View {
     case .pulse: pulseForm
     case .permissions: permissionsForm
     case .diagnostics: diagnosticsForm
+    case .settingsTransfer: settingsTransferForm
     case .reset: resetForm
     }
   }
@@ -1400,6 +1437,28 @@ struct SettingsView: View {
     .formStyle(.grouped)
   }
 
+  private var settingsTransferForm: some View {
+    Form {
+      Section("Settings backup") {
+        HStack {
+          Button("Export settings…") { exportSettings() }
+          Button("Import settings…") { importSettings() }
+        }
+        Text(
+          "Exports portable interface and activity preferences as readable JSON. Import shows every change before anything is applied."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+      Section("Never included") {
+        Text(
+          "Keychain credentials, Pulse tokens, paired T3 Code machines, permission grants, calendar account identifiers, activity data and session history stay on this Mac."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+    .formStyle(.grouped)
+  }
+
   @ViewBuilder private func permissionButtons(
     status: EventKitPermissionState, pane: SystemSettingsPrivacyPane,
     requestEnabled: Bool = true,
@@ -1525,6 +1584,52 @@ struct SettingsView: View {
     }
   }
 
+  private func exportSettings() {
+    let panel = NSSavePanel()
+    panel.allowedContentTypes = [.json]
+    panel.canCreateDirectories = true
+    panel.nameFieldStringValue = "Islet Settings.json"
+    panel.title = "Export Islet settings"
+    panel.prompt = "Export"
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+
+    do {
+      let data = try SettingsTransfer.exportData(snapshot: SettingsTransferDefaults.snapshot())
+      try data.write(to: url, options: .atomic)
+      settingsTransferNotice = SettingsTransferNotice(
+        title: "Settings exported",
+        message: "Saved \(SettingsTransfer.portableKeys.count) portable preferences.")
+    } catch {
+      settingsTransferNotice = SettingsTransferNotice(
+        title: "Settings could not be exported", message: error.localizedDescription)
+    }
+  }
+
+  private func importSettings() {
+    let panel = NSOpenPanel()
+    panel.allowedContentTypes = [.json]
+    panel.allowsMultipleSelection = false
+    panel.canChooseDirectories = false
+    panel.title = "Import Islet settings"
+    panel.prompt = "Preview"
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+
+    let hasAccess = url.startAccessingSecurityScopedResource()
+    defer { if hasAccess { url.stopAccessingSecurityScopedResource() } }
+    do {
+      let fileSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+      guard fileSize <= SettingsTransfer.maximumDocumentBytes else {
+        throw SettingsTransferError.documentTooLarge
+      }
+      let data = try Data(contentsOf: url, options: .mappedIfSafe)
+      settingsImportPreview = try SettingsTransfer.preview(
+        data: data, current: SettingsTransferDefaults.snapshot())
+    } catch {
+      settingsTransferNotice = SettingsTransferNotice(
+        title: "Settings could not be imported", message: error.localizedDescription)
+    }
+  }
+
   private func restoreInterfaceDefaults() {
     appTheme = .classic
     batteryGraphStyle = .coloured
@@ -1539,6 +1644,73 @@ struct SettingsView: View {
     systemAlwaysVisible = false
     metricStyles = [:]
     hudStyle = .bar
+  }
+}
+
+private struct SettingsImportPreviewSheet: View {
+  let preview: SettingsTransferPreview
+  let cancel: () -> Void
+  let apply: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 18) {
+      VStack(alignment: .leading, spacing: 5) {
+        Text("Preview settings import").font(.title2.weight(.semibold))
+        Text(
+          preview.sourceVersion < SettingsTransfer.currentVersion
+            ? "Islet migrated this version \(preview.sourceVersion) export before checking it."
+            : "Review the changes below. Nothing has been applied yet."
+        )
+        .foregroundStyle(.secondary)
+      }
+
+      if preview.changes.isEmpty {
+        ContentUnavailableView(
+          "No settings would change", systemImage: "checkmark.circle",
+          description: Text("The imported values already match this Mac.")
+        )
+        .frame(maxWidth: .infinity, minHeight: 180)
+      } else {
+        List(preview.changes) { change in
+          VStack(alignment: .leading, spacing: 5) {
+            Text(change.title).font(.headline)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+              Text(change.oldValue).foregroundStyle(.secondary)
+              Image(systemName: "arrow.right").foregroundStyle(.tertiary)
+              Text(change.newValue)
+            }
+            .font(.caption)
+            .textSelection(.enabled)
+          }
+          .padding(.vertical, 3)
+        }
+        .frame(minHeight: 220)
+      }
+
+      if !preview.ignoredKeys.isEmpty {
+        Label(
+          "Ignored unknown settings: \(preview.ignoredKeys.joined(separator: ", "))",
+          systemImage: "info.circle"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+      }
+
+      HStack {
+        Text(
+          "Read \(preview.importedSettingCount) portable setting\(preview.importedSettingCount == 1 ? "" : "s")."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Spacer()
+        Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
+        Button("Import settings", action: apply)
+          .keyboardShortcut(.defaultAction)
+          .disabled(preview.changes.isEmpty)
+      }
+    }
+    .padding(24)
+    .frame(minWidth: 620, idealWidth: 680, minHeight: 430)
   }
 }
 
