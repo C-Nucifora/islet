@@ -29,6 +29,24 @@ protocol PulseListening: AnyObject, Sendable {
 
 extension NWListener: PulseListening {}
 
+protocol PulseRetryCancellable: AnyObject {
+  func cancel()
+}
+
+private final class PulseRetryTask: PulseRetryCancellable {
+  private let task: Task<Void, Never>
+
+  init(after delay: TimeInterval, action: @escaping @MainActor @Sendable () -> Void) {
+    task = Task { @MainActor in
+      try? await Task.sleep(for: .seconds(delay))
+      guard !Task.isCancelled else { return }
+      action()
+    }
+  }
+
+  func cancel() { task.cancel() }
+}
+
 /// Authenticated, loopback-only newline-delimited JSON transport for out-of-process activity
 /// providers. Providers never load code into Islet; they can only submit bounded data and web URLs.
 @MainActor
@@ -37,9 +55,15 @@ final class PulseServer: ObservableObject {
   nonisolated static let maximumMessageBytes = 64 * 1024
   nonisolated static let maximumCommandsPerConnection = 128
   nonisolated static let authenticationTimeout: Duration = .seconds(10)
+  nonisolated static let retryInitialDelay: TimeInterval = 1
+  nonisolated static let retryMaximumDelay: TimeInterval = 60
+  nonisolated static let retryStableReadyPeriod: TimeInterval = 60
   private nonisolated static let maximumConnections = 16
 
   typealias ListenerFactory = (NWParameters, NWEndpoint.Port) throws -> any PulseListening
+  typealias RetryScheduler = (
+    TimeInterval, @escaping @MainActor @Sendable () -> Void
+  ) -> any PulseRetryCancellable
 
   private var listener: (any PulseListening)?
   private var connections: [ObjectIdentifier: NWConnection] = [:]
@@ -52,13 +76,20 @@ final class PulseServer: ObservableObject {
   @Published private(set) var activePort: UInt16?
   @Published private(set) var portRecoveryMessage: String?
   @Published private(set) var tokenRotatedAt: Date?
+  @Published private(set) var nextRetryAt: Date?
   private(set) var token: String?
   private var rateLimiter = PulseRateLimiter()
   private var candidateIndex = 0
+  private var retryTask: (any PulseRetryCancellable)?
+  private var stableReadyTask: (any PulseRetryCancellable)?
+  private var retryAttempt = 0
+  private var lifecycleGeneration = 0
   private let listenerFactory: ListenerFactory
   private let tokenLoader: () throws -> String
   private let activePortWriter: (UInt16) throws -> Void
   private let activePortRemover: () -> Void
+  private let now: () -> Date
+  private let retryScheduler: RetryScheduler
 
   init(
     listenerFactory: @escaping ListenerFactory = { parameters, port in
@@ -66,12 +97,18 @@ final class PulseServer: ObservableObject {
     },
     tokenLoader: (() throws -> String)? = nil,
     activePortWriter: ((UInt16) throws -> Void)? = nil,
-    activePortRemover: (() -> Void)? = nil
+    activePortRemover: (() -> Void)? = nil,
+    now: @escaping () -> Date = Date.init,
+    retryScheduler: @escaping RetryScheduler = { delay, action in
+      PulseRetryTask(after: delay, action: action)
+    }
   ) {
     self.listenerFactory = listenerFactory
     self.tokenLoader = tokenLoader ?? Self.loadOrCreateToken
     self.activePortWriter = activePortWriter ?? Self.writeActivePort
     self.activePortRemover = activePortRemover ?? Self.removeActivePort
+    self.now = now
+    self.retryScheduler = retryScheduler
   }
 
   var listeningAddress: String? {
@@ -80,6 +117,12 @@ final class PulseServer: ObservableObject {
 
   func start() {
     guard listener == nil else { return }
+    lifecycleGeneration += 1
+    cancelScheduledRetries()
+    startFreshAttempt()
+  }
+
+  private func startFreshAttempt() {
     do {
       let token = try tokenLoader()
       self.token = token
@@ -92,6 +135,8 @@ final class PulseServer: ObservableObject {
     } catch {
       if Self.isAddressInUse(error) {
         recoverFromOccupiedPort()
+      } else if Self.isRecoverableListenerFailure(error) {
+        scheduleRetry(after: error)
       } else {
         fail(error)
       }
@@ -130,23 +175,28 @@ final class PulseServer: ObservableObject {
         activePort = port
         isRunning = true
         lastError = nil
+        nextRetryAt = nil
         portRecoveryMessage =
           port == PulsePaths.defaultPort.rawValue
           ? nil
           : "Port 47717 is in use. Pulse moved to \(port); bundled clients discover it automatically."
+        scheduleBackoffReset(for: listener)
       } catch {
         fail(error)
       }
     case .waiting(let error):
       if Self.isAddressInUse(error) {
         recoverFromOccupiedPort()
+      } else if Self.isRecoverableListenerFailure(error) {
+        scheduleRetry(after: error)
       } else {
-        isRunning = false
-        lastError = error.localizedDescription
+        fail(error)
       }
     case .failed(let error):
       if Self.isAddressInUse(error) {
         recoverFromOccupiedPort()
+      } else if Self.isRecoverableListenerFailure(error) {
+        scheduleRetry(after: error)
       } else {
         fail(error)
       }
@@ -156,6 +206,9 @@ final class PulseServer: ObservableObject {
       activePort = nil
       portRecoveryMessage = nil
       activePortRemover()
+      nextRetryAt = nil
+      stableReadyTask?.cancel()
+      stableReadyTask = nil
       lastError = "The Pulse listener stopped. Retry it from Settings."
     case .setup:
       break
@@ -169,6 +222,9 @@ final class PulseServer: ObservableObject {
     listener = nil
     isRunning = false
     activePort = nil
+    nextRetryAt = nil
+    stableReadyTask?.cancel()
+    stableReadyTask = nil
     activePortRemover()
     guard candidateIndex + 1 < PulsePaths.candidatePorts.count else {
       lastError =
@@ -182,6 +238,8 @@ final class PulseServer: ObservableObject {
     } catch {
       if Self.isAddressInUse(error) {
         recoverFromOccupiedPort()
+      } else if Self.isRecoverableListenerFailure(error) {
+        scheduleRetry(after: error)
       } else {
         fail(error)
       }
@@ -194,6 +252,9 @@ final class PulseServer: ObservableObject {
     isRunning = false
     activePort = nil
     portRecoveryMessage = nil
+    nextRetryAt = nil
+    stableReadyTask?.cancel()
+    stableReadyTask = nil
     activePortRemover()
     lastError = "Pulse could not start: \(error.localizedDescription)"
     Log.app.error("Pulse server failed: \(error.localizedDescription, privacy: .public)")
@@ -205,7 +266,82 @@ final class PulseServer: ObservableObject {
     return nsError.domain == NSPOSIXErrorDomain && nsError.code == Int(EADDRINUSE)
   }
 
+  nonisolated static func isRecoverableListenerFailure(_ error: Error) -> Bool {
+    guard let code = posixCode(for: error) else { return false }
+    return switch code {
+    case EAGAIN, ECONNABORTED, ECONNREFUSED, EINTR, ENETDOWN, ENETUNREACH, ENOBUFS, ETIMEDOUT:
+      true
+    default:
+      false
+    }
+  }
+
+  private nonisolated static func posixCode(for error: Error) -> Int32? {
+    if case .posix(let code) = error as? NWError { return code.rawValue }
+    let nsError = error as NSError
+    guard nsError.domain == NSPOSIXErrorDomain else { return nil }
+    return Int32(nsError.code)
+  }
+
+  nonisolated static func retryDelay(for attempt: Int) -> TimeInterval {
+    guard attempt > 0 else { return 0 }
+    let exponent = min(attempt - 1, 16)
+    return min(retryInitialDelay * pow(2, Double(exponent)), retryMaximumDelay)
+  }
+
+  private func scheduleRetry(after error: Error) {
+    listener?.cancel()
+    listener = nil
+    isRunning = false
+    activePort = nil
+    portRecoveryMessage = nil
+    activePortRemover()
+    stableReadyTask?.cancel()
+    stableReadyTask = nil
+    retryTask?.cancel()
+    retryAttempt += 1
+    let delay = Self.retryDelay(for: retryAttempt)
+    let retryAt = now().addingTimeInterval(delay)
+    nextRetryAt = retryAt
+    lastError =
+      "Pulse listener failed: \(error.localizedDescription). Retrying at \(retryAt.formatted(date: .omitted, time: .standard))."
+    Log.app.error(
+      "Pulse listener will retry in \(delay, privacy: .public)s: \(error.localizedDescription, privacy: .public)"
+    )
+    let generation = lifecycleGeneration
+    retryTask = retryScheduler(delay) { [weak self] in
+      guard let self, self.lifecycleGeneration == generation else { return }
+      self.retryTask = nil
+      self.nextRetryAt = nil
+      self.startFreshAttempt()
+    }
+  }
+
+  private func scheduleBackoffReset(for listener: any PulseListening) {
+    stableReadyTask?.cancel()
+    let generation = lifecycleGeneration
+    stableReadyTask = retryScheduler(Self.retryStableReadyPeriod) {
+      [weak self, weak listener] in
+      guard let self, let listener, self.lifecycleGeneration == generation,
+        self.listener === listener,
+        self.isRunning
+      else { return }
+      self.retryAttempt = 0
+      self.stableReadyTask = nil
+    }
+  }
+
+  private func cancelScheduledRetries() {
+    retryTask?.cancel()
+    retryTask = nil
+    stableReadyTask?.cancel()
+    stableReadyTask = nil
+    nextRetryAt = nil
+  }
+
   func stop() {
+    lifecycleGeneration += 1
+    cancelScheduledRetries()
     listener?.cancel()
     listener = nil
     isRunning = false
