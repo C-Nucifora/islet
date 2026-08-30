@@ -2819,6 +2819,14 @@ private struct PulseProviderRow: View {
       Text(status.descriptor.setupHint)
         .font(.caption2)
         .foregroundStyle(.tertiary)
+      if !status.descriptor.documentationLinks.isEmpty {
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Starter examples").font(.caption2).foregroundStyle(.secondary)
+          ForEach(status.descriptor.documentationLinks) { link in
+            Link(link.title, destination: link.url).font(.caption2)
+          }
+        }
+      }
     }
     .padding(.vertical, 4)
     .accessibilityElement(children: .contain)

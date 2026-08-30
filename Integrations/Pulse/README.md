@@ -332,3 +332,10 @@ providers revoke mappings as soon as the associated transfer is canceled or disa
    inaccessible paths. Test the reducer without requiring Islet, Chrome, or the transfer tool.
 
 The schema in [pulse-command.schema.json](pulse-command.schema.json) describes the wire payload.
+
+## Shortcuts starter kit
+
+The [Shortcuts starter kit](shortcuts/README.md) includes signed, importable macOS shortcuts for
+an event, a progress task, a failed task, guarded completion, a temporary Focus delivery profile,
+and a focus timer. It documents every field they send and the fixed identifiers that keep updates
+from creating duplicate Pulse items.
