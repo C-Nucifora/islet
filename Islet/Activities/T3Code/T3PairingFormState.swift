@@ -63,7 +63,9 @@ struct T3PairingFormState {
       return .succeeded
     case .failure(let message):
       statusMessage = message
-      focusedField = .pairingLink
+      focusedField =
+        pairingLink.trimmingCharacters(in: .whitespacesAndNewlines) == submission.pairingLink
+        ? .pairingLink : nil
       return .failed
     }
   }

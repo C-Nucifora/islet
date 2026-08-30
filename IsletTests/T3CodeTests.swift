@@ -189,6 +189,18 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(form.statusMessage, "T3 Code returned HTTP 503.")
   }
 
+  func testPairingFormFailureDoesNotFocusAReplacementLinkTypedWhilePairing() throws {
+    var form = T3PairingFormState()
+    form.pairingLink = "https://first.example.com/pair#token=first"
+    let submission = try XCTUnwrap(form.begin())
+    form.pairingLink = "  https://second.example.com/pair#token=second  "
+
+    XCTAssertEqual(form.finish(submission, result: .failure("Try again.")), .failed)
+    XCTAssertEqual(form.pairingLink, "  https://second.example.com/pair#token=second  ")
+    XCTAssertNil(form.focusedField)
+    XCTAssertEqual(form.statusMessage, "Try again.")
+  }
+
   func testPairingFormIgnoresAStaleCompletion() throws {
     var form = T3PairingFormState()
     form.pairingLink = "https://first.example.com/pair#token=first"

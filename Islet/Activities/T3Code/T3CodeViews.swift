@@ -464,17 +464,22 @@ struct T3SettingsSection: View {
         try await activity.addRemote(
           pairingLink: submission.pairingLink, allowInsecureHTTP: submission.allowInsecureHTTP)
         if pairingForm.finish(submission, result: .success) == .succeeded {
+          focusedField = nil
           Haptics.perform(.levelChange)
         }
       } catch {
-        _ = pairingForm.finish(submission, result: .failure(error.localizedDescription))
+        let completion = pairingForm.finish(
+          submission, result: .failure(error.localizedDescription))
+        focusFailedPairingLinkIfNeeded(
+          completion == .failed ? submission.pairingLink : nil)
       }
-      focusFailedPairingLinkIfNeeded()
     }
   }
 
-  private func focusFailedPairingLinkIfNeeded() {
-    guard pairingForm.focusedField == .pairingLink else {
+  private func focusFailedPairingLinkIfNeeded(_ failedPairingLink: String?) {
+    guard let failedPairingLink, pairingForm.focusedField == .pairingLink,
+      pairingForm.pairingLink.trimmingCharacters(in: .whitespacesAndNewlines) == failedPairingLink
+    else {
       focusedField = nil
       return
     }
@@ -484,6 +489,8 @@ struct T3SettingsSection: View {
       // the responder so a retry can replace the rejected link without exposing its credential.
       await Task.yield()
       guard focusedField == .pairingLink,
+        pairingForm.pairingLink.trimmingCharacters(in: .whitespacesAndNewlines)
+          == failedPairingLink,
         let text = NSApp.keyWindow?.firstResponder as? NSText
       else { return }
       text.selectAll(nil)
