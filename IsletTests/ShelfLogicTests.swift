@@ -85,6 +85,69 @@ final class ShelfLogicTests: XCTestCase {
     }
   }
 
+  private actor ManifestSaveGate {
+    enum Outcome {
+      case success
+      case failure
+    }
+
+    private let outcomes: [Outcome]
+    private var callCountValue = 0
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    init(outcomes: [Outcome]) {
+      self.outcomes = outcomes
+    }
+
+    func save(_ manifest: ShelfManifest, to url: URL) async -> Result<Void, Error> {
+      let callIndex = callCountValue
+      callCountValue += 1
+      await withCheckedContinuation { continuations.append($0) }
+      guard callIndex < outcomes.count else { return .failure(CopyFailure.expected) }
+      switch outcomes[callIndex] {
+      case .success:
+        return await ShelfManifestStore.save(manifest, to: url)
+      case .failure:
+        return .failure(CopyFailure.expected)
+      }
+    }
+
+    func callCount() -> Int { callCountValue }
+
+    func releaseNext() {
+      guard !continuations.isEmpty else { return }
+      continuations.removeFirst().resume()
+    }
+  }
+
+  private final class RemovalGate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var started = false
+    private var released = false
+
+    func remove(_ url: URL) -> Result<Void, Error> {
+      condition.lock()
+      started = true
+      condition.broadcast()
+      while !released { condition.wait() }
+      condition.unlock()
+      return Result { try FileManager.default.removeItem(at: url) }
+    }
+
+    func hasStarted() -> Bool {
+      condition.lock()
+      defer { condition.unlock() }
+      return started
+    }
+
+    func release() {
+      condition.lock()
+      released = true
+      condition.broadcast()
+      condition.unlock()
+    }
+  }
+
   private actor ThumbnailGeneratorProbe {
     private var requestedURLs: [URL] = []
     private var activeCount = 0
@@ -1328,6 +1391,68 @@ final class ShelfLogicTests: XCTestCase {
   }
 
   @MainActor
+  func testWorkspaceMutationsSerializeFailureRollbackBeforeLaterSuccess() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let saver = ManifestSaveGate(outcomes: [.failure, .success])
+    let model = ShelfModel(directory: shelf, saveManifest: saver.save)
+
+    let failed = Task { await model.createStack(named: "Failed") }
+    for _ in 0..<100 where await saver.callCount() < 1 { await Task.yield() }
+    let saved = Task { await model.createStack(named: "Saved") }
+    await Task.yield()
+
+    await saver.releaseNext()
+    let failedStack = await failed.value
+    XCTAssertNil(failedStack)
+    for _ in 0..<100 where await saver.callCount() < 2 { await Task.yield() }
+    await saver.releaseNext()
+    let savedValue = await saved.value
+    let savedStack = try XCTUnwrap(savedValue)
+
+    XCTAssertEqual(model.stacks.filter { $0.name != "Shelf" }.map(\.name), ["Saved"])
+    XCTAssertEqual(model.selectedStackID, savedStack.id)
+    let relaunched = ShelfModel(directory: shelf)
+    XCTAssertEqual(relaunched.stacks.filter { $0.name != "Shelf" }.map(\.name), ["Saved"])
+    XCTAssertTrue(relaunched.stacks.contains { $0.id == relaunched.selectedStackID })
+  }
+
+  @MainActor
+  func testConcurrentWorkspaceCreationRejectsCaseInsensitiveDuplicate() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let saver = ManifestSaveGate(outcomes: [.success, .success])
+    let model = ShelfModel(directory: shelf, saveManifest: saver.save)
+
+    let first = Task { await model.createStack(named: "Project") }
+    for _ in 0..<100 where await saver.callCount() < 1 { await Task.yield() }
+    let duplicate = Task { await model.createStack(named: "project") }
+    await Task.yield()
+
+    await saver.releaseNext()
+    let firstStack = await first.value
+    for _ in 0..<100 where await saver.callCount() < 2 { await Task.yield() }
+    await saver.releaseNext()
+    let duplicateStack = await duplicate.value
+
+    XCTAssertNotNil(firstStack)
+    XCTAssertNil(duplicateStack)
+    XCTAssertEqual(
+      model.stacks.filter { $0.name.caseInsensitiveCompare("project") == .orderedSame }.count,
+      1)
+    let relaunched = ShelfModel(directory: shelf)
+    XCTAssertEqual(
+      relaunched.stacks.filter { $0.name.caseInsensitiveCompare("project") == .orderedSame }.count,
+      1)
+  }
+
+  @MainActor
   func testExpiryWaitsForUseAndNeverDeletesTheOriginal() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
       UUID().uuidString, isDirectory: true)
@@ -1356,6 +1481,40 @@ final class ShelfLogicTests: XCTestCase {
     XCTAssertTrue(model.items.isEmpty)
     XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
     XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "original")
+  }
+
+  @MainActor
+  func testExpiryRemovalRejectsANewLeaseAfterDeletionIsReserved() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    try FileManager.default.createDirectory(at: shelf, withIntermediateDirectories: true)
+    let stored = shelf.appendingPathComponent("expiring.txt")
+    try Data("stored".utf8).write(to: stored)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let expiry = Date.now.addingTimeInterval(3_600)
+    let stack = ShelfStack(id: UUID(), name: "Scratch", expiryRule: .oneHour)
+    let record = ShelfItemRecord(
+      id: UUID(), fileName: stored.lastPathComponent, stackID: stack.id,
+      importedAt: expiry.addingTimeInterval(-3_600), expiresAt: expiry, origin: nil)
+    let manifest = ShelfManifest(
+      stacks: [stack], items: [record], pendingImports: [],
+      sameFilePolicy: .reuseExisting, sameNamePolicy: .keepBoth)
+    try await ShelfManifestStore.save(manifest, to: shelf.appendingPathExtension("json")).get()
+    let removal = RemovalGate()
+    let model = ShelfModel(directory: shelf, removeItem: removal.remove)
+    let item = try XCTUnwrap(model.items.first)
+
+    let cleanup = Task { await model.cleanupExpired(at: expiry.addingTimeInterval(1)) }
+    for _ in 0..<200 where !removal.hasStarted() {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+
+    XCTAssertFalse(model.beginUsing(item))
+    removal.release()
+    await cleanup.value
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: stored.path))
   }
 
   @MainActor
