@@ -91,6 +91,17 @@ struct ShelfView: View {
         }
       }
 
+      if model.isStorageAvailable {
+        HStack(spacing: 4) {
+          Image(systemName: "externaldrive")
+          Text(model.storageUsageText)
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(model.storageUsageAccessibilityText)
+      }
+
       if let storageFailure = model.storageFailure {
         HStack(spacing: 5) {
           Image(systemName: "externaldrive.badge.exclamationmark")
