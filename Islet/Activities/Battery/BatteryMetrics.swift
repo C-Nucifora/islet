@@ -61,6 +61,7 @@ enum BatteryTelemetryUnavailableReason: Equatable, Sendable {
   case inactive
   case stale
   case noSample
+  case transient
 
   var diagnosticReason: String {
     switch self {
@@ -69,6 +70,7 @@ enum BatteryTelemetryUnavailableReason: Equatable, Sendable {
     case .inactive: return "Not active right now"
     case .stale: return "Last sample is stale"
     case .noSample: return "No sample yet"
+    case .transient: return "Temporarily unavailable"
     }
   }
 }
@@ -167,6 +169,25 @@ struct BatteryMetrics: Equatable, Sendable {
   /// every entry whenever it receives an AppleSmartBattery dictionary. Empty test fixtures and
   /// manually-seeded previews may leave this empty rather than claiming an unperformed read.
   var telemetryStatus: [BatteryTelemetryField: BatteryTelemetryStatus] = [:]
+
+  /// Fields that have produced a usable value during this monitor session. This survives a later
+  /// partial registry read so a transient omission is not presented as a hardware limitation.
+  var observedTelemetryFields: Set<BatteryTelemetryField> = []
+
+  mutating func reconcileTelemetryCapability(from previous: BatteryMetrics?) {
+    if let previous {
+      observedTelemetryFields.formUnion(previous.observedTelemetryFields)
+      observedTelemetryFields.formUnion(previous.availableTelemetryFields)
+    }
+    observedTelemetryFields.formUnion(availableTelemetryFields)
+    for field in observedTelemetryFields where telemetryStatus[field] == .unsupported {
+      telemetryStatus[field] = .unavailable(.transient)
+    }
+  }
+
+  private var availableTelemetryFields: Set<BatteryTelemetryField> {
+    Set(telemetryStatus.compactMap { field, status in status == .available ? field : nil })
+  }
 
   func status(for field: BatteryTelemetryField) -> BatteryTelemetryStatus? {
     telemetryStatus[field]

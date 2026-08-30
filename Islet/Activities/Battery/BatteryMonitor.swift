@@ -195,7 +195,8 @@ final class BatteryMonitor: ObservableObject {
 
     let reading = cpuPowerSamplingService.cachedReading()
     if reading != cpuPowerReading { cpuPowerReading = reading }
-    let fresh = SmartBatteryReader.read(cpuPowerReading: reading)
+    var fresh = SmartBatteryReader.read(cpuPowerReading: reading)
+    fresh?.reconcileTelemetryCapability(from: metrics)
     let smoothed = fresh.map { PowerSmoothing.smooth(metrics, into: $0) }
     if smoothed != metrics { metrics = smoothed }
 
@@ -267,6 +268,7 @@ final class BatteryMonitor: ObservableObject {
       current.retainStableFields(from: previous)
       fresh = current
     }
+    fresh?.reconcileTelemetryCapability(from: metrics)
     let smoothed = fresh.map { PowerSmoothing.smooth(metrics, into: $0) }
     if smoothed != metrics { metrics = smoothed }
 

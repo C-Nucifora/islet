@@ -36,6 +36,43 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertEqual(metrics.unavailableTelemetry.map(\.field), [.temperature])
   }
 
+  func testObservedTelemetryBecomesTransientlyUnavailableWhenALaterSampleOmitsIt() {
+    var available = BatteryMetricsParser.parse(
+      smartBattery: Self.smartBattery,
+      adapter: Self.adapter,
+      powerSource: Self.powerSource,
+      lowPowerMode: false)
+    available.reconcileTelemetryCapability(from: nil)
+
+    var missing = BatteryMetricsParser.parse(
+      smartBattery: Self.limitedSmartBattery,
+      adapter: nil,
+      powerSource: nil,
+      lowPowerMode: false)
+    missing.reconcileTelemetryCapability(from: available)
+
+    XCTAssertEqual(missing.status(for: .temperature), .unavailable(.transient))
+    XCTAssertEqual(missing.status(for: .systemInput), .unavailable(.transient))
+    XCTAssertEqual(missing.status(for: .systemLoad), .unavailable(.transient))
+    XCTAssertEqual(missing.status(for: .batteryPower), .unavailable(.transient))
+    XCTAssertEqual(missing.status(for: .usbPowerOutput), .unavailable(.inactive))
+    XCTAssertTrue(missing.observedTelemetryFields.contains(.temperature))
+  }
+
+  func testNeverObservedTelemetryRemainsUnsupported() {
+    var first = BatteryMetricsParser.parse(
+      smartBattery: Self.limitedSmartBattery,
+      adapter: nil,
+      powerSource: nil,
+      lowPowerMode: false)
+    first.reconcileTelemetryCapability(from: nil)
+    var second = first
+    second.reconcileTelemetryCapability(from: first)
+
+    XCTAssertEqual(second.status(for: .temperature), .unsupported)
+    XCTAssertFalse(second.observedTelemetryFields.contains(.temperature))
+  }
+
   func testInternalBatterySelectionDoesNotMistakeAUPSForTheMacBattery() {
     let descriptions: [[String: Any]] = [
       ["Type": "UPS", "Name": "Desk UPS"],
