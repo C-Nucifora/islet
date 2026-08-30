@@ -163,8 +163,9 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .startupDisplays:
       pageContent + [
         "Startup", "Launch Islet at login", "Login item status", "Run setup again",
-        "Displays", "Show Islet on every display", "Hide Islet while an app is fullscreen",
-        "screen multiple monitors",
+        "Displays", "Show Islet on every display", "Preferred display",
+        "Hide Islet while an app is fullscreen",
+        "screen multiple monitors external dock clamshell closed lid reconnect",
       ]
     case .appearance:
       pageContent + [
@@ -328,6 +329,7 @@ struct SettingsView: View {
   @ObservedObject private var nowPlaying = AppState.nowPlaying
   @ObservedObject private var t3Code = AppState.t3Code
   @ObservedObject private var launchAtLoginStatus = LaunchAtLoginStatus.shared
+  @ObservedObject private var screenManager = ScreenManager.shared
 
   @Default(.appTheme) private var appTheme
   @Default(.batteryGraphStyle) private var batteryGraphStyle
@@ -347,6 +349,8 @@ struct SettingsView: View {
   @Default(.hiddenCalendarIDs) private var hiddenCalendarIDs
   @Default(.remindersEnabled) private var remindersEnabled
   @Default(.showOnAllDisplays) private var showOnAllDisplays
+  @Default(.preferredDisplayID) private var preferredDisplayID
+  @Default(.preferredDisplayName) private var preferredDisplayName
   @Default(.hideInFullscreen) private var hideInFullscreen
   @Default(.launchAtLogin) private var launchAtLogin
   @Default(.activityOrder) private var activityOrder
@@ -766,12 +770,44 @@ struct SettingsView: View {
       }
       Section("Displays") {
         Toggle("Show Islet on every display", isOn: $showOnAllDisplays)
+        if !showOnAllDisplays {
+          Picker("Preferred display", selection: preferredDisplayBinding) {
+            Text("Automatic").tag("")
+            ForEach(screenManager.displayChoices) { display in
+              Text(display.name).tag(display.id)
+            }
+            if !preferredDisplayID.isEmpty,
+              !screenManager.displayChoices.contains(where: { $0.id == preferredDisplayID })
+            {
+              Text("\(unavailablePreferredDisplayName) (not connected)")
+                .tag(preferredDisplayID)
+            }
+          }
+          .accessibilityHint(
+            "Chooses which display hosts Islet when it is not shown on every display")
+        }
         Toggle("Hide Islet while an app is fullscreen", isOn: $hideInFullscreen)
-        Text("When this is off, Islet uses one display at a time.")
-          .font(.caption).foregroundStyle(.secondary)
+        Text(
+          "Automatic uses the built-in display, then the main display. A disconnected preference returns when that display reconnects."
+        )
+        .font(.caption).foregroundStyle(.secondary)
       }
     }
     .formStyle(.grouped)
+  }
+
+  private var preferredDisplayBinding: Binding<String> {
+    Binding(
+      get: { preferredDisplayID },
+      set: { id in
+        preferredDisplayID = id
+        preferredDisplayName =
+          screenManager.displayChoices.first(where: { $0.id == id })?.name ?? ""
+      })
+  }
+
+  private var unavailablePreferredDisplayName: String {
+    preferredDisplayName.isEmpty ? "Preferred display" : preferredDisplayName
   }
 
   private var appearanceForm: some View {
