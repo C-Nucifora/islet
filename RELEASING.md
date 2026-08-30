@@ -8,6 +8,13 @@ version from the tag and the build number from the exact tagged commit.
 The workflow intentionally stops before publication unless every release prerequisite below is
 present. This repository does not contain an update-signing private key.
 
+Before tagging a release, validate the bundled Pulse Shortcuts starter kit. The importability check
+uses the macOS Shortcuts parser and does not add anything to your library:
+
+```sh
+Scripts/validate-pulse-shortcuts.sh --verify-importability
+```
+
 ## Update behavior and trust boundary
 
 `SPUStandardUpdaterController` provides Sparkle's standard release-notes, download-progress,

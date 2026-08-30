@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>WFWorkflowActions</key>
+  <array>
+    <dict>
+      <key>WFWorkflowActionIdentifier</key><string>dev.islet.PublishPulseEventIntent</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>AppIntentDescriptor</key>
+        <dict><key>AppIntentIdentifier</key><string>PublishPulseEventIntent</string><key>BundleIdentifier</key><string>dev.islet</string><key>Name</key><string>Islet</string><key>TeamIdentifier</key><string></string></dict>
+        <key>UUID</key><string>372D2466-0B32-433F-9198-444B4B4A8627</string>
+        <key>eventTitle</key><string>Build failed</string>
+        <key>identifier</key><string>shortcuts.islet.failed-build</string>
+        <key>details</key><string>The test suite needs attention.</string>
+        <key>eventPriority</key><string>high</string>
+        <key>eventState</key><string>failed</string>
+        <key>seconds</key><integer>30</integer>
+        <key>ShowWhenRun</key><false/>
+      </dict>
+    </dict>
+  </array>
+  <key>WFWorkflowClientVersion</key><string>4018.0.4</string>
+  <key>WFWorkflowHasOutputFallback</key><false/>
+  <key>WFWorkflowHasShortcutInputVariables</key><false/>
+  <key>WFWorkflowIcon</key><dict><key>WFWorkflowIconGlyphNumber</key><integer>61699</integer><key>WFWorkflowIconStartColor</key><integer>946986751</integer></dict>
+  <key>WFWorkflowImportQuestions</key><array/>
+  <key>WFWorkflowInputContentItemClasses</key><array/>
+  <key>WFWorkflowMinimumClientVersion</key><integer>900</integer>
+  <key>WFWorkflowMinimumClientVersionString</key><string>900</string>
+  <key>WFWorkflowOutputContentItemClasses</key><array/>
+  <key>WFWorkflowTypes</key><array/>
+</dict>
+</plist>

@@ -5,8 +5,16 @@
       "id": "shortcuts",
       "name": "Shortcuts",
       "sources": ["shortcuts"],
-      "capabilities": ["events"],
-      "setup": "Add the Publish an Islet Pulse Event action."
+      "capabilities": ["events", "progress"],
+      "setup": "Import a starter shortcut or add an Islet action.",
+      "examples": [
+        {"name": "Transient event", "file": "shortcuts/01-transient-event.shortcut"},
+        {"name": "Progress task", "file": "shortcuts/02-progress-task.shortcut"},
+        {"name": "Failed task", "file": "shortcuts/03-failed-task.shortcut"},
+        {"name": "Guarded completion", "file": "shortcuts/04-guarded-completion.shortcut"},
+        {"name": "Focus profile", "file": "shortcuts/05-focus-profile.shortcut"},
+        {"name": "Focus timer", "file": "shortcuts/06-focus-timer.shortcut"}
+      ]
     },
     {
       "id": "cli",
