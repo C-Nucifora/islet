@@ -1,0 +1,13 @@
+{
+  "data": [
+    {
+      "storeAssertionRecords": [
+        {
+          "assertionDetails": {
+            "assertionDetailsModeIdentifier": "com.example.focus.deep-work"
+          }
+        }
+      ]
+    }
+  ]
+}

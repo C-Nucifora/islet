@@ -256,6 +256,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       pageContent + [
         "Diagnostics", "Bundle identifier", "Version", "Energy mode", "Copy diagnostics",
         "Open logs folder", "Restart Islet", "Quit Islet", "Integration health", "Media adapter",
+        "Focus event source", "Focus last parsed", "Focus schema", "Retry Focus source",
         "T3 Code credentials", "Pulse", "Media-key HUD", "signing support status", "About",
         "GitHub contributors C-Nucifora nedlane",
       ]
@@ -327,6 +328,7 @@ struct SettingsView: View {
   @ObservedObject private var continuity = ContinuityMonitor.shared
   @ObservedObject private var nowPlaying = AppState.nowPlaying
   @ObservedObject private var t3Code = AppState.t3Code
+  @ObservedObject private var focus = AppState.focus
   @ObservedObject private var launchAtLoginStatus = LaunchAtLoginStatus.shared
 
   @Default(.appTheme) private var appTheme
@@ -1359,6 +1361,21 @@ struct SettingsView: View {
       }
       Section("Integration health") {
         PermissionStatusRow(
+          title: "Focus event source", icon: "moon.circle.fill", status: focus.health.summary,
+          color: focus.health.isFailure ? .orange : focus.health == .stopped ? .secondary : .green)
+        if let lastSuccessfulParse = focus.lastSuccessfulParse {
+          LabeledContent("Focus last parsed") {
+            Text(lastSuccessfulParse, style: .relative).foregroundStyle(.secondary)
+          }
+        }
+        if let schemaSignature = focus.schemaSignature {
+          LabeledContent("Focus schema") {
+            Text(schemaSignature).fontDesign(.monospaced).foregroundStyle(.secondary)
+          }
+        }
+        Button("Retry Focus source") { focus.retry() }
+          .disabled(focus.health == .stopped)
+        PermissionStatusRow(
           title: "Media adapter", icon: "music.note", status: nowPlaying.adapterStatus,
           color: nowPlaying.adapterStatus.localizedCaseInsensitiveContains("error")
             ? .orange : .green)
@@ -1509,6 +1526,9 @@ struct SettingsView: View {
     let text =
       permissions.diagnostics.text
       + "\nHUD event tap: \(hud.eventTapStatus.summary)"
+      + "\nFocus event source: \(focus.health.summary)"
+      + "\nFocus last parsed: \(focus.lastSuccessfulParse?.formatted() ?? "Never")"
+      + "\nFocus schema: \(focus.schemaSignature ?? "Unavailable")"
       + "\nPulse: \(pulseServer.isRunning ? "Running" : "Stopped")"
       + "\nPulse items: \(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
     NSPasteboard.general.clearContents()
