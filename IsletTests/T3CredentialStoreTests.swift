@@ -171,6 +171,42 @@ final class T3CredentialStoreTests: XCTestCase {
     XCTAssertEqual(try vault.migrateLegacyVaults(), 1)
   }
 
+  func testRollbackKeepsVerifiedReplacementWhenADeletedVaultCannotBeRestored() throws {
+    let credentialID = "remote|survivor"
+    let storedSecret = secret(20)
+    let canonical = T3MemoryCredentialRecordStore.Key(
+      service: service, account: T3CredentialVault.vaultAccount)
+    let legacy = T3MemoryCredentialRecordStore.Key(
+      service: legacyService, account: T3CredentialVault.vaultAccount)
+    let sourceData = try aggregateData([credentialID: storedSecret])
+    let store = T3MemoryCredentialRecordStore(records: [
+      canonical: sourceData,
+      legacy: sourceData,
+    ])
+    let vault = makeVault(store: store)
+    store.failDeletion(of: legacy)
+    // The first replacement writes the isolated credential. The second attempts to restore the
+    // canonical vault after its deletion succeeds and legacy-vault deletion fails.
+    store.failReplacement(number: 2)
+
+    XCTAssertThrowsError(try vault.migrateLegacyVaults()) { error in
+      guard case T3CredentialStoreError.rollbackFailed = error else {
+        return XCTFail("Expected rollbackFailed, got \(error)")
+      }
+    }
+
+    XCTAssertNil(store.value(service: canonical.service, account: canonical.account))
+    XCTAssertNotNil(store.value(service: legacy.service, account: legacy.account))
+    XCTAssertNotNil(
+      store.value(service: service, account: T3CredentialVault.account(for: credentialID)))
+
+    // The surviving isolated item is preferred on retry, so source cleanup completes without
+    // rewriting or losing the credential.
+    XCTAssertEqual(try vault.migrateLegacyVaults(), 0)
+    assertSecret(try vault.load(credentialID: credentialID), matches: storedSecret)
+    XCTAssertNil(store.value(service: legacy.service, account: legacy.account))
+  }
+
   func testLocalReplacementDeletesOnlyIdentifiableStaleItems() throws {
     let store = T3MemoryCredentialRecordStore()
     let vault = makeVault(store: store)
