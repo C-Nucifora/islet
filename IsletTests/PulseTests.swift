@@ -602,6 +602,146 @@ final class PulseTests: XCTestCase {
     XCTAssertFalse(PulseServer.isAddressInUse(NWError.posix(.ECONNREFUSED)))
   }
 
+  func testRecoverableListenerFailureClassificationExcludesPermanentErrors() {
+    XCTAssertTrue(PulseServer.isRecoverableListenerFailure(NWError.posix(.ETIMEDOUT)))
+    XCTAssertTrue(PulseServer.isRecoverableListenerFailure(NWError.posix(.ENETDOWN)))
+    XCTAssertFalse(PulseServer.isRecoverableListenerFailure(NWError.posix(.EACCES)))
+    XCTAssertFalse(PulseServer.isRecoverableListenerFailure(NWError.posix(.EADDRINUSE)))
+  }
+
+  func testRetryDelayUsesBoundedExponentialBackoff() {
+    XCTAssertEqual(PulseServer.retryDelay(for: 0), 0)
+    XCTAssertEqual(PulseServer.retryDelay(for: 1), 1)
+    XCTAssertEqual(PulseServer.retryDelay(for: 2), 2)
+    XCTAssertEqual(PulseServer.retryDelay(for: 6), 32)
+    XCTAssertEqual(PulseServer.retryDelay(for: 7), 60)
+    XCTAssertEqual(PulseServer.retryDelay(for: 100), 60)
+  }
+
+  @MainActor
+  func testRecoverableFailureRetriesAtScheduledTimeAndPublishesIt() async {
+    let scheduler = TestPulseRetryScheduler()
+    let now = Date(timeIntervalSince1970: 1_000)
+    var listeners: [FakePulseListener] = []
+    let server = PulseServer(
+      listenerFactory: { _, port in
+        let listener = FakePulseListener(port: port)
+        listeners.append(listener)
+        return listener
+      },
+      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {},
+      now: { now }, retryScheduler: scheduler.schedule)
+
+    server.start()
+    listeners[0].emit(.failed(.posix(.ETIMEDOUT)))
+    await Task.yield()
+
+    XCTAssertEqual(scheduler.delays, [1])
+    XCTAssertEqual(server.nextRetryAt, now.addingTimeInterval(1))
+    XCTAssertTrue(server.lastError?.contains("Retrying at") ?? false)
+    XCTAssertFalse(server.isRunning)
+
+    scheduler.fire(at: 0)
+    XCTAssertEqual(listeners.count, 2)
+    XCTAssertNil(server.nextRetryAt)
+    server.stop()
+  }
+
+  @MainActor
+  func testStoppingOrRestartingPulseMakesQueuedRetryCallbacksHarmless() async {
+    let scheduler = TestPulseRetryScheduler()
+    var listeners: [FakePulseListener] = []
+    let server = PulseServer(
+      listenerFactory: { _, port in
+        let listener = FakePulseListener(port: port)
+        listeners.append(listener)
+        return listener
+      },
+      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {},
+      retryScheduler: scheduler.schedule)
+
+    server.start()
+    listeners[0].emit(.failed(.posix(.ETIMEDOUT)))
+    await Task.yield()
+    server.stop()
+
+    XCTAssertTrue(scheduler.tasks[0].cancelled)
+    XCTAssertNil(server.nextRetryAt)
+    scheduler.fire(at: 0)
+    XCTAssertEqual(listeners.count, 1)
+
+    server.start()
+    XCTAssertEqual(listeners.count, 2)
+    scheduler.fire(at: 0)
+    XCTAssertEqual(listeners.count, 2)
+    server.stop()
+  }
+
+  @MainActor
+  func testRotatingTokenDuringBackoffRestartsPulseAndCancelsQueuedRetry() async throws {
+    let scheduler = TestPulseRetryScheduler()
+    var listeners: [FakePulseListener] = []
+    var storedToken = Self.testToken
+    let replacementToken = Data(repeating: 1, count: 32).base64EncodedString()
+    let server = PulseServer(
+      listenerFactory: { _, port in
+        let listener = FakePulseListener(port: port)
+        listeners.append(listener)
+        return listener
+      },
+      tokenLoader: { storedToken },
+      tokenRotator: {
+        storedToken = replacementToken
+        return replacementToken
+      },
+      activePortWriter: { _ in }, activePortRemover: {}, retryScheduler: scheduler.schedule)
+
+    server.start()
+    listeners[0].emit(.failed(.posix(.ETIMEDOUT)))
+    await Task.yield()
+    XCTAssertEqual(listeners.count, 1)
+    XCTAssertNotNil(server.nextRetryAt)
+
+    try server.rotateToken()
+
+    XCTAssertEqual(server.token, replacementToken)
+    XCTAssertEqual(listeners.count, 2)
+    XCTAssertTrue(scheduler.tasks[0].cancelled)
+    XCTAssertNil(server.nextRetryAt)
+    scheduler.fire(at: 0)
+    XCTAssertEqual(listeners.count, 2)
+    server.stop()
+  }
+
+  @MainActor
+  func testStableReadyPeriodResetsRetryBackoff() async {
+    let scheduler = TestPulseRetryScheduler()
+    var listeners: [FakePulseListener] = []
+    let server = PulseServer(
+      listenerFactory: { _, port in
+        let listener = FakePulseListener(port: port)
+        listeners.append(listener)
+        return listener
+      },
+      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {},
+      retryScheduler: scheduler.schedule)
+
+    server.start()
+    listeners[0].emit(.failed(.posix(.ETIMEDOUT)))
+    await Task.yield()
+    scheduler.fire(at: 0)
+    listeners[1].emit(.ready)
+    await Task.yield()
+
+    XCTAssertEqual(scheduler.delays, [1, PulseServer.retryStableReadyPeriod])
+    scheduler.fire(at: 1)
+    listeners[1].emit(.failed(.posix(.ETIMEDOUT)))
+    await Task.yield()
+
+    XCTAssertEqual(scheduler.delays.last, 1)
+    server.stop()
+  }
+
   func testTerminalPipelineFailureStaysBehindAcceptedCommands() async {
     let pipeline = PulseCommandPipeline()
     let command = Data("accepted".utf8)
@@ -685,4 +825,32 @@ private final class FakePulseListener: PulseListening, @unchecked Sendable {
   func start(queue: DispatchQueue) {}
   func cancel() {}
   func emit(_ state: NWListener.State) { stateUpdateHandler?(state) }
+}
+
+@MainActor
+private final class TestPulseRetryScheduler {
+  final class Task: PulseRetryCancellable {
+    private(set) var cancelled = false
+    let action: @MainActor @Sendable () -> Void
+
+    init(action: @escaping @MainActor @Sendable () -> Void) {
+      self.action = action
+    }
+
+    func cancel() { cancelled = true }
+  }
+
+  private(set) var delays: [TimeInterval] = []
+  private(set) var tasks: [Task] = []
+
+  func schedule(
+    after delay: TimeInterval, action: @escaping @MainActor @Sendable () -> Void
+  ) -> any PulseRetryCancellable {
+    delays.append(delay)
+    let task = Task(action: action)
+    tasks.append(task)
+    return task
+  }
+
+  func fire(at index: Int) { tasks[index].action() }
 }

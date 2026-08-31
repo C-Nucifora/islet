@@ -1516,6 +1516,10 @@ struct SettingsView: View {
           "Local scripts publish status and web actions over \(pulseServer.listeningAddress ?? "127.0.0.1:47717"). A private token authenticates each connection."
         )
         .font(.caption).foregroundStyle(.secondary)
+        if let nextRetryAt = pulseServer.nextRetryAt {
+          Text("Next retry at \(nextRetryAt.formatted(date: .omitted, time: .standard)).")
+            .font(.caption).foregroundStyle(.orange)
+        }
         if let recovery = pulseServer.portRecoveryMessage {
           Text(recovery)
             .font(.caption).foregroundStyle(.orange)
@@ -1525,7 +1529,7 @@ struct SettingsView: View {
           .font(.caption).foregroundStyle(.secondary)
           Button("Retry port 47717") { pulseServer.retryDefaultPort() }
         } else if pulseServer.lastError != nil {
-          Button("Retry Pulse listener") { pulseServer.retryDefaultPort() }
+          Button("Retry Pulse listener now") { pulseServer.retryDefaultPort() }
         }
         Text(
           "Turning Pulse off under Activity order closes the listener and disconnects providers."
