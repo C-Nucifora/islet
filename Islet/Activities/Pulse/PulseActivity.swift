@@ -172,6 +172,7 @@ private struct PulseItemRow: View {
     case .needsAction: "needs action"
     case .succeeded: "succeeded"
     case .failed: "failed"
+    case .cancelled: "cancelled"
     }
   }
 }
