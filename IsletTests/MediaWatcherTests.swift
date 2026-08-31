@@ -181,6 +181,94 @@ final class MediaWatcherTests: XCTestCase {
         streamHasEmittedRecord: false, currentSource: key("com.spotify.client", 1)))
   }
 
+  func testRecoverySnapshotIsAcceptedWhileAudioRemainsActive() {
+    XCTAssertTrue(
+      MediaWatcher.shouldAcceptRecoverySnapshot(
+        requestedGeneration: 4,
+        currentGeneration: 4,
+        currentSource: nil,
+        playbackRecoveryActive: true))
+  }
+
+  func testRecoverySnapshotIsRejectedAfterANewerStreamRecord() {
+    XCTAssertFalse(
+      MediaWatcher.shouldAcceptRecoverySnapshot(
+        requestedGeneration: 4,
+        currentGeneration: 5,
+        currentSource: nil,
+        playbackRecoveryActive: true))
+  }
+
+  func testRecoverySnapshotIsRejectedWhenAudioStopsOrAStreamSourceWins() {
+    XCTAssertFalse(
+      MediaWatcher.shouldAcceptRecoverySnapshot(
+        requestedGeneration: 4,
+        currentGeneration: 4,
+        currentSource: nil,
+        playbackRecoveryActive: false))
+    XCTAssertFalse(
+      MediaWatcher.shouldAcceptRecoverySnapshot(
+        requestedGeneration: 4,
+        currentGeneration: 4,
+        currentSource: key("com.spotify.client", 1),
+        playbackRecoveryActive: true))
+  }
+
+  func testActiveAudioRecoversMetadataAfterTheStreamEmitsIdle() {
+    let helper = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .appendingPathComponent("Fixtures/recovering-media-helper.pl")
+    XCTAssertTrue(FileManager.default.fileExists(atPath: helper.path))
+    let idle = expectation(description: "stream reports idle")
+    let recovered = expectation(description: "snapshot recovers current source")
+    let watcher = MediaWatcher(
+      initialSnapshotDelay: 1,
+      commandProvider: { kind in
+        MediaWatcher.HelperCommand(
+          executableURL: URL(fileURLWithPath: "/usr/bin/perl"),
+          arguments: [helper.path, kind.rawValue])
+      },
+      snapshotBackoff: { _ in 0.05 })
+    let updates = Task {
+      for await update in watcher.updates {
+        switch update {
+        case .idle:
+          idle.fulfill()
+          watcher.setPlaybackRecoverySources(["company.thebrowser.Browser"])
+        case .nowPlaying(let source, let state):
+          XCTAssertEqual(source.displayBundleIdentifier, "company.thebrowser.Browser")
+          XCTAssertEqual(state.title, "Recovered video")
+          recovered.fulfill()
+          return
+        case .ignored, .sourceGone:
+          continue
+        }
+      }
+    }
+    watcher.start()
+    wait(for: [idle, recovered], timeout: 5, enforceOrder: true)
+    watcher.stop()
+    updates.cancel()
+  }
+
+  func testRecoveryOnlyAcceptsMetadataForAnActiveAudioApp() {
+    let browser = key("company.thebrowser.Browser", 1)
+    let music = key("com.apple.Music", 2)
+    let browserUpdate = AdapterUpdate.nowPlaying(browser, state("Video"))
+
+    XCTAssertTrue(
+      MediaWatcher.shouldAcceptRecoveredUpdate(
+        browserUpdate, activeBundleIdentifiers: ["company.thebrowser.Browser"]))
+    XCTAssertFalse(
+      MediaWatcher.shouldAcceptRecoveredUpdate(
+        browserUpdate, activeBundleIdentifiers: ["com.apple.Music"]))
+    XCTAssertFalse(
+      MediaWatcher.shouldAcceptRecoveredUpdate(
+        .nowPlaying(music, state("Song")), activeBundleIdentifiers: ["company.thebrowser.Browser"]))
+    XCTAssertFalse(
+      MediaWatcher.shouldAcceptRecoveredUpdate(
+        .idle, activeBundleIdentifiers: ["company.thebrowser.Browser"]))
+  }
+
   func key(_ bundle: String, _ pid: Int32) -> SourceID {
     SourceID(bundleIdentifier: bundle, pid: pid, parentBundleIdentifier: "")
   }

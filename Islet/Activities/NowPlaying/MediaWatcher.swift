@@ -216,6 +216,9 @@ final class MediaWatcher: @unchecked Sendable {
   private var snapshotDeadlineTracker: SnapshotDeadlineTracker?
   private var snapshotDeadlineWorkItem: DispatchWorkItem?
   private var snapshotLaunchWorkItem: DispatchWorkItem?
+  /// Nil for the startup snapshot; otherwise the stream generation captured for an audio-driven
+  /// recovery snapshot.
+  private var snapshotRecoveryGeneration: UInt64?
   private var pipe: Pipe?
   private var stderrPipe: Pipe?
   private var stderr: StderrCapture?
@@ -228,6 +231,8 @@ final class MediaWatcher: @unchecked Sendable {
   private var lastStates: [SourceID: PlaybackState] = [:]
   private var currentSource: SourceID?
   private var streamHasEmittedRecord = false
+  private var streamGeneration: UInt64 = 0
+  private var playbackRecoveryBundleIdentifiers: Set<String> = []
   private var buffer = Data()  // guarded by `queue`
   private var isRunning = false
   /// Human-readable adapter status for the Settings window.
@@ -312,10 +317,27 @@ final class MediaWatcher: @unchecked Sendable {
       lastStates.removeAll()
       currentSource = nil
       streamHasEmittedRecord = false
+      streamGeneration = 0
+      playbackRecoveryBundleIdentifiers = []
       failureCount = 0
       snapshotFailureCount = 0
       onStatus?("Stopped")
       onDiagnostic?(nil)
+    }
+  }
+
+  /// CoreAudio is independent of MediaRemote and can reveal that an idle stream missed playback.
+  /// Keep the snapshot guarded by a stream generation so a newer live record always wins.
+  func setPlaybackRecoverySources(_ bundleIdentifiers: Set<String>) {
+    queue.async { [self] in
+      playbackRecoveryBundleIdentifiers = bundleIdentifiers
+      if !bundleIdentifiers.isEmpty {
+        scheduleRecoverySnapshot()
+      } else if snapshotRecoveryGeneration != nil {
+        snapshotLaunchWorkItem?.cancel()
+        snapshotLaunchWorkItem = nil
+        cleanupSnapshot(terminate: true)
+      }
     }
   }
 
@@ -365,6 +387,7 @@ final class MediaWatcher: @unchecked Sendable {
     snapshotOutput = nil
     snapshotStderrPipe = nil
     snapshotStderr = nil
+    snapshotRecoveryGeneration = nil
     oldSnapshot?.terminationHandler = nil
     if let oldSnapshot {
       if terminate {
@@ -468,15 +491,36 @@ final class MediaWatcher: @unchecked Sendable {
         Self.shouldAcceptInitialSnapshot(
           streamHasEmittedRecord: self.streamHasEmittedRecord, currentSource: self.currentSource)
       else { return }
-      self.requestInitialSnapshot()
+      self.requestSnapshot(recoveryGeneration: nil)
     }
     snapshotLaunchWorkItem = workItem
     queue.asyncAfter(deadline: .now() + (delay ?? initialSnapshotDelay), execute: workItem)
   }
 
-  private func requestInitialSnapshot() {
+  private func scheduleRecoverySnapshot(after delay: TimeInterval? = nil) {
+    guard isRunning, !playbackRecoveryBundleIdentifiers.isEmpty, currentSource == nil,
+      snapshotProcess == nil, snapshotLaunchWorkItem == nil
+    else { return }
+    let generation = streamGeneration
+    let workItem = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.snapshotLaunchWorkItem = nil
+      guard self.isRunning,
+        Self.shouldAcceptRecoverySnapshot(
+          requestedGeneration: generation,
+          currentGeneration: self.streamGeneration,
+          currentSource: self.currentSource,
+          playbackRecoveryActive: !self.playbackRecoveryBundleIdentifiers.isEmpty)
+      else { return }
+      self.requestSnapshot(recoveryGeneration: generation)
+    }
+    snapshotLaunchWorkItem = workItem
+    queue.asyncAfter(deadline: .now() + (delay ?? initialSnapshotDelay), execute: workItem)
+  }
+
+  private func requestSnapshot(recoveryGeneration: UInt64?) {
     guard snapshotProcess == nil, let command = commandProvider(.snapshot) else {
-      initialSnapshotFailed(reason: "helper missing")
+      snapshotFailed(reason: "helper missing", recoveryGeneration: recoveryGeneration)
       return
     }
     let snapshot = Process()
@@ -517,6 +561,7 @@ final class MediaWatcher: @unchecked Sendable {
     do {
       try snapshot.run()
       snapshotProcess = snapshot
+      snapshotRecoveryGeneration = recoveryGeneration
       snapshotPipe = output
       snapshotOutput = outputData
       snapshotStderrPipe = errorPipe
@@ -529,7 +574,7 @@ final class MediaWatcher: @unchecked Sendable {
       errorPipe.fileHandleForReading.readabilityHandler = nil
       snapshot.terminationHandler = nil
       Log.media.error("Initial media snapshot launch failed: \(error)")
-      initialSnapshotFailed(reason: "launch failed")
+      snapshotFailed(reason: "launch failed", recoveryGeneration: recoveryGeneration)
     }
   }
 
@@ -537,9 +582,12 @@ final class MediaWatcher: @unchecked Sendable {
     guard snapshotProcess === sourceProcess, var tracker = snapshotDeadlineTracker else { return }
     guard let snapshotOutput, !snapshotOutput.snapshot.exceededLimit else {
       let capturedStderr = snapshotStderr
+      let recoveryGeneration = snapshotRecoveryGeneration
       Log.media.error("Initial media snapshot exceeded output limit")
       cleanupSnapshot(terminate: true)
-      initialSnapshotFailed(reason: "oversized output", stderr: capturedStderr)
+      snapshotFailed(
+        reason: "oversized output", stderr: capturedStderr,
+        recoveryGeneration: recoveryGeneration)
       return
     }
     tracker.receivedOutput(at: monotonicNow())
@@ -566,17 +614,18 @@ final class MediaWatcher: @unchecked Sendable {
       return
     }
     let capturedStderr = snapshotStderr
+    let recoveryGeneration = snapshotRecoveryGeneration
     cleanupSnapshot(terminate: true)
     snapshotFailureCount += 1
+    let willRetry = recoveryGeneration == nil || snapshotFailureCount < 3
     let delay = snapshotBackoff(snapshotFailureCount)
     let reason = "snapshot \(timeout.rawValue) timeout"
     recordHelperFailure(kind: .snapshot, reason: reason, stderr: capturedStderr)
-    Log.media.warning(
-      "MediaRemote \(reason); retrying in \(delay)s (failure #\(self.snapshotFailureCount))")
-    onStatus?(
-      "Streaming (\(reason); retrying in \(Self.secondsLabel(delay)), failure #\(snapshotFailureCount))"
-    )
-    scheduleInitialSnapshot(after: delay)
+    let action = willRetry ? "retrying in \(Self.secondsLabel(delay))" : "recovery stopped"
+    Log.media.warning("MediaRemote \(reason); \(action) (failure #\(self.snapshotFailureCount))")
+    onStatus?("Streaming (\(reason); \(action), failure #\(snapshotFailureCount))")
+    guard willRetry else { return }
+    scheduleSnapshotRetry(recoveryGeneration: recoveryGeneration, after: delay)
   }
 
   private func snapshotFinished(_ finishedProcess: Process, stderr: StderrCapture) {
@@ -584,25 +633,42 @@ final class MediaWatcher: @unchecked Sendable {
       let capture = snapshotOutput?.snapshot
     else { return }
     let status = finishedProcess.terminationStatus
+    let recoveryGeneration = snapshotRecoveryGeneration
     cleanupSnapshot(terminate: false)
-    guard isRunning,
-      Self.shouldAcceptInitialSnapshot(
-        streamHasEmittedRecord: streamHasEmittedRecord, currentSource: currentSource)
-    else { return }
+    guard isRunning else { return }
+    let shouldAccept = recoveryGeneration.map {
+      Self.shouldAcceptRecoverySnapshot(
+        requestedGeneration: $0,
+        currentGeneration: streamGeneration,
+        currentSource: currentSource,
+        playbackRecoveryActive: !playbackRecoveryBundleIdentifiers.isEmpty)
+    } ?? Self.shouldAcceptInitialSnapshot(
+      streamHasEmittedRecord: streamHasEmittedRecord, currentSource: currentSource)
+    guard shouldAccept else { return }
     guard !capture.exceededLimit else {
-      initialSnapshotFailed(reason: "oversized output", stderr: stderr)
+      snapshotFailed(
+        reason: "oversized output", stderr: stderr, recoveryGeneration: recoveryGeneration)
       return
     }
     guard status == 0 else {
-      initialSnapshotFailed(reason: "helper exited with status \(status)", stderr: stderr)
+      snapshotFailed(
+        reason: "helper exited with status \(status)", stderr: stderr,
+        recoveryGeneration: recoveryGeneration)
       return
     }
     guard let parsed = Self.parseInitialSnapshot(data: capture.data) else {
-      initialSnapshotFailed(reason: "invalid output", stderr: stderr)
+      snapshotFailed(
+        reason: "invalid output", stderr: stderr, recoveryGeneration: recoveryGeneration)
       return
     }
     snapshotFailureCount = 0
     onStatus?("Streaming")
+    if recoveryGeneration != nil,
+      !Self.shouldAcceptRecoveredUpdate(
+        parsed, activeBundleIdentifiers: playbackRecoveryBundleIdentifiers)
+    {
+      return
+    }
     accept(parsed)
   }
 
@@ -659,21 +725,36 @@ final class MediaWatcher: @unchecked Sendable {
     }
   }
 
-  private func initialSnapshotFailed(reason: String, stderr: StderrCapture? = nil) {
-    guard isRunning,
-      Self.shouldAcceptInitialSnapshot(
-        streamHasEmittedRecord: streamHasEmittedRecord, currentSource: currentSource)
-    else { return }
+  private func snapshotFailed(
+    reason: String, stderr: StderrCapture? = nil, recoveryGeneration: UInt64?
+  ) {
+    guard isRunning else { return }
+    let shouldRetry = recoveryGeneration.map {
+      Self.shouldAcceptRecoverySnapshot(
+        requestedGeneration: $0,
+        currentGeneration: streamGeneration,
+        currentSource: currentSource,
+        playbackRecoveryActive: !playbackRecoveryBundleIdentifiers.isEmpty)
+    } ?? Self.shouldAcceptInitialSnapshot(
+      streamHasEmittedRecord: streamHasEmittedRecord, currentSource: currentSource)
+    guard shouldRetry else { return }
     snapshotFailureCount += 1
+    let willRetry = recoveryGeneration == nil || snapshotFailureCount < 3
     let delay = snapshotBackoff(snapshotFailureCount)
     recordHelperFailure(kind: .snapshot, reason: "snapshot \(reason)", stderr: stderr)
-    Log.media.warning(
-      "Initial media snapshot \(reason); retrying in \(delay)s (failure #\(self.snapshotFailureCount))"
-    )
-    onStatus?(
-      "Streaming (snapshot \(reason); retrying in \(Self.secondsLabel(delay)), failure #\(snapshotFailureCount))"
-    )
-    scheduleInitialSnapshot(after: delay)
+    let action = willRetry ? "retrying in \(Self.secondsLabel(delay))" : "recovery stopped"
+    Log.media.warning("Media snapshot \(reason); \(action) (failure #\(self.snapshotFailureCount))")
+    onStatus?("Streaming (snapshot \(reason); \(action), failure #\(snapshotFailureCount))")
+    guard willRetry else { return }
+    scheduleSnapshotRetry(recoveryGeneration: recoveryGeneration, after: delay)
+  }
+
+  private func scheduleSnapshotRetry(recoveryGeneration: UInt64?, after delay: TimeInterval) {
+    if recoveryGeneration == nil {
+      scheduleInitialSnapshot(after: delay)
+    } else {
+      scheduleRecoverySnapshot(after: delay)
+    }
   }
 
   private static func secondsLabel(_ delay: TimeInterval) -> String {
@@ -728,6 +809,7 @@ final class MediaWatcher: @unchecked Sendable {
     let base = currentSource.flatMap { lastStates[$0] }
     let parsed = AdapterParser.parse(line: line, current: base)
     guard parsed != .ignored else { return }
+    streamGeneration &+= 1
     streamHasEmittedRecord = true
     snapshotFailureCount = 0
     snapshotLaunchWorkItem?.cancel()
@@ -735,12 +817,31 @@ final class MediaWatcher: @unchecked Sendable {
     cleanupSnapshot(terminate: true)
     onStatus?("Streaming")
     accept(parsed)
+    if parsed == .idle, !playbackRecoveryBundleIdentifiers.isEmpty {
+      scheduleRecoverySnapshot()
+    }
   }
 
   static func shouldAcceptInitialSnapshot(
     streamHasEmittedRecord: Bool, currentSource: SourceID?
   ) -> Bool {
     !streamHasEmittedRecord && currentSource == nil
+  }
+
+  static func shouldAcceptRecoverySnapshot(
+    requestedGeneration: UInt64,
+    currentGeneration: UInt64,
+    currentSource: SourceID?,
+    playbackRecoveryActive: Bool
+  ) -> Bool {
+    playbackRecoveryActive && currentSource == nil && requestedGeneration == currentGeneration
+  }
+
+  static func shouldAcceptRecoveredUpdate(
+    _ update: AdapterUpdate, activeBundleIdentifiers: Set<String>
+  ) -> Bool {
+    guard case .nowPlaying(let source, _) = update else { return false }
+    return activeBundleIdentifiers.contains(source.displayBundleIdentifier)
   }
 
   private func accept(_ parsed: AdapterUpdate) {

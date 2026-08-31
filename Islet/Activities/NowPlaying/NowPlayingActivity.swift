@@ -69,7 +69,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     audio.start()
     audioCancellable = audio.$sources
       .receive(on: DispatchQueue.main)
-      .sink { [weak self] latest in self?.publish(audioSources: latest) }
+      .sink { [weak self] latest in self?.audioSourcesChanged(latest) }
     Defaults.publisher(.mediaSourceMode)
       .dropFirst()
       .sink { [weak self] _ in self?.publish() }
@@ -237,6 +237,13 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   }
 
   /// Mirrors the table (and the audio monitor) into the published properties the views read.
+  private func audioSourcesChanged(_ latest: [SourceID]) {
+    table.setActiveAudioSources(latest, now: Date())
+    watcher.setPlaybackRecoverySources(Set(latest.map(\.displayBundleIdentifier)))
+    publish(audioSources: latest)
+    rescheduleExpiry()
+  }
+
   private func publish(audioSources: [SourceID]? = nil) {
     let mode = Defaults[.mediaSourceMode]
     let priorityList = Defaults[.mediaPriorityList]
@@ -250,9 +257,10 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     if presentationChanged { mediaControlNotice = nil }
     for source in merged { resolveApplication(for: source.displayBundleIdentifier) }
     var publishedPropertyChanged = false
-    if sources != table.states {
-      reconcileArtwork(with: table.states)
-      sources = table.states
+    let presentationStates = table.presentationStates
+    if sources != presentationStates {
+      reconcileArtwork(with: presentationStates)
+      sources = presentationStates
       publishedPropertyChanged = true
     }
     if strip != nextStrip {
