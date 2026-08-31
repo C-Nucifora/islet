@@ -48,6 +48,37 @@ final class KeepAwakeManagerTests: XCTestCase {
     fixture.manager.stop(reason: .manual)
   }
 
+  func testClosedDisplayPreferenceFromUtilityTaskReconcilesOnMainThread() async {
+    let savedPreference = Defaults[.keepAwakeWithLidClosed]
+    let changedPreference = !savedPreference
+    defer { Defaults[.keepAwakeWithLidClosed] = savedPreference }
+
+    let fixture = Fixture(
+      allowDisplaySleep: true, keepAwakeWithLidClosed: savedPreference,
+      observePreferenceChanges: true)
+    fixture.powerProtect.isInstalled = true
+    XCTAssertTrue(fixture.manager.start(duration: .indefinitely))
+    let published = expectation(description: "Closed-display preference is reconciled")
+    let cancellable = fixture.manager.$keepAwakeWithLidClosed.dropFirst().sink { value in
+      XCTAssertTrue(Thread.isMainThread)
+      XCTAssertEqual(value, changedPreference)
+      published.fulfill()
+    }
+
+    await Task.detached(priority: .utility) {
+      Defaults[.keepAwakeWithLidClosed] = changedPreference
+    }.value
+    await fulfillment(of: [published], timeout: 2)
+
+    if changedPreference {
+      XCTAssertEqual(fixture.powerProtect.enableCalls, 1)
+    } else {
+      XCTAssertEqual(fixture.powerProtect.disableCalls, 1)
+    }
+    cancellable.cancel()
+    fixture.manager.stop(reason: .manual)
+  }
+
   func testIndefiniteSessionCreatesSystemAssertionAndReleasesItExactlyOnce() {
     let fixture = Fixture(allowDisplaySleep: true)
 
@@ -381,6 +412,42 @@ final class KeepAwakeManagerTests: XCTestCase {
     XCTAssertEqual(fixture.powerProtect.disableCalls, 2)
     XCTAssertFalse(fixture.manager.hasUnreleasedAssertions)
   }
+
+  func testPowerProtectDisableFailureDuringActiveSessionRemainsVisibleAndRetryable() {
+    let fixture = Fixture(allowDisplaySleep: true, keepAwakeWithLidClosed: true)
+    fixture.powerProtect.isInstalled = true
+    XCTAssertTrue(fixture.manager.start(duration: .indefinitely))
+    fixture.powerProtect.disableFailuresRemaining = 1
+
+    fixture.manager.setKeepAwakeWithLidClosed(false)
+
+    XCTAssertTrue(fixture.manager.isActive)
+    XCTAssertTrue(fixture.manager.needsAssertionRecovery)
+    XCTAssertNotNil(fixture.manager.lastError)
+
+    fixture.manager.retryUnreleasedAssertions()
+
+    XCTAssertEqual(fixture.powerProtect.disableCalls, 2)
+    XCTAssertFalse(fixture.manager.needsAssertionRecovery)
+    fixture.manager.stop(reason: .manual)
+  }
+
+  func testFailedStalePowerProtectRecoveryRemainsVisibleAndRetryable() {
+    let fixture = Fixture(
+      allowDisplaySleep: true, powerProtectInstalledAtInitialization: true,
+      powerProtectDisableFailuresAtInitialization: 1)
+
+    XCTAssertFalse(fixture.manager.isActive)
+    XCTAssertTrue(fixture.manager.hasUnreleasedAssertions)
+    XCTAssertTrue(fixture.manager.needsAssertionRecovery)
+    XCTAssertNotNil(fixture.manager.lastError)
+
+    fixture.manager.retryUnreleasedAssertions()
+
+    XCTAssertEqual(fixture.powerProtect.disableCalls, 2)
+    XCTAssertFalse(fixture.manager.hasUnreleasedAssertions)
+    XCTAssertFalse(fixture.manager.needsAssertionRecovery)
+  }
 }
 
 @MainActor
@@ -394,8 +461,12 @@ private struct Fixture {
 
   init(
     allowDisplaySleep: Bool, lowBatteryThreshold: Int = 20,
-    keepAwakeWithLidClosed: Bool = false, observePreferenceChanges: Bool = false
+    keepAwakeWithLidClosed: Bool = false, observePreferenceChanges: Bool = false,
+    powerProtectInstalledAtInitialization: Bool = false,
+    powerProtectDisableFailuresAtInitialization: Int = 0
   ) {
+    powerProtect.isInstalled = powerProtectInstalledAtInitialization
+    powerProtect.disableFailuresRemaining = powerProtectDisableFailuresAtInitialization
     manager = KeepAwakeManager(
       assertionProvider: provider, clock: clock, scheduler: scheduler,
       allowDisplaySleep: allowDisplaySleep, lowBatteryThreshold: lowBatteryThreshold,

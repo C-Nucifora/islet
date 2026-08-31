@@ -172,6 +172,13 @@ final class KeepAwakeManager: ObservableObject {
     systemAssertionID != nil || displayAssertionID != nil || powerProtectEnabled
   }
 
+  var needsAssertionRecovery: Bool {
+    guard hasUnreleasedAssertions else { return false }
+    guard isActive else { return true }
+    return allowDisplaySleep != effectivelyAllowsDisplaySleep
+      || powerProtectEnabled != keepAwakeWithLidClosed
+  }
+
   /// The preference is the requested state. This value reports what the owned assertion state
   /// actually does, so a failed display release is never presented as though it succeeded.
   var effectivelyAllowsDisplaySleep: Bool { displayAssertionID == nil }
@@ -219,9 +226,8 @@ final class KeepAwakeManager: ObservableObject {
         .sink { [weak self] change in self?.setLowBatteryThreshold(change.newValue) }
         .store(in: &cancellables)
       Defaults.publisher(.keepAwakeWithLidClosed)
-        .sink { [weak self] change in
-          Task { @MainActor in self?.setKeepAwakeWithLidClosed(change.newValue) }
-        }
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] change in self?.setKeepAwakeWithLidClosed(change.newValue) }
         .store(in: &cancellables)
     }
     if observeSystemChanges {
@@ -514,6 +520,7 @@ final class KeepAwakeManager: ObservableObject {
     do {
       try powerProtectProvider.disable()
     } catch {
+      powerProtectEnabled = true
       recordError(
         "Power Protect could not restore sleep after the previous Islet session. \(error.localizedDescription)"
       )

@@ -1274,9 +1274,7 @@ struct SettingsView: View {
         }
         Text("Battery protection only stops a session while the Mac is unplugged.")
           .font(.caption).foregroundStyle(.secondary)
-        if keepAwake.hasUnreleasedAssertions,
-          !keepAwake.isActive || allowDisplaySleep != keepAwake.effectivelyAllowsDisplaySleep
-        {
+        if keepAwake.needsAssertionRecovery {
           Text(keepAwake.lastError ?? "A power assertion is still awaiting release.")
             .font(.caption).foregroundStyle(.orange)
           Button("Retry power assertion change") {
