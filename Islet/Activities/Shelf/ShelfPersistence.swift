@@ -83,6 +83,10 @@ struct ShelfOriginIdentity: Hashable, Codable, Sendable {
     }
   }
 
+  func matchesPersistedOrigin(_ other: ShelfOriginIdentity) -> Bool {
+    standardizedPath == other.standardizedPath || self == other
+  }
+
   static func read(from url: URL) -> ShelfOriginIdentity {
     let identifier = try? url.resourceValues(forKeys: [.fileResourceIdentifierKey])
       .fileResourceIdentifier

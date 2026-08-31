@@ -1365,7 +1365,9 @@ final class ShelfModel: ObservableObject {
 
   private func duplicateItem(for origin: ShelfOriginIdentity, sourceName: String) -> ShelfItem? {
     if sameFileDuplicatePolicy == .reuseExisting,
-      let record = manifest.items.first(where: { $0.origin == origin })
+      let record = manifest.items.first(where: { record in
+        record.origin?.matchesPersistedOrigin(origin) == true
+      })
     {
       return items.first { $0.id == record.id }
     }

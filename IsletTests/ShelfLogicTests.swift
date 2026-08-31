@@ -1352,6 +1352,38 @@ final class ShelfLogicTests: XCTestCase {
   }
 
   @MainActor
+  func testRelaunchReusesSamePathWhenItsResourceIdentifierChanges() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    let source = root.appendingPathComponent("same.txt")
+    let stored = shelf.appendingPathComponent("same.txt")
+    try FileManager.default.createDirectory(at: shelf, withIntermediateDirectories: true)
+    try Data("source after restart".utf8).write(to: source)
+    try Data("existing shelf copy".utf8).write(to: stored)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let stack = ShelfStack(id: UUID(), name: "Shelf", expiryRule: .never)
+    let record = ShelfItemRecord(
+      id: UUID(), fileName: stored.lastPathComponent, stackID: stack.id,
+      importedAt: .now, expiresAt: nil,
+      origin: ShelfOriginIdentity(
+        standardizedPath: source.standardizedFileURL.path,
+        resourceIdentifier: "before-restart"))
+    let manifest = ShelfManifest(
+      stacks: [stack], items: [record], pendingImports: [],
+      sameFilePolicy: .reuseExisting, sameNamePolicy: .keepBoth)
+    try await ShelfManifestStore.save(manifest, to: shelf.appendingPathExtension("json")).get()
+    let model = ShelfModel(directory: shelf)
+
+    let added = await model.add(source)
+
+    XCTAssertTrue(added)
+    XCTAssertEqual(model.items.map(\.name), ["same.txt"])
+    XCTAssertEqual(
+      try String(contentsOf: model.items[0].url, encoding: .utf8), "existing shelf copy")
+  }
+
+  @MainActor
   func testConcurrentSameNameImportsHonorReusePolicy() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
       UUID().uuidString, isDirectory: true)
