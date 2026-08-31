@@ -12,9 +12,11 @@ its Perl loader. `MediaRemoteAdapter-LICENSE` contains the upstream license.
 - Source archive and SHA-256: `MediaRemoteAdapter.provenance.json`
 
 That commit was the tip of upstream `master` when Islet added the framework on
-2026-07-22. The vendored loader at `Islet/Resources/mediaremote-adapter.pl` and
-license file match the same commit. A clean build of that commit with the pinned
-toolchain reproduces the checked-in framework byte for byte.
+2026-07-22. The vendored loader at `Islet/Resources/mediaremote-adapter.pl`
+comes from that commit with the tracked, hashed
+`MediaRemoteAdapter-loader.patch` applied with patch fuzz disabled. The license
+file matches the pinned commit. A clean build with the pinned toolchain and
+loader patch reproduces the checked-in artifacts byte for byte.
 
 ## Rebuild and verify
 
@@ -40,8 +42,8 @@ target. It writes only to ignored build and download-cache directories.
 
 The verifier checks the framework's full binary checksum, the checksum of each
 architecture slice, architectures, exported symbols, `Info.plist`, signature
-resources, loader script, and code signature. CI verifies both the checked-in
-framework and a clean rebuild.
+resources, loader script, loader patch, and code signature. CI verifies both
+the checked-in framework and a clean rebuild.
 
 ## Review an update
 
