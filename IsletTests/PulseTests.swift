@@ -745,17 +745,17 @@ final class PulseTests: XCTestCase {
     server.start()
     listeners[0].emit(.failed(.posix(.ETIMEDOUT)))
     await Task.yield()
-    XCTAssertEqual(listeners.count, 1)
+    XCTAssertEqual(listeners.count, 2)
     XCTAssertNotNil(server.nextRetryAt)
 
     try server.rotateToken()
 
     XCTAssertEqual(server.token, replacementToken)
-    XCTAssertEqual(listeners.count, 2)
+    XCTAssertEqual(listeners.count, 4)
     XCTAssertTrue(scheduler.tasks[0].cancelled)
     XCTAssertNil(server.nextRetryAt)
     scheduler.fire(at: 0)
-    XCTAssertEqual(listeners.count, 2)
+    XCTAssertEqual(listeners.count, 4)
     server.stop()
   }
 
