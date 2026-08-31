@@ -347,13 +347,13 @@ final class MediaWatcherTests: XCTestCase {
     let unexpectedFourthAttempt = expectation(description: "a fourth recovery attempt starts")
     unexpectedFourthAttempt.isInverted = true
     let idleRecords = LockedCounter()
-    let snapshotAttempts = LockedCounter()
+    let recoverySnapshotAttempts = LockedCounter()
     let watcher = MediaWatcher(
       initialSnapshotDelay: 0.05,
       commandProvider: { kind in
-        if case .snapshot = kind {
-          snapshotAttempts.increment()
-          if snapshotAttempts.value > 3 { unexpectedFourthAttempt.fulfill() }
+        if case .snapshot = kind, idleRecords.value > 0 {
+          recoverySnapshotAttempts.increment()
+          if recoverySnapshotAttempts.value > 3 { unexpectedFourthAttempt.fulfill() }
         }
         return MediaWatcher.HelperCommand(
           executableURL: URL(fileURLWithPath: "/usr/bin/perl"),
@@ -379,7 +379,7 @@ final class MediaWatcherTests: XCTestCase {
     watcher.start()
     wait(for: [firstIdle, recoveryStopped, secondIdle], timeout: 5, enforceOrder: true)
     wait(for: [unexpectedFourthAttempt], timeout: 0.3)
-    XCTAssertEqual(snapshotAttempts.value, 3)
+    XCTAssertEqual(recoverySnapshotAttempts.value, 3)
     watcher.stop()
     updates.cancel()
   }
