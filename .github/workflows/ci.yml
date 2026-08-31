@@ -67,8 +67,14 @@ jobs:
 
       - name: Lint source and integration files
         run: |
-          xcrun swift-format lint --strict --recursive Islet IsletTests Tools
+          xcrun swift-format lint --strict --recursive \
+            Islet IsletTests Tools \
+            Integrations/Pulse/GitHubActionsProvider/Package.swift \
+            Integrations/Pulse/GitHubActionsProvider/Sources \
+            Integrations/Pulse/GitHubActionsProvider/Tests
           xcrun swiftc -typecheck Tools/islet-pulse.swift
+          xcrun swiftc -typecheck Tools/islet-xcode-pulse.swift
+          swift test --package-path Integrations/Pulse/GitHubActionsProvider
           /usr/bin/python3 -m py_compile \
             Integrations/Pulse/providers/common/pulse_client.py \
             Integrations/Pulse/providers/chrome-downloads/native_host.py \

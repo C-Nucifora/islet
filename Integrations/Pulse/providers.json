@@ -20,7 +20,14 @@
       "name": "GitHub workflow watcher",
       "sources": ["github-actions", "github"],
       "capabilities": ["events", "progress", "webActions"],
-      "setup": "Use examples/github-actions.sh locally or on a self-hosted Mac runner."
+      "setup": "Run examples/github-actions.sh --repo OWNER/REPOSITORY after gh auth login."
+    },
+    {
+      "id": "xcode",
+      "name": "Xcode builds",
+      "sources": ["xcode"],
+      "capabilities": ["events", "progress", "webActions"],
+      "setup": "Wrap xcodebuild with Tools/islet-xcode-pulse.swift."
     },
     {
       "id": "chrome-downloads",
@@ -39,7 +46,7 @@
     {
       "id": "developer-tools",
       "name": "Developer tools",
-      "sources": ["xcode", "build", "tests", "agent"],
+      "sources": ["build", "tests", "agent"],
       "capabilities": ["events", "progress", "webActions"],
       "setup": "Use a stable source name from local automation."
     }

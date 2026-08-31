@@ -12,10 +12,14 @@ struct ExpandedContainerView: View {
   @Environment(\.appTheme) private var appTheme
   private static let homeTab = "\u{0000}home"  // sentinel id for the dashboard chip
 
+  private var activities: [any NotchActivity] {
+    center.expandedActivities(temporarilyIncluding: vm.temporarilyPresentedActivityID)
+  }
+
   /// Tabs shown, left to right: Home, then active activities and persistent utility surfaces.
   private var tabs: [(id: String, icon: String)] {
     [(Self.homeTab, "square.grid.2x2.fill")]
-      + center.expandedActivities.map { ($0.id, $0.tabIcon) }
+      + activities.map { ($0.id, $0.tabIcon) }
   }
 
   /// Tabs that fit in the dynamically sized left ear. If the screen imposes a limit, the selected
@@ -56,7 +60,7 @@ struct ExpandedContainerView: View {
   /// The height tier the selected tab wants. The dashboard always takes the base tier.
   private var selectedHeight: CGFloat {
     guard effectiveSelection != Self.homeTab,
-      let activity = center.expandedActivities.first(where: { $0.id == effectiveSelection })
+      let activity = activities.first(where: { $0.id == effectiveSelection })
     else { return Metrics.expandedSize.height }
     return activity.preferredExpandedHeight
   }
@@ -92,6 +96,8 @@ struct ExpandedContainerView: View {
       Task { @MainActor in shelf.consumePresentationRequest(request) }
     }
     .onChange(of: tabs.map(\.id), initial: true) { _, ids in
+      vm.clearTemporaryPresentationIfUnavailable(
+        availableActivityIDs: ids.filter { $0 != Self.homeTab })
       vm.setExpandedWidth(preferredExpandedWidth(tabCount: ids.count))
     }
   }
@@ -194,7 +200,7 @@ struct ExpandedContainerView: View {
   @ViewBuilder private var content: some View {
     if effectiveSelection == Self.homeTab {
       IdleDashboardView()
-    } else if let activity = center.expandedActivities.first(where: {
+    } else if let activity = activities.first(where: {
       $0.id == effectiveSelection
     }) {
       activity.expandedView
