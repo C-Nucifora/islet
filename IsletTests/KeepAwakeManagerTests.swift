@@ -18,6 +18,17 @@ final class KeepAwakeManagerTests: XCTestCase {
     XCTAssertNil(SystemPowerProtectProvider.sleepDisabledValue(from: "sleep 1"))
   }
 
+  func testNativePowerProtectHelperTakesPrecedenceOverLegacyState() {
+    XCTAssertEqual(
+      SystemPowerProtectProvider.disableStrategy(
+        nativeHelperInstalled: true, legacyStateExists: true),
+      .nativeHelper)
+    XCTAssertEqual(
+      SystemPowerProtectProvider.disableStrategy(
+        nativeHelperInstalled: false, legacyStateExists: true),
+      .legacyAuthorization)
+  }
+
   func testPreferenceChangeFromUtilityTaskPublishesOnMainAndUpdatesDisplayAssertion() async {
     let savedAllowDisplaySleep = Defaults[.allowDisplaySleep]
     let changedAllowDisplaySleep = !savedAllowDisplaySleep

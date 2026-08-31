@@ -25,6 +25,12 @@ enum PowerProtectError: LocalizedError {
 }
 
 struct SystemPowerProtectProvider: PowerProtectProviding {
+  enum DisableStrategy: Equatable {
+    case nativeHelper
+    case legacyAuthorization
+    case none
+  }
+
   static let helperPath = "/usr/local/libexec/islet-power-protect"
   static let sudoersPath = "/etc/sudoers.d/islet-power-protect"
 
@@ -57,11 +63,25 @@ struct SystemPowerProtectProvider: PowerProtectProviding {
   }
 
   func disable() throws {
-    if FileManager.default.fileExists(atPath: legacyStateURL.path) {
-      try disableUsingExistingAuthorization()
-    } else if nativeHelperInstalled {
+    switch Self.disableStrategy(
+      nativeHelperInstalled: nativeHelperInstalled,
+      legacyStateExists: FileManager.default.fileExists(atPath: legacyStateURL.path)
+    ) {
+    case .nativeHelper:
       _ = try runHelper("disable")
+    case .legacyAuthorization:
+      try disableUsingExistingAuthorization()
+    case .none:
+      break
     }
+  }
+
+  static func disableStrategy(
+    nativeHelperInstalled: Bool, legacyStateExists: Bool
+  ) -> DisableStrategy {
+    if nativeHelperInstalled { return .nativeHelper }
+    if legacyStateExists { return .legacyAuthorization }
+    return .none
   }
 
   private var nativeHelperInstalled: Bool {
