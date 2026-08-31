@@ -1,0 +1,2 @@
+Cmnd_Alias ISLET_POWER_PROTECT = /usr/local/libexec/islet-power-protect enable, /usr/local/libexec/islet-power-protect disable, /usr/local/libexec/islet-power-protect status
+%admin ALL=(root) NOPASSWD: ISLET_POWER_PROTECT

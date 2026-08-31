@@ -14,6 +14,7 @@ struct SettingsTransferSnapshot: Equatable {
   var barrierPushDistance: Double
   var energyMode: EnergyMode
   var allowDisplaySleep: Bool
+  var keepAwakeWithLidClosed: Bool
   var keepAwakeLowBatteryThreshold: Int
   var hideFromScreenRecording: Bool
   var hudEnabled: Bool
@@ -28,6 +29,12 @@ struct SettingsTransferSnapshot: Equatable {
   var disabledActivities: [String]
   var disabledEventSources: [String]
   var systemAlwaysVisible: Bool
+  var systemAutoPresentCPU: Bool
+  var systemAutoPresentThermal: Bool
+  var systemAutoPresentMemoryPressure: Bool
+  var systemAutoPresentLowDiskSpace: Bool
+  var systemAutoPresentDiskThroughput: Bool
+  var systemAutoPresentNetworkThroughput: Bool
   var metricStyles: [String: String]
   var continuityAlwaysVisible: Bool
   var continuitySneaks: Bool
@@ -46,6 +53,7 @@ struct SettingsTransferPatch: Equatable {
   var barrierPushDistance: Double?
   var energyMode: EnergyMode?
   var allowDisplaySleep: Bool?
+  var keepAwakeWithLidClosed: Bool?
   var keepAwakeLowBatteryThreshold: Int?
   var hideFromScreenRecording: Bool?
   var hudEnabled: Bool?
@@ -60,6 +68,12 @@ struct SettingsTransferPatch: Equatable {
   var disabledActivities: [String]?
   var disabledEventSources: [String]?
   var systemAlwaysVisible: Bool?
+  var systemAutoPresentCPU: Bool?
+  var systemAutoPresentThermal: Bool?
+  var systemAutoPresentMemoryPressure: Bool?
+  var systemAutoPresentLowDiskSpace: Bool?
+  var systemAutoPresentDiskThroughput: Bool?
+  var systemAutoPresentNetworkThroughput: Bool?
   var metricStyles: [String: String]?
   var continuityAlwaysVisible: Bool?
   var continuitySneaks: Bool?
@@ -80,6 +94,9 @@ struct SettingsTransferPatch: Equatable {
     if let barrierPushDistance { result.barrierPushDistance = barrierPushDistance }
     if let energyMode { result.energyMode = energyMode }
     if let allowDisplaySleep { result.allowDisplaySleep = allowDisplaySleep }
+    if let keepAwakeWithLidClosed {
+      result.keepAwakeWithLidClosed = keepAwakeWithLidClosed
+    }
     if let keepAwakeLowBatteryThreshold {
       result.keepAwakeLowBatteryThreshold = keepAwakeLowBatteryThreshold
     }
@@ -96,6 +113,20 @@ struct SettingsTransferPatch: Equatable {
     if let disabledActivities { result.disabledActivities = disabledActivities }
     if let disabledEventSources { result.disabledEventSources = disabledEventSources }
     if let systemAlwaysVisible { result.systemAlwaysVisible = systemAlwaysVisible }
+    if let systemAutoPresentCPU { result.systemAutoPresentCPU = systemAutoPresentCPU }
+    if let systemAutoPresentThermal { result.systemAutoPresentThermal = systemAutoPresentThermal }
+    if let systemAutoPresentMemoryPressure {
+      result.systemAutoPresentMemoryPressure = systemAutoPresentMemoryPressure
+    }
+    if let systemAutoPresentLowDiskSpace {
+      result.systemAutoPresentLowDiskSpace = systemAutoPresentLowDiskSpace
+    }
+    if let systemAutoPresentDiskThroughput {
+      result.systemAutoPresentDiskThroughput = systemAutoPresentDiskThroughput
+    }
+    if let systemAutoPresentNetworkThroughput {
+      result.systemAutoPresentNetworkThroughput = systemAutoPresentNetworkThroughput
+    }
     if let metricStyles { result.metricStyles = metricStyles }
     if let continuityAlwaysVisible { result.continuityAlwaysVisible = continuityAlwaysVisible }
     if let continuitySneaks { result.continuitySneaks = continuitySneaks }
@@ -165,15 +196,23 @@ enum SettingsTransfer {
   static let portableKeys: [String] = [
     "activityOrder", "allowDisplaySleep", "appTheme", "barrierPushDistance", "batteryGraphStyle",
     "calendarEnabled", "calendarLeadMinutes", "continuityAlwaysVisible", "continuitySneaks",
-    "disabledActivities", "disabledEventSources", "energyMode", "excludedAudioOnlySourceBundleIdentifiers",
-    "hapticStrength", "hapticsEnabled", "hideFromScreenRecording", "hideInFullscreen", "hoverCollapseTimeout",
-    "hudEnabled", "hudStyle", "interactionMode", "keepAwakeLowBatteryThreshold", "launchAtLogin",
+    "disabledActivities", "disabledEventSources", "energyMode",
+    "excludedAudioOnlySourceBundleIdentifiers", "hapticStrength", "hapticsEnabled",
+    "hideFromScreenRecording", "hideInFullscreen", "hoverCollapseTimeout", "hudEnabled",
+    "hudStyle", "interactionMode", "keepAwakeLowBatteryThreshold", "keepAwakeWithLidClosed",
+    "launchAtLogin",
     "mediaPriorityList", "mediaSourceMode", "metricStyles", "remindersEnabled",
-    "showOnAllDisplays", "systemAlwaysVisible",
+    "showOnAllDisplays", "systemAlwaysVisible", "systemAutoPresentCPU",
+    "systemAutoPresentDiskThroughput", "systemAutoPresentLowDiskSpace",
+    "systemAutoPresentMemoryPressure", "systemAutoPresentNetworkThroughput",
+    "systemAutoPresentThermal",
   ]
 
   static let excludedPreferenceKeys: Set<String> = [
     "activityEnablementMigrationVersion", "batteryEnabled", "clipboardEnabled",
+    "clipboardClearHistoryOnPause", "clipboardExcludedBundleIdentifiers",
+    "clipboardManuallyPaused", "clipboardPausedFocusIdentifiers", "clipboardPausedLoginSession",
+    "clipboardPausedUntil",
     "continuityEnabled", "hiddenCalendarIDs", "onboardingVersion", "portsEnabled",
     "pulseEnabled", "systemEnabled", "t3CodeEnabled", "t3RemoteEnvironments",
   ]
@@ -258,6 +297,7 @@ enum SettingsTransfer {
     case "barrierPushDistance": patch.barrierPushDistance != nil
     case "energyMode": patch.energyMode != nil
     case "allowDisplaySleep": patch.allowDisplaySleep != nil
+    case "keepAwakeWithLidClosed": patch.keepAwakeWithLidClosed != nil
     case "keepAwakeLowBatteryThreshold": patch.keepAwakeLowBatteryThreshold != nil
     case "hideFromScreenRecording": patch.hideFromScreenRecording != nil
     case "hudEnabled": patch.hudEnabled != nil
@@ -272,6 +312,12 @@ enum SettingsTransfer {
     case "disabledActivities": patch.disabledActivities != nil
     case "disabledEventSources": patch.disabledEventSources != nil
     case "systemAlwaysVisible": patch.systemAlwaysVisible != nil
+    case "systemAutoPresentCPU": patch.systemAutoPresentCPU != nil
+    case "systemAutoPresentThermal": patch.systemAutoPresentThermal != nil
+    case "systemAutoPresentMemoryPressure": patch.systemAutoPresentMemoryPressure != nil
+    case "systemAutoPresentLowDiskSpace": patch.systemAutoPresentLowDiskSpace != nil
+    case "systemAutoPresentDiskThroughput": patch.systemAutoPresentDiskThroughput != nil
+    case "systemAutoPresentNetworkThroughput": patch.systemAutoPresentNetworkThroughput != nil
     case "metricStyles": patch.metricStyles != nil
     case "continuityAlwaysVisible": patch.continuityAlwaysVisible != nil
     case "continuitySneaks": patch.continuitySneaks != nil
@@ -294,6 +340,7 @@ enum SettingsTransfer {
       "barrierPushDistance": value.barrierPushDistance,
       "energyMode": value.energyMode.rawValue,
       "allowDisplaySleep": value.allowDisplaySleep,
+      "keepAwakeWithLidClosed": value.keepAwakeWithLidClosed,
       "keepAwakeLowBatteryThreshold": value.keepAwakeLowBatteryThreshold,
       "hideFromScreenRecording": value.hideFromScreenRecording,
       "hudEnabled": value.hudEnabled,
@@ -308,6 +355,12 @@ enum SettingsTransfer {
       "disabledActivities": value.disabledActivities,
       "disabledEventSources": value.disabledEventSources,
       "systemAlwaysVisible": value.systemAlwaysVisible,
+      "systemAutoPresentCPU": value.systemAutoPresentCPU,
+      "systemAutoPresentThermal": value.systemAutoPresentThermal,
+      "systemAutoPresentMemoryPressure": value.systemAutoPresentMemoryPressure,
+      "systemAutoPresentLowDiskSpace": value.systemAutoPresentLowDiskSpace,
+      "systemAutoPresentDiskThroughput": value.systemAutoPresentDiskThroughput,
+      "systemAutoPresentNetworkThroughput": value.systemAutoPresentNetworkThroughput,
       "metricStyles": value.metricStyles,
       "continuityAlwaysVisible": value.continuityAlwaysVisible,
       "continuitySneaks": value.continuitySneaks,
@@ -354,6 +407,7 @@ enum SettingsTransfer {
       range: PushDistanceScale.minimum...PushDistanceScale.maximum)
     patch.energyMode = try enumeration("energyMode", in: values, type: EnergyMode.self)
     patch.allowDisplaySleep = try boolean("allowDisplaySleep", in: values)
+    patch.keepAwakeWithLidClosed = try boolean("keepAwakeWithLidClosed", in: values)
     patch.keepAwakeLowBatteryThreshold = try allowedInteger(
       "keepAwakeLowBatteryThreshold", in: values, allowed: [0, 10, 20, 30])
     patch.hideFromScreenRecording = try boolean("hideFromScreenRecording", in: values)
@@ -370,6 +424,15 @@ enum SettingsTransfer {
     patch.disabledActivities = try stringArray("disabledActivities", in: values, unique: true)
     patch.disabledEventSources = try stringArray("disabledEventSources", in: values, unique: true)
     patch.systemAlwaysVisible = try boolean("systemAlwaysVisible", in: values)
+    patch.systemAutoPresentCPU = try boolean("systemAutoPresentCPU", in: values)
+    patch.systemAutoPresentThermal = try boolean("systemAutoPresentThermal", in: values)
+    patch.systemAutoPresentMemoryPressure = try boolean(
+      "systemAutoPresentMemoryPressure", in: values)
+    patch.systemAutoPresentLowDiskSpace = try boolean("systemAutoPresentLowDiskSpace", in: values)
+    patch.systemAutoPresentDiskThroughput = try boolean(
+      "systemAutoPresentDiskThroughput", in: values)
+    patch.systemAutoPresentNetworkThroughput = try boolean(
+      "systemAutoPresentNetworkThroughput", in: values)
     patch.metricStyles = try stringDictionary("metricStyles", in: values)
     patch.continuityAlwaysVisible = try boolean("continuityAlwaysVisible", in: values)
     patch.continuitySneaks = try boolean("continuitySneaks", in: values)
@@ -502,6 +565,9 @@ enum SettingsTransfer {
     add("energyMode", "Energy mode", old.energyMode.rawValue, new.energyMode.rawValue)
     add("allowDisplaySleep", "Allow display sleep", old.allowDisplaySleep, new.allowDisplaySleep)
     add(
+      "keepAwakeWithLidClosed", "Keep awake with lid closed",
+      old.keepAwakeWithLidClosed, new.keepAwakeWithLidClosed)
+    add(
       "keepAwakeLowBatteryThreshold", "Keep-awake battery stop",
       old.keepAwakeLowBatteryThreshold, new.keepAwakeLowBatteryThreshold)
     add(
@@ -532,6 +598,24 @@ enum SettingsTransfer {
     add(
       "systemAlwaysVisible", "System idle visibility", old.systemAlwaysVisible,
       new.systemAlwaysVisible)
+    add(
+      "systemAutoPresentCPU", "System CPU presence", old.systemAutoPresentCPU,
+      new.systemAutoPresentCPU)
+    add(
+      "systemAutoPresentDiskThroughput", "System disk activity presence",
+      old.systemAutoPresentDiskThroughput, new.systemAutoPresentDiskThroughput)
+    add(
+      "systemAutoPresentLowDiskSpace", "System low disk presence",
+      old.systemAutoPresentLowDiskSpace, new.systemAutoPresentLowDiskSpace)
+    add(
+      "systemAutoPresentMemoryPressure", "System memory presence",
+      old.systemAutoPresentMemoryPressure, new.systemAutoPresentMemoryPressure)
+    add(
+      "systemAutoPresentNetworkThroughput", "System network presence",
+      old.systemAutoPresentNetworkThroughput, new.systemAutoPresentNetworkThroughput)
+    add(
+      "systemAutoPresentThermal", "System thermal presence", old.systemAutoPresentThermal,
+      new.systemAutoPresentThermal)
     return changes
   }
 
@@ -563,6 +647,7 @@ enum SettingsTransferDefaults {
       hapticsEnabled: Defaults[.hapticsEnabled], hapticStrength: Defaults[.hapticStrength],
       barrierPushDistance: Defaults[.barrierPushDistance], energyMode: Defaults[.energyMode],
       allowDisplaySleep: Defaults[.allowDisplaySleep],
+      keepAwakeWithLidClosed: Defaults[.keepAwakeWithLidClosed],
       keepAwakeLowBatteryThreshold: Defaults[.keepAwakeLowBatteryThreshold],
       hideFromScreenRecording: Defaults[.hideFromScreenRecording],
       hudEnabled: Defaults[.hudEnabled],
@@ -573,8 +658,15 @@ enum SettingsTransferDefaults {
       hideInFullscreen: Defaults[.hideInFullscreen],
       launchAtLogin: Defaults[.launchAtLogin], activityOrder: Defaults[.activityOrder],
       disabledActivities: Defaults[.disabledActivities],
-      disabledEventSources: Defaults[.disabledEventSources],
-      systemAlwaysVisible: Defaults[.systemAlwaysVisible], metricStyles: Defaults[.metricStyles],
+      disabledEventSources: EventSourcePreferences.shared.disabledSourceIDs,
+      systemAlwaysVisible: Defaults[.systemAlwaysVisible],
+      systemAutoPresentCPU: Defaults[.systemAutoPresentCPU],
+      systemAutoPresentThermal: Defaults[.systemAutoPresentThermal],
+      systemAutoPresentMemoryPressure: Defaults[.systemAutoPresentMemoryPressure],
+      systemAutoPresentLowDiskSpace: Defaults[.systemAutoPresentLowDiskSpace],
+      systemAutoPresentDiskThroughput: Defaults[.systemAutoPresentDiskThroughput],
+      systemAutoPresentNetworkThroughput: Defaults[.systemAutoPresentNetworkThroughput],
+      metricStyles: Defaults[.metricStyles],
       continuityAlwaysVisible: Defaults[.continuityAlwaysVisible],
       continuitySneaks: Defaults[.continuitySneaks])
   }
@@ -594,6 +686,9 @@ enum SettingsTransferDefaults {
     if let value = patch.barrierPushDistance { Defaults[.barrierPushDistance] = value }
     if let value = patch.energyMode { Defaults[.energyMode] = value }
     if let value = patch.allowDisplaySleep { Defaults[.allowDisplaySleep] = value }
+    if let value = patch.keepAwakeWithLidClosed {
+      Defaults[.keepAwakeWithLidClosed] = value
+    }
     if let value = patch.keepAwakeLowBatteryThreshold {
       Defaults[.keepAwakeLowBatteryThreshold] = value
     }
@@ -608,8 +703,24 @@ enum SettingsTransferDefaults {
     if let value = patch.launchAtLogin { Defaults[.launchAtLogin] = value }
     if let value = patch.activityOrder { Defaults[.activityOrder] = value }
     if let value = patch.disabledActivities { Defaults[.disabledActivities] = value }
-    if let value = patch.disabledEventSources { Defaults[.disabledEventSources] = value }
+    if let value = patch.disabledEventSources {
+      EventSourcePreferences.shared.replaceDisabledSourceIDs(value)
+    }
     if let value = patch.systemAlwaysVisible { Defaults[.systemAlwaysVisible] = value }
+    if let value = patch.systemAutoPresentCPU { Defaults[.systemAutoPresentCPU] = value }
+    if let value = patch.systemAutoPresentThermal { Defaults[.systemAutoPresentThermal] = value }
+    if let value = patch.systemAutoPresentMemoryPressure {
+      Defaults[.systemAutoPresentMemoryPressure] = value
+    }
+    if let value = patch.systemAutoPresentLowDiskSpace {
+      Defaults[.systemAutoPresentLowDiskSpace] = value
+    }
+    if let value = patch.systemAutoPresentDiskThroughput {
+      Defaults[.systemAutoPresentDiskThroughput] = value
+    }
+    if let value = patch.systemAutoPresentNetworkThroughput {
+      Defaults[.systemAutoPresentNetworkThroughput] = value
+    }
     if let value = patch.metricStyles { Defaults[.metricStyles] = value }
     if let value = patch.continuityAlwaysVisible { Defaults[.continuityAlwaysVisible] = value }
     if let value = patch.continuitySneaks { Defaults[.continuitySneaks] = value }

@@ -7,11 +7,11 @@ import Foundation
 @MainActor
 protocol SystemEventSource: AnyObject {
   /// Stable identifier. Doubles as the coalescing key on every event this source emits, and as the
-  /// Defaults key suffix for its toggle.
+  /// Persistent settings identifier for its toggle.
   var id: String { get }
   var displayName: String { get }
   var tier: SystemEventTier { get }
-  /// Begin observing. Must be idempotent — the bus may call it again after a Defaults round trip.
+  /// Begin observing. Must be idempotent because the bus may call it again after a settings change.
   func start()
   /// Stop observing and release every registration. Must leave the source restartable.
   func stop()

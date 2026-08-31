@@ -186,8 +186,9 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .energy:
       pageContent + [
         "Energy use", "Mode", "Automatic", "Low Energy", "Live", "Low Power Mode",
-        "Keep awake", "Allow the display to sleep", "Stop on low battery", "Indefinitely",
-        "prevent idle system sleep display sleep assertions session timer",
+        "Keep awake", "Allow the display to sleep", "Keep awake with lid closed",
+        "Power Protect", "Stop on low battery", "Indefinitely",
+        "prevent idle system sleep display sleep assertions closed clamshell session timer",
         "refresh rates hidden activity remote T3 polling performance battery",
       ]
     case .activityOrder:
@@ -212,18 +213,21 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "iPhone Live Activities", "Show iPhone Live Activities", "Availability", "Detected now",
         "Keep iPhone in the activity switcher when idle",
         "Announce when a Live Activity starts or ends", "Request Accessibility access",
-        "Open Accessibility Settings", "Control Centre remote app names",
+        "Open Accessibility Settings", "Retry Continuity", "Control Centre remote app names",
       ]
     case .systemMetrics:
       pageContent + [
         "Visibility", "System activity", "Always show System in the activity switcher",
+        "Automatic presence", "High CPU", "Thermal pressure", "Memory pressure",
+        "Low disk space", "Heavy disk activity", "High network traffic",
         "Metric presentation", "Presentation", "Compact", "Balanced", "Detailed", "Custom",
         "Customize individual metrics", "current value recent graph state labels",
       ] + SystemMetricKind.allCases.map(\.displayName)
         + MetricDisplayStyle.allCases.map(\.displayName)
     case .clipboard:
       pageContent + [
-        "Clipboard history", "Activity", "Pause and Clear", "Quick Actions", "Privacy",
+        "Clipboard history", "Activity", "Pause and Clear", "Quick Actions", "Privacy pause",
+        "5 minutes", "30 minutes", "next login", "excluded applications", "Focus modes",
         "history stays in memory", "concealed items credential formats sensitive text secrets copy",
       ]
     case .systemHUD:
@@ -268,8 +272,11 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       pageContent + [
         "Diagnostics", "Bundle identifier", "Version", "Energy mode", "Copy diagnostics",
         "Open logs folder", "Restart Islet", "Quit Islet", "Integration health", "Media adapter",
+        "T3 Code credentials", "Pulse", "Media-key HUD", "Continuity reader",
+        "Last successful read", "Retry Continuity",
         "Focus event source", "Focus last parsed", "Focus schema", "Retry Focus source",
-        "T3 Code credentials", "Pulse", "Media-key HUD", "signing support status", "About",
+        "USB reader", "Retry USB enumeration",
+        "signing support status", "About",
         "GitHub contributors C-Nucifora nedlane",
       ]
     case .settingsTransfer:
@@ -352,7 +359,10 @@ struct SettingsView: View {
   @ObservedObject private var nowPlaying = AppState.nowPlaying
   @ObservedObject private var t3Code = AppState.t3Code
   @ObservedObject private var focus = AppState.focus
+  @ObservedObject private var clipboard = ClipboardModel.shared
   @ObservedObject private var launchAtLoginStatus = LaunchAtLoginStatus.shared
+  @ObservedObject private var eventSourcePreferences = EventSourcePreferences.shared
+  @ObservedObject private var ports = PortMonitor.shared
   @ObservedObject private var keepAwake = KeepAwakeManager.shared
 
   @Default(.appTheme) private var appTheme
@@ -378,19 +388,31 @@ struct SettingsView: View {
   @Default(.activityOrder) private var activityOrder
   @Default(.disabledActivities) private var disabledActivities
   @Default(.systemAlwaysVisible) private var systemAlwaysVisible
+  @Default(.systemAutoPresentCPU) private var systemAutoPresentCPU
+  @Default(.systemAutoPresentThermal) private var systemAutoPresentThermal
+  @Default(.systemAutoPresentMemoryPressure) private var systemAutoPresentMemoryPressure
+  @Default(.systemAutoPresentLowDiskSpace) private var systemAutoPresentLowDiskSpace
+  @Default(.systemAutoPresentDiskThroughput) private var systemAutoPresentDiskThroughput
+  @Default(.systemAutoPresentNetworkThroughput) private var systemAutoPresentNetworkThroughput
   @Default(.metricStyles) private var metricStyles
-  @Default(.disabledEventSources) private var disabledEventSources
   @Default(.energyMode) private var energyMode
   @Default(.allowDisplaySleep) private var allowDisplaySleep
+  @Default(.keepAwakeWithLidClosed) private var keepAwakeWithLidClosed
   @Default(.keepAwakeLowBatteryThreshold) private var keepAwakeLowBatteryThreshold
   @Default(.continuityAlwaysVisible) private var continuityAlwaysVisible
   @Default(.continuitySneaks) private var continuitySneaks
+  @Default(.clipboardExcludedBundleIdentifiers) private var clipboardExcludedBundleIdentifiers
+  @Default(.clipboardPausedFocusIdentifiers) private var clipboardPausedFocusIdentifiers
+  @Default(.clipboardClearHistoryOnPause) private var clipboardClearHistoryOnPause
 
   @State private var selection: SettingsCategory?
   @State private var detailPage: SettingsDetailPage?
   @State private var forwardDetailPage: SettingsDetailPage?
   @State private var searchText = ""
   @State private var newBundleID = ""
+  @State private var newClipboardBundleIdentifier = ""
+  @State private var newClipboardFocusIdentifier = ""
+  @State private var clipboardPrivacyError: String?
   @State private var confirmingRestore = false
   @State private var confirmingPulseTokenRotation = false
   @State private var pulseTokenRotationResult: String?
@@ -509,7 +531,7 @@ struct SettingsView: View {
 
   private func eventSourceEnabled(_ id: String) -> Binding<Bool> {
     Binding(
-      get: { !disabledEventSources.contains(id) },
+      get: { eventSourcePreferences.isEnabled(id) },
       set: { on in SystemEventBus.shared.setEnabled(on, for: id) })
   }
 
@@ -1072,6 +1094,18 @@ struct SettingsView: View {
         }
       }
       if isActivityEnabled("system") {
+        Section("Automatic presence") {
+          Toggle("High CPU", isOn: $systemAutoPresentCPU)
+          Toggle("Thermal pressure", isOn: $systemAutoPresentThermal)
+          Toggle("Memory pressure", isOn: $systemAutoPresentMemoryPressure)
+          Toggle("Low disk space", isOn: $systemAutoPresentLowDiskSpace)
+          Toggle("Heavy disk activity", isOn: $systemAutoPresentDiskThroughput)
+          Toggle("High network traffic", isOn: $systemAutoPresentNetworkThroughput)
+          Text(
+            "Islet waits for sustained conditions and a clear recovery margin. Disk and network rates show unusually heavy traffic, not measured saturation, because device and link capacity are unavailable."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
         Section("Metric presentation") {
           Picker("Presentation", selection: metricPresetBinding) {
             ForEach(SystemMetricPreset.allCases) { preset in
@@ -1117,6 +1151,12 @@ struct SettingsView: View {
           LabeledContent("Detected now") {
             Text("\(continuity.cards.count)").monospacedDigit().foregroundStyle(.secondary)
           }
+          LabeledContent("Last successful read") {
+            Text(continuityLastSuccessfulReadText).foregroundStyle(.secondary)
+          }
+          if let detail = continuity.lastCompatibilityError?.diagnosticSummary {
+            Text(detail).font(.caption).foregroundStyle(.orange)
+          }
           Toggle("Keep iPhone in the activity switcher when idle", isOn: $continuityAlwaysVisible)
           Toggle("Announce when a Live Activity starts or ends", isOn: $continuitySneaks)
           if continuity.availability == .needsAccessibility {
@@ -1124,6 +1164,10 @@ struct SettingsView: View {
               Button("Request Accessibility access") { AccessibilityPermission.prompt() }
               Button("Open Accessibility Settings") { permissions.open(.accessibility) }
             }
+          } else if continuity.availability == .controlCenterUnavailable
+            || continuity.availability == .incompatibleSchema
+          {
+            Button("Retry Continuity") { continuity.retry() }
           }
         }
       }
@@ -1139,8 +1183,97 @@ struct SettingsView: View {
         }
         Text("Turning Clipboard off stops polling and clears its history.")
           .font(.caption).foregroundStyle(.secondary)
-        Text("Pause and Clear are beside the history and in Quick Actions.")
-          .font(.caption).foregroundStyle(.secondary)
+        LabeledContent("Capture") {
+          Text(clipboardCaptureStatus).foregroundStyle(clipboard.isPaused ? .orange : .secondary)
+        }
+        HStack {
+          Menu("Privacy pause") {
+            Button("5 minutes") { clipboard.pause(for: 5 * 60) }
+            Button("30 minutes") { clipboard.pause(for: 30 * 60) }
+            Button("Until next login") { clipboard.pauseUntilNextLogin() }
+            Button("Until I resume") { clipboard.setPaused(true) }
+          }
+          if clipboard.canResumeManualPause {
+            Button("Resume now") { clipboard.setPaused(false) }
+          }
+          Button("Clear history") { clipboard.clear() }
+            .disabled(clipboard.items.isEmpty)
+        }
+        Toggle("Clear current history when capture pauses", isOn: $clipboardClearHistoryOnPause)
+        Text(
+          "Turning this off keeps existing in-memory entries. Copies made during a pause are never backfilled."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+      Section("Excluded applications") {
+        if clipboardExcludedBundleIdentifiers.isEmpty {
+          Text("No applications excluded").foregroundStyle(.secondary)
+        } else {
+          ForEach(clipboardExcludedBundleIdentifiers, id: \.self) { bundleIdentifier in
+            HStack(spacing: 10) {
+              if let icon = clipboardApplicationIcon(bundleIdentifier) {
+                Image(nsImage: icon).resizable().frame(width: 24, height: 24)
+              } else {
+                Image(systemName: "app.dashed").frame(width: 24, height: 24)
+              }
+              VStack(alignment: .leading, spacing: 1) {
+                Text(clipboardApplicationName(bundleIdentifier))
+                Text(bundleIdentifier).font(.caption.monospaced()).foregroundStyle(.secondary)
+              }
+              Spacer()
+              Button {
+                clipboardExcludedBundleIdentifiers.removeAll { $0 == bundleIdentifier }
+              } label: {
+                Image(systemName: "minus.circle")
+              }
+              .buttonStyle(.plain).accessibilityLabel("Remove \(bundleIdentifier)")
+            }
+          }
+        }
+        Button("Add application…") { chooseClipboardApplication() }
+        DisclosureGroup("Add by bundle identifier") {
+          HStack {
+            TextField("com.example.application", text: $newClipboardBundleIdentifier)
+            Button("Add") { addClipboardApplication(newClipboardBundleIdentifier) }
+          }
+        }
+        Text(
+          "Islet can only see the app that is frontmost when it checks the pasteboard. macOS does not reliably identify the app that wrote a copy. Islet skips copies around app switches rather than guessing."
+        )
+        .font(.caption).foregroundStyle(.orange)
+      }
+      Section("Focus rules") {
+        if clipboardPausedFocusIdentifiers.isEmpty {
+          Text("No Focus modes pause capture").foregroundStyle(.secondary)
+        } else {
+          ForEach(clipboardPausedFocusIdentifiers, id: \.self) { identifier in
+            HStack {
+              Label(identifier, systemImage: "moon.circle.fill")
+              Spacer()
+              Button {
+                clipboardPausedFocusIdentifiers.removeAll { $0 == identifier }
+              } label: {
+                Image(systemName: "minus.circle")
+              }
+              .buttonStyle(.plain).accessibilityLabel("Remove Focus \(identifier)")
+            }
+          }
+        }
+        if let currentFocusIdentifier = clipboard.currentFocusIdentifier,
+          !clipboardPausedFocusIdentifiers.contains(currentFocusIdentifier)
+        {
+          Button("Pause for current Focus: \(currentFocusIdentifier)") {
+            addClipboardFocus(currentFocusIdentifier)
+          }
+        }
+        HStack {
+          TextField("Focus name or identifier", text: $newClipboardFocusIdentifier)
+          Button("Add") { addClipboardFocus(newClipboardFocusIdentifier) }
+        }
+        Text(
+          "Focus detection uses an undocumented macOS state file. If its format is unknown, Islet does not guess that a Focus is active."
+        )
+        .font(.caption).foregroundStyle(.secondary)
       }
       Section("Privacy") {
         Label(
@@ -1148,6 +1281,10 @@ struct SettingsView: View {
           systemImage: "lock.shield"
         )
         .font(.caption).foregroundStyle(.orange)
+        if let clipboardPrivacyError {
+          Label(clipboardPrivacyError, systemImage: "exclamationmark.triangle")
+            .font(.caption).foregroundStyle(.red)
+        }
       }
     }
     .formStyle(.grouped)
@@ -1242,6 +1379,26 @@ struct SettingsView: View {
           "An active session always prevents idle system sleep. Turn this off to keep the display awake too."
         )
         .font(.caption).foregroundStyle(.secondary)
+        Toggle("Keep awake with the lid closed", isOn: $keepAwakeWithLidClosed)
+        if keepAwakeWithLidClosed {
+          if keepAwake.powerProtectInstalled {
+            Label("Power Protect ready", systemImage: "checkmark.circle.fill")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          } else {
+            Text(
+              "Closed-display mode needs a one-time administrator-approved helper. It changes only the system SleepDisabled setting while an Islet session is active."
+            )
+            .font(.caption).foregroundStyle(.secondary)
+            Button(keepAwake.isInstallingPowerProtect ? "Installing..." : "Install Power Protect") {
+              Task { await keepAwake.installPowerProtect() }
+            }
+            .disabled(keepAwake.isInstallingPowerProtect)
+            if let error = keepAwake.lastError {
+              Text(error).font(.caption).foregroundStyle(.orange)
+            }
+          }
+        }
         Picker("Stop on low battery", selection: $keepAwakeLowBatteryThreshold) {
           Text("Off").tag(0)
           Text("10%").tag(10)
@@ -1250,9 +1407,7 @@ struct SettingsView: View {
         }
         Text("Battery protection only stops a session while the Mac is unplugged.")
           .font(.caption).foregroundStyle(.secondary)
-        if keepAwake.hasUnreleasedAssertions,
-          !keepAwake.isActive || allowDisplaySleep != keepAwake.effectivelyAllowsDisplaySleep
-        {
+        if keepAwake.needsAssertionRecovery {
           Text(keepAwake.lastError ?? "A power assertion is still awaiting release.")
             .font(.caption).foregroundStyle(.orange)
           Button("Retry power assertion change") {
@@ -1262,6 +1417,7 @@ struct SettingsView: View {
       }
     }
     .formStyle(.grouped)
+    .onAppear { keepAwake.refreshPowerProtectInstallation() }
   }
 
   private var permissionsForm: some View {
@@ -1504,6 +1660,26 @@ struct SettingsView: View {
       }
       Section("Integration health") {
         PermissionStatusRow(
+          title: "Continuity reader", icon: "iphone.gen3",
+          status: continuityStatusText, color: continuityStatusColor)
+        LabeledContent("Continuity last successful read") {
+          Text(continuityLastSuccessfulReadText).foregroundStyle(.secondary)
+        }
+        if let detail = continuity.lastCompatibilityError?.diagnosticSummary {
+          Text(detail).font(.caption).foregroundStyle(.orange)
+        }
+        if continuity.availability == .needsAccessibility {
+          HStack {
+            Button("Request Accessibility access") { AccessibilityPermission.prompt() }
+            Button("Open Accessibility Settings") { permissions.open(.accessibility) }
+            Button("Retry Continuity") { continuity.retry() }
+          }
+        } else if continuity.availability == .controlCenterUnavailable
+          || continuity.availability == .incompatibleSchema
+        {
+          Button("Retry Continuity") { continuity.retry() }
+        }
+        PermissionStatusRow(
           title: "Focus event source", icon: "moon.circle.fill", status: focus.health.summary,
           color: focus.health.isFailure ? .orange : focus.health == .stopped ? .secondary : .green)
         if let lastSuccessfulParse = focus.lastSuccessfulParse {
@@ -1537,6 +1713,10 @@ struct SettingsView: View {
           status: hud.lastControlFailure ?? hud.eventTapStatus.summary,
           color: hud.lastControlFailure == nil
             ? (hud.eventTapStatus == .active ? .green : .secondary) : .orange)
+        PermissionStatusRow(
+          title: "USB reader", icon: "cable.connector", status: ports.readerHealth.summary,
+          color: usbReaderHealthColor)
+        Button("Retry USB enumeration") { ports.retry() }
       }
       Section("About") {
         Link("C-Nucifora on GitHub", destination: URL(string: "https://github.com/C-Nucifora")!)
@@ -1612,7 +1792,8 @@ struct SettingsView: View {
   private var continuityStatusText: String {
     switch continuity.availability {
     case .needsAccessibility: "Needs Accessibility"
-    case .unsupported: "Unavailable"
+    case .controlCenterUnavailable: "Control Centre unavailable"
+    case .incompatibleSchema: "Unsupported AX layout"
     case .systemDisabled: "Off in macOS"
     case .waiting: "Waiting"
     case .active: "Active"
@@ -1624,8 +1805,13 @@ struct SettingsView: View {
     case .active: .green
     case .waiting: .secondary
     case .needsAccessibility, .systemDisabled: .orange
-    case .unsupported: .red
+    case .controlCenterUnavailable, .incompatibleSchema: .red
     }
+  }
+
+  private var continuityLastSuccessfulReadText: String {
+    guard let date = continuity.lastSuccessfulRead else { return "Never" }
+    return date.formatted(date: .abbreviated, time: .standard)
   }
 
   private func authorizationColor(_ status: EventKitPermissionState) -> Color {
@@ -1666,6 +1852,72 @@ struct SettingsView: View {
           }
         }
       })
+  }
+
+  private var clipboardCaptureStatus: String {
+    guard isActivityEnabled("clipboard") else { return "Stopped with the activity" }
+    return clipboard.pauseReason?.summary ?? "Capturing new copies"
+  }
+
+  private func addClipboardApplication(_ rawBundleIdentifier: String) {
+    guard let bundleIdentifier = ClipboardIdentifierPolicy.bundleIdentifier(rawBundleIdentifier)
+    else {
+      clipboardPrivacyError = "Enter a valid application bundle identifier up to 255 bytes."
+      return
+    }
+    let updated = ClipboardIdentifierPolicy.bundleIdentifiers(
+      clipboardExcludedBundleIdentifiers + [bundleIdentifier])
+    guard updated.contains(bundleIdentifier) else {
+      clipboardPrivacyError = "The exclusion list is limited to 128 applications."
+      return
+    }
+    clipboardExcludedBundleIdentifiers = updated
+    newClipboardBundleIdentifier = ""
+    clipboardPrivacyError = nil
+  }
+
+  private func chooseClipboardApplication() {
+    let panel = NSOpenPanel()
+    panel.allowedContentTypes = [.applicationBundle]
+    panel.allowsMultipleSelection = false
+    panel.canChooseDirectories = false
+    panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+    panel.title = "Exclude an application from clipboard history"
+    panel.prompt = "Exclude"
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    guard let bundleIdentifier = Bundle(url: url)?.bundleIdentifier else {
+      clipboardPrivacyError = "That application does not declare a bundle identifier."
+      return
+    }
+    addClipboardApplication(bundleIdentifier)
+  }
+
+  private func addClipboardFocus(_ rawIdentifier: String) {
+    guard let identifier = ClipboardIdentifierPolicy.focusIdentifier(rawIdentifier) else {
+      clipboardPrivacyError = "Enter a valid Focus name or identifier up to 128 bytes."
+      return
+    }
+    let updated = ClipboardIdentifierPolicy.focusIdentifiers(
+      clipboardPausedFocusIdentifiers + [identifier])
+    guard updated.contains(identifier) else {
+      clipboardPrivacyError = "The Focus rule list is limited to 64 entries."
+      return
+    }
+    clipboardPausedFocusIdentifiers = updated
+    newClipboardFocusIdentifier = ""
+    clipboardPrivacyError = nil
+  }
+
+  private func clipboardApplicationName(_ bundleIdentifier: String) -> String {
+    guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
+    else { return bundleIdentifier }
+    return FileManager.default.displayName(atPath: url.path)
+  }
+
+  private func clipboardApplicationIcon(_ bundleIdentifier: String) -> NSImage? {
+    guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
+    else { return nil }
+    return NSWorkspace.shared.icon(forFile: url.path)
   }
 
   private func refreshPermissionState() {
@@ -1718,13 +1970,26 @@ struct SettingsView: View {
       + (nowPlaying.adapterFailure.map { "\nMedia adapter failure: \($0)" } ?? "")
       + "\nHUD event tap: \(hud.eventTapStatus.summary)"
       + "\n\(hud.externalBrightnessDiagnostics)"
+      + "\nContinuity: \(continuityStatusText)"
+      + "\nContinuity last successful read: \(continuity.lastSuccessfulRead?.formatted(.iso8601) ?? "Never")"
+      + "\nContinuity compatibility error: \(continuity.lastCompatibilityError?.diagnosticSummary ?? "None recorded")"
       + "\nFocus event source: \(focus.health.summary)"
       + "\nFocus last parsed: \(focus.lastSuccessfulParse?.formatted() ?? "Never")"
       + "\nFocus schema: \(focus.schemaSignature ?? "Unavailable")"
       + "\nPulse: \(pulseServer.isRunning ? "Running" : "Stopped")"
       + "\nPulse items: \(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
+      + "\nUSB reader: \(ports.readerHealth.summary)"
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(text, forType: .string)
+  }
+
+  private var usbReaderHealthColor: Color {
+    switch ports.readerHealth {
+    case .current: .green
+    case .awaitingFirstRead: .secondary
+    case .stale: .orange
+    case .failed: .red
+    }
   }
 
   private func rotatePulseToken() {
@@ -1795,6 +2060,12 @@ struct SettingsView: View {
     priorityList = ["com.spotify.client", "com.apple.Music"]
     activityOrder = ActivityCatalog.defaultOrder
     systemAlwaysVisible = false
+    systemAutoPresentCPU = true
+    systemAutoPresentThermal = true
+    systemAutoPresentMemoryPressure = true
+    systemAutoPresentLowDiskSpace = true
+    systemAutoPresentDiskThroughput = true
+    systemAutoPresentNetworkThroughput = true
     metricStyles = [:]
     hudStyle = .bar
     Defaults[.disabledExternalBrightnessDisplays] = []
