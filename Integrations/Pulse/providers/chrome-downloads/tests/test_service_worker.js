@@ -412,6 +412,64 @@ test("rejected terminal command remains durable while waiting to retry", async (
   assert.equal(harness.timeouts.size, 1);
 });
 
+test("unacknowledged terminal delivery expires through its bounded retry budget", async () => {
+  const sharedState = { enabled: true, profileID, knownIDs: [] };
+  const exhausted = createHarness({ state: sharedState, autoAcknowledge: false });
+  await exhausted.settle();
+  await exhausted.events.created.emit(download(25, "complete", 100));
+  await exhausted.settle();
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    assert.equal(exhausted.messages.length, attempt + 1);
+    assert.equal(exhausted.timeouts.size, 1);
+    exhausted.fireTimeouts();
+    await exhausted.settle();
+    if (attempt < 4) {
+      assert.equal(exhausted.timeouts.size, 1);
+      exhausted.fireTimeouts();
+      await exhausted.settle();
+    }
+  }
+
+  assert.deepEqual(sharedState.knownIDs, [25]);
+  assert.equal(exhausted.timeouts.size, 1);
+  exhausted.fireTimeouts();
+  await exhausted.settle();
+  assert.equal(exhausted.ports[0].disconnected, true);
+  assert.equal(exhausted.ports.length, 1);
+
+  const recovered = createHarness({ state: sharedState });
+  await recovered.settle();
+
+  assert.deepEqual(recovered.messages.map((command) => [command.kind, command.id]), [["end", 25]]);
+  assert.deepEqual(sharedState.knownIDs, []);
+});
+
+test("superseding an unacknowledged request ignores its late acknowledgement", async () => {
+  const harness = createHarness({ autoAcknowledge: false });
+  await harness.settle();
+  await harness.events.created.emit(download(26, "complete", 100));
+  await harness.settle();
+  const firstRequest = harness.messages[0];
+
+  await harness.events.erased.emit(26);
+  await harness.settle();
+  const currentRequest = harness.messages.at(-1);
+
+  assert.equal(harness.messages.length, 2);
+  assert.notEqual(currentRequest.requestID, firstRequest.requestID);
+  assert.equal(harness.timeouts.size, 1);
+  await harness.ports[0].onMessage.emit({ ok: true, requestID: firstRequest.requestID });
+  await harness.settle();
+
+  assert.equal(harness.messages.length, 2);
+  assert.deepEqual(harness.state.knownIDs, [26]);
+  await harness.ports[0].onMessage.emit({ ok: true, requestID: currentRequest.requestID });
+  await harness.settle();
+
+  assert.deepEqual(harness.state.knownIDs, []);
+});
+
 test("failed final terminal delivery retries without another browser event", async () => {
   const harness = createHarness();
   await harness.settle();
@@ -523,8 +581,41 @@ test("failed final terminal delivery uses a bounded retry budget", async () => {
   }
 
   assert.equal(harness.messages.length, 6);
-  assert.equal(harness.timeouts.size, 0);
+  assert.equal(harness.timeouts.size, 1);
   assert.deepEqual(harness.state.knownIDs, [15]);
+});
+
+test("exhausted terminal delivery releases the host for durable recovery", async () => {
+  const sharedState = { enabled: true, profileID, knownIDs: [] };
+  const exhausted = createHarness({ state: sharedState, autoAcknowledge: false });
+  await exhausted.settle();
+  await exhausted.events.created.emit(download(24, "complete", 100));
+  await exhausted.settle();
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const terminal = exhausted.messages.at(-1);
+    await exhausted.ports[0].onMessage.emit({ ok: false, requestID: terminal.requestID });
+    await exhausted.settle();
+    if (attempt < 4) {
+      exhausted.fireTimeouts();
+      await exhausted.settle();
+    }
+  }
+
+  assert.equal(exhausted.messages.length, 5);
+  assert.deepEqual(sharedState.knownIDs, [24]);
+  assert.equal(exhausted.timeouts.size, 1);
+  exhausted.fireTimeouts();
+  await exhausted.settle();
+  assert.equal(exhausted.ports[0].disconnected, true);
+  assert.equal(exhausted.ports.length, 1);
+
+  const recovered = createHarness({ state: sharedState });
+  await recovered.settle();
+
+  assert.deepEqual(recovered.messages.map((command) => [command.kind, command.id]), [["end", 24]]);
+  assert.deepEqual(sharedState.knownIDs, []);
+  assert.equal(recovered.ports.length, 1);
 });
 
 test("transport disconnect retries remain bounded for every affected command", async () => {
@@ -660,7 +751,7 @@ test("exhausted in-flight commands cannot block a later unsent command", async (
   assert.equal(harness.messages.filter((item) => item.item?.id === 50).length, 1);
 });
 
-test("terminal state supersedes in-flight progress after the stale acknowledgement", async () => {
+test("terminal state replaces in-flight progress before the stale acknowledgement", async () => {
   const harness = createHarness({ autoAcknowledge: false });
   await harness.settle();
   await harness.events.created.emit(download(13));
@@ -672,13 +763,17 @@ test("terminal state supersedes in-flight progress after the stale acknowledgeme
 
   await harness.events.changed.emit({ id: 13, state: { current: "complete" } });
   await harness.settle();
-  assert.equal(harness.messages.length, 1);
+  assert.equal(harness.messages.length, 2);
+  assert.equal(harness.messages[1].item.state, "complete");
   await harness.ports[0].onMessage.emit({ ok: true, requestID: progress.requestID });
   await harness.settle();
 
   assert.equal(harness.ports[0].disconnected, false);
   assert.equal(harness.messages.length, 2);
-  assert.equal(harness.messages[1].item.state, "complete");
+  await harness.ports[0].onMessage.emit({ ok: true, requestID: harness.messages[1].requestID });
+  await harness.settle();
+
+  assert.deepEqual(harness.state.knownIDs, []);
 });
 
 test("acknowledged terminal ignores later property-only changes", async () => {

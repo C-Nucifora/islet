@@ -7,6 +7,7 @@ const COMMANDS_PER_FLUSH = 12;
 const RETRY_INITIAL_MILLISECONDS = 250;
 const RETRY_MAX_MILLISECONDS = 2000;
 const RETRY_LIMIT = 4;
+const ACKNOWLEDGEMENT_MILLISECONDS = 5000;
 let tracker = null;
 let nativePort = null;
 let pollTimer = null;
@@ -18,6 +19,7 @@ let initializationPromise = null;
 const pending = new Map();
 const inFlight = new Map();
 const retryStates = new Map();
+const acknowledgementTimers = new Map();
 const drainWaiters = new Set();
 
 function commandKey(command) {
@@ -76,9 +78,34 @@ function clearAllRetryStates() {
   for (const key of retryStates.keys()) clearRetryState(key);
 }
 
-function scheduleRetry(key, requestID) {
+function clearAcknowledgementTimer(requestID) {
+  const timer = acknowledgementTimers.get(requestID);
+  if (timer === undefined) return;
+  clearTimeout(timer);
+  acknowledgementTimers.delete(requestID);
+}
+
+function clearAllAcknowledgementTimers() {
+  for (const requestID of acknowledgementTimers.keys()) clearAcknowledgementTimer(requestID);
+}
+
+function removeInFlightRequest(requestID) {
+  const request = inFlight.get(requestID);
+  if (!request) return null;
+  inFlight.delete(requestID);
+  clearAcknowledgementTimer(requestID);
+  return request;
+}
+
+function removeInFlightRequestsForKey(key) {
+  for (const [requestID, request] of inFlight) {
+    if (request.key === key) removeInFlightRequest(requestID);
+  }
+}
+
+function scheduleRetry(key, commandID) {
   const command = pending.get(key);
-  if (!command || command.requestID !== requestID) return;
+  if (!command || command.commandID !== commandID) return;
   let state = retryStates.get(key);
   if (!state) {
     state = { attempts: 0, ready: false, timer: null };
@@ -95,7 +122,7 @@ function scheduleRetry(key, requestID) {
     if (retryStates.get(key) !== state) return;
     state.timer = null;
     const current = pending.get(key);
-    if (!current || current.requestID !== requestID) {
+    if (!current || current.commandID !== commandID) {
       clearRetryState(key);
       return;
     }
@@ -104,9 +131,40 @@ function scheduleRetry(key, requestID) {
   }, delay);
 }
 
+function scheduleAcknowledgementDeadline(key, commandID, requestID) {
+  const timer = setTimeout(() => {
+    if (acknowledgementTimers.get(requestID) !== timer) return;
+    acknowledgementTimers.delete(requestID);
+    const request = inFlight.get(requestID);
+    if (!request || request.key !== key || request.commandID !== commandID) return;
+    inFlight.delete(requestID);
+    scheduleRetry(key, commandID);
+    flushPending();
+    notifyDrainWaiters();
+  }, ACKNOWLEDGEMENT_MILLISECONDS);
+  acknowledgementTimers.set(requestID, timer);
+}
+
 function retryIsReady(key) {
   const state = retryStates.get(key);
   return state === undefined || (state.timer === null && state.ready);
+}
+
+function retryIsExhausted(key) {
+  const state = retryStates.get(key);
+  return (
+    state !== undefined &&
+    state.timer === null &&
+    !state.ready &&
+    state.attempts >= RETRY_LIMIT
+  );
+}
+
+function hasDeliverablePending() {
+  for (const key of pending.keys()) {
+    if (!retryIsExhausted(key)) return true;
+  }
+  return false;
 }
 
 function markRetrySent(key) {
@@ -115,18 +173,18 @@ function markRetrySent(key) {
 }
 
 function scheduleTransportRetries(requests) {
-  for (const [requestID, key] of requests) scheduleRetry(key, requestID);
+  for (const request of requests) scheduleRetry(request.key, request.commandID);
 }
 
 function scheduleHostDisconnect() {
-  if (!nativePort || pending.size || inFlight.size || hasActiveDownloads()) {
+  if (!nativePort || hasDeliverablePending() || inFlight.size || hasActiveDownloads()) {
     cancelHostIdleTimer();
     return;
   }
   if (hostIdleTimer !== null) return;
   hostIdleTimer = setTimeout(() => {
     hostIdleTimer = null;
-    if (!nativePort || pending.size || inFlight.size || hasActiveDownloads()) return;
+    if (!nativePort || hasDeliverablePending() || inFlight.size || hasActiveDownloads()) return;
     const port = nativePort;
     nativePort = null;
     port.disconnect();
@@ -134,8 +192,12 @@ function scheduleHostDisconnect() {
 }
 
 function notifyDrainWaiters() {
-  if (pending.size || inFlight.size) return;
+  if (pending.size || inFlight.size) {
+    scheduleHostDisconnect();
+    return;
+  }
   clearAllRetryStates();
+  clearAllAcknowledgementTimers();
   for (const resolve of drainWaiters) resolve();
   drainWaiters.clear();
   scheduleHostDisconnect();
@@ -175,16 +237,16 @@ function connectHost() {
   nativePort = port;
   port.onMessage.addListener((response) => {
     const requestID = response && response.requestID;
-    const key = inFlight.get(requestID);
-    if (!key) return;
-    inFlight.delete(requestID);
+    const request = removeInFlightRequest(requestID);
+    if (!request) return;
+    const { key, commandID } = request;
     const command = pending.get(key);
     if (response.ok === true) {
       const finishAcknowledgement = () => {
         flushPending();
         notifyDrainWaiters();
       };
-      if (command && command.requestID === requestID) {
+      if (command && command.commandID === commandID) {
         pending.delete(key);
         clearRetryState(key);
         void persistKnownIDs().then(finishAcknowledgement, finishAcknowledgement);
@@ -193,8 +255,8 @@ function connectHost() {
       }
       return;
     }
-    if (command && command.requestID === requestID) {
-      scheduleRetry(key, requestID);
+    if (command && command.commandID === commandID) {
+      scheduleRetry(key, commandID);
     }
     flushPending();
     notifyDrainWaiters();
@@ -202,8 +264,9 @@ function connectHost() {
   port.onDisconnect.addListener(() => {
     if (nativePort !== port) return;
     nativePort = null;
-    const disconnectedRequests = Array.from(inFlight);
+    const disconnectedRequests = Array.from(inFlight.values());
     inFlight.clear();
+    clearAllAcknowledgementTimers();
     cancelHostIdleTimer();
     scheduleTransportRetries(disconnectedRequests);
     flushPending();
@@ -217,7 +280,7 @@ function flushPending() {
     notifyDrainWaiters();
     return;
   }
-  const activeKeys = new Set(inFlight.values());
+  const activeKeys = new Set(Array.from(inFlight.values(), (request) => request.key));
   const hasEligibleCommand = Array.from(pending.keys()).some(
     (key) => !activeKeys.has(key) && retryIsReady(key)
   );
@@ -229,7 +292,7 @@ function flushPending() {
   } catch (_error) {
     for (const [key, command] of pending) {
       if (!activeKeys.has(key) && retryIsReady(key)) {
-        scheduleRetry(key, command.requestID);
+        scheduleRetry(key, command.commandID);
       }
     }
     return;
@@ -239,13 +302,17 @@ function flushPending() {
     if (activeKeys.has(key)) continue;
     if (!retryIsReady(key)) continue;
     try {
-      inFlight.set(command.requestID, key);
+      const requestID = crypto.randomUUID();
+      inFlight.set(requestID, { key, commandID: command.commandID });
       activeKeys.add(key);
       markRetrySent(key);
-      port.postMessage(command);
+      const { commandID: _commandID, ...message } = command;
+      port.postMessage({ ...message, requestID });
+      scheduleAcknowledgementDeadline(key, command.commandID, requestID);
     } catch (_error) {
-      const disconnectedRequests = Array.from(inFlight);
+      const disconnectedRequests = Array.from(inFlight.values());
       inFlight.clear();
+      clearAllAcknowledgementTimers();
       if (nativePort === port) nativePort = null;
       port.disconnect();
       scheduleTransportRetries(disconnectedRequests);
@@ -273,7 +340,8 @@ async function publish(commands) {
   for (const command of commands) {
     const key = commandKey(command);
     clearRetryState(key);
-    pending.set(key, { ...command, requestID: crypto.randomUUID() });
+    removeInFlightRequestsForKey(key);
+    pending.set(key, { ...command, commandID: crypto.randomUUID() });
   }
   await persistKnownIDs();
   synchronizePolling();
@@ -370,6 +438,7 @@ async function disableObservation() {
   pollTimer = null;
   cancelHostIdleTimer();
   clearAllRetryStates();
+  clearAllAcknowledgementTimers();
   const cleanup = tracker ? tracker.disable() : [];
   pending.clear();
   inFlight.clear();
@@ -385,6 +454,7 @@ async function disableObservation() {
   }
   pending.clear();
   inFlight.clear();
+  clearAllAcknowledgementTimers();
   tracker = null;
   clearAllRetryStates();
   await persistKnownIDs();
