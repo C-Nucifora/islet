@@ -78,6 +78,11 @@ struct ContinuityExpandedView: View {
         .buttonStyle(.plain)
         .font(.caption.weight(.semibold))
         .foregroundStyle(continuityAccent)
+      } else if availability == .controlCenterUnavailable || availability == .incompatibleSchema {
+        Button("Retry") { activity.monitor.retry() }
+          .buttonStyle(.plain)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(continuityAccent)
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
