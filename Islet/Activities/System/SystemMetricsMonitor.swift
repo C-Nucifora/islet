@@ -2,7 +2,7 @@ import Combine
 import Defaults
 import Foundation
 
-/// Samples every system source and publishes a snapshot plus a 60-entry history per series.
+/// Samples every system source and publishes a snapshot plus a timestamped five-minute history.
 ///
 /// Cadence follows the refcounted view gate: 1 Hz while the System tab is on screen and a much
 /// slower history cadence otherwise. The owner stops it entirely when System is disabled.
@@ -10,7 +10,7 @@ import Foundation
 final class SystemMetricsMonitor: ObservableObject {
   static let shared = SystemMetricsMonitor()
 
-  nonisolated static let ringCapacity = 60
+  nonisolated static let ringCapacity = SystemChartHistory.maximumRetainedSamples
   nonisolated static let liveInterval: TimeInterval = 1
   nonisolated static let backgroundInterval: TimeInterval = 20
   nonisolated static let lowPowerBackgroundInterval: TimeInterval = 30
@@ -34,6 +34,11 @@ final class SystemMetricsMonitor: ObservableObject {
   private var generation = 0
   private var powerCancellable: AnyCancellable?
   private var energyCancellable: AnyCancellable?
+  private let now: () -> Date
+
+  init(now: @escaping () -> Date = Date.init) {
+    self.now = now
+  }
 
   func start() {
     guard !isRunning else { return }
@@ -98,14 +103,14 @@ final class SystemMetricsMonitor: ObservableObject {
     guard isRunning, generation == expectedGeneration else {
       return
     }
-    let now = Date()
+    let now = now()
     let next = systemMetricsSample(
       previous: previous, previousDate: previousDate, current: raw, currentDate: now,
       clusters: clusters)
     previous = raw
     previousDate = now
     sample = next
-    pushRings(next)
+    pushRings(next, at: now)
     isSampling = false
   }
 
@@ -121,26 +126,32 @@ final class SystemMetricsMonitor: ObservableObject {
     tick()
   }
 
-  private func pushRings(_ sample: SystemMetricsSample) {
-    push(.cpu, sample.cpuTotal)
-    push(.gpu, sample.gpu)
+  private func pushRings(_ sample: SystemMetricsSample, at timestamp: Date) {
+    // Advance every established series before selecting values. Disk and network deliberately
+    // have no rate after sleep, but their stale path must still disappear from the chart.
+    for kind in Array(rings.keys) {
+      rings[kind]?.advance(to: timestamp)
+    }
+
+    push(.cpu, sample.cpuTotal, at: timestamp)
+    push(.gpu, sample.gpu, at: timestamp)
     if let used = sample.memoryUsedBytes, let total = sample.memoryTotalBytes, total > 0 {
-      push(.memory, Double(used) / Double(total))
+      push(.memory, Double(used) / Double(total), at: timestamp)
     }
     // Disk and network each have two directions but one series: the sparkline shows total
     // activity, and the numbers beside it already break out the directions.
     if let read = sample.diskReadBytesPerSec, let write = sample.diskWriteBytesPerSec {
-      push(.disk, read + write)
+      push(.disk, read + write, at: timestamp)
     }
     if let inbound = sample.netInBytesPerSec, let outbound = sample.netOutBytesPerSec {
-      push(.network, inbound + outbound)
+      push(.network, inbound + outbound, at: timestamp)
     }
   }
 
-  private func push(_ kind: SystemMetricKind, _ value: Double?) {
+  private func push(_ kind: SystemMetricKind, _ value: Double?, at timestamp: Date) {
     guard let value else { return }
     var ring = rings[kind] ?? MetricRing(capacity: Self.ringCapacity)
-    ring.push(value)
+    ring.push(value, at: timestamp)
     rings[kind] = ring
   }
 }

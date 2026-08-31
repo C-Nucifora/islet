@@ -23,16 +23,18 @@ enum AudioProcessReducer {
   ) -> [SourceID] {
     var byApp: [String: SourceID] = [:]
     for process in processes where process.isPlayingOutput {
-      guard !process.bundleID.isEmpty else { continue }
+      let bundleID = process.bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !bundleID.isEmpty else { continue }
       let display = AudioSourceResolver.displayBundleID(
-        bundleID: process.bundleID, pid: process.pid, runningAppBundleID: runningAppBundleID)
-      guard !SourceFilter.isDenied(display), !SourceFilter.isDenied(process.bundleID) else {
+        bundleID: bundleID, pid: process.pid, runningAppBundleID: runningAppBundleID)
+      guard !display.isEmpty, !SourceFilter.isDenied(display), !SourceFilter.isDenied(bundleID)
+      else {
         continue
       }
       // Lowest pid wins so the row identity does not flicker as helpers come and go.
       if let existing = byApp[display], existing.pid <= process.pid { continue }
       byApp[display] = SourceID(
-        bundleIdentifier: process.bundleID, pid: process.pid, displayBundleIdentifier: display)
+        bundleIdentifier: bundleID, pid: process.pid, displayBundleIdentifier: display)
     }
     return byApp.values.sorted { $0.displayBundleIdentifier < $1.displayBundleIdentifier }
   }

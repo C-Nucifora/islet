@@ -62,6 +62,15 @@ final class SourceStripTests: XCTestCase {
       [key("com.spotify.client", 1), key("com.apple.Music", 3)])
   }
 
+  func testAdapterSourceRemainsWhenItsCoreAudioDuplicateIsExcluded() {
+    let spotify = key("com.spotify.client", 1)
+    let excludedAudio = [spotify].filter {
+      SourceFilter.acceptsAudioOnlySource(
+        $0.displayBundleIdentifier, excludedBundleIdentifiers: ["com.spotify.client"])
+    }
+    XCTAssertEqual(SourceStrip.merge(adapter: [spotify], audio: excludedAudio), [spotify])
+  }
+
   func testChooserKeepsThePrimaryAndEveryHiddenSourceForFourOrMoreSources() {
     let primary = key("com.apple.Music", 1)
     let secondary = (2...6).map { key("app\($0)", Int32($0)) }
