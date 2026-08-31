@@ -52,7 +52,7 @@ enum IslandKeyboardPolicy {
       return .selectTab(number - 1)
     }
     if stroke.modifiers == .control, key == "\t" { return .cycleTab(1) }
-    if stroke.modifiers == [.control, .shift], key == "\t" { return .cycleTab(-1) }
+    if stroke.modifiers == [.control, .shift], key == "\u{19}" { return .cycleTab(-1) }
     if stroke.modifiers == .command, key == "\r" { return .primaryAction }
     if stroke.modifiers.isEmpty, key == "\u{1b}" { return .dismissTransient }
     if stroke.modifiers == .command, key == "w" { return .close }

@@ -109,6 +109,7 @@ final class PanelInstance {
   let viewModel: NotchViewModel
   var cancellables: Set<AnyCancellable> = []
   private var isApplying = false
+  private var wasExpanded = false
   private let pointerMonitoringID = UUID()
 
   var screenUUID: String { display.id }
@@ -173,6 +174,13 @@ final class PanelInstance {
     let shouldIgnore = viewModel.shouldIgnorePanelMouseEvents(
       at: location, allowingCompactFileDrag: allowingCompactFileDrag)
     if panel.ignoresMouseEvents != shouldIgnore { panel.ignoresMouseEvents = shouldIgnore }
+  }
+
+  func updateKeyboardFocus() {
+    let isExpanded = viewModel.state.isExpanded
+    guard isExpanded != wasExpanded else { return }
+    wasExpanded = isExpanded
+    panel.updateKeyboardFocus(isExpanded: isExpanded)
   }
 
   func stop() {
@@ -516,11 +524,15 @@ final class ScreenManager: ObservableObject {
       inst.syncActualFrame()  // seed from the window we just placed, before anything is drawn
       vm.resumePointerTracking(at: NSEvent.mouseLocation)
       inst.updateMousePassthrough()
+      inst.updateKeyboardFocus()
       panel.alphaValue = 1  // alpha-flash hides ghost frames
       Publishers.CombineLatest4(
         vm.$state, vm.$expandedWidth, vm.$expandedHeight, vm.$actualPanelFrame
       )
-      .sink { [weak inst] _ in inst?.updateMousePassthrough() }
+      .sink { [weak inst] _ in
+        inst?.updateMousePassthrough()
+        inst?.updateKeyboardFocus()
+      }
       .store(in: &inst.cancellables)
       vm.$compactTargetRevision
         .dropFirst()
@@ -587,18 +599,20 @@ final class ScreenManager: ObservableObject {
       if let announcement { A11y.announce(announcement) }
       return true
     case .dismissTransient:
-      if HUDController.shared.dismiss() || SneakQueue.shared.dismissCurrent() {
-        A11y.announce("Dismissed")
-        return true
-      }
-      if RemindersProvider.shared.lastActionError != nil {
-        RemindersProvider.shared.dismissActionError()
+      if HUDController.shared.dismiss() {
         A11y.announce("Dismissed")
         return true
       }
       if let activity = activities.first(where: { $0.id == currentID }),
         activity.dismissAccessibilityTransient()
       {
+        A11y.announce("Dismissed")
+        return true
+      }
+      if currentID == ExpandedSelectionPolicy.homeID,
+        RemindersProvider.shared.lastActionError != nil
+      {
+        RemindersProvider.shared.dismissActionError()
         A11y.announce("Dismissed")
         return true
       }

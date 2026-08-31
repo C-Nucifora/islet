@@ -532,8 +532,10 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   }
 
   func performAccessibilityPrimaryAction() -> Bool {
-    guard let playback, !playback.isAdvertisement else { return false }
-    MediaRemoteCommands.shared.togglePlayPause()
+    guard let playback, !playback.isAdvertisement, let primaryKey,
+      canPerform(.togglePlayPause, for: primaryKey)
+    else { return false }
+    Task { await perform(.togglePlayPause, for: primaryKey) }
     return true
   }
 }

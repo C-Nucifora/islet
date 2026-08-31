@@ -183,6 +183,16 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
 
   var id: String { "\(logicalEnvironmentID):\(threadID)" }
 
+  var accessibilityLabel: String {
+    var parts = [title, phase.label, providerInstance, model, project]
+    if let branch { parts.append("branch \(branch)") }
+    if let completedPlanSteps, let totalPlanSteps {
+      parts.append("\(completedPlanSteps) of \(totalPlanSteps) plan steps complete")
+    }
+    if let planStep { parts.append("current step \(planStep)") }
+    return parts.joined(separator: ", ")
+  }
+
   static func activeAgents(
     in shell: T3ShellSnapshot,
     logicalEnvironmentID: String,

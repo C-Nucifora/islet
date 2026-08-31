@@ -48,15 +48,23 @@ final class AccessibilityPolicyTests: XCTestCase {
   @MainActor
   func testIslandPanelCanBecomeKeyForKeyboardTraversal() {
     let panel = NotchPanel(frame: CGRect(x: 0, y: 0, width: 520, height: 190))
+    defer { panel.close() }
     XCTAssertTrue(panel.canBecomeKey)
     XCTAssertFalse(panel.canBecomeMain)
+
+    panel.orderFront(nil)
+    panel.updateKeyboardFocus(isExpanded: true)
+    XCTAssertTrue(panel.isKeyWindow)
+    panel.updateKeyboardFocus(isExpanded: false)
+    XCTAssertFalse(panel.isKeyWindow)
   }
 
   func testKeyboardCommandsUseStableShortcuts() {
     XCTAssertEqual(command("1", .command), .selectTab(0))
     XCTAssertEqual(command("9", .command), .selectTab(8))
     XCTAssertEqual(command("\t", .control), .cycleTab(1))
-    XCTAssertEqual(command("\t", [.control, .shift]), .cycleTab(-1))
+    XCTAssertEqual(command("\u{19}", [.control, .shift]), .cycleTab(-1))
+    XCTAssertNil(command("\t", [.control, .shift]))
     XCTAssertEqual(command("\r", .command), .primaryAction)
     XCTAssertEqual(command("\u{1b}", []), .dismissTransient)
     XCTAssertEqual(command("W", .command), .close)
@@ -175,16 +183,39 @@ final class AccessibilityPolicyTests: XCTestCase {
     for theme in AppTheme.allCases {
       for style in BatteryGraphStyle.allCases {
         for role in BatteryFlowRole.allCases {
-          let ratio = try XCTUnwrap(
-            AppThemeContrast.ratio(
-              foreground: theme.powerFlowColor(for: role, style: style)),
-            "Could not resolve \(theme) \(style) \(role) in sRGB")
-          XCTAssertGreaterThanOrEqual(
-            ratio, AppThemeContrast.minimumGraphicalRatio,
-            "\(theme.title) \(style.title) \(role) contrast was \(ratio)")
+          for opacity in BatteryFlowRendering.graphicalOpacities {
+            let ratio = try XCTUnwrap(
+              AppThemeContrast.ratio(
+                foreground: theme.powerFlowColor(for: role, style: style), opacity: opacity),
+              "Could not resolve \(theme) \(style) \(role) in sRGB")
+            XCTAssertGreaterThanOrEqual(
+              ratio, AppThemeContrast.minimumGraphicalRatio,
+              "\(theme.title) \(style.title) \(role) at \(opacity) contrast was \(ratio)")
+          }
         }
       }
     }
+  }
+
+  @MainActor
+  func testDismissingCurrentSneakImmediatelyPresentsTheNextQueuedAlert() async throws {
+    let queue = SneakQueue()
+    queue.submit(
+      Sneak(
+        source: "first", duration: 4, leading: AnyView(EmptyView()),
+        trailing: AnyView(EmptyView())))
+    queue.submit(
+      Sneak(
+        source: "second", duration: 1, leading: AnyView(EmptyView()),
+        trailing: AnyView(EmptyView())))
+    await Task.yield()
+    XCTAssertEqual(queue.current?.source, "first")
+
+    XCTAssertTrue(queue.dismissCurrent())
+    try await Task.sleep(for: .milliseconds(50))
+
+    XCTAssertEqual(queue.current?.source, "second")
+    XCTAssertTrue(queue.dismissCurrent())
   }
 
   private func command(

@@ -527,9 +527,7 @@ private struct T3AgentRow: View {
     .padding(.vertical, 4).padding(.horizontal, 7)
     .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.06)))
     .accessibilityElement(children: .combine)
-    .accessibilityLabel(
-      "\(agent.title), \(agent.phase.label), \(agent.providerInstance), \(agent.model), \(agent.project)"
-    )
+    .accessibilityLabel(agent.accessibilityLabel)
   }
 
   private var phaseColor: Color {
