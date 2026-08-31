@@ -213,6 +213,8 @@ extension Defaults.Keys {
   static let energyMode = Key<EnergyMode>("energyMode", default: .automatic)
   /// Keep the Mac working while allowing its screen to follow the normal display-sleep timeout.
   static let allowDisplaySleep = Key<Bool>("allowDisplaySleep", default: true)
+  /// Uses the separately installed Power Protect helper to override closed-display sleep.
+  static let keepAwakeWithLidClosed = Key<Bool>("keepAwakeWithLidClosed", default: false)
   /// Zero disables battery protection. A 20% default avoids an unattended session draining the
   /// battery after macOS first reports its low-battery state.
   static let keepAwakeLowBatteryThreshold = Key<Int>(

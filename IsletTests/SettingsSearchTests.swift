@@ -36,6 +36,7 @@ final class SettingsSearchTests: XCTestCase {
     XCTAssertTrue(SettingsDetailPage.systemHUD.matchesSearch("brightness accessibility"))
     XCTAssertFalse(SettingsDetailPage.systemHUD.matchesSearch("brightness calendar"))
     XCTAssertTrue(SettingsDetailPage.energy.matchesSearch("allow display sleep"))
+    XCTAssertTrue(SettingsDetailPage.energy.matchesSearch("closed lid power protect"))
     XCTAssertTrue(SettingsDetailPage.energy.matchesSearch("low battery stop"))
   }
 
