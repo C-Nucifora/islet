@@ -122,36 +122,191 @@ final class AirDropInEventSource: SystemEventSource {
   }
 }
 
-/// Holds one AirDrop share's delegate long enough to report its completion, then lets go.
-///
-/// `NSSharingService.delegate` is weak and the service is created per share, so without a retained
-/// observer the completion callback has no receiver — which is exactly how the "AirDrop sent"
-/// source shipped wired to nothing. The delegate callbacks are AppKit UI and arrive on the main
-/// thread, but after the IOBluetooth lesson nothing here assumes that: the methods are
-/// `nonisolated` and hop to the main actor with only the item count.
-@MainActor
-final class AirDropShareObserver: NSObject, NSSharingServiceDelegate {
-  /// Strong reference for the share in flight. One at a time is enough: the AirDrop sheet is modal
-  /// in practice, and a second share simply replaces the observer of an abandoned first.
-  private static var current: AirDropShareObserver?
+enum AirDropShareOutcome: Equatable {
+  case shared
+  case cancelled
+  case failed(String)
 
-  static func observe(_ service: NSSharingService) {
-    let observer = AirDropShareObserver()
-    current = observer
-    service.delegate = observer
+  static func from(error: Error) -> Self {
+    let error = error as NSError
+    if (error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled)
+      || (error.domain == NSCocoaErrorDomain
+        && error.code == CocoaError.Code.userCancelled.rawValue)
+    {
+      return .cancelled
+    }
+    return .failed(error.localizedDescription)
+  }
+}
+
+enum AirDropShareState: Equatable {
+  case ready
+  case unavailable
+  case sharing
+  case cancelled
+  case busy
+  case failed(String)
+}
+
+enum AirDropShareStartResult {
+  case started
+  case unavailable
+  case busy
+}
+
+/// Owns the visible state for one Shelf share. Its launcher is injected so the state transitions
+/// can be tested without presenting the macOS AirDrop sheet.
+@MainActor
+final class AirDropShareController: ObservableObject {
+  typealias ServiceAvailable = @MainActor () -> Bool
+  typealias StartShare =
+    @MainActor ([URL], @escaping @MainActor (AirDropShareOutcome) -> Void) ->
+    AirDropShareStartResult
+
+  @Published private(set) var state: AirDropShareState = .ready
+  @Published private(set) var isServiceAvailable: Bool
+
+  private let serviceAvailable: ServiceAvailable
+  private let startShare: StartShare
+
+  init(
+    serviceAvailable: @escaping ServiceAvailable = AirDropShareLauncher.isAvailable,
+    startShare: @escaping StartShare = AirDropShareLauncher.start
+  ) {
+    self.serviceAvailable = serviceAvailable
+    self.startShare = startShare
+    isServiceAvailable = serviceAvailable()
+    if !isServiceAvailable { state = .unavailable }
   }
 
-  nonisolated func sharingService(_ sharingService: NSSharingService, didShareItems items: [Any]) {
-    let count = items.count
-    Task { @MainActor in
-      AppState.airdropOut.report(fileCount: count)
-      Self.current = nil
+  var isSharing: Bool { state == .sharing }
+  var isActionEnabled: Bool {
+    isServiceAvailable && state != .sharing && state != .busy
+  }
+
+  func refreshAvailability() {
+    isServiceAvailable = serviceAvailable()
+    if !isServiceAvailable { state = .unavailable }
+    if case .unavailable = state, isServiceAvailable { state = .ready }
+  }
+
+  func share(_ urls: [URL], onFinish: @escaping @MainActor () -> Void = {}) {
+    guard !urls.isEmpty else {
+      onFinish()
+      return
+    }
+    refreshAvailability()
+    guard isServiceAvailable else {
+      onFinish()
+      return
+    }
+    guard !isSharing else {
+      onFinish()
+      return
+    }
+
+    var didFinish = false
+    let finishOnce: @MainActor () -> Void = {
+      guard !didFinish else { return }
+      didFinish = true
+      onFinish()
+    }
+    state = .sharing
+    switch startShare(
+      urls,
+      { [weak self] outcome in
+        self?.finish(outcome)
+        finishOnce()
+      })
+    {
+    case .started:
+      break
+    case .unavailable:
+      isServiceAvailable = false
+      state = .unavailable
+      finishOnce()
+    case .busy:
+      if isSharing { state = .busy }
+      finishOnce()
     }
   }
 
-  nonisolated func sharingService(
+  func retry(_ urls: [URL], onFinish: @escaping @MainActor () -> Void = {}) {
+    guard state != .sharing else {
+      onFinish()
+      return
+    }
+    share(urls, onFinish: onFinish)
+  }
+
+  func dismissFeedback() {
+    guard state != .sharing else { return }
+    state = isServiceAvailable ? .ready : .unavailable
+  }
+
+  private func finish(_ outcome: AirDropShareOutcome) {
+    guard isSharing else { return }
+    switch outcome {
+    case .shared: state = .ready
+    case .cancelled: state = .cancelled
+    case .failed(let message): state = .failed(message)
+    }
+  }
+}
+
+/// Adapts AppKit's weak delegate API to `AirDropShareController`.
+@MainActor
+enum AirDropShareLauncher {
+  static func isAvailable() -> Bool {
+    NSSharingService(named: .sendViaAirDrop) != nil
+  }
+
+  static func start(
+    _ urls: [URL], completion: @escaping (AirDropShareOutcome) -> Void
+  ) -> AirDropShareStartResult {
+    guard let service = NSSharingService(named: .sendViaAirDrop) else { return .unavailable }
+    guard AirDropShareObserver.begin(service, completion: completion) else { return .busy }
+    service.perform(withItems: urls)
+    return .started
+  }
+}
+
+/// Holds one AirDrop share's weak delegate long enough to deliver exactly one outcome.
+@MainActor
+final class AirDropShareObserver: NSObject, NSSharingServiceDelegate {
+  /// Strong reference for the share in flight. AppKit's AirDrop sheet supports one transfer here,
+  /// and keeping that limit avoids losing a completion by replacing the delegate.
+  private static var current: AirDropShareObserver?
+  private let completion: (AirDropShareOutcome) -> Void
+
+  private init(completion: @escaping (AirDropShareOutcome) -> Void) {
+    self.completion = completion
+  }
+
+  static func begin(
+    _ service: NSSharingService, completion: @escaping (AirDropShareOutcome) -> Void
+  ) -> Bool {
+    guard current == nil else { return false }
+    let observer = AirDropShareObserver(completion: completion)
+    current = observer
+    service.delegate = observer
+    return true
+  }
+
+  func sharingService(_ sharingService: NSSharingService, didShareItems items: [Any]) {
+    AppState.airdropOut.report(fileCount: items.count)
+    finish(.shared)
+  }
+
+  func sharingService(
     _ sharingService: NSSharingService, didFailToShareItems items: [Any], error: any Error
   ) {
-    Task { @MainActor in Self.current = nil }
+    finish(.from(error: error))
+  }
+
+  private func finish(_ outcome: AirDropShareOutcome) {
+    guard Self.current === self else { return }
+    Self.current = nil
+    completion(outcome)
   }
 }

@@ -1,0 +1,7 @@
+{
+  "name": "dev.islet.pulse.chrome_downloads",
+  "description": "Local bridge from Chrome downloads to Islet Pulse",
+  "path": "__HOST_PATH__",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://__EXTENSION_ID__/"]
+}
