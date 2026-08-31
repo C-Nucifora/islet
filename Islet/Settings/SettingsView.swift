@@ -36,7 +36,8 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 
   var searchTerms: String {
     switch self {
-    case .general: "launch login displays fullscreen recording hover click haptics energy"
+    case .general:
+      "launch login displays fullscreen recording hover click haptics energy keep awake sleep battery"
     case .activities:
       "tabs order battery calendar reminders clipboard ports audio hud timer shelf system media iphone continuity live activities"
     case .notifications:
@@ -108,7 +109,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .startupDisplays: "Login item and display placement"
     case .appearance: "Choose the colours used across Islet"
     case .interaction: "How the notch opens and closes"
-    case .energy: "Refresh rates and Low Power Mode"
+    case .energy: "Refresh rates, sleep and battery protection"
     case .activityOrder: "Show, hide and reorder activities"
     case .calendarReminders: "Agenda, countdown and reminder options"
     case .nowPlaying: "Choose which active player opens first"
@@ -185,6 +186,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .energy:
       pageContent + [
         "Energy use", "Mode", "Automatic", "Low Energy", "Live", "Low Power Mode",
+        "Keep awake", "Allow the display to sleep", "Stop on low battery", "Indefinitely",
+        "prevent idle system sleep display sleep assertions session timer",
         "refresh rates hidden activity remote T3 polling performance battery",
       ]
     case .activityOrder:
@@ -349,6 +352,7 @@ struct SettingsView: View {
   @ObservedObject private var t3Code = AppState.t3Code
   @ObservedObject private var focus = AppState.focus
   @ObservedObject private var launchAtLoginStatus = LaunchAtLoginStatus.shared
+  @ObservedObject private var keepAwake = KeepAwakeManager.shared
 
   @Default(.appTheme) private var appTheme
   @Default(.batteryGraphStyle) private var batteryGraphStyle
@@ -375,6 +379,8 @@ struct SettingsView: View {
   @Default(.metricStyles) private var metricStyles
   @Default(.disabledEventSources) private var disabledEventSources
   @Default(.energyMode) private var energyMode
+  @Default(.allowDisplaySleep) private var allowDisplaySleep
+  @Default(.keepAwakeLowBatteryThreshold) private var keepAwakeLowBatteryThreshold
   @Default(.continuityAlwaysVisible) private var continuityAlwaysVisible
   @Default(.continuitySneaks) private var continuitySneaks
 
@@ -1171,6 +1177,30 @@ struct SettingsView: View {
         Text(energyModeDetail)
           .font(.caption)
           .foregroundStyle(energyMode == .live ? .orange : .secondary)
+      }
+      Section("Keep awake") {
+        Toggle("Allow the display to sleep", isOn: $allowDisplaySleep)
+        Text(
+          "An active session always prevents idle system sleep. Turn this off to keep the display awake too."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Picker("Stop on low battery", selection: $keepAwakeLowBatteryThreshold) {
+          Text("Off").tag(0)
+          Text("10%").tag(10)
+          Text("20%").tag(20)
+          Text("30%").tag(30)
+        }
+        Text("Battery protection only stops a session while the Mac is unplugged.")
+          .font(.caption).foregroundStyle(.secondary)
+        if keepAwake.hasUnreleasedAssertions,
+          !keepAwake.isActive || allowDisplaySleep != keepAwake.effectivelyAllowsDisplaySleep
+        {
+          Text(keepAwake.lastError ?? "A power assertion is still awaiting release.")
+            .font(.caption).foregroundStyle(.orange)
+          Button("Retry power assertion change") {
+            keepAwake.retryUnreleasedAssertions()
+          }
+        }
       }
     }
     .formStyle(.grouped)

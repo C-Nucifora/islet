@@ -305,4 +305,33 @@ final class ActivityCenterTests: XCTestCase {
     XCTAssertTrue(running)
     controller.stopObserving()
   }
+
+  func testKeepAwakeDemandKeepsBatteryMonitoringAliveWhenActivityIsOff() async {
+    let savedDisabled = Defaults[.disabledActivities]
+    defer { Defaults[.disabledActivities] = savedDisabled }
+    Defaults[.disabledActivities] = ["battery"]
+
+    var keepAwakeDemand = false
+    var batteryMonitoring = false
+    let controller = ActivityLifecycleController(controls: [
+      ActivityLifecycleControl(
+        activityID: "battery", additionalRuntimeDemand: { keepAwakeDemand },
+        start: { batteryMonitoring = true }, stop: { batteryMonitoring = false })
+    ])
+    controller.startObserving()
+    XCTAssertFalse(batteryMonitoring)
+
+    keepAwakeDemand = true
+    NotificationCenter.default.post(name: .keepAwakeSessionDidChange, object: nil)
+    await Task.yield()
+    await Task.yield()
+    XCTAssertTrue(batteryMonitoring)
+
+    keepAwakeDemand = false
+    NotificationCenter.default.post(name: .keepAwakeSessionDidChange, object: nil)
+    await Task.yield()
+    await Task.yield()
+    XCTAssertFalse(batteryMonitoring)
+    controller.stopObserving()
+  }
 }

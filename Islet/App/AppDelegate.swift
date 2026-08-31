@@ -38,6 +38,9 @@ final class ActivityLifecycleController {
     Defaults.publisher(.calendarEnabled)
       .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
       .store(in: &cancellables)
+    NotificationCenter.default.publisher(for: .keepAwakeSessionDidChange)
+      .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
+      .store(in: &cancellables)
     reconcile()
   }
 
@@ -136,6 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // AppKit invokes this delegate on the main thread. Media shutdown is intentionally synchronous:
     // otherwise the app can exit before the watcher's serial queue terminates its helper process.
     MainActor.assumeIsolated {
+      KeepAwakeManager.shared.stop(reason: .quit)
       AppState.nowPlaying.stop()
       AppState.battery.stop()
       AppState.calendar.stop()
@@ -166,7 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activityID: "nowPlaying", start: { AppState.nowPlaying.start() },
         stop: { AppState.nowPlaying.stop() }),
       ActivityLifecycleControl(
-        activityID: "battery", start: { AppState.battery.start() },
+        activityID: "battery", additionalRuntimeDemand: { KeepAwakeManager.shared.isActive },
+        start: { AppState.battery.start() },
         stop: { AppState.battery.stop() }),
       ActivityLifecycleControl(
         activityID: "calendar", additionalRuntimeDemand: { Defaults[.calendarEnabled] },

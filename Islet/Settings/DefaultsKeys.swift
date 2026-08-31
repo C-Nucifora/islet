@@ -210,6 +210,12 @@ extension Defaults.Keys {
   static let barrierPushDistance = Key<Double>(
     "barrierPushDistance", default: Double(Metrics.barrierPushDistance))
   static let energyMode = Key<EnergyMode>("energyMode", default: .automatic)
+  /// Keep the Mac working while allowing its screen to follow the normal display-sleep timeout.
+  static let allowDisplaySleep = Key<Bool>("allowDisplaySleep", default: true)
+  /// Zero disables battery protection. A 20% default avoids an unattended session draining the
+  /// battery after macOS first reports its low-battery state.
+  static let keepAwakeLowBatteryThreshold = Key<Int>(
+    "keepAwakeLowBatteryThreshold", default: 20)
   static let hideFromScreenRecording = Key<Bool>("hideFromScreenRecording", default: false)
   /// Retained only as input to the one-time activity enablement migration.
   static let legacyBatteryEnabled = Key<Bool>("batteryEnabled", default: true)
