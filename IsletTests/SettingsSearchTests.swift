@@ -54,4 +54,10 @@ final class SettingsSearchTests: XCTestCase {
     XCTAssertTrue(SettingsDetailPage.startupDisplays.matchesSearch("preferred display"))
     XCTAssertTrue(SettingsDetailPage.startupDisplays.matchesSearch("clamshell reconnect"))
   }
+
+  func testT3ConnectAccountActionsAreSearchable() {
+    XCTAssertTrue(SettingsDetailPage.t3Code.matchesSearch("link account"))
+    XCTAssertTrue(SettingsDetailPage.t3Code.matchesSearch("sign out"))
+    XCTAssertTrue(SettingsDetailPage.t3Code.matchesSearch("reconnect now"))
+  }
 }

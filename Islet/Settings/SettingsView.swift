@@ -246,6 +246,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       pageContent + [
         "T3 Code agents", "Monitor T3 Code", "Paste a T3 Code pairing link", "Add machine",
         "Allow plain HTTP for this pairing", "Reconnect now", "Remove machine", "This Mac",
+        "T3 Connect", "Link T3 Connect account", "Link again", "Sign out", "Retry cleanup",
         "remote paired machines pairing credentials Keychain HTTPS Tailscale credential error",
       ]
     case .pulse:
