@@ -221,6 +221,9 @@ extension Defaults.Keys {
   static let legacyBatteryEnabled = Key<Bool>("batteryEnabled", default: true)
   static let hudEnabled = Key<Bool>("hudEnabled", default: false)
   static let hudStyle = Key<HUDStyle>("hudStyle", default: .bar)
+  /// Stable Core Graphics display UUIDs for monitors whose DDC control the user disabled.
+  static let disabledExternalBrightnessDisplays = Key<[String]>(
+    "disabledExternalBrightnessDisplays", default: [])
   /// Provider setting shared by the Calendar activity and Home agenda, not an activity switch.
   static let calendarEnabled = Key<Bool>("calendarEnabled", default: true)
   static let calendarLeadMinutes = Key<Int>("calendarLeadMinutes", default: 10)
