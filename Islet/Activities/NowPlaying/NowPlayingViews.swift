@@ -80,8 +80,18 @@ struct ExpandedPlayerView: View {
           }
         }
         Text(pb.artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-        scrubber(pb)
-        controls(pb)
+        scrubber(pb, source: source)
+        controls(pb, source: source)
+        if let source {
+          let notice = activity.mediaControlNotice
+          Text(notice ?? activity.mediaControlScopeLabel(for: source))
+            .font(.caption2)
+            .foregroundStyle(notice == nil ? Color.secondary : Color.yellow)
+            .lineLimit(2)
+            .accessibilityLabel(
+              notice.map { "Media control error: \($0)" }
+                ?? activity.mediaControlScopeLabel(for: source))
+        }
       }
     }
   }
@@ -147,7 +157,7 @@ struct ExpandedPlayerView: View {
   }
 
   private func sourceChooserRow(_ source: SourceID, isPrimary: Bool) -> some View {
-    let isPlaying = activity.sources[source]?.isPlaying ?? true
+    let playback = activity.sources[source]
     return HStack(spacing: 8) {
       if let icon = activity.sourceIcon(for: source) {
         Image(nsImage: icon).resizable().frame(width: 16, height: 16)
@@ -156,7 +166,7 @@ struct ExpandedPlayerView: View {
       }
       VStack(alignment: .leading, spacing: 1) {
         Text(activity.sourceName(for: source))
-        Text(isPlaying ? "Playing" : "Paused")
+        Text(playback.map { $0.isPlaying ? "Playing" : "Paused" } ?? "Audio detected")
           .font(.caption)
           .foregroundStyle(.secondary)
       }
@@ -202,9 +212,10 @@ struct ExpandedPlayerView: View {
     .accessibilityHidden(true)
   }
 
-  private func scrubber(_ pb: PlaybackState) -> some View {
+  private func scrubber(_ pb: PlaybackState, source: SourceID?) -> some View {
+    let canSeek = source.map { activity.canPerform(.seek(to: 0), for: $0) } ?? false
     // Only tick while actually playing; a paused track's position is fixed, so no redraw is needed.
-    TimelineView(.animation(minimumInterval: 0.5, paused: pb.isPlaying == false)) { _ in
+    return TimelineView(.animation(minimumInterval: 0.5, paused: pb.isPlaying == false)) { _ in
       let elapsedText = MediaDurationFormatter.string(
         for: scrubbing ? scrubValue : pb.currentElapsed)
       let durationText = MediaDurationFormatter.string(for: pb.duration)
@@ -216,10 +227,14 @@ struct ExpandedPlayerView: View {
           in: 0...max(pb.duration, 1)
         ) { editing in
           scrubbing = editing
-          if !editing { MediaRemoteCommands.shared.seek(to: scrubValue) }
+          if !editing, let source {
+            Task { await activity.perform(.seek(to: scrubValue), for: source) }
+          }
         }
         .accessibilityLabel("Playback position")
         .accessibilityValue("\(elapsedText) of \(durationText)")
+        .disabled(!canSeek)
+        .opacity(canSeek ? 1 : 0.4)
         HStack {
           Text(elapsedText).monospacedDigit()
           Spacer()
@@ -230,52 +245,84 @@ struct ExpandedPlayerView: View {
     }
   }
 
-  private func controls(_ pb: PlaybackState) -> some View {
-    HStack(spacing: 20) {
+  private func controls(_ pb: PlaybackState, source: SourceID?) -> some View {
+    let backCommand: MediaCommand = pb.supportsSkipBackward15 ? .skipBackward15 : .previous
+    let forwardCommand: MediaCommand = pb.supportsSkipForward15 ? .skipForward15 : .next
+    let controlsAvailable = source.map { activity.canPerform(.togglePlayPause, for: $0) } ?? false
+    return HStack(spacing: 20) {
       Button {
-        MediaRemoteCommands.shared.toggleShuffle()
+        if let source { Task { await activity.perform(.toggleShuffle, for: source) } }
       } label: {
         Image(systemName: "shuffle").foregroundStyle(pb.isShuffleOn ? .green : .secondary)
       }
-      .help("Shuffle")
-      .accessibilityLabel(pb.isShuffleOn ? "Turn shuffle off" : "Turn shuffle on")
+      .help(controlHelp(pb.isShuffleOn ? "Turn shuffle off" : "Turn shuffle on", source: source))
+      .accessibilityLabel(
+        activity.mediaControlAccessibilityLabel(
+          action: pb.isShuffleOn ? "Turn shuffle off" : "Turn shuffle on"))
       // Podcasts/audiobooks get ±15 s skip; music gets prev/next.
       Button {
-        pb.supportsSkip15
-          ? MediaRemoteCommands.shared.skipBackward15() : MediaRemoteCommands.shared.previous()
+        guard let source else { return }
+        Task {
+          await activity.perform(backCommand, for: source)
+        }
       } label: {
-        Image(systemName: pb.supportsSkip15 ? "gobackward.15" : "backward.fill")
+        Image(systemName: pb.supportsSkipBackward15 ? "gobackward.15" : "backward.fill")
       }
-      .help(pb.supportsSkip15 ? "Back 15 seconds" : "Previous track")
-      .accessibilityLabel(pb.supportsSkip15 ? "Back 15 seconds" : "Previous track")
+      .help(
+        controlHelp(
+          pb.supportsSkipBackward15 ? "Back 15 seconds" : "Previous track", source: source)
+      )
+      .accessibilityLabel(
+        activity.mediaControlAccessibilityLabel(
+          action: pb.supportsSkipBackward15 ? "Back 15 seconds" : "Previous track")
+      )
+      .disabled(source.map { activity.canPerform(backCommand, for: $0) } != true)
       Button {
-        MediaRemoteCommands.shared.togglePlayPause()
+        if let source { Task { await activity.perform(.togglePlayPause, for: source) } }
       } label: {
         Image(systemName: pb.isPlaying ? "pause.fill" : "play.fill").font(.title2)
       }
-      .help(pb.isPlaying ? "Pause" : "Play")
-      .accessibilityLabel(pb.isPlaying ? "Pause" : "Play")
+      .help(controlHelp(pb.isPlaying ? "Pause" : "Play", source: source))
+      .accessibilityLabel(
+        activity.mediaControlAccessibilityLabel(action: pb.isPlaying ? "Pause" : "Play"))
       Button {
-        pb.supportsSkip15
-          ? MediaRemoteCommands.shared.skipForward15() : MediaRemoteCommands.shared.next()
+        guard let source else { return }
+        Task {
+          await activity.perform(forwardCommand, for: source)
+        }
       } label: {
-        Image(systemName: pb.supportsSkip15 ? "goforward.15" : "forward.fill")
+        Image(systemName: pb.supportsSkipForward15 ? "goforward.15" : "forward.fill")
       }
-      .help(pb.supportsSkip15 ? "Forward 15 seconds" : "Next track")
-      .accessibilityLabel(pb.supportsSkip15 ? "Forward 15 seconds" : "Next track")
+      .help(
+        controlHelp(pb.supportsSkipForward15 ? "Forward 15 seconds" : "Next track", source: source)
+      )
+      .accessibilityLabel(
+        activity.mediaControlAccessibilityLabel(
+          action: pb.supportsSkipForward15 ? "Forward 15 seconds" : "Next track")
+      )
+      .disabled(source.map { activity.canPerform(forwardCommand, for: $0) } != true)
       Button {
-        MediaRemoteCommands.shared.cycleRepeat()
+        if let source { Task { await activity.perform(.cycleRepeat, for: source) } }
       } label: {
         Image(systemName: pb.repeatMode == 1 ? "repeat.1" : "repeat")
           .foregroundStyle(pb.repeatMode != 0 ? .green : .secondary)
       }
-      .help("Repeat")
-      .accessibilityLabel(pb.repeatMode == 0 ? "Turn repeat on" : "Change repeat mode")
+      .help(
+        controlHelp(pb.repeatMode == 0 ? "Turn repeat on" : "Change repeat mode", source: source)
+      )
+      .accessibilityLabel(
+        activity.mediaControlAccessibilityLabel(
+          action: pb.repeatMode == 0 ? "Turn repeat on" : "Change repeat mode"))
     }
     .buttonStyle(.plain)
     .frame(maxWidth: .infinity)
-    .disabled(pb.isAdvertisement)
-    .opacity(pb.isAdvertisement ? 0.4 : 1)
+    .disabled(pb.isAdvertisement || !controlsAvailable)
+    .opacity(pb.isAdvertisement || !controlsAvailable ? 0.4 : 1)
+  }
+
+  private func controlHelp(_ action: String, source: SourceID?) -> String {
+    guard let source else { return action }
+    return activity.mediaControlHelp(action: action, for: source)
   }
 }
 

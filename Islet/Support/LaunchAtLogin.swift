@@ -30,6 +30,14 @@ enum LaunchAtLogin {
     apply(Defaults[.launchAtLogin])
   }
 
+  static func observe(
+    apply: @escaping @MainActor (Bool) -> Void = LaunchAtLogin.apply
+  ) -> AnyCancellable {
+    Defaults.publisher(.launchAtLogin)
+      .receive(on: DispatchQueue.main)
+      .sink { change in apply(change.newValue) }
+  }
+
   static func apply(_ enabled: Bool) {
     do {
       if enabled {

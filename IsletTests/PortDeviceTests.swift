@@ -1,7 +1,9 @@
+import Combine
 import XCTest
 
 @testable import Islet
 
+@MainActor
 final class PortDeviceTests: XCTestCase {
   func testDuplicateProductNamesWithoutLocationIDsHaveDistinctStableKeys() throws {
     let first = try XCTUnwrap(PortsReader.device(from: USBDeviceFixtures.identicalKeyboardA))
@@ -49,6 +51,197 @@ final class PortDeviceTests: XCTestCase {
         from: .init(
           registryEntryID: nil, servicePath: nil, locationID: nil,
           productName: "Keyboard", vendorName: nil, deviceSpeed: nil)))
+  }
+
+  func testLegacyUSBRegistrySpeedIsMapped() throws {
+    let device = try XCTUnwrap(PortsReader.device(from: USBDeviceFixtures.legacyUSB))
+
+    XCTAssertEqual(device.speed, "480 Mbps")
+  }
+
+  func testNegotiatedLinkSpeedTakesPriorityOverUSBMarketingSpeed() throws {
+    let device = try XCTUnwrap(PortsReader.device(from: USBDeviceFixtures.usb20Gbps))
+
+    XCTAssertEqual(device.speed, "20 Gbps")
+  }
+
+  func testNegotiatedUSB4LinkSpeedsAreMapped() throws {
+    let forty = try XCTUnwrap(PortsReader.device(from: USBDeviceFixtures.usb40Gbps))
+    let eighty = try XCTUnwrap(PortsReader.device(from: USBDeviceFixtures.usb80Gbps))
+
+    XCTAssertEqual(forty.speed, "40 Gbps")
+    XCTAssertEqual(eighty.speed, "80 Gbps")
+  }
+
+  func testUnknownLinkSpeedHasAnExplicitLabel() throws {
+    let device = try XCTUnwrap(PortsReader.device(from: USBDeviceFixtures.unknownSpeed))
+
+    XCTAssertEqual(device.speed, "Unknown (123456789)")
+  }
+
+  func testFailedReadRetainsLastValidSnapshotDuringGracePeriod() {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var results: [PortEnumerationResult] = [
+      .devices([USBDeviceFixtures.monitorDevice]),
+      .error(.matchingServices(-1)),
+    ]
+    let monitor = PortMonitor(
+      reader: { results.removeFirst() }, now: { now }, gracePeriod: 10)
+
+    monitor.refresh()
+    now.addTimeInterval(9)
+    monitor.refresh()
+
+    XCTAssertEqual(monitor.devices, [USBDeviceFixtures.monitorDevice])
+    XCTAssertEqual(
+      monitor.readerHealth,
+      .stale(error: .matchingServices(-1), lastSuccessfulRead: Date(timeIntervalSince1970: 1_000)))
+  }
+
+  func testFirstFailureHoursAfterLastSuccessStartsAFullGracePeriod() {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var results: [PortEnumerationResult] = [
+      .devices([USBDeviceFixtures.monitorDevice]),
+      .error(.matchingServices(-1)),
+    ]
+    let monitor = PortMonitor(
+      reader: { results.removeFirst() }, now: { now }, gracePeriod: 10)
+
+    monitor.refresh()
+    now.addTimeInterval(3_600)
+    monitor.refresh()
+
+    XCTAssertEqual(monitor.devices, [USBDeviceFixtures.monitorDevice])
+    XCTAssertEqual(
+      monitor.readerHealth,
+      .stale(error: .matchingServices(-1), lastSuccessfulRead: Date(timeIntervalSince1970: 1_000)))
+  }
+
+  func testGraceExpiryClearsTheDisplayedSnapshotButNotTheEventSnapshot() {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var monotonicNow: TimeInterval = 100
+    var results: [PortEnumerationResult] = [
+      .devices([USBDeviceFixtures.monitorDevice]),
+      .error(.matchingServices(-1)),
+    ]
+    let monitor = PortMonitor(
+      reader: { results.removeFirst() }, now: { now }, monotonicNow: { monotonicNow },
+      gracePeriod: 10)
+
+    monitor.refresh()
+    now.addTimeInterval(1)
+    monotonicNow += 1
+    monitor.refresh()
+    now.addTimeInterval(10)
+    monotonicNow += 10
+    monitor.expireGraceIfNeeded()
+
+    XCTAssertEqual(monitor.devices, [])
+    XCTAssertEqual(monitor.eventDevices, [USBDeviceFixtures.monitorDevice])
+    XCTAssertEqual(monitor.previousDevices, [USBDeviceFixtures.monitorDevice])
+    XCTAssertEqual(
+      monitor.readerHealth,
+      .failed(error: .matchingServices(-1), lastSuccessfulRead: Date(timeIntervalSince1970: 1_000)))
+  }
+
+  func testAnotherReadFailureAfterGraceExpiryDoesNotRestartStaleGrace() {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var monotonicNow: TimeInterval = 100
+    var results: [PortEnumerationResult] = [
+      .devices([USBDeviceFixtures.monitorDevice]),
+      .error(.matchingServices(-1)),
+      .error(.matchingServices(-2)),
+    ]
+    let monitor = PortMonitor(
+      reader: { results.removeFirst() }, now: { now }, monotonicNow: { monotonicNow },
+      gracePeriod: 10)
+
+    monitor.refresh()
+    now.addTimeInterval(1)
+    monotonicNow += 1
+    monitor.refresh()
+    now.addTimeInterval(10)
+    monotonicNow += 10
+    monitor.expireGraceIfNeeded()
+    monitor.retry()
+
+    XCTAssertTrue(monitor.devices.isEmpty)
+    XCTAssertEqual(
+      monitor.readerHealth,
+      .failed(error: .matchingServices(-2), lastSuccessfulRead: Date(timeIntervalSince1970: 1_000)))
+    XCTAssertEqual(monitor.readerHealth.summary, "IOKit matching failed (0xFFFFFFFE)")
+  }
+
+  func testRetryRecoversReaderWithoutInventingDisconnectOrReconnectEvents() {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var monotonicNow: TimeInterval = 100
+    var results: [PortEnumerationResult] = [
+      .devices([USBDeviceFixtures.monitorDevice]),
+      .error(.matchingServices(-1)),
+      .devices([USBDeviceFixtures.monitorDevice]),
+    ]
+    let monitor = PortMonitor(
+      reader: { results.removeFirst() }, now: { now }, monotonicNow: { monotonicNow },
+      gracePeriod: 10)
+    var eventSnapshots: [[PortDevice]] = []
+    let cancellable = monitor.$eventDevices.dropFirst().sink { eventSnapshots.append($0) }
+    defer { cancellable.cancel() }
+
+    monitor.refresh()
+    now.addTimeInterval(1)
+    monotonicNow += 1
+    monitor.refresh()
+    now.addTimeInterval(10)
+    monotonicNow += 10
+    monitor.expireGraceIfNeeded()
+    monitor.retry()
+
+    XCTAssertEqual(monitor.devices, [USBDeviceFixtures.monitorDevice])
+    XCTAssertEqual(
+      monitor.readerHealth,
+      .current(lastSuccessfulRead: Date(timeIntervalSince1970: 1_011)))
+    XCTAssertEqual(eventSnapshots, [[USBDeviceFixtures.monitorDevice]])
+  }
+
+  func testFirstSuccessAfterAnInitialFailureBecomesTheEventBaseline() {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var results: [PortEnumerationResult] = [
+      .error(.matchingServices(-1)),
+      .devices([USBDeviceFixtures.monitorDevice]),
+    ]
+    let monitor = PortMonitor(reader: { results.removeFirst() }, now: { now }, gracePeriod: 10)
+
+    monitor.refresh()
+    now.addTimeInterval(1)
+    monitor.retry()
+
+    XCTAssertEqual(monitor.eventDevices, [USBDeviceFixtures.monitorDevice])
+    XCTAssertEqual(monitor.previousDevices, [USBDeviceFixtures.monitorDevice])
+    let changes = SetDiff.changes(from: monitor.previousDevices, to: monitor.eventDevices)
+    XCTAssertTrue(changes.added.isEmpty)
+    XCTAssertTrue(changes.removed.isEmpty)
+  }
+
+  func testWallClockRollbackWhileStaleCannotPreventScheduledExpiry() async {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var results: [PortEnumerationResult] = [
+      .devices([USBDeviceFixtures.monitorDevice]),
+      .error(.matchingServices(-1)),
+    ]
+    let monitor = PortMonitor(reader: { results.removeFirst() }, now: { now }, gracePeriod: 0.05)
+
+    monitor.refresh()
+    now.addTimeInterval(1)
+    monitor.refresh()
+    XCTAssertEqual(monitor.devices, [USBDeviceFixtures.monitorDevice])
+
+    now.addTimeInterval(-3_600)
+    try? await Task.sleep(for: .milliseconds(150))
+
+    XCTAssertTrue(monitor.devices.isEmpty)
+    XCTAssertEqual(
+      monitor.readerHealth,
+      .failed(error: .matchingServices(-1), lastSuccessfulRead: Date(timeIntervalSince1970: 1_000)))
   }
 }
 
@@ -108,4 +301,56 @@ private enum USBDeviceFixtures {
     productName: "USB Keyboard",
     vendorName: nil,
     deviceSpeed: nil)
+
+  static let legacyUSB = USBDeviceRegistryEntry(
+    registryEntryID: 0x401,
+    servicePath: "/AppleUSBXHCI/Port@14600000/Device@1",
+    locationID: nil,
+    productName: "USB Keyboard",
+    vendorName: "Example",
+    deviceSpeed: Int(kUSBDeviceSpeedHigh))
+
+  static let usb20Gbps = USBDeviceRegistryEntry(
+    registryEntryID: 0x402,
+    servicePath: "/AppleUSBXHCI/Port@14700000/Device@1",
+    locationID: nil,
+    productName: "USB4 40Gbps device",
+    vendorName: "Example",
+    deviceSpeed: Int(kUSBDeviceSpeedSuper),
+    linkSpeed: Int(kIOUSBLinkSpeed20Gbps),
+    usbSpeed: Int(kIOUSBHostConnectionSpeedSuperPlus.rawValue))
+
+  static let usb40Gbps = USBDeviceRegistryEntry(
+    registryEntryID: 0x403,
+    servicePath: "/AppleUSBXHCI/Port@14800000/Device@1",
+    locationID: nil,
+    productName: "USB4 40Gbps device",
+    vendorName: "Example",
+    deviceSpeed: nil,
+    linkSpeed: Int(kIOUSBLinkSpeed40Gbps))
+
+  static let usb80Gbps = USBDeviceRegistryEntry(
+    registryEntryID: 0x404,
+    servicePath: "/AppleUSBXHCI/Port@14900000/Device@1",
+    locationID: nil,
+    productName: "USB4 80Gbps device",
+    vendorName: "Example",
+    deviceSpeed: nil,
+    linkSpeed: Int(kIOUSBLinkSpeed80Gbps))
+
+  static let unknownSpeed = USBDeviceRegistryEntry(
+    registryEntryID: 0x405,
+    servicePath: "/AppleUSBXHCI/Port@14A00000/Device@1",
+    locationID: nil,
+    productName: "Future USB device",
+    vendorName: "Example",
+    deviceSpeed: nil,
+    linkSpeed: 123_456_789)
+
+  static let monitorDevice = PortDevice(
+    id: "registry:0000000000000401|path:/AppleUSBXHCI/Port@14500000/Device@1",
+    name: "USB Keyboard",
+    vendor: "Example",
+    speed: "480 Mbps",
+    locationID: 0x1450_0000)
 }

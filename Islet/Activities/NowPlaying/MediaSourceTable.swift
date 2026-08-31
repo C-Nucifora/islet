@@ -152,11 +152,15 @@ enum MediaSourceChooser {
       priorityList: [bundleID] + priorityList.filter { $0 != bundleID })
   }
 
-  static func accessibilityLabel(appName: String, isPlaying: Bool, isPrimary: Bool) -> String {
-    "\(appName), \(isPlaying ? "Playing" : "Paused"), \(isPrimary ? "Primary source" : "Additional source")"
+  static func accessibilityLabel(
+    appName: String, isPlaying: Bool, isPrimary: Bool, isAdapterBacked: Bool = true
+  ) -> String {
+    let status = isAdapterBacked ? (isPlaying ? "Playing" : "Paused") : "Audio detected only"
+    return "\(appName), \(status), \(isPrimary ? "Primary source" : "Additional source")"
   }
 
-  static func accessibilityHint(appName: String) -> String {
-    "Makes \(appName) the primary player"
+  static func accessibilityHint(appName: String, isAdapterBacked: Bool = true) -> String {
+    if isAdapterBacked { return "Makes \(appName) the preferred player" }
+    return "Brings \(appName) forward; Islet cannot control this audio source directly"
   }
 }

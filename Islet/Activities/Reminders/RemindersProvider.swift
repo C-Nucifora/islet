@@ -40,6 +40,7 @@ final class RemindersProvider: ObservableObject {
     if Defaults[.remindersEnabled] { Task { await refreshAuthorization() } }
     Defaults.publisher(.remindersEnabled)
       .dropFirst()
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] change in
         guard change.newValue else {
           self?.storeChangeDebouncer.cancel()

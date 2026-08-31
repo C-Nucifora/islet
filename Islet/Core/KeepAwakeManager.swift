@@ -211,14 +211,12 @@ final class KeepAwakeManager: ObservableObject {
 
     if observePreferenceChanges {
       Defaults.publisher(.allowDisplaySleep)
-        .sink { [weak self] change in
-          Task { @MainActor in self?.setAllowDisplaySleep(change.newValue) }
-        }
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] change in self?.setAllowDisplaySleep(change.newValue) }
         .store(in: &cancellables)
       Defaults.publisher(.keepAwakeLowBatteryThreshold)
-        .sink { [weak self] change in
-          Task { @MainActor in self?.setLowBatteryThreshold(change.newValue) }
-        }
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] change in self?.setLowBatteryThreshold(change.newValue) }
         .store(in: &cancellables)
       Defaults.publisher(.keepAwakeWithLidClosed)
         .sink { [weak self] change in

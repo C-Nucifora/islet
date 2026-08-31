@@ -136,6 +136,33 @@ final class ActivityCenterTests: XCTestCase {
     XCTAssertEqual(center.activeActivities.map(\.id), ["system"])
   }
 
+  func testDefaultsChangesFromUtilityTaskPublishOnMainThread() async {
+    let savedDisabled = Defaults[.disabledActivities]
+    let marker = "activity-center-main-thread-test"
+    let changedDisabled =
+      savedDisabled.contains(marker)
+      ? savedDisabled.filter { $0 != marker }
+      : savedDisabled + [marker]
+    defer { Defaults[.disabledActivities] = savedDisabled }
+
+    let center = ActivityCenter()
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main.async { continuation.resume() }
+    }
+    let published = expectation(description: "ActivityCenter republishes the Defaults change")
+    let cancellable = center.objectWillChange.sink { _ in
+      XCTAssertTrue(Thread.isMainThread)
+      published.fulfill()
+    }
+
+    await Task.detached(priority: .utility) {
+      Defaults[.disabledActivities] = changedDisabled
+    }.value
+    await fulfillment(of: [published], timeout: 2)
+
+    cancellable.cancel()
+  }
+
   func testTieBrokenByRecency() {
     let center = ActivityCenter()
     let a = Fake(id: "a", priority: .ambient, active: true)
