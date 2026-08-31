@@ -206,7 +206,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .nowPlaying:
       pageContent + [
         "Primary player", "Whatever is playing", "My order", "Add Detected Player",
-        "Add Other App by Bundle Identifier", "music Spotify Apple Music media priority",
+        "Add Other App by Bundle Identifier", "Audio-only sources", "Include", "Exclude",
+        "CoreAudio", "music Spotify Apple Music media priority",
       ]
     case .continuity:
       pageContent + [
@@ -376,6 +377,7 @@ struct SettingsView: View {
   @Default(.hideFromScreenRecording) private var hideFromRecording
   @Default(.mediaSourceMode) private var sourceMode
   @Default(.mediaPriorityList) private var priorityList
+  @Default(.excludedAudioOnlySourceBundleIdentifiers) private var excludedAudioOnlySourceBundleIDs
   @Default(.hudEnabled) private var hudEnabled
   @Default(.hudStyle) private var hudStyle
   @Default(.calendarEnabled) private var calendarEnabled
@@ -1035,6 +1037,36 @@ struct SettingsView: View {
                     || priorityList.contains(
                       newBundleID.trimmingCharacters(in: .whitespacesAndNewlines))
                 )
+            }
+          }
+        }
+      }
+      Section("Audio-only sources") {
+        Text(
+          "CoreAudio detects any app making sound, including calls, games and helpers. These choices only affect audio-only source chips, not media players from the adapter."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        if nowPlaying.manageableAudioOnlyBundleIdentifiers.isEmpty {
+          Text("Audio-only apps appear here while they are making sound.")
+            .font(.caption).foregroundStyle(.secondary)
+        } else {
+          ForEach(nowPlaying.manageableAudioOnlyBundleIdentifiers, id: \.self) { bundleID in
+            Toggle(isOn: audioOnlySourceIncludedBinding(bundleID)) {
+              HStack(spacing: 10) {
+                if let icon = nowPlaying.applicationIcon(for: bundleID) {
+                  Image(nsImage: icon).resizable().frame(width: 24, height: 24)
+                } else {
+                  Image(systemName: "app.dashed").frame(width: 24, height: 24)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                  Text(nowPlaying.applicationName(for: bundleID))
+                  Text(bundleID).font(.caption.monospaced()).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(excludedAudioOnlySourceBundleIDs.contains(bundleID) ? "Excluded" : "Included")
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
             }
           }
         }
@@ -1845,6 +1877,21 @@ struct SettingsView: View {
     guard !bundleID.isEmpty, !priorityList.contains(bundleID) else { return }
     priorityList.append(bundleID)
     newBundleID = ""
+  }
+
+  private func audioOnlySourceIncludedBinding(_ bundleIdentifier: String) -> Binding<Bool> {
+    Binding(
+      get: { !excludedAudioOnlySourceBundleIDs.contains(bundleIdentifier) },
+      set: { included in
+        if included {
+          excludedAudioOnlySourceBundleIDs.removeAll { $0 == bundleIdentifier }
+        } else if !excludedAudioOnlySourceBundleIDs.contains(bundleIdentifier) {
+          excludedAudioOnlySourceBundleIDs.append(bundleIdentifier)
+          if excludedAudioOnlySourceBundleIDs.count > SourceFilter.maximumAudioOnlyExclusions {
+            excludedAudioOnlySourceBundleIDs.removeFirst()
+          }
+        }
+      })
   }
 
   private var clipboardCaptureStatus: String {
