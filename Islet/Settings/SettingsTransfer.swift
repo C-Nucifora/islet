@@ -620,7 +620,7 @@ enum SettingsTransferDefaults {
       hideInFullscreen: Defaults[.hideInFullscreen],
       launchAtLogin: Defaults[.launchAtLogin], activityOrder: Defaults[.activityOrder],
       disabledActivities: Defaults[.disabledActivities],
-      disabledEventSources: Defaults[.disabledEventSources],
+      disabledEventSources: EventSourcePreferences.shared.disabledSourceIDs,
       systemAlwaysVisible: Defaults[.systemAlwaysVisible],
       systemAutoPresentCPU: Defaults[.systemAutoPresentCPU],
       systemAutoPresentThermal: Defaults[.systemAutoPresentThermal],
@@ -659,7 +659,9 @@ enum SettingsTransferDefaults {
     if let value = patch.launchAtLogin { Defaults[.launchAtLogin] = value }
     if let value = patch.activityOrder { Defaults[.activityOrder] = value }
     if let value = patch.disabledActivities { Defaults[.disabledActivities] = value }
-    if let value = patch.disabledEventSources { Defaults[.disabledEventSources] = value }
+    if let value = patch.disabledEventSources {
+      EventSourcePreferences.shared.replaceDisabledSourceIDs(value)
+    }
     if let value = patch.systemAlwaysVisible { Defaults[.systemAlwaysVisible] = value }
     if let value = patch.systemAutoPresentCPU { Defaults[.systemAutoPresentCPU] = value }
     if let value = patch.systemAutoPresentThermal { Defaults[.systemAutoPresentThermal] = value }

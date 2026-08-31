@@ -250,10 +250,6 @@ extension Defaults.Keys {
   static let clipboardPausedUntil = Key<Date?>("clipboardPausedUntil")
   static let clipboardPausedLoginSession = Key<String?>("clipboardPausedLoginSession")
   static let legacyPortsEnabled = Key<Bool>("portsEnabled", default: true)
-  /// Event sources the user has switched off. Inferred sources start off because they can be late
-  /// or ambiguous; a user can explicitly enable the ones they find useful.
-  static let disabledEventSources = Key<[String]>(
-    "disabledEventSources", default: ["airdropOut", "airdropIn", "focus", "vpn"])
   /// Retained only as input to the one-time activity enablement migration.
   static let legacySystemEnabled = Key<Bool>("systemEnabled", default: true)
   /// Off: the System tab appears only while `SystemPresenceGate` is hot. On: it is always in the
