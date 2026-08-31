@@ -1,6 +1,52 @@
 import AppKit
 import SwiftUI
 
+@MainActor
+protocol TimerScheduledCompletion: AnyObject {
+  func cancel()
+}
+
+@MainActor
+protocol TimerCompletionScheduling: AnyObject {
+  func schedule(
+    at deadline: Date, action: @escaping @MainActor () -> Void
+  ) -> any TimerScheduledCompletion
+}
+
+@MainActor
+private final class TaskTimerCompletionScheduler: TimerCompletionScheduling {
+  private final class Handle: TimerScheduledCompletion {
+    private var task: Task<Void, Never>?
+
+    init(task: Task<Void, Never>) {
+      self.task = task
+    }
+
+    func cancel() {
+      task?.cancel()
+      task = nil
+    }
+  }
+
+  private let now: @MainActor () -> Date
+
+  init(now: @escaping @MainActor () -> Date) {
+    self.now = now
+  }
+
+  func schedule(
+    at deadline: Date, action: @escaping @MainActor () -> Void
+  ) -> any TimerScheduledCompletion {
+    let task = Task { @MainActor [now] in
+      let delay = deadline.timeIntervalSince(now())
+      if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+      guard !Task.isCancelled else { return }
+      action()
+    }
+    return Handle(task: task)
+  }
+}
+
 /// A single countdown timer (incl. Pomodoro presets) shown as a determinate progress activity.
 /// The model publishes only on state changes; the views tick themselves via TimelineView, so
 /// nothing runs while no timer is active.
@@ -17,24 +63,29 @@ final class TimerActivity: NotchActivity, ObservableObject {
   @Published private(set) var finished = false
   @Published private(set) var label: String?  // e.g. "Focus" / "Break"
   private var pausedRemaining: TimeInterval?
-  private var completionTask: Task<Void, Never>?
+  private var completionTask: (any TimerScheduledCompletion)?
   @Published private(set) var notificationFallbackMessage: String?
   private(set) var lastDuration: TimeInterval?
   private(set) var lastLabel: String?
   private let persistenceStore: TimerPersistenceStore
   private let completionNotifier: any TimerCompletionNotifying
-  private let completionDisplayDuration: Duration
+  private let clock: @MainActor () -> Date
+  private let completionScheduler: any TimerCompletionScheduling
   private var completionID = UUID()
+  private var retainedCompletionIdentifier: String?
+  private var retainedCompletionDate: Date?
 
   init(
-    persistenceStore: TimerPersistenceStore = .defaults, now: Date = Date(),
+    persistenceStore: TimerPersistenceStore = .defaults, now: Date? = nil,
     completionNotifier: any TimerCompletionNotifying = TimerCompletionNotifications.shared,
-    completionDisplayDuration: Duration = .seconds(6)
+    clock: @escaping @MainActor () -> Date = { Date() },
+    completionScheduler: (any TimerCompletionScheduling)? = nil
   ) {
     self.persistenceStore = persistenceStore
     self.completionNotifier = completionNotifier
-    self.completionDisplayDuration = completionDisplayDuration
-    restore(now: now)
+    self.clock = clock
+    self.completionScheduler = completionScheduler ?? TaskTimerCompletionScheduler(now: clock)
+    restore(now: now ?? clock())
   }
 
   var isActive: Bool { endDate != nil || isPaused || finished }
@@ -42,7 +93,7 @@ final class TimerActivity: NotchActivity, ObservableObject {
 
   /// Live remaining time, computed on read so no per-tick model churn is needed.
   var remainingNow: TimeInterval {
-    remaining(at: Date())
+    remaining(at: clock())
   }
 
   private func remaining(at now: Date) -> TimeInterval {
@@ -60,8 +111,10 @@ final class TimerActivity: NotchActivity, ObservableObject {
 
   func start(_ duration: TimeInterval, label: String? = nil) {
     guard let duration = TimerLogic.validatedDuration(duration) else { return }
-    let now = Date()
+    let now = clock()
     completionID = UUID()
+    retainedCompletionIdentifier = nil
+    retainedCompletionDate = nil
     notificationFallbackMessage = nil
     completionNotifier.prepareForTimerStart { [weak self] in
       self?.notificationFallbackMessage = TimerActivity.notificationFallbackMessage
@@ -83,7 +136,7 @@ final class TimerActivity: NotchActivity, ObservableObject {
 
   func togglePause() {
     guard !finished else { return }
-    let now = Date()
+    let now = clock()
     if isPaused {
       guard let remaining = pausedRemaining else { return }
       endDate = now.addingTimeInterval(remaining)
@@ -114,7 +167,7 @@ final class TimerActivity: NotchActivity, ObservableObject {
   /// Adjusts an active timer without allowing the remaining time to become zero or exceed a week.
   func adjust(by delta: TimeInterval) {
     guard !finished else { return }
-    let now = Date()
+    let now = clock()
     let remaining = remaining(at: now)
     guard remaining > 0 else { return }
     let adjusted = TimerLogic.adjustedRemaining(remaining, by: delta)
@@ -134,9 +187,19 @@ final class TimerActivity: NotchActivity, ObservableObject {
     start(lastDuration, label: lastLabel)
   }
 
-  func presentCompletionFromNotification(_ snapshot: TimerCompletionSnapshot) {
+  func presentCompletionFromNotification(
+    _ snapshot: TimerCompletionSnapshot, notificationIdentifier: String,
+    notificationDate: Date? = nil
+  ) {
     guard !isRunning, !isPaused else { return }
+    let completionDate = snapshot.completionDate(fallback: notificationDate ?? clock())
+    if finished, retainedCompletionIdentifier != notificationIdentifier {
+      guard completionDate > (retainedCompletionDate ?? .distantPast) else { return }
+    }
     completionTask?.cancel()
+    completionTask = nil
+    retainedCompletionIdentifier = notificationIdentifier
+    retainedCompletionDate = completionDate
     endDate = nil
     isPaused = false
     pausedRemaining = nil
@@ -146,10 +209,9 @@ final class TimerActivity: NotchActivity, ObservableObject {
     lastDuration = snapshot.duration
     lastLabel = snapshot.label
     persistLastPreset()
-    activationDate = Date()
+    activationDate = clock()
     notificationFallbackMessage = nil
-    persistenceStore.writeSessionData(nil)
-    scheduleFinishedAutoClear()
+    persistCompletedSession(completedAt: completionDate)
   }
 
   func cancel() {
@@ -161,6 +223,8 @@ final class TimerActivity: NotchActivity, ObservableObject {
     label = nil
     pausedRemaining = nil
     activationDate = nil
+    retainedCompletionIdentifier = nil
+    retainedCompletionDate = nil
     notificationFallbackMessage = nil
     persistenceStore.writeSessionData(nil)
   }
@@ -181,6 +245,10 @@ final class TimerActivity: NotchActivity, ObservableObject {
       apply(session, activationDate: session.savedAt)
     case .completed(let session):
       apply(session, activationDate: session.deadline?.addingTimeInterval(-session.duration))
+      retainedCompletionIdentifier =
+        session.completionIdentifier
+        ?? TimerCompletionNotificationCoordinator.identifier(for: completionID)
+      retainedCompletionDate = session.completedAt ?? session.deadline ?? now
       finish(playEffects: false)
     }
   }
@@ -216,13 +284,24 @@ final class TimerActivity: NotchActivity, ObservableObject {
     persistenceStore.writePresetData(TimerPersistence.encode(preset))
   }
 
+  private func persistCompletedSession(completedAt: Date) {
+    guard let retainedCompletionIdentifier else { return }
+    let session = TimerSessionSnapshot(
+      savedAt: completedAt,
+      label: label,
+      duration: total,
+      deadline: completedAt,
+      isPaused: false,
+      pausedRemaining: nil,
+      completionIdentifier: retainedCompletionIdentifier,
+      completedAt: completedAt)
+    persistenceStore.writeSessionData(TimerPersistence.encode(session))
+  }
+
   private func scheduleCompletion() {
     completionTask?.cancel()
     guard let endDate else { return }
-    completionTask = Task { [weak self] in
-      let delay = endDate.timeIntervalSinceNow
-      if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
-      guard !Task.isCancelled else { return }
+    completionTask = completionScheduler.schedule(at: endDate) { [weak self] in
       self?.fire()
     }
   }
@@ -232,11 +311,19 @@ final class TimerActivity: NotchActivity, ObservableObject {
   }
 
   private func finish(playEffects: Bool) {
+    let completionDate = retainedCompletionDate ?? endDate ?? clock()
+    completionTask?.cancel()
+    completionTask = nil
     endDate = nil
     isPaused = false
     pausedRemaining = nil
     finished = true
-    persistenceStore.writeSessionData(nil)
+    retainedCompletionDate = completionDate
+    if retainedCompletionIdentifier == nil {
+      retainedCompletionIdentifier = TimerCompletionNotificationCoordinator.identifier(
+        for: completionID)
+    }
+    persistCompletedSession(completedAt: completionDate)
     if playEffects {
       let title = "\(label ?? "Timer") done"
       Haptics.perform(.levelChange)
@@ -248,23 +335,15 @@ final class TimerActivity: NotchActivity, ObservableObject {
           announcement: title))
       completionNotifier.notifyTimerFinished(
         completionID: completionID,
-        snapshot: TimerCompletionSnapshot(duration: total, label: label), title: title,
+        snapshot: TimerCompletionSnapshot(
+          duration: total, label: label, completedAt: completionDate), title: title,
         body: "Your timer finished."
       ) { [weak self] in
         self?.notificationFallbackMessage = TimerActivity.notificationFallbackMessage
       }
     }
-    scheduleFinishedAutoClear()
-  }
-
-  private func scheduleFinishedAutoClear() {
-    completionTask?.cancel()
-    let displayDuration = completionDisplayDuration
-    completionTask = Task { [weak self] in
-      try? await Task.sleep(for: displayDuration)
-      guard !Task.isCancelled else { return }
-      self?.cancel()
-    }
+    // A completion stays visible until the user dismisses it or starts another timer.
+    // TimerActivity outlives rebuilt panel views, so the card survives panel reconstruction.
   }
 
   // MARK: - Views
@@ -426,6 +505,40 @@ enum TimerLogic {
       return min(maximumDuration, max(minimumDuration, remaining.isFinite ? remaining : 0))
     }
     return min(maximumDuration, max(minimumDuration, remaining + delta))
+  }
+}
+
+enum TimerEditorValidation: Equatable {
+  case valid(TimeInterval)
+  case missingDuration
+  case invalidDuration
+  case nonPositiveDuration
+  case overMaximumDuration
+
+  static func validate(minutes input: String) -> Self {
+    let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return .missingDuration }
+    guard let minutes = Int(trimmed) else { return .invalidDuration }
+    guard minutes > 0 else { return .nonPositiveDuration }
+    guard minutes <= maximumMinutes else { return .overMaximumDuration }
+    return .valid(TimeInterval(minutes * 60))
+  }
+
+  static var maximumMinutes: Int { Int(TimerLogic.maximumDuration / 60) }
+
+  var message: String? {
+    switch self {
+    case .valid:
+      nil
+    case .missingDuration:
+      "Enter a duration in minutes."
+    case .invalidDuration:
+      "Enter a whole number of minutes."
+    case .nonPositiveDuration:
+      "Duration must be at least one minute."
+    case .overMaximumDuration:
+      "Duration cannot exceed \(Self.maximumMinutes) minutes."
+    }
   }
 }
 

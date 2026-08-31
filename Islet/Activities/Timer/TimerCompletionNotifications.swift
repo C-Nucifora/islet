@@ -13,19 +13,25 @@ enum TimerNotificationAuthorization: Equatable, Sendable {
 struct TimerCompletionSnapshot: Equatable, Sendable {
   private static let durationKey = "islet.timer.duration"
   private static let labelKey = "islet.timer.label"
+  private static let completedAtKey = "islet.timer.completedAt"
 
   let duration: TimeInterval
   let label: String?
+  let completedAt: Date?
 
   var notificationUserInfo: [AnyHashable: Any] {
     var userInfo: [AnyHashable: Any] = [Self.durationKey: duration]
     if let label { userInfo[Self.labelKey] = label }
+    if let completedAt {
+      userInfo[Self.completedAtKey] = completedAt.timeIntervalSinceReferenceDate
+    }
     return userInfo
   }
 
-  init(duration: TimeInterval, label: String?) {
+  init(duration: TimeInterval, label: String?, completedAt: Date? = nil) {
     self.duration = duration
     self.label = label
+    self.completedAt = completedAt
   }
 
   init?(notificationUserInfo: [AnyHashable: Any]) {
@@ -36,8 +42,20 @@ struct TimerCompletionSnapshot: Equatable, Sendable {
       return nil
     }
     if let rawLabel = notificationUserInfo[Self.labelKey], !(rawLabel is String) { return nil }
+    let completedAt: Date?
+    if let rawCompletedAt = notificationUserInfo[Self.completedAtKey] {
+      guard let interval = rawCompletedAt as? Double, interval.isFinite else { return nil }
+      completedAt = Date(timeIntervalSinceReferenceDate: interval)
+    } else {
+      completedAt = nil
+    }
     self.duration = duration
     self.label = notificationUserInfo[Self.labelKey] as? String
+    self.completedAt = completedAt
+  }
+
+  func completionDate(fallback: Date) -> Date {
+    completedAt ?? fallback
   }
 }
 
@@ -250,9 +268,12 @@ final class TimerCompletionNotifications: NSObject, TimerCompletionNotifying,
     let identifier = response.notification.request.identifier
     if identifier.hasPrefix("timer-completion-") {
       let userInfo = response.notification.request.content.userInfo
+      let notificationDate = response.notification.date
       if let snapshot = TimerCompletionSnapshot(notificationUserInfo: userInfo) {
         Task { @MainActor in
-          AppState.timer.presentCompletionFromNotification(snapshot)
+          AppState.timer.presentCompletionFromNotification(
+            snapshot, notificationIdentifier: identifier,
+            notificationDate: notificationDate)
           NSApp.activate(ignoringOtherApps: true)
           ScreenManager.shared.openCompletedTimer()
         }
