@@ -1,7 +1,9 @@
+import Combine
 import XCTest
 
 @testable import Islet
 
+@MainActor
 final class PortDeviceTests: XCTestCase {
   func testDuplicateProductNamesWithoutLocationIDsHaveDistinctStableKeys() throws {
     let first = try XCTUnwrap(PortsReader.device(from: USBDeviceFixtures.identicalKeyboardA))
@@ -49,6 +51,171 @@ final class PortDeviceTests: XCTestCase {
         from: .init(
           registryEntryID: nil, servicePath: nil, locationID: nil,
           productName: "Keyboard", vendorName: nil, deviceSpeed: nil)))
+  }
+
+  func testFailedReadRetainsLastValidSnapshotDuringGracePeriod() {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var results: [PortEnumerationResult] = [
+      .devices([USBDeviceFixtures.monitorDevice]),
+      .error(.matchingServices(-1)),
+    ]
+    let monitor = PortMonitor(
+      reader: { results.removeFirst() }, now: { now }, gracePeriod: 10)
+
+    monitor.refresh()
+    now.addTimeInterval(9)
+    monitor.refresh()
+
+    XCTAssertEqual(monitor.devices, [USBDeviceFixtures.monitorDevice])
+    XCTAssertEqual(
+      monitor.readerHealth,
+      .stale(error: .matchingServices(-1), lastSuccessfulRead: Date(timeIntervalSince1970: 1_000)))
+  }
+
+  func testFirstFailureHoursAfterLastSuccessStartsAFullGracePeriod() {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var results: [PortEnumerationResult] = [
+      .devices([USBDeviceFixtures.monitorDevice]),
+      .error(.matchingServices(-1)),
+    ]
+    let monitor = PortMonitor(
+      reader: { results.removeFirst() }, now: { now }, gracePeriod: 10)
+
+    monitor.refresh()
+    now.addTimeInterval(3_600)
+    monitor.refresh()
+
+    XCTAssertEqual(monitor.devices, [USBDeviceFixtures.monitorDevice])
+    XCTAssertEqual(
+      monitor.readerHealth,
+      .stale(error: .matchingServices(-1), lastSuccessfulRead: Date(timeIntervalSince1970: 1_000)))
+  }
+
+  func testGraceExpiryClearsTheDisplayedSnapshotButNotTheEventSnapshot() {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var monotonicNow: TimeInterval = 100
+    var results: [PortEnumerationResult] = [
+      .devices([USBDeviceFixtures.monitorDevice]),
+      .error(.matchingServices(-1)),
+    ]
+    let monitor = PortMonitor(
+      reader: { results.removeFirst() }, now: { now }, monotonicNow: { monotonicNow },
+      gracePeriod: 10)
+
+    monitor.refresh()
+    now.addTimeInterval(1)
+    monotonicNow += 1
+    monitor.refresh()
+    now.addTimeInterval(10)
+    monotonicNow += 10
+    monitor.expireGraceIfNeeded()
+
+    XCTAssertEqual(monitor.devices, [])
+    XCTAssertEqual(monitor.eventDevices, [USBDeviceFixtures.monitorDevice])
+    XCTAssertEqual(monitor.previousDevices, [USBDeviceFixtures.monitorDevice])
+    XCTAssertEqual(
+      monitor.readerHealth,
+      .failed(error: .matchingServices(-1), lastSuccessfulRead: Date(timeIntervalSince1970: 1_000)))
+  }
+
+  func testAnotherReadFailureAfterGraceExpiryDoesNotRestartStaleGrace() {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var monotonicNow: TimeInterval = 100
+    var results: [PortEnumerationResult] = [
+      .devices([USBDeviceFixtures.monitorDevice]),
+      .error(.matchingServices(-1)),
+      .error(.matchingServices(-2)),
+    ]
+    let monitor = PortMonitor(
+      reader: { results.removeFirst() }, now: { now }, monotonicNow: { monotonicNow },
+      gracePeriod: 10)
+
+    monitor.refresh()
+    now.addTimeInterval(1)
+    monotonicNow += 1
+    monitor.refresh()
+    now.addTimeInterval(10)
+    monotonicNow += 10
+    monitor.expireGraceIfNeeded()
+    monitor.retry()
+
+    XCTAssertTrue(monitor.devices.isEmpty)
+    XCTAssertEqual(
+      monitor.readerHealth,
+      .failed(error: .matchingServices(-2), lastSuccessfulRead: Date(timeIntervalSince1970: 1_000)))
+    XCTAssertEqual(monitor.readerHealth.summary, "IOKit matching failed (0xFFFFFFFE)")
+  }
+
+  func testRetryRecoversReaderWithoutInventingDisconnectOrReconnectEvents() {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var monotonicNow: TimeInterval = 100
+    var results: [PortEnumerationResult] = [
+      .devices([USBDeviceFixtures.monitorDevice]),
+      .error(.matchingServices(-1)),
+      .devices([USBDeviceFixtures.monitorDevice]),
+    ]
+    let monitor = PortMonitor(
+      reader: { results.removeFirst() }, now: { now }, monotonicNow: { monotonicNow },
+      gracePeriod: 10)
+    var eventSnapshots: [[PortDevice]] = []
+    let cancellable = monitor.$eventDevices.dropFirst().sink { eventSnapshots.append($0) }
+    defer { cancellable.cancel() }
+
+    monitor.refresh()
+    now.addTimeInterval(1)
+    monotonicNow += 1
+    monitor.refresh()
+    now.addTimeInterval(10)
+    monotonicNow += 10
+    monitor.expireGraceIfNeeded()
+    monitor.retry()
+
+    XCTAssertEqual(monitor.devices, [USBDeviceFixtures.monitorDevice])
+    XCTAssertEqual(
+      monitor.readerHealth,
+      .current(lastSuccessfulRead: Date(timeIntervalSince1970: 1_011)))
+    XCTAssertEqual(eventSnapshots, [[USBDeviceFixtures.monitorDevice]])
+  }
+
+  func testFirstSuccessAfterAnInitialFailureBecomesTheEventBaseline() {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var results: [PortEnumerationResult] = [
+      .error(.matchingServices(-1)),
+      .devices([USBDeviceFixtures.monitorDevice]),
+    ]
+    let monitor = PortMonitor(reader: { results.removeFirst() }, now: { now }, gracePeriod: 10)
+
+    monitor.refresh()
+    now.addTimeInterval(1)
+    monitor.retry()
+
+    XCTAssertEqual(monitor.eventDevices, [USBDeviceFixtures.monitorDevice])
+    XCTAssertEqual(monitor.previousDevices, [USBDeviceFixtures.monitorDevice])
+    let changes = SetDiff.changes(from: monitor.previousDevices, to: monitor.eventDevices)
+    XCTAssertTrue(changes.added.isEmpty)
+    XCTAssertTrue(changes.removed.isEmpty)
+  }
+
+  func testWallClockRollbackWhileStaleCannotPreventScheduledExpiry() async {
+    var now = Date(timeIntervalSince1970: 1_000)
+    var results: [PortEnumerationResult] = [
+      .devices([USBDeviceFixtures.monitorDevice]),
+      .error(.matchingServices(-1)),
+    ]
+    let monitor = PortMonitor(reader: { results.removeFirst() }, now: { now }, gracePeriod: 0.05)
+
+    monitor.refresh()
+    now.addTimeInterval(1)
+    monitor.refresh()
+    XCTAssertEqual(monitor.devices, [USBDeviceFixtures.monitorDevice])
+
+    now.addTimeInterval(-3_600)
+    try? await Task.sleep(for: .milliseconds(150))
+
+    XCTAssertTrue(monitor.devices.isEmpty)
+    XCTAssertEqual(
+      monitor.readerHealth,
+      .failed(error: .matchingServices(-1), lastSuccessfulRead: Date(timeIntervalSince1970: 1_000)))
   }
 }
 
@@ -108,4 +275,11 @@ private enum USBDeviceFixtures {
     productName: "USB Keyboard",
     vendorName: nil,
     deviceSpeed: nil)
+
+  static let monitorDevice = PortDevice(
+    id: "registry:0000000000000401|path:/AppleUSBXHCI/Port@14500000/Device@1",
+    name: "USB Keyboard",
+    vendor: "Example",
+    speed: "480 Mbps",
+    locationID: 0x1450_0000)
 }
