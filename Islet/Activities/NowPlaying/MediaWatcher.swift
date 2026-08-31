@@ -225,6 +225,9 @@ final class MediaWatcher: @unchecked Sendable {
   private var restartTask: Task<Void, Never>?
   private var failureCount = 0
   private var snapshotFailureCount = 0
+  /// Recovery launches spent for the current CoreAudio source set. This stays independent from
+  /// snapshot failure diagnostics so repeated idle stream records cannot reopen the retry budget.
+  private var recoverySnapshotAttemptCount = 0
   /// Diff base per source. The vendored adapter collapses concurrent players, so this holds at
   /// most one entry today. The shape is what the fork described in the design spec's
   /// "Upgrade path - fork the MediaRemote adapter for true per-source media" section needs.
@@ -321,6 +324,7 @@ final class MediaWatcher: @unchecked Sendable {
       playbackRecoveryBundleIdentifiers = []
       failureCount = 0
       snapshotFailureCount = 0
+      recoverySnapshotAttemptCount = 0
       onStatus?("Stopped")
       onDiagnostic?(nil)
     }
@@ -332,6 +336,7 @@ final class MediaWatcher: @unchecked Sendable {
     queue.async { [self] in
       if bundleIdentifiers != playbackRecoveryBundleIdentifiers {
         snapshotFailureCount = 0
+        recoverySnapshotAttemptCount = 0
       }
       playbackRecoveryBundleIdentifiers = bundleIdentifiers
       if !bundleIdentifiers.isEmpty {
@@ -502,7 +507,7 @@ final class MediaWatcher: @unchecked Sendable {
 
   private func scheduleRecoverySnapshot(after delay: TimeInterval? = nil) {
     guard isRunning, !playbackRecoveryBundleIdentifiers.isEmpty, currentSource == nil,
-      snapshotProcess == nil, snapshotLaunchWorkItem == nil, snapshotFailureCount < 3
+      snapshotProcess == nil, snapshotLaunchWorkItem == nil, recoverySnapshotAttemptCount < 3
     else { return }
     let generation = streamGeneration
     let workItem = DispatchWorkItem { [weak self] in
@@ -522,7 +527,12 @@ final class MediaWatcher: @unchecked Sendable {
   }
 
   private func requestSnapshot(recoveryGeneration: UInt64?) {
-    guard snapshotProcess == nil, let command = commandProvider(.snapshot) else {
+    guard snapshotProcess == nil else { return }
+    if recoveryGeneration != nil {
+      guard recoverySnapshotAttemptCount < 3 else { return }
+      recoverySnapshotAttemptCount += 1
+    }
+    guard let command = commandProvider(.snapshot) else {
       snapshotFailed(reason: "helper missing", recoveryGeneration: recoveryGeneration)
       return
     }
@@ -620,7 +630,7 @@ final class MediaWatcher: @unchecked Sendable {
     let recoveryGeneration = snapshotRecoveryGeneration
     cleanupSnapshot(terminate: true)
     snapshotFailureCount += 1
-    let willRetry = recoveryGeneration == nil || snapshotFailureCount < 3
+    let willRetry = recoveryGeneration == nil || recoverySnapshotAttemptCount < 3
     let delay = snapshotBackoff(snapshotFailureCount)
     let reason = "snapshot \(timeout.rawValue) timeout"
     recordHelperFailure(kind: .snapshot, reason: reason, stderr: capturedStderr)
@@ -677,6 +687,7 @@ final class MediaWatcher: @unchecked Sendable {
       return
     }
     snapshotFailureCount = 0
+    recoverySnapshotAttemptCount = 0
     onStatus?("Streaming")
     accept(parsed)
   }
@@ -750,7 +761,7 @@ final class MediaWatcher: @unchecked Sendable {
         streamHasEmittedRecord: streamHasEmittedRecord, currentSource: currentSource)
     guard shouldRetry else { return }
     snapshotFailureCount += 1
-    let willRetry = recoveryGeneration == nil || snapshotFailureCount < 3
+    let willRetry = recoveryGeneration == nil || recoverySnapshotAttemptCount < 3
     let delay = snapshotBackoff(snapshotFailureCount)
     recordHelperFailure(kind: .snapshot, reason: "snapshot \(reason)", stderr: stderr)
     let action = willRetry ? "retrying in \(Self.secondsLabel(delay))" : "recovery stopped"
@@ -823,6 +834,7 @@ final class MediaWatcher: @unchecked Sendable {
     streamGeneration &+= 1
     streamHasEmittedRecord = true
     snapshotFailureCount = 0
+    if case .nowPlaying = parsed { recoverySnapshotAttemptCount = 0 }
     snapshotLaunchWorkItem?.cancel()
     snapshotLaunchWorkItem = nil
     cleanupSnapshot(terminate: true)

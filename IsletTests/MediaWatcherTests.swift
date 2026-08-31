@@ -333,6 +333,57 @@ final class MediaWatcherTests: XCTestCase {
     updates.cancel()
   }
 
+  func testRepeatedIdleDoesNotReopenExhaustedRecoveryBudget() throws {
+    let helper = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .appendingPathComponent("Fixtures/wrong-app-recovery-helper.pl")
+    let stateFile = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent("wrong-app-recovery-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: stateFile) }
+
+    XCTAssertTrue(FileManager.default.fileExists(atPath: helper.path))
+    let firstIdle = expectation(description: "stream reports its first idle record")
+    let recoveryStopped = expectation(description: "recovery budget is exhausted")
+    let secondIdle = expectation(description: "stream repeats idle with the same audio source")
+    let unexpectedFourthAttempt = expectation(description: "a fourth recovery attempt starts")
+    unexpectedFourthAttempt.isInverted = true
+    let idleRecords = LockedCounter()
+    let snapshotAttempts = LockedCounter()
+    let watcher = MediaWatcher(
+      initialSnapshotDelay: 0.05,
+      commandProvider: { kind in
+        if case .snapshot = kind {
+          snapshotAttempts.increment()
+          if snapshotAttempts.value > 3 { unexpectedFourthAttempt.fulfill() }
+        }
+        return MediaWatcher.HelperCommand(
+          executableURL: URL(fileURLWithPath: "/usr/bin/perl"),
+          arguments: [helper.path, kind.rawValue, stateFile.path, "100", "2"])
+      },
+      snapshotBackoff: { _ in 0.01 })
+    watcher.onStatus = { status in
+      if status.contains("recovery stopped") { recoveryStopped.fulfill() }
+    }
+    let updates = Task {
+      for await update in watcher.updates {
+        guard case .idle = update else { continue }
+        idleRecords.increment()
+        if idleRecords.value == 1 {
+          firstIdle.fulfill()
+        } else if idleRecords.value == 2 {
+          secondIdle.fulfill()
+        }
+        watcher.setPlaybackRecoverySources(["company.thebrowser.Browser"])
+      }
+    }
+
+    watcher.start()
+    wait(for: [firstIdle, recoveryStopped, secondIdle], timeout: 5, enforceOrder: true)
+    wait(for: [unexpectedFourthAttempt], timeout: 0.3)
+    XCTAssertEqual(snapshotAttempts.value, 3)
+    watcher.stop()
+    updates.cancel()
+  }
+
   func testRecoveryRetryBudgetResetsWhenAudioSourcesChange() throws {
     let helper = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
       .appendingPathComponent("Fixtures/wrong-app-recovery-helper.pl")
