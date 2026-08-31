@@ -435,6 +435,9 @@ class RcloneProvider:
             return None
         identifier = opaque_id(execute_id, scope, name)
         progress = self._progress(transfer)
+        reveal_path = self._reveal_path(name)
+        if self.reveal_root is not None and reveal_path is None:
+            self._remove_reveal(identifier)
         fingerprint = hashlib.sha256(
             json.dumps(
                 [
@@ -466,10 +469,17 @@ class RcloneProvider:
         if progress is not None:
             activity["progress"] = progress
             activity["subtitle"] = f"{round(progress * 100)}%"
-        reveal_action_id = self._add_reveal(activity, name, identifier)
+        reveal_action_id = self._add_reveal(activity, reveal_path, identifier)
         if reveal_action_id:
             self.reveal_deadlines.pop(reveal_action_id, None)
-        self.pulse.send({"operation": "update", "activity": activity})
+        elif self.reveal_root is not None and reveal_path is not None:
+            self._remove_reveal(identifier)
+        try:
+            self.pulse.send({"operation": "update", "activity": activity})
+        except PulseError:
+            if reveal_action_id:
+                self._remove_reveal(identifier)
+            raise
         self.active_command_budget -= 1
         self.fingerprints[identifier] = fingerprint
         self.last_published_at[identifier] = now
@@ -498,20 +508,24 @@ class RcloneProvider:
         }
         if not failed:
             activity["progress"] = 1.0
-        reveal_action_id = self._add_reveal(activity, name, identifier)
+        reveal_action_id = self._add_reveal(
+            activity, self._reveal_path(name), identifier
+        )
+        if not reveal_action_id:
+            self._remove_reveal(identifier)
+        try:
+            self.pulse.send({"operation": "event", "activity": activity})
+        except PulseError:
+            if reveal_action_id:
+                self._remove_reveal(identifier)
+            raise
         if reveal_action_id:
-            self.reveal_deadlines[reveal_action_id] = (
-                self.clock() + TERMINAL_REVEAL_SECONDS
-            )
-        else:
-            stale_action_id = self._reveal_action_id(identifier)
-            self.reveal_deadlines.pop(stale_action_id, None)
-            self.reveal.remove(stale_action_id)
-        self.pulse.send({"operation": "event", "activity": activity})
-        if reveal_action_id:
-            self.reveal_deadlines[reveal_action_id] = (
-                self.clock() + TERMINAL_REVEAL_SECONDS
-            )
+            if self.reveal.expire(reveal_action_id, TERMINAL_REVEAL_SECONDS):
+                self.reveal_deadlines[reveal_action_id] = (
+                    self.clock() + TERMINAL_REVEAL_SECONDS
+                )
+            else:
+                self.reveal_deadlines.pop(reveal_action_id, None)
         self.fingerprints.pop(identifier, None)
         self.last_published_at.pop(identifier, None)
         self.published.discard(identifier)
@@ -528,11 +542,8 @@ class RcloneProvider:
             raise ObservationDisabled("rclone observation disabled")
 
     def _add_reveal(
-        self, activity: dict[str, Any], name: str, identifier: str
+        self, activity: dict[str, Any], path: Path | None, identifier: str
     ) -> str | None:
-        if self.reveal_root is None:
-            return None
-        path = safe_child(self.reveal_root, name)
         if path is None:
             return None
         action_id = self._reveal_action_id(identifier)
@@ -541,6 +552,16 @@ class RcloneProvider:
             activity["actions"] = [action]
             return action_id
         return None
+
+    def _reveal_path(self, name: str) -> Path | None:
+        if self.reveal_root is None:
+            return None
+        return safe_child(self.reveal_root, name)
+
+    def _remove_reveal(self, identifier: str) -> None:
+        action_id = self._reveal_action_id(identifier)
+        self.reveal_deadlines.pop(action_id, None)
+        self.reveal.remove(action_id)
 
     @staticmethod
     def _reveal_action_id(identifier: str) -> str:
@@ -582,9 +603,7 @@ class RcloneProvider:
             pass
         self.fingerprints.pop(identifier, None)
         self.last_published_at.pop(identifier, None)
-        action_id = self._reveal_action_id(identifier)
-        self.reveal_deadlines.pop(action_id, None)
-        self.reveal.remove(action_id)
+        self._remove_reveal(identifier)
 
     def persisted(self, enabled: bool) -> dict[str, Any]:
         return {

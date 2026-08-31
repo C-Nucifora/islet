@@ -10,6 +10,7 @@ import tempfile
 import threading
 import unittest
 from unittest import mock
+from urllib import error, request
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "rclone_provider.py"
@@ -67,6 +68,9 @@ class FakeReveal:
     def remove(self, action_id: str) -> None:
         self.active.discard(action_id)
         self.removed.append(action_id)
+
+    def expire(self, action_id: str, _expires_in: float) -> bool:
+        return action_id in self.active
 
     def close(self) -> None:
         pass
@@ -557,6 +561,84 @@ class RcloneProviderTests(unittest.TestCase):
         self.assertEqual(reveal.active, set())
         self.assertEqual(reveal.removed, [action_id])
 
+    def test_terminal_reveal_url_expires_without_another_observation(self) -> None:
+        now = [1_000.0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "finished.bin").touch()
+            record = {
+                "name": "finished.bin",
+                "timestamp": 1_000,
+                "error": "",
+                "jobid": 7,
+            }
+            reveal = rclone.RevealServer(clock=lambda: now[0])
+            pulse = FakePulse()
+            provider = rclone.RcloneProvider(
+                fixture([], [record]),
+                pulse,
+                reveal,
+                root,
+                {"completedAfter": 0},
+                clock=lambda: now[0],
+            )
+            try:
+                provider.observe()
+                action_url = pulse.commands[0]["activity"]["actions"][0]["url"]
+                now[0] += 8
+
+                with mock.patch(
+                    f"{rclone.RevealServer.__module__}.subprocess.Popen"
+                ):
+                    try:
+                        with request.urlopen(action_url, timeout=1) as response:
+                            self.fail(
+                                f"expected expired reveal URL, got HTTP {response.status}"
+                            )
+                    except error.HTTPError as failure:
+                        self.assertEqual(failure.code, 404)
+                        failure.close()
+            finally:
+                reveal.close()
+
+    def test_rejected_terminal_delivery_revokes_its_reveal_url(self) -> None:
+        class RejectingPulse(FakePulse):
+            def send(self, command: dict) -> dict:
+                super().send(command)
+                raise rclone.PulseError("rejected")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "finished.bin").touch()
+            record = {
+                "name": "finished.bin",
+                "timestamp": 1_000,
+                "error": "",
+                "jobid": 7,
+            }
+            reveal = rclone.RevealServer()
+            pulse = RejectingPulse()
+            provider = rclone.RcloneProvider(
+                fixture([], [record]),
+                pulse,
+                reveal,
+                root,
+                {"completedAfter": 0},
+            )
+            try:
+                with self.assertRaisesRegex(rclone.PulseError, "rejected"):
+                    provider.observe()
+                action_url = pulse.commands[0]["activity"]["actions"][0]["url"]
+
+                with mock.patch(
+                    f"{rclone.RevealServer.__module__}.subprocess.Popen"
+                ), self.assertRaises(error.HTTPError) as failure:
+                    request.urlopen(action_url, timeout=1)
+                self.assertEqual(failure.exception.code, 404)
+                failure.exception.close()
+            finally:
+                reveal.close()
+
     def test_terminal_without_reveal_path_revokes_active_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -600,6 +682,66 @@ class RcloneProviderTests(unittest.TestCase):
             self.assertEqual(len(reveal.active), 1)
             action_id = next(iter(reveal.active))
             rc.responses[("core/stats", "job/7")] = {"transferring": []}
+            provider.observe()
+
+        self.assertEqual(reveal.active, set())
+        self.assertEqual(reveal.removed, [action_id])
+
+    def test_rejected_first_active_publish_leaves_no_mapping_after_disappearance(
+        self,
+    ) -> None:
+        class RejectOncePulse(FakePulse):
+            reject = True
+
+            def send(self, command: dict) -> dict:
+                super().send(command)
+                if self.reject:
+                    raise rclone.PulseError("rejected")
+                return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "active.bin").touch()
+            rc = fixture([{"name": "active.bin", "bytes": 1, "size": 2}])
+            pulse = RejectOncePulse()
+            reveal = FakeReveal()
+            provider = rclone.RcloneProvider(
+                rc,
+                pulse,
+                reveal,
+                root,
+                {"completedAfter": 0},
+            )
+
+            with self.assertRaisesRegex(rclone.PulseError, "rejected"):
+                provider.observe()
+            self.assertEqual(reveal.active, set())
+            self.assertEqual(len(reveal.removed), 1)
+
+            pulse.reject = False
+            rc.responses[("job/list", None)]["running_ids"] = []
+            rc.responses[("core/stats", "job/7")] = {"transferring": []}
+            provider.observe()
+
+        self.assertEqual(reveal.active, set())
+        self.assertEqual(len(reveal.removed), 1)
+
+    def test_active_path_disappearance_revokes_mapping_without_progress_change(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "active.bin"
+            path.touch()
+            provider, _ = self.provider(
+                fixture([{"name": "active.bin", "bytes": 1, "size": 2}]),
+                reveal_root=root,
+            )
+
+            provider.observe()
+            reveal = provider.reveal
+            action_id = next(iter(reveal.active))
+            path.unlink()
             provider.observe()
 
         self.assertEqual(reveal.active, set())

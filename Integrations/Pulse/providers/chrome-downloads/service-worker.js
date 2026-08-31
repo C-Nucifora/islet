@@ -11,14 +11,13 @@ let tracker = null;
 let nativePort = null;
 let pollTimer = null;
 let hostIdleTimer = null;
-let retryTimer = null;
-let retryAttempts = 0;
 let listenersRegistered = false;
 let lifecycleTail = Promise.resolve();
 let persistenceTail = Promise.resolve();
 let initializationPromise = null;
 const pending = new Map();
 const inFlight = new Map();
+const retryStates = new Map();
 const drainWaiters = new Set();
 
 function commandKey(command) {
@@ -67,23 +66,56 @@ function cancelHostIdleTimer() {
   hostIdleTimer = null;
 }
 
-function resetRetryState() {
-  if (retryTimer !== null) clearTimeout(retryTimer);
-  retryTimer = null;
-  retryAttempts = 0;
+function clearRetryState(key) {
+  const state = retryStates.get(key);
+  if (state && state.timer !== null) clearTimeout(state.timer);
+  retryStates.delete(key);
 }
 
-function scheduleRetry() {
-  if (!pending.size || retryTimer !== null || retryAttempts >= RETRY_LIMIT) return;
+function clearAllRetryStates() {
+  for (const key of retryStates.keys()) clearRetryState(key);
+}
+
+function scheduleRetry(key, requestID) {
+  const command = pending.get(key);
+  if (!command || command.requestID !== requestID) return;
+  let state = retryStates.get(key);
+  if (!state) {
+    state = { attempts: 0, ready: false, timer: null };
+    retryStates.set(key, state);
+  }
+  state.ready = false;
+  if (state.timer !== null || state.attempts >= RETRY_LIMIT) return;
   const delay = Math.min(
-    RETRY_INITIAL_MILLISECONDS * 2 ** retryAttempts,
+    RETRY_INITIAL_MILLISECONDS * 2 ** state.attempts,
     RETRY_MAX_MILLISECONDS
   );
-  retryAttempts += 1;
-  retryTimer = setTimeout(() => {
-    retryTimer = null;
+  state.attempts += 1;
+  state.timer = setTimeout(() => {
+    if (retryStates.get(key) !== state) return;
+    state.timer = null;
+    const current = pending.get(key);
+    if (!current || current.requestID !== requestID) {
+      clearRetryState(key);
+      return;
+    }
+    state.ready = true;
     flushPending();
   }, delay);
+}
+
+function retryIsReady(key) {
+  const state = retryStates.get(key);
+  return state === undefined || (state.timer === null && state.ready);
+}
+
+function markRetrySent(key) {
+  const state = retryStates.get(key);
+  if (state) state.ready = false;
+}
+
+function scheduleTransportRetries(requests) {
+  for (const [requestID, key] of requests) scheduleRetry(key, requestID);
 }
 
 function scheduleHostDisconnect() {
@@ -103,7 +135,7 @@ function scheduleHostDisconnect() {
 
 function notifyDrainWaiters() {
   if (pending.size || inFlight.size) return;
-  resetRetryState();
+  clearAllRetryStates();
   for (const resolve of drainWaiters) resolve();
   drainWaiters.clear();
   scheduleHostDisconnect();
@@ -154,22 +186,28 @@ function connectHost() {
       };
       if (command && command.requestID === requestID) {
         pending.delete(key);
+        clearRetryState(key);
         void persistKnownIDs().then(finishAcknowledgement, finishAcknowledgement);
       } else {
         finishAcknowledgement();
       }
       return;
     }
+    if (command && command.requestID === requestID) {
+      scheduleRetry(key, requestID);
+    }
+    flushPending();
     notifyDrainWaiters();
-    scheduleRetry();
   });
   port.onDisconnect.addListener(() => {
     if (nativePort !== port) return;
     nativePort = null;
+    const disconnectedRequests = Array.from(inFlight);
     inFlight.clear();
     cancelHostIdleTimer();
+    scheduleTransportRetries(disconnectedRequests);
+    flushPending();
     notifyDrainWaiters();
-    scheduleRetry();
   });
   return nativePort;
 }
@@ -179,28 +217,38 @@ function flushPending() {
     notifyDrainWaiters();
     return;
   }
-  if (retryTimer !== null) return;
+  const activeKeys = new Set(inFlight.values());
+  const hasEligibleCommand = Array.from(pending.keys()).some(
+    (key) => !activeKeys.has(key) && retryIsReady(key)
+  );
+  if (!hasEligibleCommand || inFlight.size >= COMMANDS_PER_FLUSH) return;
   cancelHostIdleTimer();
   let port;
   try {
     port = connectHost();
   } catch (_error) {
-    scheduleRetry();
+    for (const [key, command] of pending) {
+      if (!activeKeys.has(key) && retryIsReady(key)) {
+        scheduleRetry(key, command.requestID);
+      }
+    }
     return;
   }
-  const activeKeys = new Set(inFlight.values());
   for (const [key, command] of pending) {
     if (inFlight.size >= COMMANDS_PER_FLUSH) break;
     if (activeKeys.has(key)) continue;
+    if (!retryIsReady(key)) continue;
     try {
       inFlight.set(command.requestID, key);
       activeKeys.add(key);
+      markRetrySent(key);
       port.postMessage(command);
     } catch (_error) {
+      const disconnectedRequests = Array.from(inFlight);
       inFlight.clear();
       if (nativePort === port) nativePort = null;
       port.disconnect();
-      scheduleRetry();
+      scheduleTransportRetries(disconnectedRequests);
       break;
     }
   }
@@ -223,7 +271,9 @@ function synchronizePolling() {
 
 async function publish(commands) {
   for (const command of commands) {
-    pending.set(commandKey(command), { ...command, requestID: crypto.randomUUID() });
+    const key = commandKey(command);
+    clearRetryState(key);
+    pending.set(key, { ...command, requestID: crypto.randomUUID() });
   }
   await persistKnownIDs();
   synchronizePolling();
@@ -319,7 +369,7 @@ async function disableObservation() {
   if (pollTimer !== null) clearInterval(pollTimer);
   pollTimer = null;
   cancelHostIdleTimer();
-  resetRetryState();
+  clearAllRetryStates();
   const cleanup = tracker ? tracker.disable() : [];
   pending.clear();
   inFlight.clear();
@@ -336,7 +386,7 @@ async function disableObservation() {
   pending.clear();
   inFlight.clear();
   tracker = null;
-  resetRetryState();
+  clearAllRetryStates();
   await persistKnownIDs();
   notifyDrainWaiters();
 }
