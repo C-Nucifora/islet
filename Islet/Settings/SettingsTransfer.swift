@@ -13,6 +13,7 @@ struct SettingsTransferSnapshot: Equatable {
   var barrierPushDistance: Double
   var energyMode: EnergyMode
   var allowDisplaySleep: Bool
+  var keepAwakeWithLidClosed: Bool
   var keepAwakeLowBatteryThreshold: Int
   var hideFromScreenRecording: Bool
   var hudEnabled: Bool
@@ -50,6 +51,7 @@ struct SettingsTransferPatch: Equatable {
   var barrierPushDistance: Double?
   var energyMode: EnergyMode?
   var allowDisplaySleep: Bool?
+  var keepAwakeWithLidClosed: Bool?
   var keepAwakeLowBatteryThreshold: Int?
   var hideFromScreenRecording: Bool?
   var hudEnabled: Bool?
@@ -87,6 +89,9 @@ struct SettingsTransferPatch: Equatable {
     if let barrierPushDistance { result.barrierPushDistance = barrierPushDistance }
     if let energyMode { result.energyMode = energyMode }
     if let allowDisplaySleep { result.allowDisplaySleep = allowDisplaySleep }
+    if let keepAwakeWithLidClosed {
+      result.keepAwakeWithLidClosed = keepAwakeWithLidClosed
+    }
     if let keepAwakeLowBatteryThreshold {
       result.keepAwakeLowBatteryThreshold = keepAwakeLowBatteryThreshold
     }
@@ -188,7 +193,8 @@ enum SettingsTransfer {
     "calendarEnabled", "calendarLeadMinutes", "continuityAlwaysVisible", "continuitySneaks",
     "disabledActivities", "disabledEventSources", "energyMode", "hapticStrength",
     "hapticsEnabled", "hideFromScreenRecording", "hideInFullscreen", "hoverCollapseTimeout",
-    "hudEnabled", "hudStyle", "interactionMode", "keepAwakeLowBatteryThreshold", "launchAtLogin",
+    "hudEnabled", "hudStyle", "interactionMode", "keepAwakeLowBatteryThreshold",
+    "keepAwakeWithLidClosed", "launchAtLogin",
     "mediaPriorityList", "mediaSourceMode", "metricStyles", "remindersEnabled",
     "showOnAllDisplays", "systemAlwaysVisible", "systemAutoPresentCPU",
     "systemAutoPresentDiskThroughput", "systemAutoPresentLowDiskSpace",
@@ -283,6 +289,7 @@ enum SettingsTransfer {
     case "barrierPushDistance": patch.barrierPushDistance != nil
     case "energyMode": patch.energyMode != nil
     case "allowDisplaySleep": patch.allowDisplaySleep != nil
+    case "keepAwakeWithLidClosed": patch.keepAwakeWithLidClosed != nil
     case "keepAwakeLowBatteryThreshold": patch.keepAwakeLowBatteryThreshold != nil
     case "hideFromScreenRecording": patch.hideFromScreenRecording != nil
     case "hudEnabled": patch.hudEnabled != nil
@@ -323,6 +330,7 @@ enum SettingsTransfer {
       "barrierPushDistance": value.barrierPushDistance,
       "energyMode": value.energyMode.rawValue,
       "allowDisplaySleep": value.allowDisplaySleep,
+      "keepAwakeWithLidClosed": value.keepAwakeWithLidClosed,
       "keepAwakeLowBatteryThreshold": value.keepAwakeLowBatteryThreshold,
       "hideFromScreenRecording": value.hideFromScreenRecording,
       "hudEnabled": value.hudEnabled,
@@ -382,6 +390,7 @@ enum SettingsTransfer {
       range: PushDistanceScale.minimum...PushDistanceScale.maximum)
     patch.energyMode = try enumeration("energyMode", in: values, type: EnergyMode.self)
     patch.allowDisplaySleep = try boolean("allowDisplaySleep", in: values)
+    patch.keepAwakeWithLidClosed = try boolean("keepAwakeWithLidClosed", in: values)
     patch.keepAwakeLowBatteryThreshold = try allowedInteger(
       "keepAwakeLowBatteryThreshold", in: values, allowed: [0, 10, 20, 30])
     patch.hideFromScreenRecording = try boolean("hideFromScreenRecording", in: values)
@@ -538,6 +547,9 @@ enum SettingsTransfer {
     add("energyMode", "Energy mode", old.energyMode.rawValue, new.energyMode.rawValue)
     add("allowDisplaySleep", "Allow display sleep", old.allowDisplaySleep, new.allowDisplaySleep)
     add(
+      "keepAwakeWithLidClosed", "Keep awake with lid closed",
+      old.keepAwakeWithLidClosed, new.keepAwakeWithLidClosed)
+    add(
       "keepAwakeLowBatteryThreshold", "Keep-awake battery stop",
       old.keepAwakeLowBatteryThreshold, new.keepAwakeLowBatteryThreshold)
     add(
@@ -610,6 +622,7 @@ enum SettingsTransferDefaults {
       hapticsEnabled: Defaults[.hapticsEnabled], hapticStrength: Defaults[.hapticStrength],
       barrierPushDistance: Defaults[.barrierPushDistance], energyMode: Defaults[.energyMode],
       allowDisplaySleep: Defaults[.allowDisplaySleep],
+      keepAwakeWithLidClosed: Defaults[.keepAwakeWithLidClosed],
       keepAwakeLowBatteryThreshold: Defaults[.keepAwakeLowBatteryThreshold],
       hideFromScreenRecording: Defaults[.hideFromScreenRecording],
       hudEnabled: Defaults[.hudEnabled],
@@ -645,6 +658,9 @@ enum SettingsTransferDefaults {
     if let value = patch.barrierPushDistance { Defaults[.barrierPushDistance] = value }
     if let value = patch.energyMode { Defaults[.energyMode] = value }
     if let value = patch.allowDisplaySleep { Defaults[.allowDisplaySleep] = value }
+    if let value = patch.keepAwakeWithLidClosed {
+      Defaults[.keepAwakeWithLidClosed] = value
+    }
     if let value = patch.keepAwakeLowBatteryThreshold {
       Defaults[.keepAwakeLowBatteryThreshold] = value
     }
