@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import SwiftUI
 import XCTest
 
@@ -30,7 +31,8 @@ final class TimerCompletionNotificationTests: XCTestCase {
     timer.start(300, label: "Focus")
     timer.cancel()
     timer.presentCompletionFromNotification(
-      TimerCompletionSnapshot(duration: 300, label: "Focus"))
+      TimerCompletionSnapshot(duration: 300, label: "Focus"),
+      notificationIdentifier: TimerCompletionNotificationCoordinator.identifier(for: UUID()))
     notifier.reportUnavailable()
 
     XCTAssertTrue(timer.finished)
@@ -70,7 +72,8 @@ final class TimerCompletionNotificationTests: XCTestCase {
     timer.cancel()
 
     timer.presentCompletionFromNotification(
-      TimerCompletionSnapshot(duration: 300, label: "Focus"))
+      TimerCompletionSnapshot(duration: 300, label: "Focus"),
+      notificationIdentifier: TimerCompletionNotificationCoordinator.identifier(for: UUID()))
 
     XCTAssertTrue(timer.finished)
     XCTAssertTrue(timer.isActive)
@@ -88,7 +91,8 @@ final class TimerCompletionNotificationTests: XCTestCase {
     let currentDeadline = timer.endDate
 
     timer.presentCompletionFromNotification(
-      TimerCompletionSnapshot(duration: 300, label: "Older"))
+      TimerCompletionSnapshot(duration: 300, label: "Older"),
+      notificationIdentifier: TimerCompletionNotificationCoordinator.identifier(for: UUID()))
 
     XCTAssertTrue(timer.isRunning)
     XCTAssertFalse(timer.finished)
@@ -106,7 +110,8 @@ final class TimerCompletionNotificationTests: XCTestCase {
     let currentRemaining = timer.remainingNow
 
     timer.presentCompletionFromNotification(
-      TimerCompletionSnapshot(duration: 300, label: "Older"))
+      TimerCompletionSnapshot(duration: 300, label: "Older"),
+      notificationIdentifier: TimerCompletionNotificationCoordinator.identifier(for: UUID()))
 
     XCTAssertTrue(timer.isPaused)
     XCTAssertFalse(timer.finished)
@@ -125,7 +130,8 @@ final class TimerCompletionNotificationTests: XCTestCase {
     timer.cancel()
 
     timer.presentCompletionFromNotification(
-      TimerCompletionSnapshot(duration: 300, label: "Focus"))
+      TimerCompletionSnapshot(duration: 300, label: "Focus"),
+      notificationIdentifier: TimerCompletionNotificationCoordinator.identifier(for: UUID()))
 
     XCTAssertEqual(timer.total, 300)
     XCTAssertEqual(timer.label, "Focus")
@@ -139,7 +145,50 @@ final class TimerCompletionNotificationTests: XCTestCase {
     XCTAssertEqual(timer.label, "Focus")
   }
 
-  func testNotificationActivationRefreshesExistingRetainedCompletion() throws {
+  func testOlderNotificationDoesNotReplaceANewerRetainedCompletion() {
+    let persistence = NotificationTimerPersistenceBox()
+    let timer = TimerActivity(
+      persistenceStore: persistence.store,
+      completionNotifier: TimerCompletionNotifierStub())
+    let newerCompletionID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+    let olderCompletionID = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
+    timer.presentCompletionFromNotification(
+      TimerCompletionSnapshot(duration: 600, label: "Newer"),
+      notificationIdentifier: TimerCompletionNotificationCoordinator.identifier(
+        for: newerCompletionID))
+
+    timer.presentCompletionFromNotification(
+      TimerCompletionSnapshot(duration: 300, label: "Older"),
+      notificationIdentifier: TimerCompletionNotificationCoordinator.identifier(
+        for: olderCompletionID))
+
+    XCTAssertTrue(timer.finished)
+    XCTAssertEqual(timer.total, 600)
+    XCTAssertEqual(timer.label, "Newer")
+    XCTAssertEqual(timer.lastDuration, 600)
+    XCTAssertEqual(timer.lastLabel, "Newer")
+  }
+
+  func testSameNotificationIdentityRefreshesTheRetainedCompletion() throws {
+    let persistence = NotificationTimerPersistenceBox()
+    let timer = TimerActivity(
+      persistenceStore: persistence.store,
+      completionNotifier: TimerCompletionNotifierStub())
+    let completionID = UUID(uuidString: "55555555-5555-5555-5555-555555555555")!
+    let identifier = TimerCompletionNotificationCoordinator.identifier(for: completionID)
+    let snapshot = TimerCompletionSnapshot(duration: 300, label: "Focus")
+    timer.presentCompletionFromNotification(snapshot, notificationIdentifier: identifier)
+    let firstActivation = try XCTUnwrap(timer.activationDate)
+    usleep(10_000)
+
+    timer.presentCompletionFromNotification(snapshot, notificationIdentifier: identifier)
+
+    XCTAssertGreaterThan(try XCTUnwrap(timer.activationDate), firstActivation)
+    XCTAssertEqual(timer.total, 300)
+    XCTAssertEqual(timer.label, "Focus")
+  }
+
+  func testNotificationActivationDoesNotReplaceARestoredCompletionWithDifferentIdentity() throws {
     let now = Date(timeIntervalSinceReferenceDate: 90_000)
     let session = TimerSessionSnapshot(
       savedAt: now.addingTimeInterval(-5), label: "Focus", duration: 300,
@@ -152,12 +201,13 @@ final class TimerCompletionNotificationTests: XCTestCase {
     XCTAssertTrue(timer.finished)
 
     timer.presentCompletionFromNotification(
-      TimerCompletionSnapshot(duration: 600, label: "Break"))
+      TimerCompletionSnapshot(duration: 600, label: "Break"),
+      notificationIdentifier: TimerCompletionNotificationCoordinator.identifier(for: UUID()))
 
     XCTAssertTrue(timer.finished)
     XCTAssertTrue(timer.isActive)
-    XCTAssertEqual(timer.total, 600)
-    XCTAssertEqual(timer.label, "Break")
+    XCTAssertEqual(timer.total, 300)
+    XCTAssertEqual(timer.label, "Focus")
   }
 
   func testCompletionSnapshotUsesStableNotificationMetadata() throws {

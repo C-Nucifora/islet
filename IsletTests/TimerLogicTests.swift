@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 
 @testable import Islet
@@ -101,6 +102,25 @@ final class TimerLogicTests: XCTestCase {
     XCTAssertFalse(activity.isActive)
   }
 
+  func testElapsedPausePathEmitsCompletionOnlyOnce() async {
+    let notifier = TimerNotifierStub()
+    let persistence = TimerPersistenceBox()
+    let activity = TimerActivity(
+      persistenceStore: persistence.store, completionNotifier: notifier)
+    activity.start(1, label: "Tea")
+
+    // Keep the main actor occupied until the deadline has elapsed. The deadline task is then ready
+    // but cannot run before the control path observes 0:00 and completes the timer itself.
+    usleep(1_100_000)
+    activity.togglePause()
+    await Task.yield()
+    await Task.yield()
+
+    XCTAssertTrue(activity.finished)
+    XCTAssertEqual(notifier.finishedCompletionIDs.count, 1)
+    activity.cancel()
+  }
+
   func testRestartReplacesCompletedTimerWithARunningTimer() throws {
     let activity = try completedActivity()
 
@@ -189,10 +209,14 @@ private final class TimerPersistenceBox {
 
 @MainActor
 private final class TimerNotifierStub: TimerCompletionNotifying {
+  private(set) var finishedCompletionIDs: [UUID] = []
+
   func prepareForTimerStart(onUnavailable: @escaping @MainActor () -> Void) {}
 
   func notifyTimerFinished(
     completionID: UUID, snapshot: TimerCompletionSnapshot, title: String, body: String,
     onUnavailable: @escaping @MainActor () -> Void
-  ) {}
+  ) {
+    finishedCompletionIDs.append(completionID)
+  }
 }
