@@ -237,6 +237,12 @@ extension Defaults.Keys {
   static let hiddenCalendarIDs = Key<[String]>("hiddenCalendarIDs", default: [])
   static let remindersEnabled = Key<Bool>("remindersEnabled", default: true)
   static let showOnAllDisplays = Key<Bool>("showOnAllDisplays", default: false)
+  /// The display's Quartz UUID. This remains set while the display is disconnected so Islet can
+  /// return to it on reconnect instead of turning a temporary fallback into a new preference.
+  static let preferredDisplayID = Key<String>("preferredDisplayID", default: "")
+  /// Last user-facing name for an unavailable preferred display. Identity always comes from the
+  /// UUID above; this value is presentation only.
+  static let preferredDisplayName = Key<String>("preferredDisplayName", default: "")
   static let hideInFullscreen = Key<Bool>("hideInFullscreen", default: false)
   static let launchAtLogin = Key<Bool>("launchAtLogin", default: false)
   static let activityOrder = Key<[String]>("activityOrder", default: ActivityCatalog.defaultOrder)

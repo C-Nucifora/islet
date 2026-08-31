@@ -49,4 +49,9 @@ final class SettingsSearchTests: XCTestCase {
   func testBlankQueryMatches() {
     XCTAssertTrue(SettingsSearch.matches("  ", in: ["Anything"]))
   }
+
+  func testDisplayPreferenceTermsFindStartupAndDisplays() {
+    XCTAssertTrue(SettingsDetailPage.startupDisplays.matchesSearch("preferred display"))
+    XCTAssertTrue(SettingsDetailPage.startupDisplays.matchesSearch("clamshell reconnect"))
+  }
 }
