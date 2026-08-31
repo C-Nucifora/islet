@@ -357,6 +357,7 @@ struct SettingsView: View {
   @ObservedObject private var t3Code = AppState.t3Code
   @ObservedObject private var focus = AppState.focus
   @ObservedObject private var launchAtLoginStatus = LaunchAtLoginStatus.shared
+  @ObservedObject private var eventSourcePreferences = EventSourcePreferences.shared
   @ObservedObject private var ports = PortMonitor.shared
   @ObservedObject private var keepAwake = KeepAwakeManager.shared
 
@@ -389,7 +390,6 @@ struct SettingsView: View {
   @Default(.systemAutoPresentDiskThroughput) private var systemAutoPresentDiskThroughput
   @Default(.systemAutoPresentNetworkThroughput) private var systemAutoPresentNetworkThroughput
   @Default(.metricStyles) private var metricStyles
-  @Default(.disabledEventSources) private var disabledEventSources
   @Default(.energyMode) private var energyMode
   @Default(.allowDisplaySleep) private var allowDisplaySleep
   @Default(.keepAwakeLowBatteryThreshold) private var keepAwakeLowBatteryThreshold
@@ -519,7 +519,7 @@ struct SettingsView: View {
 
   private func eventSourceEnabled(_ id: String) -> Binding<Bool> {
     Binding(
-      get: { !disabledEventSources.contains(id) },
+      get: { eventSourcePreferences.isEnabled(id) },
       set: { on in SystemEventBus.shared.setEnabled(on, for: id) })
   }
 

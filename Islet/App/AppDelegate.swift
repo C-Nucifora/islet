@@ -159,6 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       AudioDeviceMonitor.shared.stop()
       HUDController.shared.stop()
       SystemEventBus.shared.stopAll()
+      EventSourcePreferences.shared.flush()
       EventMonitors.shared.stop()
       ScreenManager.shared.stop()
       activityLifecycleController?.stopObserving()
@@ -205,15 +206,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ])
     activityLifecycleController = controller
     controller.startObserving()
-    audioDeviceLifecycleCancellable = Defaults.publisher(.disabledEventSources)
-      .receive(on: DispatchQueue.main)
-      .sink { [weak self] _ in self?.reconcileAudioDeviceLifecycle() }
+    audioDeviceLifecycleCancellable = EventSourcePreferences.shared.$disabledSourceIDs
+      .sink { [weak self] _ in Task { @MainActor in self?.reconcileAudioDeviceLifecycle() } }
     reconcileAudioDeviceLifecycle()
   }
 
   @MainActor
   private func reconcileAudioDeviceLifecycle() {
-    if Defaults[.disabledEventSources].contains("audiodevice") {
+    if !EventSourcePreferences.shared.isEnabled("audiodevice") {
       AudioDeviceMonitor.shared.stop()
     } else {
       AudioDeviceMonitor.shared.start()
