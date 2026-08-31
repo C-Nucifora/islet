@@ -17,6 +17,13 @@ select((select($log), $| = 1)[0]);
 print {$log} "started $kind $$\n";
 close $log;
 
+# Confirm that the snapshot helper reached user code before it hangs. The watcher then exercises
+# its idle deadline instead of racing process startup against an intentionally tiny timeout.
+if ($kind eq "get") {
+  select((select(STDOUT), $| = 1)[0]);
+  print STDOUT " ";
+}
+
 my $cleanup = sub {
   rmdir $lock_path;
   exit 0;

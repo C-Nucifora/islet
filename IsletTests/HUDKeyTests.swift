@@ -187,6 +187,213 @@ final class HUDKeyTests: XCTestCase {
   }
 }
 
+@MainActor
+final class ExternalBrightnessTests: XCTestCase {
+  private let display = ExternalBrightnessDisplay(
+    displayID: 42, id: "fake-display-42", name: "Fake DDC Display",
+    vendorID: 10, productID: 20, serialNumber: 30)
+
+  func testSuccessfulProbeAndWriteControlTheFakeDisplay() async {
+    let fake = FakeExternalBrightnessBackend()
+    let deadlines = ManualBrightnessDeadlineScheduler()
+    let controller = ExternalBrightnessController(
+      backend: fake.backend, deadlineScheduler: deadlines.scheduler)
+
+    controller.refresh(displays: [display], disabledDisplayIDs: [])
+    XCTAssertEqual(controller.statuses.first?.capability, .probing)
+    fake.completeRead(.success(0.5))
+    await settleMainActorTasks()
+
+    let target = controller.adjust(displayID: display.displayID, up: true, divisor: 1)
+    XCTAssertEqual(target ?? -1, 0.5 + 1.0 / 16.0, accuracy: 1e-6)
+    XCTAssertEqual(fake.writtenLevels, [0.5 + 1.0 / 16.0])
+
+    fake.completeWrite(.success(target!))
+    await settleMainActorTasks()
+    XCTAssertEqual(controller.statuses.first?.capability, .available(level: target!))
+  }
+
+  func testProbeTimeoutRejectsLateReplyAndFallsBack() async {
+    let fake = FakeExternalBrightnessBackend()
+    let deadlines = ManualBrightnessDeadlineScheduler()
+    let controller = ExternalBrightnessController(
+      backend: fake.backend, deadlineScheduler: deadlines.scheduler)
+
+    controller.refresh(displays: [display], disabledDisplayIDs: [])
+    deadlines.fireAll()
+    await settleMainActorTasks()
+
+    XCTAssertEqual(controller.statuses.first?.capability, .unavailable(.timedOut))
+    XCTAssertNil(controller.adjust(displayID: display.displayID, up: true, divisor: 1))
+
+    fake.completeRead(.success(0.8))
+    await settleMainActorTasks()
+    XCTAssertEqual(controller.statuses.first?.capability, .unavailable(.timedOut))
+  }
+
+  func testRejectedProbeLeavesMediaKeyForNativeHandling() async {
+    let fake = FakeExternalBrightnessBackend()
+    let controller = ExternalBrightnessController(
+      backend: fake.backend,
+      deadlineScheduler: ManualBrightnessDeadlineScheduler().scheduler)
+
+    controller.refresh(displays: [display], disabledDisplayIDs: [])
+    fake.completeRead(.failure(.rejected("fake monitor refused VCP 0x10")))
+    await settleMainActorTasks()
+
+    XCTAssertEqual(
+      controller.statuses.first?.capability,
+      .unavailable(.rejected("fake monitor refused VCP 0x10")))
+    XCTAssertNil(controller.adjust(displayID: display.displayID, up: false, divisor: 1))
+    XCTAssertTrue(fake.writtenLevels.isEmpty)
+  }
+
+  func testRejectedWriteMakesLaterKeysFallThrough() async {
+    let fake = FakeExternalBrightnessBackend()
+    let controller = ExternalBrightnessController(
+      backend: fake.backend,
+      deadlineScheduler: ManualBrightnessDeadlineScheduler().scheduler)
+
+    controller.refresh(displays: [display], disabledDisplayIDs: [])
+    fake.completeRead(.success(0.5))
+    await settleMainActorTasks()
+    XCTAssertNotNil(controller.adjust(displayID: display.displayID, up: true, divisor: 1))
+
+    fake.completeWrite(.failure(.rejected("fake monitor refused the write")))
+    await settleMainActorTasks()
+
+    XCTAssertEqual(
+      controller.statuses.first?.capability,
+      .unavailable(.rejected("fake monitor refused the write")))
+    XCTAssertNil(controller.adjust(displayID: display.displayID, up: true, divisor: 1))
+  }
+
+  func testRepeatedKeysCoalesceBehindTheInFlightWrite() async throws {
+    let fake = FakeExternalBrightnessBackend()
+    let controller = ExternalBrightnessController(
+      backend: fake.backend,
+      deadlineScheduler: ManualBrightnessDeadlineScheduler().scheduler)
+
+    controller.refresh(displays: [display], disabledDisplayIDs: [])
+    fake.completeRead(.success(0.5))
+    await settleMainActorTasks()
+
+    let first = try XCTUnwrap(
+      controller.adjust(displayID: display.displayID, up: true, divisor: 1))
+    let second = try XCTUnwrap(
+      controller.adjust(displayID: display.displayID, up: true, divisor: 1))
+    XCTAssertEqual(fake.writtenLevels, [first])
+
+    fake.completeWrite(.success(first))
+    await settleMainActorTasks()
+    XCTAssertEqual(fake.writtenLevels, [first, second])
+
+    fake.completeWrite(.success(second))
+    await settleMainActorTasks()
+    XCTAssertEqual(controller.statuses.first?.capability, .available(level: second))
+  }
+
+  func testRefreshReadsTheCurrentLevelBeforeTheNextAdjustment() async throws {
+    let fake = FakeExternalBrightnessBackend()
+    let controller = ExternalBrightnessController(
+      backend: fake.backend,
+      deadlineScheduler: ManualBrightnessDeadlineScheduler().scheduler)
+
+    controller.refresh(displays: [display], disabledDisplayIDs: [])
+    fake.completeRead(.success(0.5))
+    await settleMainActorTasks()
+
+    controller.refresh(displays: [display], disabledDisplayIDs: [])
+    XCTAssertEqual(fake.readCount, 2)
+    XCTAssertEqual(controller.statuses.first?.capability, .probing)
+    fake.completeRead(.success(0.8))
+    await settleMainActorTasks()
+
+    let target = try XCTUnwrap(
+      controller.adjust(displayID: display.displayID, up: false, divisor: 1))
+    XCTAssertEqual(target, 0.8 - 1.0 / 16.0, accuracy: 1e-6)
+  }
+
+  func testPerDisplayDisablementSkipsProbeAndFallsBack() {
+    let fake = FakeExternalBrightnessBackend()
+    let controller = ExternalBrightnessController(
+      backend: fake.backend,
+      deadlineScheduler: ManualBrightnessDeadlineScheduler().scheduler)
+
+    controller.refresh(displays: [display], disabledDisplayIDs: [display.id])
+
+    XCTAssertEqual(controller.statuses.first?.capability, .disabled)
+    XCTAssertEqual(fake.readCount, 0)
+    XCTAssertNil(controller.adjust(displayID: display.displayID, up: true, divisor: 1))
+  }
+
+  private func settleMainActorTasks() async {
+    await Task.yield()
+    await Task.yield()
+  }
+}
+
+private final class FakeExternalBrightnessBackend: @unchecked Sendable {
+  private let lock = NSLock()
+  private var readCompletions: [ExternalBrightnessBackend.Completion] = []
+  private var writeCompletions: [ExternalBrightnessBackend.Completion] = []
+  private var levels: [Float] = []
+  private var reads = 0
+
+  var backend: ExternalBrightnessBackend {
+    ExternalBrightnessBackend(
+      read: { [self] _, completion in
+        lock.withLock {
+          reads += 1
+          readCompletions.append(completion)
+        }
+      },
+      write: { [self] _, level, completion in
+        lock.withLock {
+          levels.append(level)
+          writeCompletions.append(completion)
+        }
+      })
+  }
+
+  var writtenLevels: [Float] { lock.withLock { levels } }
+  var readCount: Int { lock.withLock { reads } }
+
+  func completeRead(_ result: Result<Float, ExternalBrightnessFailure>) {
+    let completion = lock.withLock { readCompletions.removeFirst() }
+    completion(result)
+  }
+
+  func completeWrite(_ result: Result<Float, ExternalBrightnessFailure>) {
+    let completion = lock.withLock { writeCompletions.removeFirst() }
+    completion(result)
+  }
+}
+
+private final class ManualBrightnessDeadlineScheduler: @unchecked Sendable {
+  private let lock = NSLock()
+  private var operations: [UUID: @Sendable () -> Void] = [:]
+
+  var scheduler: BrightnessDeadlineScheduler {
+    BrightnessDeadlineScheduler { [self] _, operation in
+      let id = UUID()
+      lock.withLock { operations[id] = operation }
+      return BrightnessDeadlineCancellation { [weak self] in
+        _ = self?.lock.withLock { self?.operations.removeValue(forKey: id) }
+      }
+    }
+  }
+
+  func fireAll() {
+    let pending = lock.withLock {
+      let pending = Array(operations.values)
+      operations.removeAll()
+      return pending
+    }
+    for operation in pending { operation() }
+  }
+}
+
 private struct FakeVolumeDevice {
   let elements: [UInt32]
   var values: [UInt32: Float]

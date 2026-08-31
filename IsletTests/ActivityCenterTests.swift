@@ -57,6 +57,20 @@ final class ActivityCenterTests: XCTestCase {
     XCTAssertEqual(center.primaryActivity?.id, "nowPlaying")
   }
 
+  func testTemporaryPresentationRevealsOnlyTheRequestedDisabledActivity() {
+    let saved = Defaults[.disabledActivities]
+    defer { Defaults[.disabledActivities] = saved }
+    Defaults[.disabledActivities] = ["timer", "battery"]
+    let center = ActivityCenter()
+    center.register(Fake(id: "timer", priority: .timer, active: true))
+    center.register(Fake(id: "battery", priority: .ambient, active: true))
+
+    XCTAssertTrue(center.expandedActivities.isEmpty)
+    XCTAssertEqual(
+      center.expandedActivities(temporarilyIncluding: "timer").map(\.id), ["timer"])
+    XCTAssertTrue(center.expandedActivities.isEmpty)
+  }
+
   func testInactiveIgnored() {
     let center = ActivityCenter()
     center.register(Fake(id: "media", priority: .media, active: false))
@@ -303,6 +317,35 @@ final class ActivityCenterTests: XCTestCase {
     await Task.yield()
     await Task.yield()
     XCTAssertTrue(running)
+    controller.stopObserving()
+  }
+
+  func testKeepAwakeDemandKeepsBatteryMonitoringAliveWhenActivityIsOff() async {
+    let savedDisabled = Defaults[.disabledActivities]
+    defer { Defaults[.disabledActivities] = savedDisabled }
+    Defaults[.disabledActivities] = ["battery"]
+
+    var keepAwakeDemand = false
+    var batteryMonitoring = false
+    let controller = ActivityLifecycleController(controls: [
+      ActivityLifecycleControl(
+        activityID: "battery", additionalRuntimeDemand: { keepAwakeDemand },
+        start: { batteryMonitoring = true }, stop: { batteryMonitoring = false })
+    ])
+    controller.startObserving()
+    XCTAssertFalse(batteryMonitoring)
+
+    keepAwakeDemand = true
+    NotificationCenter.default.post(name: .keepAwakeSessionDidChange, object: nil)
+    await Task.yield()
+    await Task.yield()
+    XCTAssertTrue(batteryMonitoring)
+
+    keepAwakeDemand = false
+    NotificationCenter.default.post(name: .keepAwakeSessionDidChange, object: nil)
+    await Task.yield()
+    await Task.yield()
+    XCTAssertFalse(batteryMonitoring)
     controller.stopObserving()
   }
 }

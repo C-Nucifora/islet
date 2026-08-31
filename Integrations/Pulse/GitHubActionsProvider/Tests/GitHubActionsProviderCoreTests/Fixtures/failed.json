@@ -1,0 +1,15 @@
+{
+  "total_count": 1,
+  "workflow_runs": [{
+    "id": 104,
+    "name": "CI",
+    "workflow_id": 9001,
+    "path": ".github/workflows/ci.yml",
+    "status": "completed",
+    "conclusion": "failure",
+    "html_url": "https://github.com/C-Nucifora/islet/actions/runs/104",
+    "head_branch": "main",
+    "event": "push",
+    "run_attempt": 1
+  }]
+}
