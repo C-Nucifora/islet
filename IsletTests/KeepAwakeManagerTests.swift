@@ -161,6 +161,42 @@ final class KeepAwakeManagerTests: XCTestCase {
     XCTAssertEqual(fixture.provider.releasedIDs, [1])
   }
 
+  func testAlreadyLowBatteryPreventsSessionFromCreatingAssertions() {
+    let fixture = Fixture(allowDisplaySleep: false, lowBatteryThreshold: 20)
+    fixture.batteryStateProvider.state = BatteryState(
+      percent: 19, isCharging: false, onAC: false)
+
+    XCTAssertFalse(fixture.manager.start(duration: .indefinitely))
+
+    XCTAssertFalse(fixture.manager.isActive)
+    XCTAssertEqual(fixture.manager.lastEndReason, .battery)
+    XCTAssertTrue(fixture.provider.createdKinds.isEmpty)
+    XCTAssertNotNil(fixture.manager.lastError)
+  }
+
+  func testRaisingThresholdStopsActiveSessionUsingLatestBatteryState() {
+    let fixture = Fixture(allowDisplaySleep: true, lowBatteryThreshold: 10)
+    fixture.manager.handleBattery(
+      BatteryState(percent: 20, isCharging: false, onAC: false), lowBatteryThreshold: 10)
+    XCTAssertTrue(fixture.manager.start(duration: .indefinitely))
+
+    fixture.manager.setLowBatteryThreshold(30)
+
+    XCTAssertFalse(fixture.manager.isActive)
+    XCTAssertEqual(fixture.manager.lastEndReason, .battery)
+    XCTAssertEqual(fixture.provider.releasedIDs, [1])
+  }
+
+  func testClearingBatteryStateAllowsStartAfterMonitoringStops() {
+    let fixture = Fixture(allowDisplaySleep: true, lowBatteryThreshold: 20)
+    fixture.manager.handleBattery(
+      BatteryState(percent: 10, isCharging: false, onAC: false), lowBatteryThreshold: 20)
+    fixture.manager.clearBatteryState()
+
+    XCTAssertTrue(fixture.manager.start(duration: .indefinitely))
+    XCTAssertEqual(fixture.provider.createdKinds, [.systemSleep])
+  }
+
   func testDisplayCreationFailureDuringLivePreferenceChangeKeepsSystemSession() {
     let fixture = Fixture(allowDisplaySleep: true)
     XCTAssertTrue(fixture.manager.start(duration: .indefinitely))
@@ -248,13 +284,19 @@ private struct Fixture {
   let provider = TestAssertionProvider()
   let clock = TestKeepAwakeClock()
   let scheduler = TestKeepAwakeScheduler()
+  let batteryStateProvider = TestBatteryStateProvider()
   let manager: KeepAwakeManager
 
-  init(allowDisplaySleep: Bool) {
+  init(allowDisplaySleep: Bool, lowBatteryThreshold: Int = 20) {
     manager = KeepAwakeManager(
       assertionProvider: provider, clock: clock, scheduler: scheduler,
-      allowDisplaySleep: allowDisplaySleep)
+      allowDisplaySleep: allowDisplaySleep, lowBatteryThreshold: lowBatteryThreshold,
+      batteryStateProvider: { [batteryStateProvider] in batteryStateProvider.state })
   }
+}
+
+private final class TestBatteryStateProvider {
+  var state: BatteryState?
 }
 
 private enum TestKeepAwakeError: Error {

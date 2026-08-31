@@ -35,6 +35,7 @@ final class BatteryActivity: NotchActivity, ObservableObject {
     cancellables.removeAll()
     eventHistory.reset()
     activationDate = nil
+    KeepAwakeManager.shared.clearBatteryState()
     objectWillChange.send()
   }
 

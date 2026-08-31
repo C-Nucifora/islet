@@ -149,6 +149,8 @@ final class KeepAwakeManager: ObservableObject {
   static let shared = KeepAwakeManager(
     assertionProvider: IOKitKeepAwakeAssertionProvider(), clock: SystemKeepAwakeClock(),
     scheduler: DispatchKeepAwakeScheduler(), allowDisplaySleep: Defaults[.allowDisplaySleep],
+    lowBatteryThreshold: Defaults[.keepAwakeLowBatteryThreshold],
+    batteryStateProvider: { BatteryMonitor.readState() },
     observeSystemChanges: true, observePreferenceChanges: true)
 
   @Published private(set) var isActive = false
@@ -172,6 +174,9 @@ final class KeepAwakeManager: ObservableObject {
   private let assertionProvider: KeepAwakeAssertionProviding
   private let clock: KeepAwakeClock
   private let scheduler: KeepAwakeScheduling
+  private let batteryStateProvider: () -> BatteryState?
+  private var lowBatteryThreshold: Int
+  private var latestBatteryState: BatteryState?
   private var systemAssertionID: UInt32?
   private var displayAssertionID: UInt32?
   private var monotonicDeadline: TimeInterval?
@@ -182,17 +187,25 @@ final class KeepAwakeManager: ObservableObject {
   init(
     assertionProvider: KeepAwakeAssertionProviding, clock: KeepAwakeClock,
     scheduler: KeepAwakeScheduling, allowDisplaySleep: Bool,
+    lowBatteryThreshold: Int, batteryStateProvider: @escaping () -> BatteryState?,
     observeSystemChanges: Bool = false, observePreferenceChanges: Bool = false
   ) {
     self.assertionProvider = assertionProvider
     self.clock = clock
     self.scheduler = scheduler
     self.allowDisplaySleep = allowDisplaySleep
+    self.lowBatteryThreshold = lowBatteryThreshold
+    self.batteryStateProvider = batteryStateProvider
 
     if observePreferenceChanges {
       Defaults.publisher(.allowDisplaySleep)
         .sink { [weak self] change in
           Task { @MainActor in self?.setAllowDisplaySleep(change.newValue) }
+        }
+        .store(in: &cancellables)
+      Defaults.publisher(.keepAwakeLowBatteryThreshold)
+        .sink { [weak self] change in
+          Task { @MainActor in self?.setLowBatteryThreshold(change.newValue) }
         }
         .store(in: &cancellables)
     }
@@ -213,6 +226,19 @@ final class KeepAwakeManager: ObservableObject {
 
     guard Self.isValid(newDuration) else {
       recordError("Keep-awake duration must be finite and greater than zero.")
+      return false
+    }
+
+    refreshBatteryState()
+    guard !batteryProtectionApplies else {
+      if isActive {
+        stop(reason: .battery)
+      } else {
+        lastEndReason = .battery
+        recordError(
+          "Keep awake did not start because the battery is at or below \(lowBatteryThreshold)% while unplugged."
+        )
+      }
       return false
     }
 
@@ -283,10 +309,19 @@ final class KeepAwakeManager: ObservableObject {
   }
 
   func handleBattery(_ state: BatteryState, lowBatteryThreshold: Int) {
-    guard isActive, lowBatteryThreshold > 0, !state.onAC,
-      state.percent <= lowBatteryThreshold
-    else { return }
-    stop(reason: .battery)
+    latestBatteryState = state
+    self.lowBatteryThreshold = lowBatteryThreshold
+    stopForBatteryIfNeeded()
+  }
+
+  func clearBatteryState() {
+    latestBatteryState = nil
+  }
+
+  func setLowBatteryThreshold(_ threshold: Int) {
+    lowBatteryThreshold = threshold
+    refreshBatteryState()
+    stopForBatteryIfNeeded()
   }
 
   func retryUnreleasedAssertions() {
@@ -405,6 +440,21 @@ final class KeepAwakeManager: ObservableObject {
     case .timed(let interval):
       interval.isFinite && interval > 0
     }
+  }
+
+  private var batteryProtectionApplies: Bool {
+    guard let latestBatteryState else { return false }
+    return lowBatteryThreshold > 0 && !latestBatteryState.onAC
+      && latestBatteryState.percent <= lowBatteryThreshold
+  }
+
+  private func refreshBatteryState() {
+    if let state = batteryStateProvider() { latestBatteryState = state }
+  }
+
+  private func stopForBatteryIfNeeded() {
+    guard isActive, batteryProtectionApplies else { return }
+    stop(reason: .battery)
   }
 
   private func releaseDisplayAssertion() {
