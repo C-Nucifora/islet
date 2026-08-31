@@ -11,9 +11,18 @@ final class ShelfActivity: NotchActivity, ObservableObject {
   let isAvailableWhenInactive = true
   private(set) var activationDate: Date?
 
-  private let model = ShelfModel.shared
+  private let model: ShelfModel
+  let airDrop: AirDropShareController
   private var cancellables: Set<AnyCancellable> = []
   private var isMonitoring = false
+
+  init(
+    model: ShelfModel = .shared,
+    airDrop: AirDropShareController = AirDropShareController()
+  ) {
+    self.model = model
+    self.airDrop = airDrop
+  }
 
   var isActive: Bool { !model.items.isEmpty || model.isDropPresentationActive }
 
@@ -49,11 +58,13 @@ final class ShelfActivity: NotchActivity, ObservableObject {
         .font(.caption.weight(.semibold)).monospacedDigit().appThemeForeground(.shelf))
   }
 
-  var expandedView: AnyView { AnyView(ShelfView(model: model)) }
+  var shelfView: ShelfView { ShelfView(model: model, airDrop: airDrop) }
+  var expandedView: AnyView { AnyView(shelfView) }
 }
 
 struct ShelfView: View {
   @ObservedObject var model: ShelfModel
+  @ObservedObject var airDrop: AirDropShareController
   @Environment(\.appTheme) private var appTheme
 
   var body: some View {
@@ -73,13 +84,19 @@ struct ShelfView: View {
         }
         if !model.items.isEmpty {
           Button {
-            airdropAll()
+            airDrop.share(model.urls)
           } label: {
-            Image(systemName: "square.and.arrow.up")
+            if airDrop.isSharing {
+              ProgressView().controlSize(.small)
+            } else {
+              Image(systemName: "square.and.arrow.up")
+            }
           }
           .buttonStyle(.plain)
-          .help("Share all Shelf items with AirDrop")
+          .disabled(!airDrop.isActionEnabled)
+          .help(airDropHelp)
           .accessibilityLabel("AirDrop all Shelf items")
+          .accessibilityHint(airDropHint)
           Button {
             Task { await model.clear() }
           } label: {
@@ -128,6 +145,23 @@ struct ShelfView: View {
         .accessibilityElement(children: .combine)
       }
 
+      if let airDropFeedback {
+        HStack(spacing: 5) {
+          Image(systemName: airDropFeedback.icon)
+          Text(airDropFeedback.message).lineLimit(2)
+          Spacer(minLength: 0)
+          if airDropFeedback.canRetry {
+            Button("Try Again") { airDrop.retry(model.urls) }.buttonStyle(.link)
+          }
+          if airDropFeedback.canDismiss {
+            Button("Dismiss") { airDrop.dismissFeedback() }.buttonStyle(.link)
+          }
+        }
+        .font(.caption2)
+        .foregroundStyle(airDropFeedback.isFailure ? .orange : .secondary)
+        .accessibilityElement(children: .contain)
+      }
+
       if model.isStorageAvailable, model.items.isEmpty {
         RoundedRectangle(cornerRadius: 10)
           .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [5]))
@@ -154,6 +188,7 @@ struct ShelfView: View {
     .foregroundStyle(.white)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .contentShape(Rectangle())
+    .onAppear { airDrop.refreshAvailability() }
     .overlay {
       if model.isDragActive {
         RoundedRectangle(cornerRadius: 12)
@@ -162,11 +197,49 @@ struct ShelfView: View {
     }
   }
 
-  private func airdropAll() {
-    guard let service = NSSharingService(named: .sendViaAirDrop) else { return }
-    // The observer is what makes the "AirDrop sent" event source fire on completion.
-    AirDropShareObserver.observe(service)
-    service.perform(withItems: model.urls)
+  private var airDropHelp: String {
+    if !airDrop.isServiceAvailable { return "AirDrop is unavailable on this Mac" }
+    if airDrop.isSharing { return "AirDrop share in progress" }
+    if airDrop.state == .busy { return "Another AirDrop share is in progress" }
+    return "Share all Shelf items with AirDrop"
+  }
+
+  private var airDropHint: String {
+    if !airDrop.isServiceAvailable { return "AirDrop is unavailable" }
+    if airDrop.isSharing { return "Wait for the current share to finish" }
+    if airDrop.state == .busy { return "Another Shelf share must finish first" }
+    return "Opens AirDrop for every item on the Shelf"
+  }
+
+  private var airDropFeedback: AirDropFeedback? {
+    switch airDrop.state {
+    case .ready, .sharing: nil
+    case .unavailable:
+      .init(
+        icon: "airplayaudio.badge.exclamationmark", message: "AirDrop is unavailable on this Mac.",
+        isFailure: true, canRetry: false, canDismiss: false)
+    case .cancelled:
+      .init(
+        icon: "xmark.circle", message: "AirDrop was cancelled. Your Shelf items are still here.",
+        isFailure: false, canRetry: true, canDismiss: true)
+    case .busy:
+      .init(
+        icon: "hourglass", message: "Another AirDrop share is still in progress.",
+        isFailure: false, canRetry: false, canDismiss: true)
+    case .failed(let reason):
+      .init(
+        icon: "exclamationmark.triangle.fill",
+        message: "AirDrop failed: \(reason) Your Shelf items are still here.",
+        isFailure: true, canRetry: true, canDismiss: true)
+    }
+  }
+
+  private struct AirDropFeedback {
+    let icon: String
+    let message: String
+    let isFailure: Bool
+    let canRetry: Bool
+    let canDismiss: Bool
   }
 }
 
