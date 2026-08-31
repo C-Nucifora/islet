@@ -147,6 +147,12 @@ final class ShelfModel: ObservableObject {
     var isStaged: Bool
   }
 
+  private enum PendingImportRecordResult {
+    case recorded(ShelfPendingImport)
+    case cancelled
+    case saveFailed
+  }
+
   private struct ThumbnailCacheKey: Hashable, Sendable {
     let url: URL
     let metadata: ShelfThumbnailMetadata
@@ -440,7 +446,6 @@ final class ShelfModel: ObservableObject {
   }
 
   func setExpiryRule(_ rule: ShelfExpiryRule, for stack: ShelfStack) async -> Bool {
-    let now = Date.now
     let saved = await withManifestMutation {
       guard let index = manifest.stacks.firstIndex(where: { $0.id == stack.id }) else {
         return false
@@ -450,6 +455,12 @@ final class ShelfModel: ObservableObject {
       for itemIndex in manifest.items.indices where manifest.items[itemIndex].stackID == stack.id {
         manifest.items[itemIndex].expiresAt = rule.interval.map {
           manifest.items[itemIndex].importedAt.addingTimeInterval($0)
+        }
+      }
+      for pendingIndex in manifest.pendingImports.indices
+      where manifest.pendingImports[pendingIndex].stackID == stack.id {
+        manifest.pendingImports[pendingIndex].expiresAt = rule.interval.map {
+          manifest.pendingImports[pendingIndex].importedAt.addingTimeInterval($0)
         }
       }
       guard await persistManifest(reportingError: true) else {
@@ -462,7 +473,7 @@ final class ShelfModel: ObservableObject {
     stacks = manifest.stacks
     applyManifestItems()
     scheduleExpiry()
-    await cleanupExpired(at: now)
+    await cleanupExpired()
     return true
   }
 
@@ -492,12 +503,12 @@ final class ShelfModel: ObservableObject {
 
   func move(_ item: ShelfItem, to stack: ShelfStack) async -> Bool {
     let saved = await withManifestMutation {
-      guard manifest.stacks.contains(where: { $0.id == stack.id }),
+      guard let destinationStack = manifest.stacks.first(where: { $0.id == stack.id }),
         let index = manifest.items.firstIndex(where: { $0.id == item.id })
       else { return false }
       let previous = manifest
-      manifest.items[index].stackID = stack.id
-      manifest.items[index].expiresAt = stack.expiryRule.interval.map {
+      manifest.items[index].stackID = destinationStack.id
+      manifest.items[index].expiresAt = destinationStack.expiryRule.interval.map {
         manifest.items[index].importedAt.addingTimeInterval($0)
       }
       guard await persistManifest(reportingError: true) else {
@@ -912,19 +923,21 @@ final class ShelfModel: ObservableObject {
       }
 
       let importedAt = Date.now
-      let pending = ShelfPendingImport(
+      let pendingDraft = ShelfPendingImport(
         id: UUID(), fileName: dest.lastPathComponent, stackID: targetStack.id,
         importedAt: importedAt,
         expiresAt: targetStack.expiryRule.interval.map { importedAt.addingTimeInterval($0) },
         origin: origin)
-      guard
-        let pendingRecorded = await recordPendingImport(
-          pending, expectedImportGeneration: expectedImportGeneration)
-      else {
+      let pending: ShelfPendingImport
+      switch await recordPendingImport(
+        pendingDraft, expectedImportGeneration: expectedImportGeneration)
+      {
+      case .recorded(let recorded):
+        pending = recorded
+      case .cancelled:
         removeStagingItem(staging)
         return (nil, nil, nil)
-      }
-      guard pendingRecorded else {
+      case .saveFailed:
         removeStagingItem(staging)
         let error = "Couldn't save Shelf workspace data."
         setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
@@ -946,15 +959,15 @@ final class ShelfModel: ObservableObject {
       }
       switch moveResult {
       case .success:
-        let metadataSaved = await commitPendingImport(pending)
+        let (committedPending, metadataSaved) = await commitPendingImport(pending)
         if updatesLastError {
           lastError = metadataSaved ? nil : "Couldn't finish saving Shelf workspace data."
           lastRejectedImportBytes = nil
         }
         let item = ShelfItem(
-          id: pending.id, url: dest, name: dest.lastPathComponent,
-          stackID: pending.stackID, importedAt: pending.importedAt,
-          expiresAt: pending.expiresAt, thumbnail: nil)
+          id: committedPending.id, url: dest, name: dest.lastPathComponent,
+          stackID: committedPending.stackID, importedAt: committedPending.importedAt,
+          expiresAt: committedPending.expiresAt, thumbnail: nil)
         items.append(item)
         committedItem = item
         usageMutationGeneration &+= 1
@@ -985,15 +998,21 @@ final class ShelfModel: ObservableObject {
 
   private func recordPendingImport(
     _ pending: ShelfPendingImport, expectedImportGeneration: UInt?
-  ) async -> Bool? {
+  ) async -> PendingImportRecordResult {
     await withManifestMutation {
-      guard importIsCurrent(expectedImportGeneration) else { return nil }
-      manifest.pendingImports.append(pending)
-      guard await persistManifest(reportingError: false) else {
-        manifest.pendingImports.removeAll { $0.id == pending.id }
-        return false
+      guard importIsCurrent(expectedImportGeneration),
+        let stack = manifest.stacks.first(where: { $0.id == pending.stackID })
+      else { return .cancelled }
+      var recorded = pending
+      recorded.expiresAt = stack.expiryRule.interval.map {
+        recorded.importedAt.addingTimeInterval($0)
       }
-      return true
+      manifest.pendingImports.append(recorded)
+      guard await persistManifest(reportingError: false) else {
+        manifest.pendingImports.removeAll { $0.id == recorded.id }
+        return .saveFailed
+      }
+      return .recorded(recorded)
     }
   }
 
@@ -1004,15 +1023,18 @@ final class ShelfModel: ObservableObject {
     }
   }
 
-  private func commitPendingImport(_ pending: ShelfPendingImport) async -> Bool {
+  private func commitPendingImport(
+    _ pending: ShelfPendingImport
+  ) async -> (ShelfPendingImport, Bool) {
     await withManifestMutation {
+      let committed = manifest.pendingImports.first(where: { $0.id == pending.id }) ?? pending
       manifest.pendingImports.removeAll { $0.id == pending.id }
       manifest.items.append(
         ShelfItemRecord(
-          id: pending.id, fileName: pending.fileName, stackID: pending.stackID,
-          importedAt: pending.importedAt, expiresAt: pending.expiresAt,
-          origin: pending.origin))
-      return await persistManifest(reportingError: false)
+          id: committed.id, fileName: committed.fileName, stackID: committed.stackID,
+          importedAt: committed.importedAt, expiresAt: committed.expiresAt,
+          origin: committed.origin))
+      return (committed, await persistManifest(reportingError: false))
     }
   }
 

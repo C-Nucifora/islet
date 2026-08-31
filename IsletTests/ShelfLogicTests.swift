@@ -120,6 +120,26 @@ final class ShelfLogicTests: XCTestCase {
     }
   }
 
+  private actor FirstManifestSaveGate {
+    private var firstCallStarted = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func save(_ manifest: ShelfManifest, to url: URL) async -> Result<Void, Error> {
+      if !firstCallStarted {
+        firstCallStarted = true
+        await withCheckedContinuation { continuation = $0 }
+      }
+      return await ShelfManifestStore.save(manifest, to: url)
+    }
+
+    func hasStarted() -> Bool { firstCallStarted }
+
+    func release() {
+      continuation?.resume()
+      continuation = nil
+    }
+  }
+
   private final class RemovalGate: @unchecked Sendable {
     private let condition = NSCondition()
     private var started = false
@@ -1481,6 +1501,149 @@ final class ShelfLogicTests: XCTestCase {
     XCTAssertTrue(model.items.isEmpty)
     XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
     XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "original")
+  }
+
+  @MainActor
+  func testImportUsesWorkspaceExpiryRuleCurrentWhenPendingMetadataIsRecorded() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    let source = root.appendingPathComponent("large-import.txt")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try Data("source".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let copyGate = StagedCopyGate()
+    let model = ShelfModel(
+      directory: shelf,
+      copyItem: { source, destination in
+        await copyGate.copy(source: source, to: destination)
+      })
+    let createdWorkspace = await model.createStack(named: "Scratch")
+    let workspace = try XCTUnwrap(createdWorkspace)
+    let initialRuleSaved = await model.setExpiryRule(.oneHour, for: workspace)
+    XCTAssertTrue(initialRuleSaved)
+
+    let importTask = Task { await model.add(source, to: workspace.id) }
+    for _ in 0..<200 where !(await copyGate.hasStarted()) {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let copyStarted = await copyGate.hasStarted()
+    XCTAssertTrue(copyStarted)
+    let newRuleSaved = await model.setExpiryRule(.never, for: workspace)
+    XCTAssertTrue(newRuleSaved)
+    await copyGate.release()
+
+    let imported = await importTask.value
+    XCTAssertTrue(imported)
+    XCTAssertNil(try XCTUnwrap(model.items.first).expiresAt)
+    XCTAssertNil(try XCTUnwrap(ShelfModel(directory: shelf).items.first).expiresAt)
+  }
+
+  @MainActor
+  func testExpiryRuleChangeUpdatesAnImportWaitingToCommit() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    let source = root.appendingPathComponent("pending-import.txt")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try Data("source".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let moveGate = CompletedMoveGate()
+    let model = ShelfModel(
+      directory: shelf,
+      moveItem: { source, destination in
+        await moveGate.move(source: source, to: destination)
+      })
+    let createdWorkspace = await model.createStack(named: "Scratch")
+    let workspace = try XCTUnwrap(createdWorkspace)
+    let initialRuleSaved = await model.setExpiryRule(.oneHour, for: workspace)
+    XCTAssertTrue(initialRuleSaved)
+
+    let importTask = Task { await model.add(source, to: workspace.id) }
+    for _ in 0..<200 where !(await moveGate.hasStarted()) {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let moveStarted = await moveGate.hasStarted()
+    XCTAssertTrue(moveStarted)
+    let newRuleSaved = await model.setExpiryRule(.never, for: workspace)
+    XCTAssertTrue(newRuleSaved)
+    await moveGate.release()
+
+    let imported = await importTask.value
+    XCTAssertTrue(imported)
+    XCTAssertNil(try XCTUnwrap(model.items.first).expiresAt)
+    XCTAssertNil(try XCTUnwrap(ShelfModel(directory: shelf).items.first).expiresAt)
+  }
+
+  @MainActor
+  func testMoveUsesCurrentDestinationExpiryInsteadOfCapturedStackValue() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    let source = root.appendingPathComponent("move-me.txt")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try Data("source".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = ShelfModel(directory: shelf)
+    let added = await model.add(source)
+    XCTAssertTrue(added)
+    let item = try XCTUnwrap(model.items.first)
+    let createdWorkspace = await model.createStack(named: "Scratch")
+    let workspace = try XCTUnwrap(createdWorkspace)
+    let initialRuleSaved = await model.setExpiryRule(.oneHour, for: workspace)
+    XCTAssertTrue(initialRuleSaved)
+    let capturedWorkspace = try XCTUnwrap(model.stacks.first { $0.id == workspace.id })
+    let newRuleSaved = await model.setExpiryRule(.never, for: capturedWorkspace)
+    XCTAssertTrue(newRuleSaved)
+
+    let movedSuccessfully = await model.move(item, to: capturedWorkspace)
+    XCTAssertTrue(movedSuccessfully)
+
+    let moved = try XCTUnwrap(model.items.first)
+    XCTAssertEqual(moved.stackID, workspace.id)
+    XCTAssertNil(moved.expiresAt)
+    XCTAssertNil(try XCTUnwrap(ShelfModel(directory: shelf).items.first).expiresAt)
+  }
+
+  @MainActor
+  func testExpiryCrossedDuringManifestSaveIsRemovedAfterPersistence() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    try FileManager.default.createDirectory(at: shelf, withIntermediateDirectories: true)
+    let stored = shelf.appendingPathComponent("crosses-deadline.txt")
+    try Data("stored".utf8).write(to: stored)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let deadline = Date(
+      timeIntervalSince1970: floor(Date.now.timeIntervalSince1970) + 3)
+    let stack = ShelfStack(id: UUID(), name: "Scratch", expiryRule: .never)
+    let record = ShelfItemRecord(
+      id: UUID(), fileName: stored.lastPathComponent, stackID: stack.id,
+      importedAt: deadline.addingTimeInterval(-3_600), expiresAt: nil, origin: nil)
+    let manifest = ShelfManifest(
+      stacks: [stack], items: [record], pendingImports: [],
+      sameFilePolicy: .reuseExisting, sameNamePolicy: .keepBoth)
+    try await ShelfManifestStore.save(manifest, to: shelf.appendingPathExtension("json")).get()
+    let saveGate = FirstManifestSaveGate()
+    let model = ShelfModel(directory: shelf, saveManifest: saveGate.save)
+
+    let ruleChange = Task { await model.setExpiryRule(.oneHour, for: stack) }
+    for _ in 0..<200 where !(await saveGate.hasStarted()) {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let firstSaveStarted = await saveGate.hasStarted()
+    XCTAssertTrue(firstSaveStarted)
+    XCTAssertLessThan(Date.now, deadline)
+    while Date.now <= deadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    await saveGate.release()
+
+    let ruleSaved = await ruleChange.value
+    XCTAssertTrue(ruleSaved)
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: stored.path))
+    XCTAssertTrue(ShelfModel(directory: shelf).items.isEmpty)
   }
 
   @MainActor

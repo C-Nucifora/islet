@@ -106,7 +106,7 @@ struct ShelfPendingImport: Identifiable, Equatable, Codable, Sendable {
   let fileName: String
   let stackID: UUID
   let importedAt: Date
-  let expiresAt: Date?
+  var expiresAt: Date?
   let origin: ShelfOriginIdentity
 }
 
