@@ -127,6 +127,7 @@ extension MediaSourceMode: Defaults.Serializable {}
 extension HUDStyle: Defaults.Serializable {}
 extension EnergyMode: Defaults.Serializable {}
 extension HapticStrength: Defaults.Serializable {}
+extension PulseDeliveryProfile: Defaults.Serializable {}
 
 /// The persisted activity switch. `disabledActivities` is an exclusion list so activities added by
 /// a newer build start enabled, and an older build can retain ids it does not understand.
@@ -210,11 +211,20 @@ extension Defaults.Keys {
   static let barrierPushDistance = Key<Double>(
     "barrierPushDistance", default: Double(Metrics.barrierPushDistance))
   static let energyMode = Key<EnergyMode>("energyMode", default: .automatic)
+  /// Keep the Mac working while allowing its screen to follow the normal display-sleep timeout.
+  static let allowDisplaySleep = Key<Bool>("allowDisplaySleep", default: true)
+  /// Zero disables battery protection. A 20% default avoids an unattended session draining the
+  /// battery after macOS first reports its low-battery state.
+  static let keepAwakeLowBatteryThreshold = Key<Int>(
+    "keepAwakeLowBatteryThreshold", default: 20)
   static let hideFromScreenRecording = Key<Bool>("hideFromScreenRecording", default: false)
   /// Retained only as input to the one-time activity enablement migration.
   static let legacyBatteryEnabled = Key<Bool>("batteryEnabled", default: true)
   static let hudEnabled = Key<Bool>("hudEnabled", default: false)
   static let hudStyle = Key<HUDStyle>("hudStyle", default: .bar)
+  /// Stable Core Graphics display UUIDs for monitors whose DDC control the user disabled.
+  static let disabledExternalBrightnessDisplays = Key<[String]>(
+    "disabledExternalBrightnessDisplays", default: [])
   /// Provider setting shared by the Calendar activity and Home agenda, not an activity switch.
   static let calendarEnabled = Key<Bool>("calendarEnabled", default: true)
   static let calendarLeadMinutes = Key<Int>("calendarLeadMinutes", default: 10)
@@ -253,6 +263,10 @@ extension Defaults.Keys {
   /// Retained only as input to the one-time activity enablement migration.
   static let legacyT3CodeEnabled = Key<Bool>("t3CodeEnabled", default: true)
   static let legacyPulseEnabled = Key<Bool>("pulseEnabled", default: true)
+  /// Unknown values written by a newer Islet build fall back to `.everything`, which keeps Pulse
+  /// available instead of silently hiding provider updates.
+  static let pulseDeliveryProfile = Key<PulseDeliveryProfile>(
+    "pulseDeliveryProfile", default: .everything)
   static let t3RemoteEnvironments = Key<[T3EnvironmentProfile]>(
     "t3RemoteEnvironments", default: [])
   static let timerSessionData = Key<Data?>("timerSessionData")

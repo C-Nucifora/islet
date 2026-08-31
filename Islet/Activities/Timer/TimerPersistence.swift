@@ -11,6 +11,8 @@ struct TimerSessionSnapshot: Codable, Equatable {
   let deadline: Date?
   let isPaused: Bool
   let pausedRemaining: TimeInterval?
+  let completionIdentifier: String?
+  let completedAt: Date?
 
   init(
     savedAt: Date,
@@ -18,7 +20,9 @@ struct TimerSessionSnapshot: Codable, Equatable {
     duration: TimeInterval,
     deadline: Date?,
     isPaused: Bool,
-    pausedRemaining: TimeInterval?
+    pausedRemaining: TimeInterval?,
+    completionIdentifier: String? = nil,
+    completedAt: Date? = nil
   ) {
     version = Self.schemaVersion
     self.savedAt = savedAt
@@ -27,6 +31,8 @@ struct TimerSessionSnapshot: Codable, Equatable {
     self.deadline = deadline
     self.isPaused = isPaused
     self.pausedRemaining = pausedRemaining
+    self.completionIdentifier = completionIdentifier
+    self.completedAt = completedAt
   }
 }
 
@@ -69,8 +75,8 @@ struct TimerPersistenceStore {
 }
 
 enum TimerPersistence {
-  /// A paused timer older than this is more likely abandoned state than a countdown the user still
-  /// expects to see. Running timers can still restore as completed anywhere inside this window.
+  /// An unfinished timer older than this is more likely abandoned state than a countdown the user
+  /// still expects to see. Explicit completed records remain until the user acknowledges them.
   static let maximumRecordAge: TimeInterval = 30 * 24 * 60 * 60
   static let maximumFutureClockSkew: TimeInterval = 5 * 60
 
@@ -90,9 +96,30 @@ enum TimerPersistence {
       session.version == TimerSessionSnapshot.schemaVersion,
       session.savedAt.timeIntervalSinceReferenceDate.isFinite,
       session.savedAt <= now.addingTimeInterval(maximumFutureClockSkew),
-      now.timeIntervalSince(session.savedAt) <= maximumRecordAge,
       isValidDuration(session.duration)
     else {
+      return .discard
+    }
+
+    if session.completionIdentifier != nil || session.completedAt != nil {
+      guard
+        !session.isPaused,
+        session.pausedRemaining == nil,
+        let deadline = session.deadline,
+        deadline.timeIntervalSinceReferenceDate.isFinite,
+        let identifier = session.completionIdentifier,
+        !identifier.isEmpty,
+        let completedAt = session.completedAt,
+        completedAt.timeIntervalSinceReferenceDate.isFinite,
+        deadline <= completedAt,
+        completedAt <= now.addingTimeInterval(maximumFutureClockSkew)
+      else {
+        return .discard
+      }
+      return .completed(session)
+    }
+
+    guard now.timeIntervalSince(session.savedAt) <= maximumRecordAge else {
       return .discard
     }
 
@@ -142,9 +169,9 @@ enum TimerPersistence {
   ) -> TimerSessionRestoration {
     let result = restoration(from: store.readSessionData(), now: now)
     switch result {
-    case .completed, .discard:
+    case .discard:
       store.writeSessionData(nil)
-    case .none, .running, .paused:
+    case .none, .running, .paused, .completed:
       break
     }
     return result
