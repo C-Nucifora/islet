@@ -260,6 +260,13 @@ final class T3OAuthLoopbackTests: XCTestCase, @unchecked Sendable {
     XCTAssertNil(T3OAuthLoopbackListener.maximumReceiveLength(bufferedHeaderBytes: 8_193))
   }
 
+  func testConcurrentConnectionAdmissionIsBounded() {
+    XCTAssertTrue(T3OAuthLoopbackListener.canAcceptConnection(activeCount: 0))
+    XCTAssertTrue(T3OAuthLoopbackListener.canAcceptConnection(activeCount: 7))
+    XCTAssertFalse(T3OAuthLoopbackListener.canAcceptConnection(activeCount: 8))
+    XCTAssertFalse(T3OAuthLoopbackListener.canAcceptConnection(activeCount: -1))
+  }
+
   func testUnterminatedHeaderAtEightKiBIsRejectedBeforeAnotherRead() async throws {
     let fixture = try await LoopbackFixture()
     defer { Task { await fixture.listener.cancel() } }
@@ -304,6 +311,33 @@ final class T3OAuthLoopbackTests: XCTestCase, @unchecked Sendable {
       resultTask.cancel()
       _ = try? await resultTask.value
       XCTFail("The idle connection blocked the browser callback")
+      return
+    }
+
+    let result = try await resultTask.value
+    XCTAssertEqual(result, .authorizationCode("right"))
+  }
+
+  func testIdleConnectionDoesNotBlockConcurrentValidCallback() async throws {
+    let deadlineGate = T3FirstHeaderDeadlineGate()
+    let fixture = try await LoopbackFixture(
+      waitForHeaderDeadline: { await deadlineGate.wait() })
+    defer { Task { await fixture.listener.cancel() } }
+    let resultTask = Task { try await fixture.listener.waitForCallback() }
+    let idleConnection = try await openIdleConnection(port: fixture.port)
+    defer { idleConnection.close() }
+
+    await deadlineGate.waitUntilSuspended()
+    let response = try? await send(
+      "GET /callback?state=expected-state&code=right HTTP/1.1\r\n"
+        + "Host: 127.0.0.1\r\n\r\n",
+      port: fixture.port)
+    await deadlineGate.resume()
+
+    guard let response, response.hasPrefix("HTTP/1.1 200") else {
+      resultTask.cancel()
+      _ = try? await resultTask.value
+      XCTFail("An idle connection blocked the concurrent browser callback")
       return
     }
 
