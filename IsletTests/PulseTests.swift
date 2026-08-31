@@ -45,7 +45,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testCancelledStateIsAcceptedAsAProviderTerminalState() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     let payload = PulsePayload(
       id: "cancelled", source: "xcode", title: "Build cancelled", subtitle: "Islet · 4s",
@@ -136,7 +136,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testCancelledStateRemainsDistinct() {
-    let center = PulseCenter()
+    let center = makeCenter()
     let payload = PulsePayload(
       id: "cancelled", source: "github-actions", title: "CI cancelled", subtitle: nil,
       symbol: nil, accentHex: nil, progress: nil, state: .cancelled, priority: .low,
@@ -291,7 +291,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testProviderHealthReportsNeedsAttentionFromProviderState() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     let payload = PulsePayload(
       id: "github-actions-health", source: "github-actions",
