@@ -1,10 +1,9 @@
 import Combine
-import Defaults
 import Foundation
 
 /// Registration, enable/disable and delivery for every system-event source.
 ///
-/// Mirrors `ActivityCenter` on purpose: same registration shape, same Defaults-driven
+/// Mirrors `ActivityCenter` on purpose: same registration shape, same preference-driven
 /// enable/disable, so the Settings section and the Debug menu both generate from `SourceCatalog`
 /// rather than being hand-maintained alongside it.
 ///
@@ -16,16 +15,24 @@ final class SystemEventBus: ObservableObject {
   static let shared = SystemEventBus(queue: SneakQueue.shared)
 
   private let queue: SneakQueue?
+  let preferences: EventSourcePreferences
   /// Test seam. Left nil in production, where `queue` does the delivering.
   var onSneak: ((Sneak) -> Void)?
 
   private(set) var sources: [any SystemEventSource] = []
   private var coalescer = BurstCoalescer()
   private var flushTask: Task<Void, Never>?
+  private var preferencesCancellable: AnyCancellable?
+  private var appliedDisabledSourceIDs: Set<String>
   private var isRunning = false
 
-  init(queue: SneakQueue?) {
+  init(queue: SneakQueue?, preferences: EventSourcePreferences = .shared) {
     self.queue = queue
+    self.preferences = preferences
+    appliedDisabledSourceIDs = Set(preferences.disabledSourceIDs)
+    preferencesCancellable = preferences.$disabledSourceIDs.dropFirst().sink { [weak self] _ in
+      Task { @MainActor in self?.reconcileSourceLifecycles() }
+    }
   }
 
   // MARK: - Registration
@@ -47,6 +54,7 @@ final class SystemEventBus: ObservableObject {
   func startEnabled() {
     guard !isRunning else { return }
     isRunning = true
+    appliedDisabledSourceIDs = Set(preferences.disabledSourceIDs)
     for source in sources where isEnabled(source.id) {
       source.start()
     }
@@ -63,19 +71,15 @@ final class SystemEventBus: ObservableObject {
   // MARK: - Enable / disable
 
   func isEnabled(_ sourceID: String) -> Bool {
-    !Defaults[.disabledEventSources].contains(sourceID)
+    preferences.isEnabled(sourceID)
   }
 
   /// Toggling actually starts or stops the source. A disabled source holds no registration, no
   /// run-loop source and no timer — "off" means off, not muted.
   func setEnabled(_ enabled: Bool, for sourceID: String) {
-    var disabled = Defaults[.disabledEventSources]
-    if enabled {
-      disabled.removeAll { $0 == sourceID }
-    } else if !disabled.contains(sourceID) {
-      disabled.append(sourceID)
-    }
-    Defaults[.disabledEventSources] = disabled
+    let changed = preferences.setEnabled(enabled, for: sourceID)
+    guard changed else { return }
+    appliedDisabledSourceIDs = Set(preferences.disabledSourceIDs)
 
     // A configuration boundary also invalidates an in-flight burst: otherwise a summary can name
     // a source after the user has disabled it. Canceling the task and resetting both pieces keeps
@@ -86,6 +90,27 @@ final class SystemEventBus: ObservableObject {
 
     if isRunning, let source = sources.first(where: { $0.id == sourceID }) {
       if enabled { source.start() } else { source.stop() }
+    }
+    objectWillChange.send()
+  }
+
+  /// Settings imports and legacy migration replace the stored list as one transaction instead of
+  /// calling `setEnabled` for each source. Reconcile those published changes with the observers
+  /// that are already running so persisted state and live state cannot diverge until relaunch.
+  private func reconcileSourceLifecycles() {
+    let updatedDisabledSourceIDs = Set(preferences.disabledSourceIDs)
+    let previousDisabledSourceIDs = appliedDisabledSourceIDs
+    guard updatedDisabledSourceIDs != previousDisabledSourceIDs else { return }
+    appliedDisabledSourceIDs = updatedDisabledSourceIDs
+    guard isRunning else { return }
+    flushTask?.cancel()
+    flushTask = nil
+    coalescer.reset()
+    for source in sources
+    where previousDisabledSourceIDs.contains(source.id)
+      != updatedDisabledSourceIDs.contains(source.id)
+    {
+      if updatedDisabledSourceIDs.contains(source.id) { source.stop() } else { source.start() }
     }
     objectWillChange.send()
   }
