@@ -47,6 +47,7 @@ final class SystemMetricsMonitor: ObservableObject {
     }
     energyCancellable = Defaults.publisher(.energyMode)
       .dropFirst()
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.energyPolicyDidChange() }
     restartTimer()
     tick()

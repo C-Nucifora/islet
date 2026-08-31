@@ -1,3 +1,5 @@
+import Combine
+import Defaults
 import Foundation
 import XCTest
 
@@ -5,6 +7,36 @@ import XCTest
 
 @MainActor
 final class KeepAwakeManagerTests: XCTestCase {
+  func testPreferenceChangeFromUtilityTaskPublishesOnMainAndUpdatesDisplayAssertion() async {
+    let savedAllowDisplaySleep = Defaults[.allowDisplaySleep]
+    let changedAllowDisplaySleep = !savedAllowDisplaySleep
+    defer { Defaults[.allowDisplaySleep] = savedAllowDisplaySleep }
+
+    let fixture = Fixture(
+      allowDisplaySleep: savedAllowDisplaySleep, observePreferenceChanges: true)
+    XCTAssertTrue(fixture.manager.start(duration: .indefinitely))
+    let published = expectation(description: "KeepAwakeManager publishes the preference change")
+    let cancellable = fixture.manager.$allowDisplaySleep.dropFirst().sink { value in
+      XCTAssertTrue(Thread.isMainThread)
+      XCTAssertEqual(value, changedAllowDisplaySleep)
+      published.fulfill()
+    }
+
+    await Task.detached(priority: .utility) {
+      Defaults[.allowDisplaySleep] = changedAllowDisplaySleep
+    }.value
+    await fulfillment(of: [published], timeout: 2)
+
+    XCTAssertEqual(fixture.manager.effectivelyAllowsDisplaySleep, changedAllowDisplaySleep)
+    if changedAllowDisplaySleep {
+      XCTAssertEqual(fixture.provider.releasedIDs, [2])
+    } else {
+      XCTAssertEqual(fixture.provider.createdKinds, [.systemSleep, .displaySleep])
+    }
+    cancellable.cancel()
+    fixture.manager.stop(reason: .manual)
+  }
+
   func testIndefiniteSessionCreatesSystemAssertionAndReleasesItExactlyOnce() {
     let fixture = Fixture(allowDisplaySleep: true)
 
@@ -287,11 +319,15 @@ private struct Fixture {
   let batteryStateProvider = TestBatteryStateProvider()
   let manager: KeepAwakeManager
 
-  init(allowDisplaySleep: Bool, lowBatteryThreshold: Int = 20) {
+  init(
+    allowDisplaySleep: Bool, lowBatteryThreshold: Int = 20,
+    observePreferenceChanges: Bool = false
+  ) {
     manager = KeepAwakeManager(
       assertionProvider: provider, clock: clock, scheduler: scheduler,
       allowDisplaySleep: allowDisplaySleep, lowBatteryThreshold: lowBatteryThreshold,
-      batteryStateProvider: { [batteryStateProvider] in batteryStateProvider.state })
+      batteryStateProvider: { [batteryStateProvider] in batteryStateProvider.state },
+      observePreferenceChanges: observePreferenceChanges)
   }
 }
 

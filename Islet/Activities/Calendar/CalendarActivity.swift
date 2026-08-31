@@ -141,6 +141,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
     // Request/refresh when the feature is toggled on; clear when off.
     Defaults.publisher(.calendarEnabled)
       .dropFirst()
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] change in
         if change.newValue {
           Task { await self?.refreshAuthorization() }
@@ -155,6 +156,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
       .store(in: &cancellables)
     Defaults.publisher(.hiddenCalendarIDs)
       .dropFirst()
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in Task { await self?.reload() } }
       .store(in: &cancellables)
     // A grant made in System Settings happens out of process. Refresh as soon as the user returns

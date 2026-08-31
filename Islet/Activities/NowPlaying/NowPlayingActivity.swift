@@ -97,10 +97,12 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
       .sink { [weak self] latest in self?.publish(audioSources: latest) }
     Defaults.publisher(.mediaSourceMode)
       .dropFirst()
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.publish() }
       .store(in: &preferenceCancellables)
     Defaults.publisher(.mediaPriorityList)
       .dropFirst()
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.publish() }
       .store(in: &preferenceCancellables)
     streamTask = Task { [weak self] in
