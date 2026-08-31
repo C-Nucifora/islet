@@ -245,7 +245,7 @@ enum PulseOperation: String, Codable, Sendable {
   case event
 }
 
-/// Session-scoped delivery rules. Providers still receive a successful response when a rule
+/// Persisted delivery rules. Providers still receive a successful response when a rule
 /// suppresses an item, which lets focus modes remain an Islet concern rather than something each
 /// integration has to understand.
 enum PulseDeliveryProfile: String, CaseIterable, Identifiable, Sendable {

@@ -13,20 +13,25 @@ final class PulseCenter: ObservableObject {
   @Published private(set) var items: [PulseItem] = []
   @Published private(set) var history: [PulseHistoryEntry] = []
   @Published private(set) var sourcePolicies: [String: PulseSourcePolicy] = [:]
-  @Published var deliveryProfile: PulseDeliveryProfile = .everything {
+  @Published var deliveryProfile: PulseDeliveryProfile {
     didSet {
       guard deliveryProfile != oldValue else { return }
+      Defaults[deliveryProfileKey] = deliveryProfile
       refreshVisibleItems()
     }
   }
+  private let deliveryProfileKey: Defaults.Key<PulseDeliveryProfile>
   private let symbolAvailability: (String) -> Bool?
   private var storedItems: [PulseItem] = []
   private var expiryTask: Task<Void, Never>?
 
   init(
-    symbolAvailability: @escaping (String) -> Bool? = PulseSymbolValidator.platformAvailability
+    symbolAvailability: @escaping (String) -> Bool? = PulseSymbolValidator.platformAvailability,
+    deliveryProfileKey: Defaults.Key<PulseDeliveryProfile> = .pulseDeliveryProfile
   ) {
     self.symbolAvailability = symbolAvailability
+    self.deliveryProfileKey = deliveryProfileKey
+    deliveryProfile = Defaults[deliveryProfileKey]
   }
 
   var primary: PulseItem? { items.first }
