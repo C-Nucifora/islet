@@ -33,9 +33,6 @@ ACTIVE_HEARTBEAT_SECONDS = 30
 MAX_INTERVAL_SECONDS = ACTIVE_HEARTBEAT_SECONDS
 TERMINAL_REVEAL_SECONDS = 8
 NANOSECONDS_PER_MILLISECOND = 1_000_000
-PUBLIC_OBSERVATION_METHODS = frozenset(
-    {"core/stats", "core/transferred", "job/list", "job/status"}
-)
 _RFC3339 = re.compile(
     r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$"
 )
@@ -142,7 +139,7 @@ class RcloneClient:
             {"Content-Type": "application/json"},
             method="POST",
         )
-        if self.authorization and method not in PUBLIC_OBSERVATION_METHODS:
+        if self.authorization:
             request.add_header("Authorization", self.authorization)
         try:
             with self.opener.open(request, timeout=5) as response:

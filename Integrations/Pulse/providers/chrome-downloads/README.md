@@ -30,17 +30,20 @@ The extension sends the native host only the numeric ID, local filename, byte co
 pause flag, error category, and existence flag. It does not send source URLs or referrers. The
 native host uses the full filename only for an in-memory Finder reveal mapping and displays the
 base name in Islet. Chrome's cancellation states send `end`; other interruptions publish a failed
-event. Completed and failed events use Pulse's default eight-second expiry.
+event. Completed and failed events use Pulse's default eight-second expiry. Their reveal mappings
+expire at the same time, and cancellation or a missing file revokes an existing mapping immediately.
 
 The native host reads the Pulse token for each command through the shared client. It never returns
 the token to Chrome or writes it anywhere. Progress searches happen every two seconds while a
 download is active; the extension does not poll while idle. Browser startup and download events
 wake the worker and run through one serialized state queue. The provider keeps a terminal download
-ID in extension storage until the native host acknowledges it, then removes the ID. It publishes
-changed values immediately and refreshes unchanged active items every 30 seconds. Active items
-expire after 90 seconds if Chrome or the provider stops unexpectedly. The native host closes ten
-seconds after the last transfer ends, after the default terminal event expires. Pulse rate-limit
-responses use bounded exponential backoff.
+ID in extension storage until the native host acknowledges it, then removes the ID. A rejected
+terminal delivery or native-host disconnect gets up to four bounded retries without requiring
+another browser event. Later property-only changes cannot replay an acknowledged terminal event.
+The provider publishes changed values immediately and refreshes unchanged active items every 30
+seconds. Active items expire after 90 seconds if Chrome or the provider stops unexpectedly. The
+native host closes ten seconds after the last transfer ends, after the default terminal event
+expires. Pulse rate-limit responses use bounded exponential backoff.
 
 ## Test
 

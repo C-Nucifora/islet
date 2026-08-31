@@ -122,7 +122,7 @@ URL or referrer to its native host. It keeps only Chrome's numeric download IDs 
 storage so it can remove stale items after a service-worker restart. Active transfer items carry a
 bounded expiry that a low-rate heartbeat refreshes.
 
-The [rclone provider](providers/rclone/README.md) polls `job/list`, `core/stats`, and
+The [rclone provider](providers/rclone/README.md) polls `job/list`, `job/status`, `core/stats`, and
 `core/transferred` on a persistent `rclone rcd` loopback endpoint. Transfers run as asynchronous RC
 jobs so terminal results remain available after a provider restart. It stores hashed activity and
 completion IDs, never transfer names, paths, remote names, RC credentials, or Pulse credentials.
@@ -134,7 +134,8 @@ The provider maps the random URL to an existing path in memory. The HTTP handler
 `127.0.0.1`, returns no file content, and asks Finder to reveal the mapped file. rclone reveal
 actions are optional and require an explicit local root. Paths outside that root and inaccessible
 files get no action. Each provider process retains at most 128 reveal mappings and evicts the oldest
-mapping when it reaches that limit.
+mapping when it reaches that limit. Terminal mappings expire with their eight-second events, and
+providers revoke mappings as soon as the associated transfer is canceled or disappears.
 
 ## Adding another transfer provider
 

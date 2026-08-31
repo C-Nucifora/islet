@@ -81,6 +81,11 @@ class RecordingHandler(BaseHTTPRequestHandler):
         self.server.requests.append(
             {"path": self.path, "authorization": self.headers.get("Authorization")}
         )
+        if self.server.redirect_to is not None:
+            self.send_response(307)
+            self.send_header("Location", self.server.redirect_to)
+            self.end_headers()
+            return
         payload = b"{}"
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -93,8 +98,9 @@ class RecordingHandler(BaseHTTPRequestHandler):
 
 
 class RecordingHTTPServer(ThreadingHTTPServer):
-    def __init__(self) -> None:
+    def __init__(self, redirect_to: str | None = None) -> None:
         super().__init__(("127.0.0.1", 0), RecordingHandler)
+        self.redirect_to = redirect_to
         self.requests: list[dict[str, str | None]] = []
         self.thread = threading.Thread(target=self.serve_forever, daemon=True)
         self.thread.start()
@@ -666,10 +672,34 @@ class RcloneClientTests(unittest.TestCase):
             proxy.close()
             origin.close()
 
-    def test_observation_calls_do_not_send_control_credentials(self) -> None:
+    def test_authenticated_job_status_ignores_environment_proxies(self) -> None:
+        origin = RecordingHTTPServer()
+        proxy = RecordingHTTPServer()
+        try:
+            environment = {
+                "HTTP_PROXY": proxy.url,
+                "NO_PROXY": "",
+                "http_proxy": proxy.url,
+                "no_proxy": "",
+            }
+            with mock.patch.dict(os.environ, environment, clear=True):
+                rclone.RcloneClient(origin.url, "islet", "secret").call(
+                    "job/status", {"jobid": 7}
+                )
+
+            self.assertEqual(
+                origin.requests,
+                [{"path": "/job/status", "authorization": "Basic aXNsZXQ6c2VjcmV0"}],
+            )
+            self.assertEqual(proxy.requests, [])
+        finally:
+            proxy.close()
+            origin.close()
+
+    def test_observation_calls_without_credentials_send_no_authorization(self) -> None:
         server = RecordingHTTPServer()
         try:
-            client = rclone.RcloneClient(server.url, "islet", "secret")
+            client = rclone.RcloneClient(server.url)
 
             for method in ("job/list", "job/status", "core/stats", "core/transferred"):
                 client.call(method)
@@ -680,6 +710,40 @@ class RcloneClientTests(unittest.TestCase):
             )
         finally:
             server.close()
+
+    def test_authenticated_observation_calls_send_credentials_required_by_rclone(
+        self,
+    ) -> None:
+        server = RecordingHTTPServer()
+        try:
+            client = rclone.RcloneClient(server.url, "islet", "secret")
+
+            for method in ("job/list", "job/status", "core/stats", "core/transferred"):
+                client.call(method)
+
+            self.assertEqual(
+                [item["authorization"] for item in server.requests],
+                ["Basic aXNsZXQ6c2VjcmV0"] * 4,
+            )
+        finally:
+            server.close()
+
+    def test_authenticated_job_status_does_not_follow_redirects(self) -> None:
+        target = RecordingHTTPServer()
+        origin = RecordingHTTPServer(f"{target.url}/job/status")
+        try:
+            client = rclone.RcloneClient(origin.url, "islet", "secret")
+
+            with self.assertRaisesRegex(RuntimeError, "rclone RC request failed"):
+                client.call("job/status", {"jobid": 7})
+
+            self.assertEqual(
+                origin.requests[0]["authorization"], "Basic aXNsZXQ6c2VjcmV0"
+            )
+            self.assertEqual(target.requests, [])
+        finally:
+            origin.close()
+            target.close()
 
     def test_authenticated_control_call_still_sends_credentials(self) -> None:
         server = RecordingHTTPServer()

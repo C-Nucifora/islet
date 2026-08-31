@@ -37,7 +37,10 @@ endpoint as it exits, so it cannot reliably expose its terminal result to a sepa
 
 The RC URL defaults to `http://127.0.0.1:5572`. Set `ISLET_RCLONE_RC_URL` or pass `--url` for a
 different loopback port. The provider rejects non-loopback hosts and URLs containing credentials.
-Credentials stay in environment variables and memory. They are not written to provider state.
+It bypasses environment-configured HTTP proxies. When the daemon credentials are configured, rclone
+requires them on observation calls, and the provider sends them only to the same numeric loopback
+endpoint and never through a proxy or redirect. An unauthenticated daemon receives no Authorization
+header. Credentials are never written to provider state.
 
 Pass `--reveal-root /absolute/local/root` if transfer names are paths below one local directory.
 The provider then offers **Reveal in Finder** only when the resolved file exists below that root.
@@ -46,8 +49,9 @@ Omit this option for remote-to-remote jobs or when rclone's names do not map to 
 Each ID hashes rclone's process `executeId`, its stats group or RC job ID, and the complete transfer
 name. Two files named `report.pdf` in different directories or groups remain independent, while Islet
 displays only `report.pdf`.
-The state files contain only opaque Pulse IDs, completion fingerprints, a millisecond watermark,
-and the enabled marker. They do not contain file names, paths, remote names, URLs, or credentials.
+The state files contain only opaque Pulse IDs, completion fingerprints, an exact timestamp
+watermark with opaque keys for events at that timestamp, and the enabled marker. They do not
+contain file names, paths, remote names, URLs, or credentials.
 
 ## Disable and recover
 
@@ -62,7 +66,8 @@ python3 Integrations/Pulse/providers/rclone/rclone_provider.py --enable
 and clears its live items. `SIGINT` and `SIGTERM` also stop polling and clean up. On restart, the
 provider republishes active rclone transfers and ends opaque cached IDs that rclone no longer
 reports. Successful and failed completions that happened while the provider was down are recovered
-from `core/transferred` when they are newer than the stored watermark.
+from `core/transferred` when they are newer than the stored watermark or were not previously seen
+at the exact watermark.
 
 Use `--once` for a single observation cycle. The default interval is two seconds and must stay
 between one and 30 seconds. Changed progress publishes immediately; unchanged active work receives
