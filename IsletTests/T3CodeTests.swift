@@ -148,6 +148,74 @@ final class T3CodeTests: XCTestCase {
       policy.requiresHTTPSMigration(URL(string: "https://mini.example.com:3773/")!))
   }
 
+  func testPairingFormClearsTheSubmittedLinkOnlyAfterSuccess() throws {
+    var form = T3PairingFormState()
+    form.pairingLink = "http://mini.example.com/pair#token=one-time-secret"
+    form.allowInsecureHTTP = true
+
+    let submission = try XCTUnwrap(form.begin())
+
+    XCTAssertTrue(form.isPairing)
+    XCTAssertEqual(form.pairingLink, submission.pairingLink)
+    XCTAssertEqual(form.finish(submission, result: .success), .succeeded)
+    XCTAssertFalse(form.isPairing)
+    XCTAssertEqual(form.pairingLink, "")
+    XCTAssertFalse(form.allowInsecureHTTP)
+    XCTAssertEqual(form.statusMessage, "Added T3 Code machine.")
+  }
+
+  func testPairingFormSuccessKeepsAReplacementLinkTypedWhilePairing() throws {
+    var form = T3PairingFormState()
+    form.pairingLink = "https://first.example.com/pair#token=first"
+    let submission = try XCTUnwrap(form.begin())
+    form.pairingLink = "https://second.example.com/pair#token=second"
+
+    XCTAssertEqual(form.finish(submission, result: .success), .succeeded)
+    XCTAssertEqual(form.pairingLink, "https://second.example.com/pair#token=second")
+  }
+
+  func testPairingFormPreservesFailedPlainHTTPLinkAndFocusesIt() throws {
+    var form = T3PairingFormState()
+    form.pairingLink = "http://mini.example.com/pair#token=one-time-secret"
+    form.allowInsecureHTTP = true
+    let submission = try XCTUnwrap(form.begin())
+
+    XCTAssertEqual(
+      form.finish(submission, result: .failure("T3 Code returned HTTP 503.")), .failed)
+    XCTAssertFalse(form.isPairing)
+    XCTAssertEqual(form.pairingLink, submission.pairingLink)
+    XCTAssertTrue(form.allowInsecureHTTP)
+    XCTAssertEqual(form.focusedField, .pairingLink)
+    XCTAssertEqual(form.statusMessage, "T3 Code returned HTTP 503.")
+  }
+
+  func testPairingFormFailureDoesNotFocusAReplacementLinkTypedWhilePairing() throws {
+    var form = T3PairingFormState()
+    form.pairingLink = "https://first.example.com/pair#token=first"
+    let submission = try XCTUnwrap(form.begin())
+    form.pairingLink = "  https://second.example.com/pair#token=second  "
+
+    XCTAssertEqual(form.finish(submission, result: .failure("Try again.")), .failed)
+    XCTAssertEqual(form.pairingLink, "  https://second.example.com/pair#token=second  ")
+    XCTAssertNil(form.focusedField)
+    XCTAssertEqual(form.statusMessage, "Try again.")
+  }
+
+  func testPairingFormIgnoresAStaleCompletion() throws {
+    var form = T3PairingFormState()
+    form.pairingLink = "https://first.example.com/pair#token=first"
+    let first = try XCTUnwrap(form.begin())
+    XCTAssertEqual(form.finish(first, result: .failure("Try again.")), .failed)
+
+    form.pairingLink = "https://second.example.com/pair#token=second"
+    let second = try XCTUnwrap(form.begin())
+    XCTAssertEqual(form.finish(first, result: .success), .ignored)
+
+    XCTAssertTrue(form.isPairing)
+    XCTAssertEqual(form.pairingLink, second.pairingLink)
+    XCTAssertNil(form.statusMessage)
+  }
+
   func testAgentDerivationIsProviderNeutralAndPrioritizesQuestions() throws {
     let json = """
       {
