@@ -59,6 +59,25 @@ final class SystemActivityGateTests: XCTestCase {
         uptime: start + SystemPresenceGate.activationDuration))
   }
 
+  private func sample(
+    cpu: Double? = 0, thermal: Int? = 0, memoryPressure: Int? = 1,
+    diskFree: UInt64? = 20_000_000_000, disk: Double? = 0, network: Double? = 0
+  ) -> SystemMetricsSample {
+    SystemMetricsSample(
+      cpuTotal: cpu, memoryPressureLevel: memoryPressure,
+      diskReadBytesPerSec: disk.map { $0 / 2 }, diskWriteBytesPerSec: disk.map { $0 / 2 },
+      diskFreeBytes: diskFree, netInBytesPerSec: network.map { $0 / 2 },
+      netOutBytesPerSec: network.map { $0 / 2 }, thermalState: thermal)
+  }
+
+  @discardableResult
+  private func update(
+    _ gate: inout SystemPresenceGate, _ sample: SystemMetricsSample,
+    controls: SystemPresenceGate.Controls = .init(), uptime: TimeInterval
+  ) -> Bool {
+    gate.update(sample: sample, controls: controls, uptime: uptime)
+  }
+
   func testFreshGateIsInactive() {
     let gate = SystemPresenceGate()
     XCTAssertFalse(gate.isActive)
@@ -176,16 +195,208 @@ final class SystemActivityGateTests: XCTestCase {
     XCTAssertEqual(gate.reason, .thermal)
   }
 
-  func testCPUMustReearnActivationAfterThermalClears() {
+  func testCPUResumesAsTheReasonAfterThermalClears() {
     var gate = SystemPresenceGate()
     activate(&gate)
     _ = gate.update(cpuTotal: 0.9, thermalState: 1, uptime: 6)
     XCTAssertTrue(gate.update(cpuTotal: 0.9, thermalState: 0, uptime: 7))
-    XCTAssertFalse(gate.isActive)
-    XCTAssertFalse(gate.update(cpuTotal: 0.9, thermalState: 0, uptime: 11.9))
-    XCTAssertTrue(gate.update(cpuTotal: 0.9, thermalState: 0, uptime: 12))
     XCTAssertTrue(gate.isActive)
     XCTAssertEqual(gate.reason, .cpu)
+  }
+
+  func testMemoryPressureUsesTheKernelLevelAndSustainedRecovery() {
+    var gate = SystemPresenceGate()
+    let pressured = sample(memoryPressure: SystemPresenceGate.activateMemoryPressureLevel)
+    XCTAssertFalse(update(&gate, pressured, uptime: 0))
+    XCTAssertFalse(
+      update(
+        &gate, pressured, uptime: SystemPresenceGate.memoryActivationDuration - 0.1))
+    XCTAssertTrue(update(&gate, pressured, uptime: SystemPresenceGate.memoryActivationDuration))
+    XCTAssertEqual(gate.reason, .memoryPressure)
+
+    let normal = sample(memoryPressure: SystemPresenceGate.deactivateMemoryPressureLevel)
+    XCTAssertFalse(update(&gate, normal, uptime: 21))
+    XCTAssertFalse(update(&gate, pressured, uptime: 50))
+    XCTAssertFalse(update(&gate, normal, uptime: 51))
+    XCTAssertTrue(
+      update(&gate, normal, uptime: 51 + SystemPresenceGate.memoryRecoveryDuration))
+    XCTAssertFalse(gate.isActive)
+  }
+
+  func testLowDiskSpaceUsesAnAbsoluteFloorAndWideHysteresisBand() {
+    var gate = SystemPresenceGate()
+    let low = sample(diskFree: SystemPresenceGate.activateDiskFreeBytes)
+    XCTAssertFalse(update(&gate, low, uptime: 0))
+    XCTAssertTrue(update(&gate, low, uptime: SystemPresenceGate.lowDiskActivationDuration))
+    XCTAssertEqual(gate.reason, .lowDiskSpace)
+
+    let band = sample(diskFree: 12_000_000_000)
+    XCTAssertFalse(update(&gate, band, uptime: 61))
+    XCTAssertEqual(gate.reason, .lowDiskSpace)
+
+    let recovered = sample(diskFree: SystemPresenceGate.deactivateDiskFreeBytes)
+    XCTAssertFalse(update(&gate, recovered, uptime: 62))
+    XCTAssertFalse(update(&gate, recovered, uptime: 122))
+    XCTAssertTrue(
+      update(&gate, recovered, uptime: 62 + SystemPresenceGate.lowDiskRecoveryDuration))
+    XCTAssertFalse(gate.isActive)
+  }
+
+  func testHeavyDiskThroughputIsSustainedAndHasRateHysteresis() {
+    var gate = SystemPresenceGate()
+    let heavy = sample(disk: SystemPresenceGate.activateDiskBytesPerSecond)
+    XCTAssertFalse(update(&gate, heavy, uptime: 0))
+    XCTAssertTrue(update(&gate, heavy, uptime: SystemPresenceGate.diskActivationDuration))
+    XCTAssertEqual(gate.reason, .diskThroughput)
+
+    let band = sample(disk: 400_000_000)
+    XCTAssertFalse(update(&gate, band, uptime: 21))
+    XCTAssertEqual(gate.reason, .diskThroughput)
+
+    let quiet = sample(disk: SystemPresenceGate.deactivateDiskBytesPerSecond)
+    XCTAssertFalse(update(&gate, quiet, uptime: 22))
+    XCTAssertTrue(
+      update(&gate, quiet, uptime: 22 + SystemPresenceGate.diskRecoveryDuration))
+    XCTAssertFalse(gate.isActive)
+  }
+
+  func testHighNetworkThroughputIsSustainedAndHasRateHysteresis() {
+    var gate = SystemPresenceGate()
+    let high = sample(network: SystemPresenceGate.activateNetworkBytesPerSecond)
+    XCTAssertFalse(update(&gate, high, uptime: 0))
+    XCTAssertTrue(update(&gate, high, uptime: SystemPresenceGate.networkActivationDuration))
+    XCTAssertEqual(gate.reason, .networkThroughput)
+
+    let band = sample(network: 65_000_000)
+    XCTAssertFalse(update(&gate, band, uptime: 21))
+    XCTAssertEqual(gate.reason, .networkThroughput)
+
+    let quiet = sample(network: SystemPresenceGate.deactivateNetworkBytesPerSecond)
+    XCTAssertFalse(update(&gate, quiet, uptime: 22))
+    XCTAssertTrue(
+      update(&gate, quiet, uptime: 22 + SystemPresenceGate.networkRecoveryDuration))
+    XCTAssertFalse(gate.isActive)
+  }
+
+  func testEveryTriggerCanBeDisabledIndependently() {
+    let cases: [(SystemMetricsSample, SystemPresenceGate.Controls, TimeInterval)] = [
+      (sample(cpu: 1), .init(cpu: false), SystemPresenceGate.cpuActivationDuration),
+      (sample(thermal: 3), .init(thermal: false), 0),
+      (
+        sample(memoryPressure: 4), .init(memoryPressure: false),
+        SystemPresenceGate.memoryActivationDuration
+      ),
+      (
+        sample(diskFree: 0), .init(lowDiskSpace: false),
+        SystemPresenceGate.lowDiskActivationDuration
+      ),
+      (
+        sample(disk: 1_000_000_000), .init(diskThroughput: false),
+        SystemPresenceGate.diskActivationDuration
+      ),
+      (
+        sample(network: 1_000_000_000), .init(networkThroughput: false),
+        SystemPresenceGate.networkActivationDuration
+      ),
+    ]
+
+    for (triggeringSample, controls, duration) in cases {
+      var gate = SystemPresenceGate()
+      XCTAssertFalse(update(&gate, triggeringSample, controls: controls, uptime: 0))
+      XCTAssertFalse(update(&gate, triggeringSample, controls: controls, uptime: duration))
+      XCTAssertFalse(gate.isActive)
+    }
+  }
+
+  func testDisablingTheActiveTriggerRemovesItImmediately() {
+    var gate = SystemPresenceGate()
+    let highCPU = sample(cpu: 1)
+    XCTAssertFalse(update(&gate, highCPU, uptime: 0))
+    XCTAssertTrue(update(&gate, highCPU, uptime: SystemPresenceGate.cpuActivationDuration))
+
+    XCTAssertTrue(gate.update(controls: .init(cpu: false)))
+    XCTAssertFalse(gate.isActive)
+    XCTAssertNil(gate.reason)
+  }
+
+  func testControlOnlyUpdateDoesNotAdvancePendingActivation() {
+    var gate = SystemPresenceGate()
+    let highCPU = sample(cpu: 1)
+    let controls = SystemPresenceGate.Controls(networkThroughput: false)
+
+    XCTAssertFalse(update(&gate, highCPU, controls: controls, uptime: 0))
+    XCTAssertFalse(gate.update(controls: controls))
+    XCTAssertFalse(gate.isActive)
+    XCTAssertTrue(
+      update(
+        &gate, highCPU, controls: controls,
+        uptime: SystemPresenceGate.cpuActivationDuration))
+  }
+
+  func testControlOnlyUpdateDoesNotAdvancePendingRecovery() {
+    var gate = SystemPresenceGate()
+    activate(&gate)
+    let lowCPU = sample(cpu: SystemPresenceGate.deactivateCPU)
+    let controls = SystemPresenceGate.Controls(networkThroughput: false)
+
+    XCTAssertFalse(update(&gate, lowCPU, controls: controls, uptime: 6))
+    XCTAssertFalse(gate.update(controls: controls))
+    XCTAssertTrue(gate.isActive)
+    XCTAssertTrue(
+      update(
+        &gate, lowCPU, controls: controls,
+        uptime: 6 + SystemPresenceGate.cpuRecoveryDuration))
+  }
+
+  func testSimultaneousConditionsChoosePriorityAndRecoverToTheNextReason() {
+    var gate = SystemPresenceGate()
+    let allHigh = sample(
+      cpu: 1, thermal: 0, memoryPressure: 4,
+      diskFree: SystemPresenceGate.activateDiskFreeBytes,
+      disk: SystemPresenceGate.activateDiskBytesPerSecond,
+      network: SystemPresenceGate.activateNetworkBytesPerSecond)
+
+    XCTAssertFalse(update(&gate, allHigh, uptime: 0))
+    XCTAssertTrue(update(&gate, allHigh, uptime: 5))
+    XCTAssertEqual(gate.reason, .cpu)
+    XCTAssertTrue(update(&gate, allHigh, uptime: 20))
+    XCTAssertEqual(gate.reason, .memoryPressure)
+    XCTAssertFalse(update(&gate, allHigh, uptime: 60))
+
+    var thermalHigh = allHigh
+    thermalHigh.thermalState = 2
+    XCTAssertTrue(update(&gate, thermalHigh, uptime: 61))
+    XCTAssertEqual(gate.reason, .thermal)
+
+    var recovering = allHigh
+    recovering.thermalState = 0
+    recovering.memoryPressureLevel = 1
+    recovering.diskReadBytesPerSec = 0
+    recovering.diskWriteBytesPerSec = 0
+    recovering.netInBytesPerSec = 0
+    recovering.netOutBytesPerSec = 0
+    XCTAssertTrue(update(&gate, recovering, uptime: 62))
+    XCTAssertEqual(gate.reason, .memoryPressure)
+    XCTAssertTrue(update(&gate, recovering, uptime: 122))
+    XCTAssertEqual(gate.reason, .lowDiskSpace)
+
+    recovering.diskFreeBytes = SystemPresenceGate.deactivateDiskFreeBytes
+    XCTAssertFalse(update(&gate, recovering, uptime: 123))
+    XCTAssertFalse(update(&gate, recovering, uptime: 183))
+    XCTAssertTrue(update(&gate, recovering, uptime: 243))
+    XCTAssertEqual(gate.reason, .cpu)
+
+    recovering.cpuTotal = SystemPresenceGate.deactivateCPU
+    XCTAssertFalse(update(&gate, recovering, uptime: 244))
+    XCTAssertTrue(update(&gate, recovering, uptime: 249))
+    XCTAssertFalse(gate.isActive)
+    XCTAssertNil(gate.reason)
+  }
+
+  func testReasonPriorityIsExplicitAndStable() {
+    XCTAssertEqual(
+      SystemPresenceGate.Reason.allCases.sorted { $0.priority > $1.priority },
+      [.thermal, .memoryPressure, .lowDiskSpace, .cpu, .diskThroughput, .networkThroughput])
   }
 
   func testNilCPUHoldsActiveStateButResetsPendingRecovery() {
@@ -198,6 +409,26 @@ final class SystemActivityGateTests: XCTestCase {
     XCTAssertTrue(gate.isActive)
     XCTAssertTrue(gate.update(cpuTotal: 0.5, thermalState: 0, uptime: 16))
     XCTAssertFalse(gate.isActive)
+  }
+
+  func testActivePressureExpiresAfterABoundedRunOfMissingSamples() {
+    var gate = SystemPresenceGate()
+    activate(&gate)
+    let firstMissing = SystemPresenceGate.activationDuration + 1
+
+    XCTAssertFalse(gate.update(cpuTotal: nil, thermalState: 0, uptime: firstMissing))
+    XCTAssertTrue(gate.isActive)
+    XCTAssertFalse(
+      gate.update(
+        cpuTotal: nil, thermalState: 0,
+        uptime: firstMissing + SystemPresenceGate.maximumSampleGap - 0.1))
+    XCTAssertTrue(gate.isActive)
+    XCTAssertTrue(
+      gate.update(
+        cpuTotal: nil, thermalState: 0,
+        uptime: firstMissing + SystemPresenceGate.maximumSampleGap))
+    XCTAssertFalse(gate.isActive)
+    XCTAssertNil(gate.reason)
   }
 
   func testNilCPUResetsPendingActivation() {

@@ -458,6 +458,10 @@ final class SystemMetricsTests: XCTestCase {
     XCTAssertTrue((0...3).contains(SystemMetricsReader.thermalState()))
   }
 
+  func testZeroAvailableDiskCapacityIsAValidReading() {
+    XCTAssertEqual(SystemMetricsReader.validatedDiskFreeBytes(0), 0)
+  }
+
   // MARK: - Sample building
 
   private func raw(
@@ -548,6 +552,19 @@ final class SystemMetricsTests: XCTestCase {
     XCTAssertEqual(sample.diskWriteBytesPerSec ?? -1, 200, accuracy: 1e-9)
     XCTAssertEqual(sample.netInBytesPerSec ?? -1, 100, accuracy: 1e-9)
     XCTAssertEqual(sample.netOutBytesPerSec ?? -1, 300, accuracy: 1e-9)
+  }
+
+  func testNetworkRatePreservesTrafficPastTheThirtyTwoBitRange() {
+    let then = Date()
+    let sample = systemMetricsSample(
+      previous: raw(network: NetworkCounters(inBytes: 0, outBytes: 0, interface: "en0")),
+      previousDate: then,
+      current: raw(
+        network: NetworkCounters(
+          inBytes: 5_625_000_000, outBytes: 0, interface: "en0")),
+      currentDate: then.addingTimeInterval(45), clusters: [])
+
+    XCTAssertEqual(sample.netInBytesPerSec ?? -1, 125_000_000, accuracy: 1e-9)
   }
 
   func testInterfaceChangeDiscardsNetworkRates() {
