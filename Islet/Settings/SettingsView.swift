@@ -251,7 +251,10 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       ]
     case .permissions:
       pageContent + [
-        "Screen recording", "Hide Islet from screen recordings", "Calendar access",
+        "Screen recording", "Hide Islet from screen recordings", "Request capture exclusion",
+        "Capture exclusion", "Unsupported", "Unverified",
+        "screenshots recordings shared screens ScreenCaptureKit QuickTime conferencing",
+        "Calendar access",
         "Reminders access", "Accessibility access", "Request access", "Open System Settings",
         "Nearby devices and networks", "Location for Wi-Fi names", "Open Location Settings",
         "Bluetooth devices", "Open Bluetooth Privacy Settings", "Local network",
@@ -262,6 +265,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       pageContent + [
         "Diagnostics", "Bundle identifier", "Version", "Energy mode", "Copy diagnostics",
         "Open logs folder", "Restart Islet", "Quit Islet", "Integration health", "Media adapter",
+        "Focus event source", "Focus last parsed", "Focus schema", "Retry Focus source",
         "T3 Code credentials", "Pulse", "Media-key HUD", "signing support status", "About",
         "GitHub contributors C-Nucifora nedlane",
       ]
@@ -344,6 +348,7 @@ struct SettingsView: View {
   @ObservedObject private var continuity = ContinuityMonitor.shared
   @ObservedObject private var nowPlaying = AppState.nowPlaying
   @ObservedObject private var t3Code = AppState.t3Code
+  @ObservedObject private var focus = AppState.focus
   @ObservedObject private var launchAtLoginStatus = LaunchAtLoginStatus.shared
 
   @Default(.appTheme) private var appTheme
@@ -357,7 +362,6 @@ struct SettingsView: View {
   @Default(.mediaSourceMode) private var sourceMode
   @Default(.mediaPriorityList) private var priorityList
   @Default(.excludedAudioOnlySourceBundleIdentifiers) private var excludedAudioOnlySourceBundleIDs
-  @Default(.batteryEnabled) private var batteryEnabled
   @Default(.hudEnabled) private var hudEnabled
   @Default(.hudStyle) private var hudStyle
   @Default(.calendarEnabled) private var calendarEnabled
@@ -369,16 +373,10 @@ struct SettingsView: View {
   @Default(.launchAtLogin) private var launchAtLogin
   @Default(.activityOrder) private var activityOrder
   @Default(.disabledActivities) private var disabledActivities
-  @Default(.clipboardEnabled) private var clipboardEnabled
-  @Default(.portsEnabled) private var portsEnabled
-  @Default(.systemEnabled) private var systemEnabled
   @Default(.systemAlwaysVisible) private var systemAlwaysVisible
   @Default(.metricStyles) private var metricStyles
   @Default(.disabledEventSources) private var disabledEventSources
-  @Default(.pulseEnabled) private var pulseEnabled
-  @Default(.t3CodeEnabled) private var t3CodeEnabled
   @Default(.energyMode) private var energyMode
-  @Default(.continuityEnabled) private var continuityEnabled
   @Default(.continuityAlwaysVisible) private var continuityAlwaysVisible
   @Default(.continuitySneaks) private var continuitySneaks
 
@@ -424,47 +422,15 @@ struct SettingsView: View {
 
   private func activityEnabled(_ id: String) -> Binding<Bool> {
     Binding(
-      get: { !disabledActivities.contains(id) && featureEnabled(id) },
-      set: { on in
-        if on {
-          disabledActivities.removeAll { $0 == id }
-          // Recover preferences written by the previous combined visibility/lifecycle switch.
-          setFeatureEnabled(true, id: id)
-        } else if !disabledActivities.contains(id) {
-          disabledActivities.append(id)
-          if ActivityLifecyclePolicy.stopsFeatureWhenHidden(id) {
-            setFeatureEnabled(false, id: id)
-          }
-        }
+      get: { ActivityEnablement.isEnabled(id, disabledActivities: disabledActivities) },
+      set: { enabled in
+        disabledActivities = ActivityEnablement.updating(
+          disabledActivities, activityID: id, enabled: enabled)
       })
   }
 
-  private func featureEnabled(_ id: String) -> Bool {
-    switch id {
-    case "battery": batteryEnabled
-    case "calendar": calendarEnabled
-    case "clipboard": clipboardEnabled
-    case "ports": portsEnabled
-    case "system": systemEnabled
-    case "t3Code": t3CodeEnabled
-    case "pulse": pulseEnabled
-    case "continuity": continuityEnabled
-    default: true
-    }
-  }
-
-  private func setFeatureEnabled(_ enabled: Bool, id: String) {
-    switch id {
-    case "battery": batteryEnabled = enabled
-    case "calendar": calendarEnabled = enabled
-    case "clipboard": clipboardEnabled = enabled
-    case "ports": portsEnabled = enabled
-    case "system": systemEnabled = enabled
-    case "t3Code": t3CodeEnabled = enabled
-    case "pulse": pulseEnabled = enabled
-    case "continuity": continuityEnabled = enabled
-    default: break
-    }
+  private func isActivityEnabled(_ id: String) -> Bool {
+    ActivityEnablement.isEnabled(id, disabledActivities: disabledActivities)
   }
 
   private var hapticStrengthBinding: Binding<HapticStrength> {
@@ -841,7 +807,7 @@ struct SettingsView: View {
   private var activityOrderForm: some View {
     Form {
       Section("Activities") {
-        Text("Drag to reorder. Hiding Clipboard or Pulse also stops its data service.")
+        Text("Drag to reorder. Turning an activity off also stops its observer or server.")
           .font(.caption).foregroundStyle(.secondary)
         List {
           ForEach(ActivityCatalog.mergedOrder(activityOrder), id: \.self) { id in
@@ -1049,9 +1015,10 @@ struct SettingsView: View {
     Form {
       Section("Calendar") {
         LabeledContent("Activity") {
-          Text(calendarEnabled ? "On" : "Off").foregroundStyle(.secondary)
+          Text(isActivityEnabled("calendar") ? "On" : "Off").foregroundStyle(.secondary)
         }
-        Text("Calendar also supplies the Home agenda when its tab is hidden.")
+        Toggle("Read calendar events", isOn: $calendarEnabled)
+        Text("Calendar data also supplies the Home agenda when its activity is off.")
           .font(.caption).foregroundStyle(.secondary)
         if calendarEnabled {
           Picker("Upcoming-event countdown", selection: $calendarLeadMinutes) {
@@ -1090,15 +1057,15 @@ struct SettingsView: View {
     Form {
       Section("Visibility") {
         LabeledContent("System activity") {
-          Text(systemEnabled ? "On" : "Off").foregroundStyle(.secondary)
+          Text(isActivityEnabled("system") ? "On" : "Off").foregroundStyle(.secondary)
         }
         Text("By default, System appears only during sustained load.")
           .font(.caption).foregroundStyle(.secondary)
-        if systemEnabled {
+        if isActivityEnabled("system") {
           Toggle("Always show System in the activity switcher", isOn: $systemAlwaysVisible)
         }
       }
-      if systemEnabled {
+      if isActivityEnabled("system") {
         Section("Metric presentation") {
           Picker("Presentation", selection: metricPresetBinding) {
             ForEach(SystemMetricPreset.allCases) { preset in
@@ -1132,10 +1099,10 @@ struct SettingsView: View {
   private var continuityForm: some View {
     Form {
       Section("iPhone Live Activities") {
-        Toggle("Show iPhone Live Activities", isOn: $continuityEnabled)
+        Toggle("Show iPhone Live Activities", isOn: activityEnabled("continuity"))
         Text("Islet reads app names from Control Centre. macOS does not share the activity text.")
           .font(.caption).foregroundStyle(.secondary)
-        if continuityEnabled {
+        if isActivityEnabled("continuity") {
           PermissionStatusRow(
             title: "Availability", icon: "iphone.gen3",
             status: continuityStatusText, color: continuityStatusColor)
@@ -1162,7 +1129,7 @@ struct SettingsView: View {
     Form {
       Section("Clipboard history") {
         LabeledContent("Activity") {
-          Text(clipboardEnabled ? "On" : "Off").foregroundStyle(.secondary)
+          Text(isActivityEnabled("clipboard") ? "On" : "Off").foregroundStyle(.secondary)
         }
         Text("Turning Clipboard off stops polling and clears its history.")
           .font(.caption).foregroundStyle(.secondary)
@@ -1244,8 +1211,12 @@ struct SettingsView: View {
   private var permissionsForm: some View {
     Form {
       Section("Screen recording") {
-        Toggle("Hide Islet from screen recordings", isOn: $hideFromRecording)
-        Text("This hides Islet's panels from capture. It does not stop enabled activities.")
+        let policy = ScreenCaptureExclusionPolicy.current
+        Toggle("Request capture exclusion", isOn: $hideFromRecording)
+        PermissionStatusRow(
+          title: "Capture exclusion", icon: "rectangle.dashed.badge.record",
+          status: policy.status.summary, color: screenCaptureStatusColor)
+        Text(policy.status.detail)
           .font(.caption).foregroundStyle(.secondary)
       }
       Section("Calendar") {
@@ -1347,7 +1318,7 @@ struct SettingsView: View {
         PermissionStatusRow(
           title: "Local activity API", icon: "waveform.path.ecg",
           status: pulseServer.lastError
-            ?? (pulseServer.isRunning ? "Listening on 127.0.0.1:47717" : "Stopped"),
+            ?? (pulseServer.listeningAddress.map { "Listening on \($0)" } ?? "Stopped"),
           color: pulseServer.lastError == nil ? (pulseServer.isRunning ? .green : .secondary) : .red
         )
         LabeledContent("Pulse items") {
@@ -1362,9 +1333,20 @@ struct SettingsView: View {
           Text("Shared bearer token").foregroundStyle(.secondary)
         }
         Text(
-          "Local scripts publish status and web actions over 127.0.0.1:47717. A private token authenticates each connection."
+          "Local scripts publish status and web actions over \(pulseServer.listeningAddress ?? "127.0.0.1:47717"). A private token authenticates each connection."
         )
         .font(.caption).foregroundStyle(.secondary)
+        if let recovery = pulseServer.portRecoveryMessage {
+          Text(recovery)
+            .font(.caption).foregroundStyle(.orange)
+          Text(
+            "Tools/islet-pulse.swift reads the active port from the token folder. Set other clients to \(pulseServer.activePort ?? 47_717)."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+          Button("Retry port 47717") { pulseServer.retryDefaultPort() }
+        } else if pulseServer.lastError != nil {
+          Button("Retry Pulse listener") { pulseServer.retryDefaultPort() }
+        }
         Text(
           "Turning Pulse off under Activity order closes the listener and disconnects providers."
         )
@@ -1466,8 +1448,24 @@ struct SettingsView: View {
       }
       Section("Integration health") {
         PermissionStatusRow(
+          title: "Focus event source", icon: "moon.circle.fill", status: focus.health.summary,
+          color: focus.health.isFailure ? .orange : focus.health == .stopped ? .secondary : .green)
+        if let lastSuccessfulParse = focus.lastSuccessfulParse {
+          LabeledContent("Focus last parsed") {
+            Text(lastSuccessfulParse, style: .relative).foregroundStyle(.secondary)
+          }
+        }
+        if let schemaSignature = focus.schemaSignature {
+          LabeledContent("Focus schema") {
+            Text(schemaSignature).fontDesign(.monospaced).foregroundStyle(.secondary)
+          }
+        }
+        Button("Retry Focus source") { focus.retry() }
+          .disabled(focus.health == .stopped)
+        PermissionStatusRow(
           title: "Media adapter", icon: "music.note", status: nowPlaying.adapterStatus,
           color: nowPlaying.adapterStatus.localizedCaseInsensitiveContains("error")
+            || nowPlaying.adapterStatus.localizedCaseInsensitiveContains("timeout")
             ? .orange : .green)
         PermissionStatusRow(
           title: "T3 Code credentials", icon: "key.fill",
@@ -1546,6 +1544,14 @@ struct SettingsView: View {
   private var reminderStatusText: String { permissions.diagnostics.reminders.summary }
   private var eventStatusColor: Color { authorizationColor(permissions.diagnostics.calendar) }
   private var reminderStatusColor: Color { authorizationColor(permissions.diagnostics.reminders) }
+
+  private var screenCaptureStatusColor: Color {
+    switch ScreenCaptureExclusionPolicy.current.status {
+    case .active: .green
+    case .unsupported: .red
+    case .unverified: .orange
+    }
+  }
 
   private var continuityStatusText: String {
     switch continuity.availability {
@@ -1652,7 +1658,12 @@ struct SettingsView: View {
   private func copyDiagnostics() {
     let text =
       permissions.diagnostics.text
+      + "\nMedia adapter: \(nowPlaying.adapterStatus)"
+      + (nowPlaying.adapterFailure.map { "\nMedia adapter failure: \($0)" } ?? "")
       + "\nHUD event tap: \(hud.eventTapStatus.summary)"
+      + "\nFocus event source: \(focus.health.summary)"
+      + "\nFocus last parsed: \(focus.lastSuccessfulParse?.formatted() ?? "Never")"
+      + "\nFocus schema: \(focus.schemaSignature ?? "Unavailable")"
       + "\nPulse: \(pulseServer.isRunning ? "Running" : "Stopped")"
       + "\nPulse items: \(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
     NSPasteboard.general.clearContents()

@@ -48,8 +48,8 @@ final class SetDiffTests: XCTestCase {
     let name: String
   }
 
-  /// USB devices are compared by locationID, not by value: a device that renegotiates its speed is
-  /// the same device, and must not fire a detach followed by an attach.
+  /// USB devices are compared by their stable registry identity, not by value: a device that
+  /// renegotiates its speed is the same device, and must not fire a detach followed by an attach.
   func testIdentifiedOverloadComparesByIDNotByValue() {
     let old = [Device(id: "0x1", name: "Keyboard")]
     let new = [Device(id: "0x1", name: "Keyboard (2.0)"), Device(id: "0x2", name: "Mouse")]

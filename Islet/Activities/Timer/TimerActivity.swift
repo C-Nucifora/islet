@@ -20,16 +20,26 @@ final class TimerActivity: NotchActivity, ObservableObject {
   private var completionTask: Task<Void, Never>?
   private(set) var lastDuration: TimeInterval?
   private(set) var lastLabel: String?
+  private let persistenceStore: TimerPersistenceStore
+
+  init(persistenceStore: TimerPersistenceStore = .defaults, now: Date = Date()) {
+    self.persistenceStore = persistenceStore
+    restore(now: now)
+  }
 
   var isActive: Bool { endDate != nil || isPaused || finished }
   var isRunning: Bool { endDate != nil && !isPaused && !finished }
 
   /// Live remaining time, computed on read so no per-tick model churn is needed.
   var remainingNow: TimeInterval {
+    remaining(at: Date())
+  }
+
+  private func remaining(at now: Date) -> TimeInterval {
     if finished { return 0 }
     if isPaused { return pausedRemaining ?? 0 }
     guard let endDate else { return 0 }
-    return max(0, endDate.timeIntervalSinceNow)
+    return max(0, endDate.timeIntervalSince(now))
   }
 
   var progressNow: Double {
@@ -40,29 +50,34 @@ final class TimerActivity: NotchActivity, ObservableObject {
 
   func start(_ duration: TimeInterval, label: String? = nil) {
     guard let duration = TimerLogic.validatedDuration(duration) else { return }
+    let now = Date()
     total = duration
     let cleanLabel = label?.trimmingCharacters(in: .whitespacesAndNewlines)
     self.label = cleanLabel?.isEmpty == true ? nil : cleanLabel
     lastDuration = duration
     lastLabel = self.label
+    persistLastPreset()
     pausedRemaining = nil
     isPaused = false
     finished = false
-    activationDate = Date()
-    endDate = Date().addingTimeInterval(duration)
+    activationDate = now
+    endDate = now.addingTimeInterval(duration)
+    persistSession(savedAt: now)
     scheduleCompletion()
   }
 
   func togglePause() {
     guard !finished else { return }
+    let now = Date()
     if isPaused {
       guard let remaining = pausedRemaining else { return }
-      endDate = Date().addingTimeInterval(remaining)
+      endDate = now.addingTimeInterval(remaining)
       isPaused = false
       pausedRemaining = nil
+      persistSession(savedAt: now)
       scheduleCompletion()
     } else {
-      let remaining = remainingNow
+      let remaining = remaining(at: now)
       // The deadline can pass just before the scheduled completion task gets its main-actor turn.
       // Pausing in that sliver must complete the timer, not create a permanently paused 0:00.
       guard remaining > 0 else {
@@ -73,6 +88,7 @@ final class TimerActivity: NotchActivity, ObservableObject {
       endDate = nil
       isPaused = true
       completionTask?.cancel()
+      persistSession(savedAt: now)
     }
   }
 
@@ -83,7 +99,8 @@ final class TimerActivity: NotchActivity, ObservableObject {
   /// Adjusts an active timer without allowing the remaining time to become zero or exceed a week.
   func adjust(by delta: TimeInterval) {
     guard !finished else { return }
-    let remaining = remainingNow
+    let now = Date()
+    let remaining = remaining(at: now)
     guard remaining > 0 else { return }
     let adjusted = TimerLogic.adjustedRemaining(remaining, by: delta)
     let appliedDelta = adjusted - remaining
@@ -91,9 +108,10 @@ final class TimerActivity: NotchActivity, ObservableObject {
     if isPaused {
       pausedRemaining = adjusted
     } else if endDate != nil {
-      endDate = Date().addingTimeInterval(adjusted)
+      endDate = now.addingTimeInterval(adjusted)
       scheduleCompletion()
     }
+    persistSession(savedAt: now)
   }
 
   func restartLastTimer() {
@@ -110,6 +128,58 @@ final class TimerActivity: NotchActivity, ObservableObject {
     label = nil
     pausedRemaining = nil
     activationDate = nil
+    persistenceStore.writeSessionData(nil)
+  }
+
+  private func restore(now: Date) {
+    if let preset = TimerPersistence.restorePreset(from: persistenceStore) {
+      lastDuration = preset.duration
+      lastLabel = preset.label
+    }
+
+    switch TimerPersistence.restoreSession(from: persistenceStore, now: now) {
+    case .none, .discard:
+      break
+    case .running(let session):
+      apply(session, activationDate: session.deadline?.addingTimeInterval(-session.duration))
+      scheduleCompletion()
+    case .paused(let session):
+      apply(session, activationDate: session.savedAt)
+    case .completed(let session):
+      apply(session, activationDate: session.deadline?.addingTimeInterval(-session.duration))
+      finish(playEffects: false)
+    }
+  }
+
+  private func apply(_ session: TimerSessionSnapshot, activationDate: Date?) {
+    total = session.duration
+    label = session.label
+    endDate = session.deadline
+    isPaused = session.isPaused
+    pausedRemaining = session.pausedRemaining
+    finished = false
+    self.activationDate = activationDate
+  }
+
+  private func persistSession(savedAt: Date) {
+    guard isRunning || isPaused else {
+      persistenceStore.writeSessionData(nil)
+      return
+    }
+    let session = TimerSessionSnapshot(
+      savedAt: savedAt,
+      label: label,
+      duration: total,
+      deadline: endDate,
+      isPaused: isPaused,
+      pausedRemaining: pausedRemaining)
+    persistenceStore.writeSessionData(TimerPersistence.encode(session))
+  }
+
+  private func persistLastPreset() {
+    guard let lastDuration else { return }
+    let preset = TimerPresetSnapshot(duration: lastDuration, label: lastLabel)
+    persistenceStore.writePresetData(TimerPersistence.encode(preset))
   }
 
   private func scheduleCompletion() {
@@ -124,16 +194,24 @@ final class TimerActivity: NotchActivity, ObservableObject {
   }
 
   private func fire() {
+    finish(playEffects: true)
+  }
+
+  private func finish(playEffects: Bool) {
     endDate = nil
     isPaused = false
+    pausedRemaining = nil
     finished = true
-    Haptics.perform(.levelChange)
-    NSSound(named: NSSound.Name("Glass"))?.play()
-    SystemEventBus.shared.emit(
-      SystemEvent(
-        sourceID: "timer", icon: "timer", title: "\(label ?? "Timer") done",
-        accentHex: EventAccent.warning, motion: .chargeComplete, urgency: .alert, duration: 4,
-        announcement: "\(label ?? "Timer") done"))
+    persistenceStore.writeSessionData(nil)
+    if playEffects {
+      Haptics.perform(.levelChange)
+      NSSound(named: NSSound.Name("Glass"))?.play()
+      SystemEventBus.shared.emit(
+        SystemEvent(
+          sourceID: "timer", icon: "timer", title: "\(label ?? "Timer") done",
+          accentHex: EventAccent.warning, motion: .chargeComplete, urgency: .alert, duration: 4,
+          announcement: "\(label ?? "Timer") done"))
+    }
     // Auto-clear the finished state after a few seconds.
     completionTask = Task { [weak self] in
       try? await Task.sleep(for: .seconds(6))
