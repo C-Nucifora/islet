@@ -1647,7 +1647,8 @@ final class PulseTests: XCTestCase {
       "file:///tmp/action", "https://user:secret@example.com/run",
       "https://аррӏе.com/run", "https://xn--80ak6aa92e.com/run",
       "https://example.com%2eattacker.test/run", "https://example.com./run",
-      "https://127.1/run", "https://2130706433/run", "https://example.com/%0aheader",
+      "https://127.1/run", "https://2130706433/run", "https://0x7f.0.0.1/run",
+      "https://0x7f.1/run", "https://127.0.0.0x1/run", "https://example.com/%0aheader",
       "https://example.com\\@attacker.test/run", "https://",
     ]
 
@@ -1791,6 +1792,45 @@ final class PulseTests: XCTestCase {
     let reloaded = PulseActionTrustStore(supportDirectory: directory)
     try reloaded.prepare()
     XCTAssertFalse(reloaded.isTrusted(destination, for: provider))
+  }
+
+  @MainActor
+  func testTrustStoreReloadsInsideEachTransactionAndDoesNotResurrectRevokedTrust() throws {
+    let directory = try pulseActionTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let first = PulseActionTrustStore(supportDirectory: directory)
+    let stale = PulseActionTrustStore(supportDirectory: directory)
+    let provider = try PulseProviderIdentity(credentialID: "provider", source: "build")
+    let revoked = try PulseActionDestination.validate(URL(string: "https://revoked.example")!)
+    let retained = try PulseActionDestination.validate(URL(string: "https://retained.example")!)
+
+    let trust = try first.trust(revoked, for: provider)
+    try stale.prepare()
+    try first.revoke(trust)
+    XCTAssertFalse(stale.isTrusted(revoked, for: provider))
+    try stale.trust(retained, for: provider)
+
+    let reloaded = PulseActionTrustStore(supportDirectory: directory)
+    XCTAssertFalse(reloaded.isTrusted(revoked, for: provider))
+    XCTAssertTrue(reloaded.isTrusted(retained, for: provider))
+  }
+
+  @MainActor
+  func testOversizedTrustMutationRollsBackWithoutReplacingReadableStore() throws {
+    let directory = try pulseActionTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = PulseActionTrustStore(supportDirectory: directory, maximumStoreBytes: 256)
+    let provider = try PulseProviderIdentity(credentialID: "provider", source: "build")
+    let destination = try PulseActionDestination.validate(
+      URL(string: "https://a-very-long-destination-name-for-the-size-limit.example")!)
+
+    XCTAssertThrowsError(try store.trust(destination, for: provider)) { error in
+      XCTAssertEqual(error as? PulseActionTrustError, .corruptStore)
+    }
+    XCTAssertFalse(store.isTrusted(destination, for: provider))
+    XCTAssertLessThanOrEqual(
+      try Data(contentsOf: store.storeURL).count, 256,
+      "A failed mutation must leave the previous readable registry in place")
   }
 
   @MainActor

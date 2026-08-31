@@ -427,8 +427,10 @@ final class PulseServer: ObservableObject {
   }
 
   func rotateCredential(_ id: String) throws {
+    let source = credentialStore.credentials.first { $0.id == id }?.source
     try credentialStore.rotate(id)
     rateLimiters.removeProvider(id)
+    if let source { PulseCenter.shared.removeItems(forSource: source) }
     disconnectProvider(id)
   }
 
