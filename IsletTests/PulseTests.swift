@@ -325,6 +325,8 @@ final class PulseTests: XCTestCase {
     let suiteName = "PulseTests.source-policy-migration.\(UUID().uuidString)"
     let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
     defer { suite.removePersistentDomain(forName: suiteName) }
+    let deliveryProfileKey = Defaults.Key<PulseDeliveryProfile>(
+      "pulseDeliveryProfile", default: .everything, suite: suite)
     let sourcePoliciesKey = Defaults.Key<[String: String]>(
       "pulseSourcePolicies", default: [:], suite: suite)
     suite.set(
@@ -336,7 +338,8 @@ final class PulseTests: XCTestCase {
         "   ": "muted",
       ], forKey: sourcePoliciesKey.name)
 
-    let center = PulseCenter(sourcePoliciesKey: sourcePoliciesKey)
+    let center = PulseCenter(
+      deliveryProfileKey: deliveryProfileKey, sourcePoliciesKey: sourcePoliciesKey)
 
     XCTAssertEqual(center.sourcePolicies, ["build": .revoked])
     XCTAssertEqual(Defaults[sourcePoliciesKey], ["build": "revoked"])
@@ -347,11 +350,14 @@ final class PulseTests: XCTestCase {
     let suiteName = "PulseTests.corrupt-source-policies.\(UUID().uuidString)"
     let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
     defer { suite.removePersistentDomain(forName: suiteName) }
+    let deliveryProfileKey = Defaults.Key<PulseDeliveryProfile>(
+      "pulseDeliveryProfile", default: .everything, suite: suite)
     let sourcePoliciesKey = Defaults.Key<[String: String]>(
       "pulseSourcePolicies", default: [:], suite: suite)
     suite.set("not a source-policy map", forKey: sourcePoliciesKey.name)
 
-    let center = PulseCenter(sourcePoliciesKey: sourcePoliciesKey)
+    let center = PulseCenter(
+      deliveryProfileKey: deliveryProfileKey, sourcePoliciesKey: sourcePoliciesKey)
     let payload = PulsePayload(
       id: "build", source: "build", title: "Build", subtitle: nil, symbol: nil,
       accentHex: nil, progress: nil, state: .active, priority: .normal,
