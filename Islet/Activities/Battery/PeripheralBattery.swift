@@ -70,7 +70,9 @@ struct PeripheralBatteryAlertDetector: Sendable {
   private var lastLevels: [String: Int] = [:]
 
   mutating func seed(_ peripherals: [PeripheralBattery]) {
-    lastLevels = Dictionary(uniqueKeysWithValues: peripherals.map { ($0.id, $0.percent) })
+    lastLevels = peripherals.reduce(into: [:]) { levels, peripheral in
+      levels[peripheral.id] = peripheral.percent
+    }
   }
 
   mutating func evaluate(
@@ -114,7 +116,8 @@ enum PeripheralBatteryReader {
         let name = strProp(service, "Product"),
         !name.localizedCaseInsensitiveContains("internal")
       {
-        result.append(PeripheralBattery(id: name, name: name, percent: percent))
+        result.append(
+          PeripheralBattery(id: stableIdentifier(service), name: name, percent: percent))
       }
       IOObjectRelease(service)
       service = IOIteratorNext(iterator)
@@ -130,6 +133,32 @@ enum PeripheralBatteryReader {
   private static func strProp(_ service: io_service_t, _ key: String) -> String? {
     IORegistryEntryCreateCFProperty(service, key as CFString, kCFAllocatorDefault, 0)?
       .takeRetainedValue() as? String
+  }
+
+  private static func stableIdentifier(_ service: io_service_t) -> String {
+    let address = ["DeviceAddress", "TransportAddress", "BD_ADDR"]
+      .lazy.compactMap { strProp(service, $0) }.first
+    var registryEntryID: UInt64 = 0
+    let hasRegistryEntryID =
+      IORegistryEntryGetRegistryEntryID(service, &registryEntryID) == KERN_SUCCESS
+    return stableIdentifier(
+      serialNumber: strProp(service, "SerialNumber"), deviceAddress: address,
+      registryEntryID: hasRegistryEntryID ? registryEntryID : UInt64(service))
+  }
+
+  static func stableIdentifier(
+    serialNumber: String?, deviceAddress: String?, registryEntryID: UInt64
+  ) -> String {
+    if let serialNumber = normalizedIdentity(serialNumber) { return "serial:\(serialNumber)" }
+    if let deviceAddress = normalizedIdentity(deviceAddress) { return "address:\(deviceAddress)" }
+    return "ioreg:\(String(registryEntryID, radix: 16))"
+  }
+
+  private static func normalizedIdentity(_ value: String?) -> String? {
+    guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+      !value.isEmpty
+    else { return nil }
+    return value
   }
 }
 
