@@ -13,6 +13,9 @@ struct MediaSourceTable: Equatable {
   private(set) var firstSeen: [SourceID: Date] = [:]
   /// When each paused source becomes eligible for eviction. Absent while playing.
   private(set) var idleDeadlines: [SourceID: Date] = [:]
+  /// Display identities that CoreAudio currently reports as producing output. MediaRemote can
+  /// leave a browser session marked paused while its audio helper is still playing.
+  private(set) var activeAudioBundleIdentifiers: Set<String> = []
 
   init(idleTimeout: TimeInterval = 60) { self.idleTimeout = idleTimeout }
 
@@ -21,13 +24,30 @@ struct MediaSourceTable: Equatable {
   /// The soonest idle deadline, so a single timer can drive expiry for the whole table.
   var nextDeadline: Date? { idleDeadlines.values.min() }
 
+  /// States corrected for presentation using the independent CoreAudio playback signal.
+  var presentationStates: [SourceID: PlaybackState] {
+    Dictionary(
+      uniqueKeysWithValues: states.map { key, state in
+        guard !state.isPlaying, isEffectivelyPlaying(key, state: state) else {
+          return (key, state)
+        }
+        var presented = state
+        presented.isPlaying = true
+        return (key, presented)
+      })
+  }
+
+  private func isEffectivelyPlaying(_ key: SourceID, state: PlaybackState) -> Bool {
+    state.isPlaying || activeAudioBundleIdentifiers.contains(key.displayBundleIdentifier)
+  }
+
   /// Inserts or updates a source. Returns true when the key was not already present.
   @discardableResult
   mutating func upsert(_ key: SourceID, _ state: PlaybackState, now: Date) -> Bool {
     let isNew = states[key] == nil
     states[key] = state
     if isNew { firstSeen[key] = now }
-    if state.isPlaying {
+    if isEffectivelyPlaying(key, state: state) {
       idleDeadlines[key] = nil
     } else if idleDeadlines[key] == nil {
       // The countdown starts when playback pauses, and repeated paused updates do not push it
@@ -52,6 +72,18 @@ struct MediaSourceTable: Equatable {
     idleDeadlines.removeAll()
   }
 
+  /// Reconciles MediaRemote's sometimes-stale paused flag with CoreAudio's live process signal.
+  mutating func setActiveAudioSources(_ sources: [SourceID], now: Date) {
+    activeAudioBundleIdentifiers = Set(sources.map(\.displayBundleIdentifier))
+    for (key, state) in states {
+      if isEffectivelyPlaying(key, state: state) {
+        idleDeadlines[key] = nil
+      } else if idleDeadlines[key] == nil {
+        idleDeadlines[key] = now.addingTimeInterval(idleTimeout)
+      }
+    }
+  }
+
   /// Evicts every source whose paused deadline has passed. Returns the keys removed.
   @discardableResult
   mutating func expire(now: Date) -> [SourceID] {
@@ -73,8 +105,8 @@ struct MediaSourceTable: Equatable {
       }
       .sorted { left, right in
         if left.1 != right.1 { return left.1 < right.1 }
-        let leftPlaying = states[left.0]?.isPlaying ?? false
-        let rightPlaying = states[right.0]?.isPlaying ?? false
+        let leftPlaying = states[left.0].map { isEffectivelyPlaying(left.0, state: $0) } ?? false
+        let rightPlaying = states[right.0].map { isEffectivelyPlaying(right.0, state: $0) } ?? false
         if leftPlaying != rightPlaying { return leftPlaying }
         let leftSeen = firstSeen[left.0] ?? .distantPast
         let rightSeen = firstSeen[right.0] ?? .distantPast
@@ -152,11 +184,15 @@ enum MediaSourceChooser {
       priorityList: [bundleID] + priorityList.filter { $0 != bundleID })
   }
 
-  static func accessibilityLabel(appName: String, isPlaying: Bool, isPrimary: Bool) -> String {
-    "\(appName), \(isPlaying ? "Playing" : "Paused"), \(isPrimary ? "Primary source" : "Additional source")"
+  static func accessibilityLabel(
+    appName: String, isPlaying: Bool, isPrimary: Bool, isAdapterBacked: Bool = true
+  ) -> String {
+    let status = isAdapterBacked ? (isPlaying ? "Playing" : "Paused") : "Audio detected only"
+    return "\(appName), \(status), \(isPrimary ? "Primary source" : "Additional source")"
   }
 
-  static func accessibilityHint(appName: String) -> String {
-    "Makes \(appName) the primary player"
+  static func accessibilityHint(appName: String, isAdapterBacked: Bool = true) -> String {
+    if isAdapterBacked { return "Makes \(appName) the preferred player" }
+    return "Brings \(appName) forward; Islet cannot control this audio source directly"
   }
 }

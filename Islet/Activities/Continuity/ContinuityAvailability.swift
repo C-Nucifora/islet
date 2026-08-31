@@ -2,13 +2,14 @@ import Foundation
 
 /// Why the iPhone tab is or is not showing anything.
 ///
-/// Five dead ends look identical from the outside — an empty island — and each needs a different
-/// sentence, so they are modelled rather than collapsed into "no data".
+/// These states can all look like an empty island, but each needs a different explanation.
 enum ContinuityAvailability: Equatable, Sendable {
   /// Islet has not been granted Accessibility. The only state the user can fix from inside Islet.
   case needsAccessibility
-  /// ControlCenter could not be reached, or exposes no menu bar at all.
-  case unsupported
+  /// ControlCenter is not running, so there is no process to inspect.
+  case controlCenterUnavailable
+  /// ControlCenter is running but no longer exposes the private hierarchy Islet understands.
+  case incompatibleSchema
   /// macOS has iPhone Live Activities switched off in System Settings.
   case systemDisabled
   /// Switched on, but nothing is arriving.
@@ -16,21 +17,30 @@ enum ContinuityAvailability: Equatable, Sendable {
   case active
 
   static func resolve(
-    isTrusted: Bool, controlCenterReachable: Bool, systemEnabled: Bool, cardCount: Int
+    readResult: LiveActivityAXReadResult, systemEnabled: Bool, cardCount: Int
   ) -> ContinuityAvailability {
-    guard isTrusted else { return .needsAccessibility }
-    // A card in hand outranks every other signal: whatever the settings say, something is here.
-    if cardCount > 0 { return .active }
-    guard controlCenterReachable else { return .unsupported }
-    return systemEnabled ? .waiting : .systemDisabled
+    switch readResult {
+    case .permissionDenied:
+      return .needsAccessibility
+    case .controlCenterUnavailable:
+      return .controlCenterUnavailable
+    case .schemaChanged:
+      return .incompatibleSchema
+    case .success:
+      // A card in hand outranks the preference: whatever it says, something is here now.
+      if cardCount > 0 { return .active }
+      return systemEnabled ? .waiting : .systemDisabled
+    }
   }
 
   var explanation: String {
     switch self {
     case .needsAccessibility:
       return "Islet needs Accessibility access to read Live Activities from the menu bar."
-    case .unsupported:
-      return "This build of macOS doesn't put iPhone Live Activities in the menu bar."
+    case .controlCenterUnavailable:
+      return "Control Centre is not running. Retry after macOS starts it again."
+    case .incompatibleSchema:
+      return "This macOS version exposes a Control Centre layout Islet cannot read."
     case .systemDisabled:
       return "Turn on iPhone Live Activities in System Settings to see them here."
     case .waiting:

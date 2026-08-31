@@ -1,0 +1,41 @@
+{
+  "total_count": 3,
+  "workflow_runs": [
+    {
+      "id": 101,
+      "name": "CI",
+      "workflow_id": 9001,
+      "path": ".github/workflows/ci.yml",
+      "status": "queued",
+      "conclusion": null,
+      "html_url": "https://github.com/C-Nucifora/islet/actions/runs/101",
+      "head_branch": "main",
+      "event": "push",
+      "run_attempt": 1
+    },
+    {
+      "id": 202,
+      "name": "Release",
+      "workflow_id": 9002,
+      "path": ".github/workflows/release.yml",
+      "status": "in_progress",
+      "conclusion": null,
+      "html_url": "https://github.com/C-Nucifora/islet/actions/runs/202",
+      "head_branch": "main",
+      "event": "workflow_dispatch",
+      "run_attempt": 1
+    },
+    {
+      "id": 99,
+      "name": "CI",
+      "workflow_id": 9001,
+      "path": ".github/workflows/ci.yml",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/C-Nucifora/islet/actions/runs/99",
+      "head_branch": "main",
+      "event": "push",
+      "run_attempt": 1
+    }
+  ]
+}

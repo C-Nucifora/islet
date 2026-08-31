@@ -120,6 +120,7 @@ final class BatteryMonitor: ObservableObject {
       .store(in: &cancellables)
     Defaults.publisher(.energyMode)
       .dropFirst()
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.energyPolicyDidChange() }
       .store(in: &cancellables)
   }

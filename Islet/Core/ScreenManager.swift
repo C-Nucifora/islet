@@ -7,10 +7,19 @@ import SwiftUI
 struct PanelPresentationState: Equatable {
   var notchState: NotchState = .closed
   var selectedActivityID: String?
+  var temporarilyPresentedActivityID: String?
   var expandedWidth: CGFloat = Metrics.expandedSize.width
   var expandedHeight: CGFloat = Metrics.expandedSize.height
 
   static let initial = PanelPresentationState()
+}
+
+nonisolated enum TimerCompletionVisibility {
+  static func isVisible(
+    screenAwake: Bool, sessionActive: Bool, visiblePanelPresentingTimer: Bool
+  ) -> Bool {
+    screenAwake && sessionActive && visiblePanelPresentingTimer
+  }
 }
 
 /// A hardware identity is used only when macOS gives the same display a new UUID. External
@@ -175,6 +184,11 @@ private final class PanelInstance {
 /// hides panels on screens showing a fullscreen app when that option is enabled.
 @MainActor
 final class ScreenManager: ObservableObject {
+  private struct PendingOpenedActivity {
+    let id: String
+    let allowingDisabledActivity: Bool
+  }
+
   static let shared = ScreenManager()
 
   @Published private(set) var displayChoices: [DisplayChoice] = []
@@ -184,6 +198,9 @@ final class ScreenManager: ObservableObject {
   private var displayState = ScreenManagerDisplayState()
   private var fullscreenTransitionRefreshes: Set<AnyCancellable> = []
   private var fullscreenTransitionRevision = FullscreenTransitionRevision()
+  private var pendingOpenedActivity: PendingOpenedActivity?
+  private var isScreenAwake = true
+  private var isSessionActive = true
   /// Last-known notch measurements per display, so a transient empty aux-area read can't downgrade
   /// a built-in screen to the 200pt fallback for the rest of the session.
   private var stickiness = NotchStickiness()
@@ -209,6 +226,39 @@ final class ScreenManager: ObservableObject {
     // single-display mode the rebuilt set contains exactly the fresh fallback; in all-display
     // mode any remaining panel is preferable to dropping the user action.
     return instances[targetID]?.viewModel ?? instances.values.first?.viewModel
+  }
+
+  /// A completion is already visible when the session and screen are available and a visible
+  /// expanded panel is showing the timer. A compact countdown or a hidden fullscreen panel is not
+  /// enough context to suppress the macOS notification.
+  var isTimerCompletionVisible: Bool {
+    TimerCompletionVisibility.isVisible(
+      screenAwake: isScreenAwake,
+      sessionActive: isSessionActive,
+      visiblePanelPresentingTimer: instances.values.contains {
+        $0.panel.isVisible && $0.viewModel.isPresenting(activityID: "timer")
+      })
+  }
+
+  func openCompletedTimer() {
+    open(activityID: "timer", allowingDisabledActivity: true)
+  }
+
+  private func open(activityID: String, allowingDisabledActivity: Bool = false) {
+    guard
+      let instance = instances.values.first(where: { $0.panel.isVisible }) ?? instances.values.first
+    else {
+      // A notification response can arrive while a cold launch is still building its panels.
+      // Preserve the intent and replay it after `rebuild()` has created the first island.
+      pendingOpenedActivity = PendingOpenedActivity(
+        id: activityID, allowingDisabledActivity: allowingDisabledActivity)
+      return
+    }
+    pendingOpenedActivity = nil
+    instance.panel.orderFrontRegardless()
+    instance.viewModel.open(
+      activityID: activityID, allowingDisabledActivity: allowingDisabledActivity)
+    instance.updateMousePassthrough()
   }
 
   func start() {
@@ -251,28 +301,46 @@ final class ScreenManager: ObservableObject {
       )
       .sink { [weak self] _ in self?.refreshFullscreenTransition() }
       .store(in: &cancellables)
+    NSWorkspace.shared.notificationCenter
+      .publisher(for: NSWorkspace.screensDidSleepNotification)
+      .sink { [weak self] _ in self?.isScreenAwake = false }
+      .store(in: &cancellables)
+    NSWorkspace.shared.notificationCenter
+      .publisher(for: NSWorkspace.screensDidWakeNotification)
+      .sink { [weak self] _ in self?.isScreenAwake = true }
+      .store(in: &cancellables)
+    NSWorkspace.shared.notificationCenter
+      .publisher(for: NSWorkspace.sessionDidResignActiveNotification)
+      .sink { [weak self] _ in self?.isSessionActive = false }
+      .store(in: &cancellables)
+    NSWorkspace.shared.notificationCenter
+      .publisher(for: NSWorkspace.sessionDidBecomeActiveNotification)
+      .sink { [weak self] _ in self?.isSessionActive = true }
+      .store(in: &cancellables)
     Defaults.publisher(.hideFromScreenRecording)
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] change in
-        Task { @MainActor in
-          if let instances = self?.instances.values {
-            for instance in instances {
-              instance.panel.sharingType = ScreenCaptureExclusionPolicy.current.sharingType(
-                exclusionRequested: change.newValue)
-            }
+        if let instances = self?.instances.values {
+          for instance in instances {
+            instance.panel.sharingType = ScreenCaptureExclusionPolicy.current.sharingType(
+              exclusionRequested: change.newValue)
           }
         }
       }
       .store(in: &cancellables)
     Defaults.publisher(.showOnAllDisplays)
       .dropFirst()
-      .sink { [weak self] _ in Task { @MainActor in self?.rebuild() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.rebuild() }
       .store(in: &cancellables)
     Defaults.publisher(.preferredDisplayID)
       .dropFirst()
-      .sink { [weak self] _ in Task { @MainActor in self?.rebuild() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.rebuild() }
       .store(in: &cancellables)
     Defaults.publisher(.hideInFullscreen)
-      .sink { [weak self] _ in Task { @MainActor in self?.updateFullscreenObserving() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.updateFullscreenObserving() }
       .store(in: &cancellables)
     updateFullscreenObserving()
   }
@@ -400,6 +468,11 @@ final class ScreenManager: ObservableObject {
     }
     Log.shell.info("Built \(self.instances.count) notch panel(s)")
     applyFullscreenVisibility()
+    if let pendingOpenedActivity {
+      open(
+        activityID: pendingOpenedActivity.id,
+        allowingDisabledActivity: pendingOpenedActivity.allowingDisabledActivity)
+    }
   }
 
   /// Re-pushes every panel's reserved frame after a display, Space or app activation change.

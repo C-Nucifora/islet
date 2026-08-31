@@ -33,9 +33,14 @@ final class ActivityLifecycleController {
   func startObserving() {
     guard cancellables.isEmpty else { return }
     Defaults.publisher(.disabledActivities)
-      .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.reconcile() }
       .store(in: &cancellables)
     Defaults.publisher(.calendarEnabled)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.reconcile() }
+      .store(in: &cancellables)
+    NotificationCenter.default.publisher(for: .keepAwakeSessionDidChange)
       .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
       .store(in: &cancellables)
     reconcile()
@@ -60,10 +65,14 @@ final class ActivityLifecycleController {
   }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-  private var launchAtLoginObserver: Defaults.Observation?
+  private var launchAtLoginObserver: AnyCancellable?
   private var activityLifecycleController: ActivityLifecycleController?
   private var audioDeviceLifecycleCancellable: AnyCancellable?
+  /// Kept by the delegate for the entire app lifetime so notification responses still reach the
+  /// timer when Islet has no normal application window.
+  private let timerCompletionNotifications = TimerCompletionNotifications.shared
 
   /// True when the app is running only as XCTest's host process. Every monitor below talks to real
   /// hardware — CoreWLAN, IOBluetooth, Spotlight, the Downloads folder — and several of them prompt
@@ -87,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       Log.app.info("Launched as a test host; skipping monitor startup")
       return
     }
+    timerCompletionNotifications.start()
     Task { @MainActor in
       ActivityEnablement.migrateLegacyPreferencesIfNeeded()
       // Bring a persisted activity order forward before anything renders from it: entries added to
@@ -123,9 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       }
       HUDController.shared.startObserving()
       LaunchAtLogin.sync()
-      launchAtLoginObserver = Defaults.observe(.launchAtLogin) { change in
-        Task { @MainActor in LaunchAtLogin.apply(change.newValue) }
-      }
+      launchAtLoginObserver = LaunchAtLogin.observe()
       OnboardingOpener.openIfNeeded()
     }
     Log.app.info("Islet launched")
@@ -136,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // AppKit invokes this delegate on the main thread. Media shutdown is intentionally synchronous:
     // otherwise the app can exit before the watcher's serial queue terminates its helper process.
     MainActor.assumeIsolated {
+      KeepAwakeManager.shared.stop(reason: .quit)
       AppState.nowPlaying.stop()
       AppState.battery.stop()
       AppState.calendar.stop()
@@ -150,6 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       AudioDeviceMonitor.shared.stop()
       HUDController.shared.stop()
       SystemEventBus.shared.stopAll()
+      EventSourcePreferences.shared.flush()
       EventMonitors.shared.stop()
       ScreenManager.shared.stop()
       activityLifecycleController?.stopObserving()
@@ -166,7 +176,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activityID: "nowPlaying", start: { AppState.nowPlaying.start() },
         stop: { AppState.nowPlaying.stop() }),
       ActivityLifecycleControl(
-        activityID: "battery", start: { AppState.battery.start() },
+        activityID: "battery", additionalRuntimeDemand: { KeepAwakeManager.shared.isActive },
+        start: { AppState.battery.start() },
         stop: { AppState.battery.stop() }),
       ActivityLifecycleControl(
         activityID: "calendar", additionalRuntimeDemand: { Defaults[.calendarEnabled] },
@@ -195,14 +206,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ])
     activityLifecycleController = controller
     controller.startObserving()
-    audioDeviceLifecycleCancellable = Defaults.publisher(.disabledEventSources)
+    audioDeviceLifecycleCancellable = EventSourcePreferences.shared.$disabledSourceIDs
       .sink { [weak self] _ in Task { @MainActor in self?.reconcileAudioDeviceLifecycle() } }
     reconcileAudioDeviceLifecycle()
   }
 
   @MainActor
   private func reconcileAudioDeviceLifecycle() {
-    if Defaults[.disabledEventSources].contains("audiodevice") {
+    if !EventSourcePreferences.shared.isEnabled("audiodevice") {
       AudioDeviceMonitor.shared.stop()
     } else {
       AudioDeviceMonitor.shared.start()
