@@ -294,6 +294,45 @@ final class MediaWatcherTests: XCTestCase {
     updates.cancel()
   }
 
+  func testNonActiveRecoverySnapshotStopsAfterThreeMismatches() throws {
+    let helper = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .appendingPathComponent("Fixtures/wrong-app-recovery-helper.pl")
+    let stateFile = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent("wrong-app-recovery-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: stateFile) }
+
+    XCTAssertTrue(FileManager.default.fileExists(atPath: helper.path))
+    let idle = expectation(description: "stream reports idle")
+    let recoveryStopped = expectation(description: "recovery stops after three mismatches")
+    let snapshotAttempts = LockedCounter()
+    let watcher = MediaWatcher(
+      initialSnapshotDelay: 1,
+      commandProvider: { kind in
+        if case .snapshot = kind { snapshotAttempts.increment() }
+        return MediaWatcher.HelperCommand(
+          executableURL: URL(fileURLWithPath: "/usr/bin/perl"),
+          arguments: [helper.path, kind.rawValue, stateFile.path])
+      },
+      snapshotBackoff: { _ in 0.05 })
+    watcher.onStatus = { status in
+      if status.contains("recovery stopped") { recoveryStopped.fulfill() }
+    }
+    let updates = Task {
+      for await update in watcher.updates {
+        guard case .idle = update else { continue }
+        idle.fulfill()
+        watcher.setPlaybackRecoverySources(["com.example.NeverMatches"])
+        return
+      }
+    }
+
+    watcher.start()
+    wait(for: [idle, recoveryStopped], timeout: 5, enforceOrder: true)
+    XCTAssertEqual(snapshotAttempts.value, 3)
+    watcher.stop()
+    updates.cancel()
+  }
+
   func testRecoveryOnlyAcceptsMetadataForAnActiveAudioApp() {
     let browser = key("company.thebrowser.Browser", 1)
     let music = key("com.apple.Music", 2)

@@ -663,8 +663,6 @@ final class MediaWatcher: @unchecked Sendable {
         reason: "invalid output", stderr: stderr, recoveryGeneration: recoveryGeneration)
       return
     }
-    snapshotFailureCount = 0
-    onStatus?("Streaming")
     if recoveryGeneration != nil,
       !Self.shouldAcceptRecoveredUpdate(
         parsed, activeBundleIdentifiers: playbackRecoveryBundleIdentifiers)
@@ -675,6 +673,8 @@ final class MediaWatcher: @unchecked Sendable {
         recoveryGeneration: recoveryGeneration)
       return
     }
+    snapshotFailureCount = 0
+    onStatus?("Streaming")
     accept(parsed)
   }
 
