@@ -8,12 +8,15 @@ private let usage = """
          islet-pulse <show|update|event> <id> <title> [subtitle] [options]
 
   options:
+    --credential-file PATH  Explicit provider credential file (or set ISLET_PULSE_CREDENTIAL_FILE)
     --source NAME            Stable provider source (default: cli; use with end)
     --progress NUMBER        Progress from 0 through 1
     --state STATE            active|progress|needsAction|succeeded|failed
     --priority PRIORITY      low|normal|high|critical
     --expires SECONDS        Expire after 2 through 86400 seconds
     --action TITLE URL       Add an HTTP(S) action (up to three)
+
+  The client reads Islet's active loopback port from the pulse-port file beside pulse-token.
   """ + "\n"
 
 private struct Response: Decodable {
@@ -27,8 +30,7 @@ private struct Response: Decodable {
 /// Network callbacks run on a private serial queue. Completion is separately lock-protected so a
 /// timeout and a callback cannot race to choose the process exit status.
 private final class PulseClient: @unchecked Sendable {
-  private let connection = NWConnection(
-    host: "127.0.0.1", port: NWEndpoint.Port(rawValue: 47_717)!, using: .tcp)
+  private let connection: NWConnection
   private let queue = DispatchQueue(label: "dev.islet.pulse-cli", qos: .utility)
   private let semaphore = DispatchSemaphore(value: 0)
   private let lock = NSLock()
@@ -37,6 +39,10 @@ private final class PulseClient: @unchecked Sendable {
   private var sent = false  // queue-confined
   private var buffer = Data()  // queue-confined
   private var expectedRequestID = ""
+
+  init(port: NWEndpoint.Port) {
+    connection = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
+  }
 
   func run(payload: Data, requestID: String) -> Int32 {
     expectedRequestID = requestID
@@ -127,7 +133,28 @@ private final class PulseClient: @unchecked Sendable {
   }
 }
 
-let arguments = Array(CommandLine.arguments.dropFirst())
+let rawArguments = Array(CommandLine.arguments.dropFirst())
+var arguments: [String] = []
+var credentialFileArgument: String?
+var rawIndex = 0
+while rawIndex < rawArguments.count {
+  if rawArguments[rawIndex] == "--credential-file" {
+    guard rawIndex + 1 < rawArguments.count, credentialFileArgument == nil else {
+      FileHandle.standardError.write(Data("--credential-file requires one path\n".utf8))
+      exit(64)
+    }
+    let value = rawArguments[rawIndex + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else {
+      FileHandle.standardError.write(Data("--credential-file requires one path\n".utf8))
+      exit(64)
+    }
+    credentialFileArgument = value
+    rawIndex += 2
+  } else {
+    arguments.append(rawArguments[rawIndex])
+    rawIndex += 1
+  }
+}
 if arguments == ["--help"] || arguments == ["-h"] {
   FileHandle.standardOutput.write(Data(usage.utf8))
   exit(0)
@@ -272,11 +299,13 @@ if operation == "end" {
 
 let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
   .appendingPathComponent("Islet", isDirectory: true)
-let requestedSource =
-  (command["source"] as? String)
-  ?? ((command["activity"] as? [String: Any])?["source"] as? String)
-let registryURL = support.appendingPathComponent("pulse-providers.json")
-let credentialDirectory = support.appendingPathComponent("pulse-credentials", isDirectory: true)
+let activePortURL = support.appendingPathComponent("pulse-port")
+let storedPort = (try? String(contentsOf: activePortURL, encoding: .utf8)).flatMap {
+  UInt16($0.trimmingCharacters(in: .whitespacesAndNewlines))
+}
+let port =
+  storedPort.flatMap { NWEndpoint.Port(rawValue: $0) }
+  ?? NWEndpoint.Port(rawValue: 47_717)!
 
 func secureData(at url: URL, maximumBytes: Int) -> Data? {
   let descriptor = url.path.withCString {
@@ -310,35 +339,20 @@ func secureString(at url: URL) -> String? {
     in: .whitespacesAndNewlines)
 }
 
-func providerCredential() -> String? {
-  guard let data = secureData(at: registryURL, maximumBytes: 1_048_576),
-    let registry = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-    let providers = registry["credentials"] as? [[String: Any]]
-  else { return nil }
-  let active = providers.filter { $0["revokedAt"] == nil && ($0["isLegacy"] as? Bool) != true }
-  let matches: [[String: Any]]
-  if let requestedSource {
-    matches = active.filter {
-      ($0["source"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        .localizedCaseInsensitiveCompare(
-          requestedSource.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
-    }
-  } else {
-    matches = active.count == 1 ? active : []
-  }
-  guard matches.count == 1, let id = matches[0]["id"] as? String,
-    let uuid = UUID(uuidString: id), uuid.uuidString.lowercased() == id
-  else { return nil }
-  return secureString(at: credentialDirectory.appendingPathComponent("\(id).credential"))
-}
-
-let legacyToken = secureString(at: support.appendingPathComponent("pulse-token"))
-let token = providerCredential() ?? legacyToken
-guard let token else {
+let configuredCredentialPath =
+  credentialFileArgument ?? ProcessInfo.processInfo.environment["ISLET_PULSE_CREDENTIAL_FILE"]
+guard let configuredCredentialPath, !configuredCredentialPath.isEmpty else {
   FileHandle.standardError.write(
     Data(
-      "No active Pulse credential matches this source. Add one in Islet Settings.\n"
+      "Set --credential-file or ISLET_PULSE_CREDENTIAL_FILE to one revealed provider credential.\n"
         .utf8))
+  exit(69)
+}
+let credentialURL = URL(
+  fileURLWithPath: (configuredCredentialPath as NSString).expandingTildeInPath)
+guard let token = secureString(at: credentialURL) else {
+  FileHandle.standardError.write(
+    Data("Could not read the configured Pulse credential safely.\n".utf8))
   exit(69)
 }
 command["token"] = token
@@ -346,7 +360,7 @@ command["token"] = token
 do {
   var payload = try JSONSerialization.data(withJSONObject: command)
   payload.append(0x0A)
-  exit(PulseClient().run(payload: payload, requestID: requestID))
+  exit(PulseClient(port: port).run(payload: payload, requestID: requestID))
 } catch {
   FileHandle.standardError.write(
     Data("could not encode command: \(error.localizedDescription)\n".utf8))

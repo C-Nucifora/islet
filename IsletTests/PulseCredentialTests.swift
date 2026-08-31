@@ -83,6 +83,22 @@ final class PulseCredentialTests: XCTestCase {
   }
 
   @MainActor
+  func testEventsPermissionCannotCreateALongLivedActivity() throws {
+    let fixture = try fixture(permissions: [.events])
+    defer { fixture.remove() }
+    let date = Date(timeIntervalSince1970: 10_000)
+    var event = command(
+      token: fixture.token, operation: .event, source: "build", requestID: "bounded-event")
+    event.activity?.expiresAt = date.addingTimeInterval(24 * 60 * 60)
+
+    let authorized = try fixture.store.authorize(event, at: date).0
+
+    XCTAssertEqual(
+      authorized.activity?.expiresAt,
+      date.addingTimeInterval(PulseCredentialStore.maximumEventLifetime))
+  }
+
+  @MainActor
   func testReplayIsRejectedPerCredentialWithoutCollidingAcrossProviders() throws {
     let directory = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -176,6 +192,33 @@ final class PulseCredentialTests: XCTestCase {
     XCTAssertEqual(summary.lastUsedAt, Date(timeIntervalSince1970: 2_000))
     XCTAssertEqual(summary.revokedAt, Date(timeIntervalSince1970: 3_000))
     XCTAssertEqual(summary.permissions, [.events, .progress])
+  }
+
+  @MainActor
+  func testStaleStoreCannotEraseAnotherProcessProviderOrLastUse() throws {
+    let directory = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let firstStore = PulseCredentialStore(supportDirectory: directory)
+    let staleStore = PulseCredentialStore(supportDirectory: directory)
+    try firstStore.prepare()
+    try staleStore.prepare()
+    let first = try firstStore.createProvider(
+      name: "Build", source: "build", permissions: [.events])
+    let firstToken = try token(for: first, in: firstStore)
+    let second = try staleStore.createProvider(
+      name: "Tests", source: "tests", permissions: [.events])
+
+    _ = try firstStore.authorize(
+      command(
+        token: firstToken, operation: .event, source: "build", requestID: "fresh-last-use"),
+      at: Date(timeIntervalSince1970: 20_000))
+
+    let reloaded = PulseCredentialStore(supportDirectory: directory)
+    try reloaded.prepare()
+    XCTAssertEqual(Set(reloaded.credentials.map(\.id)), [first.id, second.id])
+    XCTAssertEqual(
+      reloaded.credentials.first(where: { $0.id == first.id })?.lastUsedAt,
+      Date(timeIntervalSince1970: 20_000))
   }
 
   func testConcurrentClientsSerializeCredentialUseWithoutCrossProviderState() async throws {
@@ -319,6 +362,44 @@ final class PulseCredentialTests: XCTestCase {
         command(
           token: fixture.token, operation: .event, source: "build",
           requestID: "old-still-valid")))
+  }
+
+  @MainActor
+  func testFailedRevocationCleanupIsReportedAndRetried() throws {
+    let directory = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    var removalAttempts = 0
+    let store = PulseCredentialStore(
+      supportDirectory: directory,
+      removeItem: { url in
+        removalAttempts += 1
+        if removalAttempts == 1 { throw CocoaError(.fileWriteNoPermission) }
+        try FileManager.default.removeItem(at: url)
+      })
+    let summary = try store.createProvider(
+      name: "Build", source: "build", permissions: [.events])
+    let credentialURL = try XCTUnwrap(store.credentialFileURL(for: summary.id))
+
+    XCTAssertThrowsError(try store.revoke(summary.id))
+    XCTAssertTrue(store.credentials.first(where: { $0.id == summary.id })?.isRevoked == true)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: credentialURL.path))
+
+    XCTAssertNoThrow(try store.revoke(summary.id))
+    XCTAssertEqual(removalAttempts, 2)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: credentialURL.path))
+  }
+
+  func testSchemaRequiresRequestIDForProviderCredentials() throws {
+    let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    let root = testsDirectory.deletingLastPathComponent()
+    let data = try Data(
+      contentsOf: root.appendingPathComponent("Integrations/Pulse/pulse-command.schema.json"))
+    let schema = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let conditions = try XCTUnwrap(schema["allOf"] as? [[String: Any]])
+    let providerCondition = try XCTUnwrap(conditions.first)
+    let thenClause = try XCTUnwrap(providerCondition["then"] as? [String: Any])
+
+    XCTAssertEqual(thenClause["required"] as? [String], ["requestID"])
   }
 
   @MainActor

@@ -1,15 +1,30 @@
 import Combine
+import Darwin
 import Foundation
 import Network
 
 enum PulsePaths {
-  static let port = NWEndpoint.Port(rawValue: 47_717)!
+  static let defaultPort = NWEndpoint.Port(rawValue: 47_717)!
+  static let fallbackPorts = (47_718...47_727).compactMap(NWEndpoint.Port.init(rawValue:))
+  static let candidatePorts = [defaultPort] + fallbackPorts
 
   static var supportDirectory: URL {
     let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     return root.appendingPathComponent("Islet", isDirectory: true)
   }
+  static var activePortURL: URL { supportDirectory.appendingPathComponent("pulse-port") }
 }
+
+protocol PulseListening: AnyObject, Sendable {
+  var newConnectionHandler: (@Sendable (NWConnection) -> Void)? { get set }
+  var stateUpdateHandler: (@Sendable (NWListener.State) -> Void)? { get set }
+  var port: NWEndpoint.Port? { get }
+
+  func start(queue: DispatchQueue)
+  func cancel()
+}
+
+extension NWListener: PulseListening {}
 
 /// Authenticated, loopback-only newline-delimited JSON transport for out-of-process activity
 /// providers. Providers never load code into Islet; they can only submit bounded data and web URLs.
@@ -21,7 +36,9 @@ final class PulseServer: ObservableObject {
   nonisolated static let authenticationTimeout: Duration = .seconds(10)
   private nonisolated static let maximumConnections = 16
 
-  private var listener: NWListener?
+  typealias ListenerFactory = (NWParameters, NWEndpoint.Port) throws -> any PulseListening
+
+  private var listener: (any PulseListening)?
   private var connections: [ObjectIdentifier: NWConnection] = [:]
   private var commandPipelines: [ObjectIdentifier: PulseCommandPipeline] = [:]
   private var commandTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
@@ -30,61 +47,166 @@ final class PulseServer: ObservableObject {
   private let queue = DispatchQueue(label: "dev.islet.pulse", qos: .utility)
   @Published private(set) var isRunning = false
   @Published private(set) var lastError: String?
+  @Published private(set) var activePort: UInt16?
+  @Published private(set) var portRecoveryMessage: String?
   let credentialStore: PulseCredentialStore
   private var rateLimiters = PulseProviderRateLimiters()
+  private var candidateIndex = 0
+  private let listenerFactory: ListenerFactory
+  private let activePortWriter: (UInt16) throws -> Void
+  private let activePortRemover: () -> Void
 
-  init(credentialStore: PulseCredentialStore = PulseCredentialStore()) {
+  init(
+    credentialStore: PulseCredentialStore = PulseCredentialStore(),
+    listenerFactory: @escaping ListenerFactory = { parameters, port in
+      try NWListener(using: parameters, on: port)
+    },
+    activePortWriter: ((UInt16) throws -> Void)? = nil,
+    activePortRemover: (() -> Void)? = nil
+  ) {
     self.credentialStore = credentialStore
+    self.listenerFactory = listenerFactory
+    self.activePortWriter = activePortWriter ?? Self.writeActivePort
+    self.activePortRemover = activePortRemover ?? Self.removeActivePort
+  }
+
+  var listeningAddress: String? {
+    activePort.map { "127.0.0.1:\($0)" }
   }
 
   func start() {
     guard listener == nil else { return }
     do {
       try credentialStore.prepare()
-      let parameters = NWParameters.tcp
-      parameters.allowLocalEndpointReuse = true
-      parameters.requiredLocalEndpoint = .hostPort(
-        host: NWEndpoint.Host("127.0.0.1"), port: .any)
-      let listener = try NWListener(using: parameters, on: PulsePaths.port)
-      listener.newConnectionHandler = { [weak self] connection in
-        Task { @MainActor in self?.accept(connection) }
-      }
-      listener.stateUpdateHandler = { [weak self, weak listener] state in
-        Task { @MainActor in
-          guard let self, let listener, self.listener === listener else { return }
-          switch state {
-          case .ready:
-            self.isRunning = true
-            self.lastError = nil
-          case .waiting(let error):
-            self.isRunning = false
-            self.lastError = error.localizedDescription
-          case .failed(let error):
-            self.lastError = error.localizedDescription
-            self.stop()
-          case .cancelled:
-            self.isRunning = false
-          case .setup:
-            break
-          @unknown default:
-            break
-          }
-        }
-      }
-      self.listener = listener
+      candidateIndex = 0
       lastError = nil
+      portRecoveryMessage = nil
+      activePort = nil
       isRunning = false
-      listener.start(queue: queue)
+      try startCandidate()
     } catch {
-      lastError = error.localizedDescription
-      Log.app.error("Pulse server failed: \(error.localizedDescription, privacy: .public)")
+      if Self.isAddressInUse(error) {
+        recoverFromOccupiedPort()
+      } else {
+        fail(error)
+      }
     }
+  }
+
+  private func startCandidate() throws {
+    let port = PulsePaths.candidatePorts[candidateIndex]
+    let parameters = NWParameters.tcp
+    parameters.allowLocalEndpointReuse = true
+    parameters.requiredLocalEndpoint = .hostPort(
+      host: NWEndpoint.Host("127.0.0.1"), port: .any)
+    let listener = try listenerFactory(parameters, port)
+    listener.newConnectionHandler = { [weak self] connection in
+      Task { @MainActor in self?.accept(connection) }
+    }
+    listener.stateUpdateHandler = { [weak self, weak listener] state in
+      Task { @MainActor in
+        guard let self, let listener, self.listener === listener else { return }
+        self.handle(state, from: listener)
+      }
+    }
+    self.listener = listener
+    listener.start(queue: queue)
+  }
+
+  private func handle(_ state: NWListener.State, from listener: any PulseListening) {
+    switch state {
+    case .ready:
+      guard let port = listener.port?.rawValue else {
+        fail(PulseServerError.missingActivePort)
+        return
+      }
+      do {
+        try activePortWriter(port)
+        activePort = port
+        isRunning = true
+        lastError = nil
+        portRecoveryMessage =
+          port == PulsePaths.defaultPort.rawValue
+          ? nil
+          : "Port 47717 is in use. Pulse moved to \(port); bundled clients discover it automatically."
+      } catch {
+        fail(error)
+      }
+    case .waiting(let error):
+      if Self.isAddressInUse(error) {
+        recoverFromOccupiedPort()
+      } else {
+        isRunning = false
+        lastError = error.localizedDescription
+      }
+    case .failed(let error):
+      if Self.isAddressInUse(error) {
+        recoverFromOccupiedPort()
+      } else {
+        fail(error)
+      }
+    case .cancelled:
+      self.listener = nil
+      isRunning = false
+      activePort = nil
+      portRecoveryMessage = nil
+      activePortRemover()
+      lastError = "The Pulse listener stopped. Retry it from Settings."
+    case .setup:
+      break
+    @unknown default:
+      break
+    }
+  }
+
+  private func recoverFromOccupiedPort() {
+    listener?.cancel()
+    listener = nil
+    isRunning = false
+    activePort = nil
+    activePortRemover()
+    guard candidateIndex + 1 < PulsePaths.candidatePorts.count else {
+      lastError =
+        "Pulse could not start because ports 47717 through 47727 are in use. Free one, then retry."
+      portRecoveryMessage = nil
+      return
+    }
+    candidateIndex += 1
+    do {
+      try startCandidate()
+    } catch {
+      if Self.isAddressInUse(error) {
+        recoverFromOccupiedPort()
+      } else {
+        fail(error)
+      }
+    }
+  }
+
+  private func fail(_ error: Error) {
+    listener?.cancel()
+    listener = nil
+    isRunning = false
+    activePort = nil
+    portRecoveryMessage = nil
+    activePortRemover()
+    lastError = "Pulse could not start: \(error.localizedDescription)"
+    Log.app.error("Pulse server failed: \(error.localizedDescription, privacy: .public)")
+  }
+
+  nonisolated static func isAddressInUse(_ error: Error) -> Bool {
+    if case .posix(.EADDRINUSE) = error as? NWError { return true }
+    let nsError = error as NSError
+    return nsError.domain == NSPOSIXErrorDomain && nsError.code == Int(EADDRINUSE)
   }
 
   func stop() {
     listener?.cancel()
     listener = nil
     isRunning = false
+    activePort = nil
+    portRecoveryMessage = nil
+    activePortRemover()
     for connection in connections.values { connection.cancel() }
     for pipeline in commandPipelines.values { pipeline.finish() }
     for task in commandTasks.values { task.cancel() }
@@ -94,6 +216,11 @@ final class PulseServer: ObservableObject {
     commandTasks.removeAll()
     authenticationTasks.removeAll()
     authenticatedCredentials.removeAll()
+  }
+
+  func retryDefaultPort() {
+    stop()
+    start()
   }
 
   @discardableResult
@@ -122,10 +249,14 @@ final class PulseServer: ObservableObject {
 
   func revokeCredential(_ id: String) throws {
     let source = credentialStore.credentials.first { $0.id == id }?.source
+    defer {
+      if credentialStore.credentials.first(where: { $0.id == id })?.isRevoked == true {
+        rateLimiters.removeProvider(id)
+        if let source { PulseCenter.shared.removeItems(forSource: source) }
+        disconnectProvider(id)
+      }
+    }
     try credentialStore.revoke(id)
-    rateLimiters.removeProvider(id)
-    if let source { PulseCenter.shared.removeItems(forSource: source) }
-    disconnectProvider(id)
   }
 
   private func disconnectProvider(_ credentialID: String) {
@@ -347,6 +478,26 @@ final class PulseServer: ObservableObject {
     case .unauthorized, .notFound, .unsafeCredentialFile, .corruptRegistry, .duplicateSource,
       .providerLimitReached, .invalidName, .invalidSource:
       .unauthorized
+    }
+  }
+
+  private static func writeActivePort(_ port: UInt16) throws {
+    try Data("\(port)\n".utf8).write(to: PulsePaths.activePortURL, options: .atomic)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o600], ofItemAtPath: PulsePaths.activePortURL.path)
+  }
+
+  private static func removeActivePort() {
+    try? FileManager.default.removeItem(at: PulsePaths.activePortURL)
+  }
+}
+
+private enum PulseServerError: LocalizedError {
+  case missingActivePort
+
+  var errorDescription: String? {
+    switch self {
+    case .missingActivePort: "The listener did not report its active port."
     }
   }
 }

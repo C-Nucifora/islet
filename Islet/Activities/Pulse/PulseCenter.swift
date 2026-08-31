@@ -75,6 +75,7 @@ final class PulseCenter: ObservableObject {
       refreshVisibleItems()
     }
   }
+  private let symbolAvailability: (String) -> Bool?
   private var storedItems: [PulseItem] = []
   private var deadlineTask: PulseDeadlineTask?
   private let clock: any PulseClock
@@ -85,13 +86,15 @@ final class PulseCenter: ObservableObject {
     staleTimeout: TimeInterval = Defaults[.pulseStaleTimeout],
     staleRetention: TimeInterval = PulseStalenessPolicy.defaultRetention,
     clock: (any PulseClock)? = nil,
-    scheduler: (any PulseDeadlineScheduling)? = nil
+    scheduler: (any PulseDeadlineScheduling)? = nil,
+    symbolAvailability: @escaping (String) -> Bool? = PulseSymbolValidator.platformAvailability
   ) {
     let resolvedClock = clock ?? PulseSystemClock()
     self.clock = resolvedClock
     deadlineScheduler = scheduler ?? PulseSystemDeadlineScheduler(clock: resolvedClock)
     stalenessPolicy = PulseStalenessPolicy(
       timeout: staleTimeout, retention: staleRetention)
+    self.symbolAvailability = symbolAvailability
   }
 
   var primary: PulseItem? { items.first }
@@ -101,9 +104,10 @@ final class PulseCenter: ObservableObject {
 
   @discardableResult
   func applyIfEnabled(
-    _ command: PulseCommand, now: Date? = nil, featureEnabled: Bool = Defaults[.pulseEnabled]
+    _ command: PulseCommand, now: Date? = nil,
+    activityEnabled: Bool = ActivityEnablement.isEnabled("pulse")
   ) -> PulseResponse {
-    guard featureEnabled else {
+    guard activityEnabled else {
       return .failure(
         "Pulse is disabled in Islet Settings", code: .featureDisabled,
         requestID: command.requestID)
@@ -132,7 +136,7 @@ final class PulseCenter: ObservableObject {
         let previous = storedItems.first { $0.id == incomingID }
         let item = try PulseItem(
           payload: payload, now: now, previous: previous,
-          staleTimeout: stalenessPolicy.timeout)
+          staleTimeout: stalenessPolicy.timeout, symbolAvailability: symbolAvailability)
         guard policy(for: item.source) != .revoked else {
           record(operation: command.operation, item: nil, result: .rejected, date: now)
           return .failure(
@@ -150,7 +154,9 @@ final class PulseCenter: ObservableObject {
           operation: command.operation, item: item,
           result: visible ? (previous == nil ? .shown : .updated) : .suppressed, date: now)
         refreshVisibleItems()
-        return .success(id: item.providerIdentifier, requestID: command.requestID)
+        return .success(
+          id: item.providerIdentifier, warning: item.symbolWarning?.localizedDescription,
+          requestID: command.requestID)
       case .end:
         guard let rawIdentifier = command.id ?? command.activity?.id else {
           record(operation: .end, item: nil, result: .rejected, date: now)

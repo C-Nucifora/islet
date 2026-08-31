@@ -7,6 +7,24 @@ import Foundation
 /// knows where the dictionaries come from.
 enum BatteryMetricsParser {
 
+  // MARK: - Charge percentage
+
+  /// Returns a usable IOPS battery reading. Both capacity keys are transiently absent while the
+  /// power-source service restarts, and substituting zero for either one would publish a false
+  /// empty battery.
+  static func batteryState(from powerSource: [String: Any]) -> BatteryState? {
+    guard let current = capacityValue(powerSource, kIOPSCurrentCapacityKey),
+      let maximum = capacityValue(powerSource, kIOPSMaxCapacityKey),
+      maximum > 0,
+      (0...maximum).contains(current)
+    else { return nil }
+
+    let charging = bool(powerSource, kIOPSIsChargingKey) ?? false
+    let onAC = (powerSource[kIOPSPowerSourceStateKey] as? String) == kIOPSACPowerValue
+    let percent = Int((Double(current) / Double(maximum) * 100).rounded())
+    return BatteryState(percent: percent, isCharging: charging, onAC: onAC)
+  }
+
   // MARK: - Health, capacity, cycles
 
   static func applyHealth(_ m: inout BatteryMetrics, from p: [String: Any]) {
@@ -168,6 +186,16 @@ enum BatteryMetricsParser {
 
   static func int(_ p: [String: Any], _ key: String) -> Int? {
     (p[key] as? NSNumber)?.intValue
+  }
+
+  private static func capacityValue(_ p: [String: Any], _ key: String) -> Int? {
+    guard let number = p[key] as? NSNumber else { return nil }
+    guard CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+    let value = number.doubleValue
+    guard value.isFinite, value.rounded() == value,
+      value >= 0, value < Double(Int.max)
+    else { return nil }
+    return Int(value)
   }
 
   static func uint64(_ p: [String: Any], _ key: String) -> UInt64? {

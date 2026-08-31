@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 enum PulsePriority: String, Codable, CaseIterable, Comparable, Sendable {
@@ -103,6 +104,7 @@ struct PulseItem: Equatable, Identifiable, Sendable {
   var title: String
   var subtitle: String?
   var symbol: String
+  let symbolWarning: PulseSymbolWarning?
   var accentHex: String?
   var progress: Double?
   var state: PulseState
@@ -117,7 +119,8 @@ struct PulseItem: Equatable, Identifiable, Sendable {
 
   init(
     payload: PulsePayload, now: Date, previous: PulseItem? = nil,
-    staleTimeout: TimeInterval = PulseStalenessPolicy.defaultTimeout
+    staleTimeout: TimeInterval = PulseStalenessPolicy.defaultTimeout,
+    symbolAvailability: (String) -> Bool? = PulseSymbolValidator.platformAvailability
   ) throws {
     providerIdentifier = try Self.clean(
       payload.id, field: "id", limit: Self.maximumIdentifierLength)
@@ -130,13 +133,10 @@ struct PulseItem: Equatable, Identifiable, Sendable {
     } else {
       subtitle = nil
     }
-    if let rawSymbol = payload.symbol {
-      let candidate = rawSymbol.trimmingCharacters(in: .whitespacesAndNewlines)
-      symbol = candidate.isEmpty ? "waveform.path.ecg" : candidate
-    } else {
-      symbol = "waveform.path.ecg"
-    }
-    guard symbol.count <= 80 else { throw PulseValidationError.tooLong("symbol", 80) }
+    let normalizedSymbol = try PulseSymbolValidator.normalize(
+      payload.symbol, availability: symbolAvailability)
+    symbol = normalizedSymbol.name
+    symbolWarning = normalizedSymbol.warning
     if let rawAccent = payload.accentHex {
       let candidate = rawAccent.trimmingCharacters(in: .whitespacesAndNewlines)
       guard Self.isValidAccentHex(candidate) else { throw PulseValidationError.invalidAccentHex }
@@ -212,6 +212,57 @@ struct PulseItem: Equatable, Identifiable, Sendable {
     return value.dropFirst().unicodeScalars.allSatisfy { scalar in
       (48...57).contains(scalar.value) || (65...70).contains(scalar.value)
         || (97...102).contains(scalar.value)
+    }
+  }
+}
+
+struct PulseNormalizedSymbol: Equatable, Sendable {
+  let name: String
+  let warning: PulseSymbolWarning?
+}
+
+/// Pulse payloads use SF Symbol names. Keep the fallback in one place so every rejected name
+/// renders a known-good icon instead of a blank image.
+enum PulseSymbolValidator {
+  static let fallbackSymbol = "waveform.path.ecg"
+
+  static func normalize(
+    _ rawSymbol: String?, availability: (String) -> Bool? = platformAvailability
+  ) throws -> PulseNormalizedSymbol {
+    guard let rawSymbol else {
+      return PulseNormalizedSymbol(name: fallbackSymbol, warning: nil)
+    }
+
+    let candidate = rawSymbol.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !candidate.isEmpty else {
+      return PulseNormalizedSymbol(name: fallbackSymbol, warning: .empty)
+    }
+    guard candidate.count <= 80 else { throw PulseValidationError.tooLong("symbol", 80) }
+    guard let isAvailable = availability(candidate) else {
+      return PulseNormalizedSymbol(name: fallbackSymbol, warning: .platformUnavailable)
+    }
+    guard isAvailable else {
+      return PulseNormalizedSymbol(name: fallbackSymbol, warning: .invalid)
+    }
+    return PulseNormalizedSymbol(name: candidate, warning: nil)
+  }
+
+  static func platformAvailability(of symbolName: String) -> Bool? {
+    NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) != nil
+  }
+}
+
+enum PulseSymbolWarning: LocalizedError, Equatable, Sendable {
+  case empty
+  case invalid
+  case platformUnavailable
+
+  var errorDescription: String? {
+    switch self {
+    case .empty: "symbol was empty; using waveform.path.ecg"
+    case .invalid: "symbol is not available on this macOS version; using waveform.path.ecg"
+    case .platformUnavailable:
+      "symbol validation is unavailable on this platform; using waveform.path.ecg"
     }
   }
 }
@@ -474,14 +525,17 @@ struct PulseResponse: Codable, Equatable, Sendable {
   var ok: Bool
   var id: String?
   var error: String?
+  var warning: String? = nil
   var errorCode: PulseErrorCode? = nil
   var requestID: String? = nil
   /// Whole seconds to wait before retrying a throttled command. This is the local protocol's
   /// equivalent of HTTP's `Retry-After` response header.
   var retryAfter: Int? = nil
 
-  static func success(id: String? = nil, requestID: String? = nil) -> Self {
-    .init(ok: true, id: id, error: nil, requestID: requestID)
+  static func success(
+    id: String? = nil, warning: String? = nil, requestID: String? = nil
+  ) -> Self {
+    .init(ok: true, id: id, error: nil, warning: warning, requestID: requestID)
   }
 
   static func failure(
@@ -489,7 +543,7 @@ struct PulseResponse: Codable, Equatable, Sendable {
     retryAfter: Int? = nil
   ) -> Self {
     .init(
-      ok: false, id: nil, error: error, errorCode: code, requestID: requestID,
+      ok: false, id: nil, error: error, warning: nil, errorCode: code, requestID: requestID,
       retryAfter: retryAfter)
   }
 }

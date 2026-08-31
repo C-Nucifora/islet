@@ -93,22 +93,23 @@ final class ActivityCenterTests: XCTestCase {
     XCTAssertFalse(action?.isAvailable() ?? true)
   }
 
-  func testActivityLifecyclePolicyUsesFeatureStateRatherThanVisibility() {
-    XCTAssertTrue(ActivityLifecyclePolicy.shouldRun(featureEnabled: true))
-    XCTAssertFalse(ActivityLifecyclePolicy.shouldRun(featureEnabled: false))
-    XCTAssertTrue(ActivityLifecyclePolicy.stopsFeatureWhenHidden("clipboard"))
-    XCTAssertTrue(ActivityLifecyclePolicy.stopsFeatureWhenHidden("pulse"))
-    XCTAssertFalse(ActivityLifecyclePolicy.stopsFeatureWhenHidden("calendar"))
+  func testActivityLifecyclePolicyUsesCanonicalStateAndAdditionalProviderDemand() {
+    XCTAssertTrue(
+      ActivityLifecyclePolicy.shouldRun(activityID: "pulse", disabledActivities: []))
+    XCTAssertFalse(
+      ActivityLifecyclePolicy.shouldRun(
+        activityID: "pulse", disabledActivities: ["pulse"]))
+    XCTAssertTrue(
+      ActivityLifecyclePolicy.shouldRun(
+        activityID: "calendar", disabledActivities: ["calendar"],
+        additionalRuntimeDemand: true))
   }
 
   func testAlwaysShowSystemInvalidatesTheActiveActivityCache() async {
-    let savedEnabled = Defaults[.systemEnabled]
     let savedAlwaysVisible = Defaults[.systemAlwaysVisible]
     defer {
-      Defaults[.systemEnabled] = savedEnabled
       Defaults[.systemAlwaysVisible] = savedAlwaysVisible
     }
-    Defaults[.systemEnabled] = true
     Defaults[.systemAlwaysVisible] = false
 
     let center = ActivityCenter()
@@ -163,5 +164,145 @@ final class ActivityCenterTests: XCTestCase {
       ActivityCatalog.lifecycleManagedIDs.union(ActivityCatalog.persistentLifecycleIDs))
     XCTAssertTrue(
       ActivityCatalog.lifecycleManagedIDs.isDisjoint(with: ActivityCatalog.persistentLifecycleIDs))
+  }
+
+  // MARK: - Canonical enablement migration
+
+  func testLegacyActivityOnlyFlagsUseTheCompleteMigrationTruthTable() {
+    let activityOnlyIDs = ActivityEnablement.legacyFlagActivityIDs.subtracting(
+      ActivityEnablement.sharedProviderIDs)
+
+    for activityID in activityOnlyIDs {
+      for wasHidden in [false, true] {
+        for legacyEnabled in [false, true] {
+          let migrated = ActivityEnablement.migratedDisabledActivities(
+            existing: wasHidden ? [activityID] : [],
+            legacyEnabled: [activityID: legacyEnabled])
+          let expectedEnabled = !wasHidden && legacyEnabled
+          XCTAssertEqual(
+            ActivityEnablement.isEnabled(activityID, disabledActivities: migrated),
+            expectedEnabled,
+            "\(activityID), hidden=\(wasHidden), legacyEnabled=\(legacyEnabled)")
+        }
+      }
+    }
+  }
+
+  func testCalendarMigrationPreservesAllProviderAndVisibilityCombinations() {
+    for wasHidden in [false, true] {
+      for providerEnabled in [false, true] {
+        let migrated = ActivityEnablement.migratedDisabledActivities(
+          existing: wasHidden ? ["calendar"] : [],
+          legacyEnabled: ["calendar": providerEnabled])
+        XCTAssertEqual(
+          ActivityEnablement.isEnabled("calendar", disabledActivities: migrated),
+          !wasHidden && providerEnabled,
+          "hidden=\(wasHidden), providerEnabled=\(providerEnabled)")
+      }
+    }
+  }
+
+  func testRunningMigrationDoesNotRewriteCalendarProviderSetting() {
+    let savedDisabled = Defaults[.disabledActivities]
+    let savedVersion = Defaults[.activityEnablementMigrationVersion]
+    let savedCalendarProvider = Defaults[.calendarEnabled]
+    defer {
+      Defaults[.disabledActivities] = savedDisabled
+      Defaults[.activityEnablementMigrationVersion] = savedVersion
+      Defaults[.calendarEnabled] = savedCalendarProvider
+    }
+
+    for providerEnabled in [false, true] {
+      Defaults[.disabledActivities] = []
+      Defaults[.calendarEnabled] = providerEnabled
+      ActivityEnablement.migrateLegacyPreferencesIfNeeded(force: true)
+      XCTAssertEqual(Defaults[.calendarEnabled], providerEnabled)
+    }
+  }
+
+  func testEnablementMigrationPreservesUnknownIDsAndIsIdempotent() {
+    let once = ActivityEnablement.migratedDisabledActivities(
+      existing: ["futureActivity", "pulse"],
+      legacyEnabled: ["pulse": true, "clipboard": false])
+    let twice = ActivityEnablement.migratedDisabledActivities(
+      existing: once,
+      legacyEnabled: ["pulse": true, "clipboard": false])
+
+    XCTAssertEqual(once.filter { $0 == "futureActivity" }, ["futureActivity"])
+    XCTAssertEqual(twice, once)
+    XCTAssertFalse(ActivityEnablement.isEnabled("pulse", disabledActivities: once))
+    XCTAssertFalse(ActivityEnablement.isEnabled("clipboard", disabledActivities: once))
+  }
+
+  // MARK: - Live lifecycle changes
+
+  func testEveryManagedActivityStartsAndStopsOnCanonicalLiveToggle() async {
+    let savedDisabled = Defaults[.disabledActivities]
+    let savedCalendarProvider = Defaults[.calendarEnabled]
+    defer {
+      Defaults[.disabledActivities] = savedDisabled
+      Defaults[.calendarEnabled] = savedCalendarProvider
+    }
+    Defaults[.disabledActivities] = []
+    Defaults[.calendarEnabled] = false
+
+    var running = Dictionary(
+      uniqueKeysWithValues: ActivityCatalog.lifecycleManagedIDs.map { ($0, false) })
+    let controls = ActivityCatalog.lifecycleManagedIDs.sorted().map { activityID in
+      ActivityLifecycleControl(
+        activityID: activityID,
+        start: { running[activityID] = true },
+        stop: { running[activityID] = false })
+    }
+    let controller = ActivityLifecycleController(controls: controls)
+    controller.startObserving()
+    XCTAssertTrue(running.values.allSatisfy { $0 })
+
+    for activityID in ActivityCatalog.lifecycleManagedIDs.sorted() {
+      Defaults[.disabledActivities] = [activityID]
+      await Task.yield()
+      await Task.yield()
+      XCTAssertFalse(running[activityID] ?? true, "\(activityID) did not stop")
+      XCTAssertTrue(
+        running.filter { $0.key != activityID }.values.allSatisfy { $0 },
+        "toggling \(activityID) changed another lifecycle")
+
+      Defaults[.disabledActivities] = []
+      await Task.yield()
+      await Task.yield()
+      XCTAssertTrue(running[activityID] ?? false, "\(activityID) did not restart")
+    }
+    controller.stopObserving()
+  }
+
+  func testCalendarProviderDemandKeepsRuntimeAliveWhenActivityIsOff() async {
+    let savedDisabled = Defaults[.disabledActivities]
+    let savedCalendarProvider = Defaults[.calendarEnabled]
+    defer {
+      Defaults[.disabledActivities] = savedDisabled
+      Defaults[.calendarEnabled] = savedCalendarProvider
+    }
+    Defaults[.disabledActivities] = ["calendar"]
+    Defaults[.calendarEnabled] = true
+
+    var running = false
+    let controller = ActivityLifecycleController(controls: [
+      ActivityLifecycleControl(
+        activityID: "calendar", additionalRuntimeDemand: { Defaults[.calendarEnabled] },
+        start: { running = true }, stop: { running = false })
+    ])
+    controller.startObserving()
+    XCTAssertTrue(running)
+
+    Defaults[.calendarEnabled] = false
+    await Task.yield()
+    await Task.yield()
+    XCTAssertFalse(running)
+
+    Defaults[.disabledActivities] = []
+    await Task.yield()
+    await Task.yield()
+    XCTAssertTrue(running)
+    controller.stopObserving()
   }
 }

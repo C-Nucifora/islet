@@ -1,3 +1,4 @@
+import Network
 import XCTest
 
 @testable import Islet
@@ -190,6 +191,61 @@ final class PulseTests: XCTestCase {
     let response = center.apply(command(.show, payload), now: Date(timeIntervalSince1970: 1_000))
     XCTAssertFalse(response.ok)
     XCTAssertEqual(response.errorCode, .validationFailed)
+  }
+
+  @MainActor
+  func testPulseSymbolValidationKeepsValidSymbolsAndReplacesInvalidSymbols() throws {
+    let now = Date(timeIntervalSince1970: 1_000)
+    let validPayload = PulsePayload(
+      id: "valid-symbol", source: "tests", title: "Valid", subtitle: nil,
+      symbol: "checkmark.circle.fill", accentHex: nil, progress: nil, state: nil,
+      priority: nil, expiresAt: nil, actions: nil)
+    let valid = try PulseItem(
+      payload: validPayload, now: now, symbolAvailability: { $0 == "checkmark.circle.fill" })
+    XCTAssertEqual(valid.symbol, "checkmark.circle.fill")
+    XCTAssertNil(valid.symbolWarning)
+
+    var invalidPayload = validPayload
+    invalidPayload.id = "invalid-symbol"
+    invalidPayload.symbol = "not.a.real.sf.symbol"
+    let invalid = try PulseItem(
+      payload: invalidPayload, now: now, symbolAvailability: { _ in false })
+    XCTAssertEqual(invalid.symbol, PulseSymbolValidator.fallbackSymbol)
+    XCTAssertEqual(invalid.symbolWarning, .invalid)
+
+    let center = PulseCenter(symbolAvailability: { _ in false })
+    let response = center.apply(command(.show, invalidPayload), now: now)
+    XCTAssertTrue(response.ok)
+    XCTAssertEqual(center.items.first?.symbol, PulseSymbolValidator.fallbackSymbol)
+    XCTAssertEqual(response.warning, PulseSymbolWarning.invalid.localizedDescription)
+  }
+
+  @MainActor
+  func testPulseSymbolValidationReplacesEmptyAndPlatformUnavailableSymbols() throws {
+    let now = Date(timeIntervalSince1970: 1_000)
+    var payload = PulsePayload(
+      id: "empty-symbol", source: "tests", title: "Empty", subtitle: nil, symbol: "  ",
+      accentHex: nil, progress: nil, state: nil, priority: nil, expiresAt: nil, actions: nil)
+    let empty = try PulseItem(payload: payload, now: now, symbolAvailability: { _ in true })
+    XCTAssertEqual(empty.symbol, PulseSymbolValidator.fallbackSymbol)
+    XCTAssertEqual(empty.symbolWarning, .empty)
+
+    let emptyCenter = PulseCenter(symbolAvailability: { _ in true })
+    let emptyResponse = emptyCenter.apply(command(.show, payload), now: now)
+    XCTAssertTrue(emptyResponse.ok)
+    XCTAssertEqual(emptyResponse.warning, PulseSymbolWarning.empty.localizedDescription)
+
+    payload.id = "platform-unavailable-symbol"
+    payload.symbol = "checkmark.circle.fill"
+    let unavailable = try PulseItem(
+      payload: payload, now: now, symbolAvailability: { _ in nil })
+    XCTAssertEqual(unavailable.symbol, PulseSymbolValidator.fallbackSymbol)
+    XCTAssertEqual(unavailable.symbolWarning, .platformUnavailable)
+
+    let center = PulseCenter(symbolAvailability: { _ in nil })
+    let response = center.apply(command(.show, payload), now: now)
+    XCTAssertTrue(response.ok)
+    XCTAssertEqual(response.warning, PulseSymbolWarning.platformUnavailable.localizedDescription)
   }
 
   @MainActor
@@ -663,6 +719,86 @@ final class PulseTests: XCTestCase {
     XCTAssertFalse(PulseServer.canAcceptConnection(activeCount: -1))
   }
 
+  @MainActor
+  func testOccupiedDefaultPortMovesToStableLoopbackFallbackAndPublishesIt() async throws {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-port-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
+    var requestedPorts: [UInt16] = []
+    var requestedHosts: [NWEndpoint.Host] = []
+    var listeners: [FakePulseListener] = []
+    var publishedPorts: [UInt16] = []
+    let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: supportDirectory),
+      listenerFactory: { parameters, port in
+        requestedPorts.append(port.rawValue)
+        if case .hostPort(let host, _) = parameters.requiredLocalEndpoint {
+          requestedHosts.append(host)
+        }
+        let listener = FakePulseListener(port: port)
+        listeners.append(listener)
+        return listener
+      },
+      activePortWriter: { publishedPorts.append($0) },
+      activePortRemover: {})
+
+    server.start()
+    XCTAssertEqual(requestedPorts, [47_717])
+    listeners[0].emit(.failed(.posix(.EADDRINUSE)))
+    await Task.yield()
+
+    XCTAssertEqual(requestedPorts, [47_717, 47_718])
+    XCTAssertEqual(requestedHosts, ["127.0.0.1", "127.0.0.1"])
+    XCTAssertFalse(server.isRunning)
+    XCTAssertNil(server.activePort)
+
+    listeners[1].emit(.ready)
+    await Task.yield()
+
+    XCTAssertTrue(server.isRunning)
+    XCTAssertEqual(server.activePort, 47_718)
+    XCTAssertEqual(server.listeningAddress, "127.0.0.1:47718")
+    XCTAssertEqual(publishedPorts, [47_718])
+    XCTAssertNil(server.lastError)
+    XCTAssertNotNil(server.portRecoveryMessage)
+    server.stop()
+  }
+
+  @MainActor
+  func testOccupiedFallbacksEndInActionableStoppedState() {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-port-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
+    var requestedPorts: [UInt16] = []
+    var removedPortFile = false
+    let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: supportDirectory),
+      listenerFactory: { _, port in
+        requestedPorts.append(port.rawValue)
+        throw NWError.posix(.EADDRINUSE)
+      },
+      activePortWriter: { _ in XCTFail("An occupied listener must not publish a port") },
+      activePortRemover: { removedPortFile = true })
+
+    server.start()
+
+    XCTAssertEqual(requestedPorts, PulsePaths.candidatePorts.map(\.rawValue))
+    XCTAssertFalse(server.isRunning)
+    XCTAssertNil(server.activePort)
+    XCTAssertEqual(
+      server.lastError,
+      "Pulse could not start because ports 47717 through 47727 are in use. Free one, then retry.")
+    XCTAssertTrue(removedPortFile)
+  }
+
+  func testAddressInUseClassificationDoesNotConsumeOtherListenerFailures() {
+    XCTAssertTrue(PulseServer.isAddressInUse(NWError.posix(.EADDRINUSE)))
+    XCTAssertTrue(
+      PulseServer.isAddressInUse(
+        NSError(domain: NSPOSIXErrorDomain, code: Int(EADDRINUSE))))
+    XCTAssertFalse(PulseServer.isAddressInUse(NWError.posix(.ECONNREFUSED)))
+  }
+
   func testTerminalPipelineFailureStaysBehindAcceptedCommands() async {
     let pipeline = PulseCommandPipeline()
     let command = Data("accepted".utf8)
@@ -707,7 +843,7 @@ final class PulseTests: XCTestCase {
       symbol: nil, accentHex: nil, progress: 0.5, state: .progress, priority: .normal,
       expiresAt: nil, actions: nil)
 
-    let response = center.applyIfEnabled(command(.update, payload), featureEnabled: false)
+    let response = center.applyIfEnabled(command(.update, payload), activityEnabled: false)
 
     XCTAssertFalse(response.ok)
     XCTAssertEqual(response.errorCode, .featureDisabled)
@@ -717,6 +853,20 @@ final class PulseTests: XCTestCase {
   private func command(_ operation: PulseOperation, _ payload: PulsePayload) -> PulseCommand {
     PulseCommand(token: "test", operation: operation, activity: payload, id: nil)
   }
+}
+
+private final class FakePulseListener: PulseListening, @unchecked Sendable {
+  var newConnectionHandler: (@Sendable (NWConnection) -> Void)?
+  var stateUpdateHandler: (@Sendable (NWListener.State) -> Void)?
+  let port: NWEndpoint.Port?
+
+  init(port: NWEndpoint.Port) {
+    self.port = port
+  }
+
+  func start(queue: DispatchQueue) {}
+  func cancel() {}
+  func emit(_ state: NWListener.State) { stateUpdateHandler?(state) }
 }
 
 @MainActor
