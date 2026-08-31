@@ -252,7 +252,8 @@ final class TimerCompletionNotifications: NSObject, TimerCompletionNotifying,
       let userInfo = response.notification.request.content.userInfo
       if let snapshot = TimerCompletionSnapshot(notificationUserInfo: userInfo) {
         Task { @MainActor in
-          AppState.timer.presentCompletionFromNotification(snapshot)
+          AppState.timer.presentCompletionFromNotification(
+            snapshot, notificationIdentifier: identifier)
           NSApp.activate(ignoringOtherApps: true)
           ScreenManager.shared.openCompletedTimer()
         }

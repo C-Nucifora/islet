@@ -24,6 +24,7 @@ final class TimerActivity: NotchActivity, ObservableObject {
   private let persistenceStore: TimerPersistenceStore
   private let completionNotifier: any TimerCompletionNotifying
   private var completionID = UUID()
+  private var retainedCompletionIdentifier: String?
 
   init(
     persistenceStore: TimerPersistenceStore = .defaults, now: Date = Date(),
@@ -59,6 +60,7 @@ final class TimerActivity: NotchActivity, ObservableObject {
     guard let duration = TimerLogic.validatedDuration(duration) else { return }
     let now = Date()
     completionID = UUID()
+    retainedCompletionIdentifier = nil
     notificationFallbackMessage = nil
     completionNotifier.prepareForTimerStart { [weak self] in
       self?.notificationFallbackMessage = TimerActivity.notificationFallbackMessage
@@ -131,9 +133,14 @@ final class TimerActivity: NotchActivity, ObservableObject {
     start(lastDuration, label: lastLabel)
   }
 
-  func presentCompletionFromNotification(_ snapshot: TimerCompletionSnapshot) {
+  func presentCompletionFromNotification(
+    _ snapshot: TimerCompletionSnapshot, notificationIdentifier: String
+  ) {
     guard !isRunning, !isPaused else { return }
+    guard !finished || retainedCompletionIdentifier == notificationIdentifier else { return }
     completionTask?.cancel()
+    completionTask = nil
+    retainedCompletionIdentifier = notificationIdentifier
     endDate = nil
     isPaused = false
     pausedRemaining = nil
@@ -157,6 +164,7 @@ final class TimerActivity: NotchActivity, ObservableObject {
     label = nil
     pausedRemaining = nil
     activationDate = nil
+    retainedCompletionIdentifier = nil
     notificationFallbackMessage = nil
     persistenceStore.writeSessionData(nil)
   }
@@ -228,12 +236,16 @@ final class TimerActivity: NotchActivity, ObservableObject {
   }
 
   private func finish(playEffects: Bool) {
+    completionTask?.cancel()
+    completionTask = nil
     endDate = nil
     isPaused = false
     pausedRemaining = nil
     finished = true
     persistenceStore.writeSessionData(nil)
     if playEffects {
+      retainedCompletionIdentifier = TimerCompletionNotificationCoordinator.identifier(
+        for: completionID)
       let title = "\(label ?? "Timer") done"
       Haptics.perform(.levelChange)
       NSSound(named: NSSound.Name("Glass"))?.play()
