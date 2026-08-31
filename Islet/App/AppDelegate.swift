@@ -38,6 +38,9 @@ final class ActivityLifecycleController {
     Defaults.publisher(.calendarEnabled)
       .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
       .store(in: &cancellables)
+    NotificationCenter.default.publisher(for: .keepAwakeSessionDidChange)
+      .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
+      .store(in: &cancellables)
     reconcile()
   }
 
@@ -60,10 +63,14 @@ final class ActivityLifecycleController {
   }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
   private var launchAtLoginObserver: Defaults.Observation?
   private var activityLifecycleController: ActivityLifecycleController?
   private var audioDeviceLifecycleCancellable: AnyCancellable?
+  /// Kept by the delegate for the entire app lifetime so notification responses still reach the
+  /// timer when Islet has no normal application window.
+  private let timerCompletionNotifications = TimerCompletionNotifications.shared
 
   /// True when the app is running only as XCTest's host process. Every monitor below talks to real
   /// hardware — CoreWLAN, IOBluetooth, Spotlight, the Downloads folder — and several of them prompt
@@ -87,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       Log.app.info("Launched as a test host; skipping monitor startup")
       return
     }
+    timerCompletionNotifications.start()
     Task { @MainActor in
       ActivityEnablement.migrateLegacyPreferencesIfNeeded()
       // Bring a persisted activity order forward before anything renders from it: entries added to
@@ -136,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // AppKit invokes this delegate on the main thread. Media shutdown is intentionally synchronous:
     // otherwise the app can exit before the watcher's serial queue terminates its helper process.
     MainActor.assumeIsolated {
+      KeepAwakeManager.shared.stop(reason: .quit)
       AppState.nowPlaying.stop()
       AppState.battery.stop()
       AppState.calendar.stop()
@@ -167,7 +176,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activityID: "nowPlaying", start: { AppState.nowPlaying.start() },
         stop: { AppState.nowPlaying.stop() }),
       ActivityLifecycleControl(
-        activityID: "battery", start: { AppState.battery.start() },
+        activityID: "battery", additionalRuntimeDemand: { KeepAwakeManager.shared.isActive },
+        start: { AppState.battery.start() },
         stop: { AppState.battery.stop() }),
       ActivityLifecycleControl(
         activityID: "calendar", additionalRuntimeDemand: { Defaults[.calendarEnabled] },
