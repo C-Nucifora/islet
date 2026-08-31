@@ -173,7 +173,14 @@ struct IdleDashboardView: View {
           .buttonStyle(.link).font(.caption2)
       }
     } else if reminders.reminders.isEmpty {
-      emptyRow("All clear")
+      if reminders.hasMoreReminders {
+        VStack(alignment: .leading, spacing: 5) {
+          emptyRow("No reminders due soon")
+          moreRemindersButton
+        }
+      } else {
+        emptyRow("All clear")
+      }
     } else {
       ScrollView(.vertical, showsIndicators: false) {
         VStack(alignment: .leading, spacing: 6) {
@@ -223,6 +230,9 @@ struct IdleDashboardView: View {
               .accessibilityLabel("Snooze \(item.title)")
             }
           }
+          if reminders.hasMoreReminders {
+            moreRemindersButton
+          }
         }
       }
     }
@@ -241,6 +251,13 @@ struct IdleDashboardView: View {
 
   private func emptyRow(_ text: String) -> some View {
     Text(text).font(.caption).foregroundStyle(.secondary)
+  }
+
+  private var moreRemindersButton: some View {
+    Button("More in Reminders") { reminders.openRemindersApp() }
+      .buttonStyle(.link)
+      .font(.caption2)
+      .accessibilityHint("Opens the Reminders app")
   }
 
   @ViewBuilder private func reminderDueText(_ item: ReminderItem, due: Date) -> some View {
