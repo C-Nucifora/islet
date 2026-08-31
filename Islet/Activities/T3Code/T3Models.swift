@@ -27,6 +27,36 @@ struct T3EnvironmentDescriptor: Decodable, Equatable, Sendable {
   let serverVersion: String?
 }
 
+struct T3EnvironmentAuthState: Decodable, Equatable, Sendable {
+  struct Auth: Decodable, Equatable, Sendable {
+    let policy: String
+    let bootstrapMethods: [String]
+    let sessionMethods: [String]
+    let sessionCookieName: String
+  }
+
+  let authenticated: Bool
+  let auth: Auth
+}
+
+struct T3ConnectEnvironment: Equatable, Identifiable, Sendable {
+  let environmentID: String
+  let label: String
+  let httpBaseURL: URL
+  let webSocketBaseURL: URL
+  let providerKind: String
+  let linkedAt: Date
+
+  var id: String { environmentID }
+}
+
+struct T3ConnectEnvironmentAuthorization: Sendable {
+  let descriptor: T3EnvironmentDescriptor
+  let endpoint: T3Endpoint
+  let authorization: T3Authorization
+  let expiresAt: Date
+}
+
 struct T3ShellSnapshot: Decodable, Equatable, Sendable {
   let snapshotSequence: Int?
   let projects: [T3ProjectShell]
@@ -136,7 +166,7 @@ enum T3AgentPhase: String, Codable, Sendable {
 struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
   private static let maximumFutureClockSkew: TimeInterval = 5 * 60
 
-  let environmentID: String
+  let logicalEnvironmentID: String
   let threadID: String
   let title: String
   let project: String
@@ -149,11 +179,11 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
   let totalPlanSteps: Int?
   let updatedAt: Date
 
-  var id: String { "\(environmentID):\(threadID)" }
+  var id: String { "\(logicalEnvironmentID):\(threadID)" }
 
   static func activeAgents(
     in shell: T3ShellSnapshot,
-    environmentID: String,
+    logicalEnvironmentID: String,
     now: Date = Date()
   ) -> [Self] {
     // The shell snapshot is server-controlled. Keep the first project for a duplicated id rather
@@ -166,7 +196,7 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
         let phase = phase(for: thread, now: now)
       else { return nil }
       return Self(
-        environmentID: environmentID,
+        logicalEnvironmentID: logicalEnvironmentID,
         threadID: thread.id,
         title: thread.title,
         project: projects[thread.projectId] ?? "Unknown project",
@@ -304,11 +334,18 @@ enum T3EnvironmentAction: Equatable, Sendable {
   case openSettings
 }
 
+enum T3EnvironmentSource: String, Codable, Equatable, Sendable {
+  case local
+  case connect
+  case manual
+}
+
 struct T3EnvironmentSnapshot: Equatable, Identifiable, Sendable {
   let id: String
+  let logicalEnvironmentID: String
+  let source: T3EnvironmentSource
   let label: String
   let baseURL: String
-  let isLocal: Bool
   let platform: String?
   let serverVersion: String?
   let state: T3ConnectionState
@@ -318,9 +355,10 @@ struct T3EnvironmentSnapshot: Equatable, Identifiable, Sendable {
 
   init(
     id: String,
+    logicalEnvironmentID: String,
+    source: T3EnvironmentSource,
     label: String,
     baseURL: String,
-    isLocal: Bool,
     platform: String?,
     serverVersion: String?,
     state: T3ConnectionState,
@@ -328,15 +366,18 @@ struct T3EnvironmentSnapshot: Equatable, Identifiable, Sendable {
     isStale: Bool = false
   ) {
     self.id = id
+    self.logicalEnvironmentID = logicalEnvironmentID
+    self.source = source
     self.label = label
     self.baseURL = baseURL
-    self.isLocal = isLocal
     self.platform = platform
     self.serverVersion = serverVersion
     self.state = state
     self.agents = agents
     self.isStale = isStale
   }
+
+  var isLocal: Bool { source == .local }
 }
 
 /// One row in the expanded T3 presentation. Agents share one global attention order, while a

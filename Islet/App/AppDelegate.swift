@@ -117,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       ActivityCenter.shared.register(AppState.t3Code)
       ActivityCenter.shared.register(AppState.pulse)
       ActivityCenter.shared.register(AppState.continuity)
+      await AppState.t3Code.loadConnectAccount()
       #if DEBUG
         let registeredIDs = Set(ActivityCenter.shared.activities.map(\.id))
         let missingIDs = Set(ActivityCatalog.defaultOrder).subtracting(registeredIDs)
