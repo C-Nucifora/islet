@@ -66,12 +66,34 @@ struct ShelfView: View {
   @ObservedObject var model: ShelfModel
   @ObservedObject var airDrop: AirDropShareController
   @Environment(\.appTheme) private var appTheme
+  @State private var isCreatingStack = false
+  @State private var newStackName = ""
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack {
         Label("Shelf", systemImage: "tray.full.fill")
           .font(.caption.weight(.semibold)).appThemeForeground(.shelf)
+        Menu {
+          ForEach(model.stacks) { stack in
+            Button {
+              model.selectedStackID = stack.id
+            } label: {
+              if model.selectedStackID == stack.id {
+                Label(stack.name, systemImage: "checkmark")
+              } else {
+                Text(stack.name)
+              }
+            }
+          }
+          Divider()
+          Button("New Workspace…") { isCreatingStack = true }
+        } label: {
+          Text(model.selectedStack?.name ?? "Workspace")
+            .font(.caption2.weight(.medium))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
         Spacer()
         if model.pendingImportCount > 0 {
           ProgressView()
@@ -84,7 +106,7 @@ struct ShelfView: View {
         }
         if !model.items.isEmpty {
           Button {
-            airDrop.share(model.urls)
+            model.shareAllItems(using: airDrop)
           } label: {
             if airDrop.isSharing {
               ProgressView().controlSize(.small)
@@ -98,6 +120,14 @@ struct ShelfView: View {
           .accessibilityLabel("AirDrop all Shelf items")
           .accessibilityHint(airDropHint)
           Button {
+            Task { await model.cleanupStorage() }
+          } label: {
+            Image(systemName: "sparkles")
+          }
+          .buttonStyle(.plain)
+          .help("Remove expired and missing Shelf items")
+          .accessibilityLabel("Clean up Shelf storage")
+          Button {
             Task { await model.clear() }
           } label: {
             Image(systemName: "trash")
@@ -108,15 +138,33 @@ struct ShelfView: View {
         }
       }
 
+      if isCreatingStack {
+        HStack(spacing: 5) {
+          TextField("Workspace name", text: $newStackName)
+            .textFieldStyle(.roundedBorder)
+            .font(.caption)
+            .onSubmit { createStack() }
+          Button("Add") { createStack() }.buttonStyle(.bordered)
+          Button("Cancel") {
+            newStackName = ""
+            isCreatingStack = false
+          }.buttonStyle(.plain)
+        }
+      }
+
       if model.isStorageAvailable {
         HStack(spacing: 4) {
-          Image(systemName: "externaldrive")
-          Text(model.storageUsageText)
+          HStack(spacing: 4) {
+            Image(systemName: "externaldrive")
+            Text(model.storageUsageText)
+          }
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel(model.storageUsageAccessibilityText)
+          Spacer(minLength: 4)
+          workspaceOptions
         }
         .font(.caption2)
         .foregroundStyle(.secondary)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(model.storageUsageAccessibilityText)
       }
 
       if let storageFailure = model.storageFailure {
@@ -151,7 +199,7 @@ struct ShelfView: View {
           Text(airDropFeedback.message).lineLimit(2)
           Spacer(minLength: 0)
           if airDropFeedback.canRetry {
-            Button("Try Again") { airDrop.retry(model.urls) }.buttonStyle(.link)
+            Button("Try Again") { model.shareAllItems(using: airDrop) }.buttonStyle(.link)
           }
           if airDropFeedback.canDismiss {
             Button("Dismiss") { airDrop.dismissFeedback() }.buttonStyle(.link)
@@ -162,7 +210,7 @@ struct ShelfView: View {
         .accessibilityElement(children: .contain)
       }
 
-      if model.isStorageAvailable, model.items.isEmpty {
+      if model.isStorageAvailable, model.selectedItems.isEmpty {
         RoundedRectangle(cornerRadius: 10)
           .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [5]))
           .foregroundStyle(.secondary)
@@ -177,7 +225,7 @@ struct ShelfView: View {
       } else {
         ScrollView(.horizontal, showsIndicators: false) {
           LazyHStack(spacing: 10) {
-            ForEach(model.items) { item in
+            ForEach(model.selectedItems) { item in
               ShelfItemView(item: item, model: model)
             }
           }
@@ -241,6 +289,66 @@ struct ShelfView: View {
     let canRetry: Bool
     let canDismiss: Bool
   }
+
+  private var workspaceOptions: some View {
+    Menu {
+      Menu("Expire items") {
+        ForEach(ShelfExpiryRule.allCases) { rule in
+          Button {
+            guard let stack = model.selectedStack else { return }
+            Task { await model.setExpiryRule(rule, for: stack) }
+          } label: {
+            if model.selectedStack?.expiryRule == rule {
+              Label(rule.title, systemImage: "checkmark")
+            } else {
+              Text(rule.title)
+            }
+          }
+        }
+      }
+      Menu("Same file") {
+        ForEach(ShelfSameFileDuplicatePolicy.allCases) { policy in
+          Button {
+            Task { await model.setSameFileDuplicatePolicy(policy) }
+          } label: {
+            if model.sameFileDuplicatePolicy == policy {
+              Label(policy.title, systemImage: "checkmark")
+            } else {
+              Text(policy.title)
+            }
+          }
+        }
+      }
+      Menu("Same name") {
+        ForEach(ShelfSameNameDuplicatePolicy.allCases) { policy in
+          Button {
+            Task { await model.setSameNameDuplicatePolicy(policy) }
+          } label: {
+            if model.sameNameDuplicatePolicy == policy {
+              Label(policy.title, systemImage: "checkmark")
+            } else {
+              Text(policy.title)
+            }
+          }
+        }
+      }
+    } label: {
+      Image(systemName: "ellipsis.circle")
+    }
+    .menuStyle(.borderlessButton)
+    .fixedSize()
+    .accessibilityLabel("Shelf workspace options")
+    .help("Workspace, expiry, and duplicate options")
+  }
+
+  private func createStack() {
+    let name = newStackName
+    Task {
+      guard await model.createStack(named: name) != nil else { return }
+      newStackName = ""
+      isCreatingStack = false
+    }
+  }
 }
 
 struct ShelfItemView: View {
@@ -253,7 +361,7 @@ struct ShelfItemView: View {
     VStack(spacing: 3) {
       ZStack(alignment: .topTrailing) {
         Button {
-          model.open(item)
+          model.quickLook(item)
         } label: {
           ZStack {
             RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.08))
@@ -266,9 +374,9 @@ struct ShelfItemView: View {
         }
         .buttonStyle(.plain)
         .frame(width: 56, height: 56)
-        .accessibilityLabel("Open \(item.name)")
-        .accessibilityHint("Drag to copy it into another app")
-        .help("Open \(item.name)")
+        .accessibilityLabel("Quick Look \(item.name)")
+        .accessibilityHint("Opens a preview of this Shelf item")
+        .help("Quick Look \(item.name)")
 
         Button {
           Task { await model.remove(item) }
@@ -282,6 +390,13 @@ struct ShelfItemView: View {
         .accessibilityLabel("Remove \(item.name) from Shelf")
       }
       Text(item.name).font(.system(size: 9)).lineLimit(1).frame(width: 60)
+      if let expiry = model.expirationText(for: item) {
+        Text(expiry)
+          .font(.system(size: 8))
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .frame(width: 70)
+      }
     }
     .onHover { hovering = $0 }
     .onAppear {
@@ -292,13 +407,20 @@ struct ShelfItemView: View {
     .onChange(of: item.thumbnail) { _, _ in updateThumbnail() }
     .accessibilityElement(children: .contain)
     .contextMenu {
+      Button("Quick Look") { model.quickLook(item) }
+      Button("Open") { model.open(item) }
       Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
+      Menu("Move to Workspace") {
+        ForEach(model.stacks.filter { $0.id != item.stackID }) { stack in
+          Button(stack.name) { Task { await model.move(item, to: stack) } }
+        }
+      }
       Button("Remove from Shelf", role: .destructive) {
         Task { await model.remove(item) }
       }
     }
     // Drag back out to Finder / other apps.
-    .onDrag { NSItemProvider(contentsOf: item.url) ?? NSItemProvider() }
+    .onDrag { model.itemProvider(for: item) }
   }
 
   private func updateThumbnail() {

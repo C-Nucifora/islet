@@ -190,27 +190,53 @@ final class AirDropShareController: ObservableObject {
     if case .unavailable = state, isServiceAvailable { state = .ready }
   }
 
-  func share(_ urls: [URL]) {
-    guard !urls.isEmpty else { return }
+  func share(_ urls: [URL], onFinish: @escaping @MainActor () -> Void = {}) {
+    guard !urls.isEmpty else {
+      onFinish()
+      return
+    }
     refreshAvailability()
-    guard isServiceAvailable else { return }
-    guard !isSharing else { return }
+    guard isServiceAvailable else {
+      onFinish()
+      return
+    }
+    guard !isSharing else {
+      onFinish()
+      return
+    }
 
+    var didFinish = false
+    let finishOnce: @MainActor () -> Void = {
+      guard !didFinish else { return }
+      didFinish = true
+      onFinish()
+    }
     state = .sharing
-    switch startShare(urls, { [weak self] outcome in self?.finish(outcome) }) {
+    switch startShare(
+      urls,
+      { [weak self] outcome in
+        self?.finish(outcome)
+        finishOnce()
+      })
+    {
     case .started:
       break
     case .unavailable:
       isServiceAvailable = false
       state = .unavailable
+      finishOnce()
     case .busy:
       if isSharing { state = .busy }
+      finishOnce()
     }
   }
 
-  func retry(_ urls: [URL]) {
-    guard state != .sharing else { return }
-    share(urls)
+  func retry(_ urls: [URL], onFinish: @escaping @MainActor () -> Void = {}) {
+    guard state != .sharing else {
+      onFinish()
+      return
+    }
+    share(urls, onFinish: onFinish)
   }
 
   func dismissFeedback() {
