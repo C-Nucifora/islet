@@ -446,7 +446,11 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(
       T3ConnectionIndicatorView.tone(for: .connecting, increasedContrast: false), .secondary)
     XCTAssertEqual(
-      T3ConnectionIndicatorView.tone(for: .connecting, increasedContrast: true), .white)
+      T3ConnectionIndicatorView.tone(
+        for: .connecting, increasedContrast: true, colorScheme: .light), .primary)
+    XCTAssertEqual(
+      T3ConnectionIndicatorView.tone(
+        for: .connecting, increasedContrast: true, colorScheme: .dark), .primary)
     XCTAssertEqual(
       T3ConnectionIndicatorView.tone(for: .reconnecting("Retrying"), increasedContrast: false),
       .orange)
@@ -484,6 +488,59 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(
       T3ConnectionIndicatorView.accessibilityLabel(for: stale.state, isStale: stale.isStale),
       "Reconnecting: No route, showing the last update")
+  }
+
+  func testColdStartFailureDoesNotClaimToRetainAnUpdate() {
+    let candidate = T3EnvironmentSnapshot(
+      id: "remote|machine|https://machine.example/", label: "Machine",
+      baseURL: "https://machine.example/", isLocal: false, platform: nil,
+      serverVersion: nil, state: .offline("No route"), agents: [])
+
+    let failure = T3CodeActivity.retainingStalePayload(candidate, from: [])
+
+    XCTAssertFalse(failure.isStale)
+    XCTAssertEqual(failure.agents, [])
+    XCTAssertEqual(
+      T3ConnectionIndicatorView.accessibilityLabel(
+        for: failure.state, isStale: failure.isStale),
+      "Offline: No route")
+  }
+
+  func testCompactPresentationSeparatesLiveAndStaleAgents() {
+    let live = T3AgentSnapshot(
+      environmentID: "live", threadID: "live-thread", title: "Live", project: "Islet",
+      providerInstance: "Provider", model: "model", branch: nil, phase: .needsApproval,
+      planStep: nil, completedPlanSteps: nil, totalPlanSteps: nil,
+      updatedAt: Date(timeIntervalSince1970: 2))
+    let stale = T3AgentSnapshot(
+      environmentID: "stale", threadID: "stale-thread", title: "Stale", project: "Islet",
+      providerInstance: "Provider", model: "model", branch: nil, phase: .working,
+      planStep: nil, completedPlanSteps: nil, totalPlanSteps: nil,
+      updatedAt: Date(timeIntervalSince1970: 1))
+    let environments = [
+      T3EnvironmentSnapshot(
+        id: "live", label: "Live", baseURL: "https://live.example", isLocal: false,
+        platform: nil, serverVersion: nil, state: .connected, agents: [live]),
+      T3EnvironmentSnapshot(
+        id: "stale", label: "Stale", baseURL: "https://stale.example", isLocal: false,
+        platform: nil, serverVersion: nil, state: .reconnecting("No route"), agents: [stale],
+        isStale: true),
+    ]
+
+    let mixed = T3CodeActivity.compactPresentation(for: environments)
+    XCTAssertEqual(mixed.liveAgentCount, 1)
+    XCTAssertEqual(mixed.staleAgentCount, 1)
+    XCTAssertEqual(mixed.leadingPhase, .needsApproval)
+    XCTAssertEqual(mixed.displayedAgentCount, 1)
+    XCTAssertEqual(mixed.accessibilityLabel, "1 active T3 Code agent; 1 stale")
+
+    let entirelyStale = T3CodeActivity.compactPresentation(for: [environments[1]])
+    XCTAssertTrue(entirelyStale.isEntirelyStale)
+    XCTAssertNil(entirelyStale.leadingPhase)
+    XCTAssertEqual(entirelyStale.displayedAgentCount, 1)
+    XCTAssertEqual(
+      entirelyStale.accessibilityLabel,
+      "1 T3 Code agent from the last update; connection stale")
   }
 
   func testVisibleEnvironmentsIncludeHealthyEmptyAndUnhealthyConfiguredRemotes() {

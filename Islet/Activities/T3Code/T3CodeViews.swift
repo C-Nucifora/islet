@@ -7,7 +7,7 @@ import SwiftUI
 struct T3ConnectionIndicatorView: View {
   enum Tone: Equatable {
     case secondary
-    case white
+    case primary
     case green
     case orange
     case yellow
@@ -17,6 +17,7 @@ struct T3ConnectionIndicatorView: View {
   let state: T3ConnectionState
   var isStale = false
   @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+  @Environment(\.colorScheme) private var colorScheme
 
   var body: some View {
     Label {
@@ -41,9 +42,12 @@ struct T3ConnectionIndicatorView: View {
   }
 
   private var color: Color {
-    switch Self.tone(for: state, increasedContrast: colorSchemeContrast == .increased) {
+    switch Self.tone(
+      for: state, increasedContrast: colorSchemeContrast == .increased,
+      colorScheme: colorScheme)
+    {
     case .secondary: Color.secondary
-    case .white: Color.white
+    case .primary: Color.primary
     case .green: Color.green
     case .orange: Color.orange
     case .yellow: Color.yellow
@@ -51,12 +55,19 @@ struct T3ConnectionIndicatorView: View {
     }
   }
 
-  static func tone(for state: T3ConnectionState, increasedContrast: Bool) -> Tone {
+  static func tone(
+    for state: T3ConnectionState, increasedContrast: Bool, colorScheme: ColorScheme = .light
+  ) -> Tone {
     switch state.semanticColor {
-    case .neutral: increasedContrast ? .white : .secondary
-    case .positive: .green
-    case .warning: increasedContrast ? .yellow : .orange
-    case .negative: .red
+    case .neutral:
+      guard increasedContrast else { return .secondary }
+      switch colorScheme {
+      case .light, .dark: return .primary
+      @unknown default: return .primary
+      }
+    case .positive: return .green
+    case .warning: return increasedContrast ? .yellow : .orange
+    case .negative: return .red
     }
   }
 }
@@ -78,15 +89,21 @@ struct T3CompactStatusView: View {
   @Environment(\.appTheme) private var appTheme
 
   var body: some View {
+    let presentation = activity.compactPresentation
     HStack(spacing: 3) {
-      if let first = activity.agents.first {
-        Image(systemName: first.phase.symbol).font(.system(size: 8))
+      if let phase = presentation.leadingPhase {
+        Image(systemName: phase.symbol).font(.system(size: 8))
       }
-      Text("\(activity.agents.count)")
+      if presentation.staleAgentCount > 0 {
+        Image(systemName: "exclamationmark.triangle.fill")
+          .font(.system(size: 8))
+          .foregroundStyle(.orange)
+      }
+      Text("\(presentation.displayedAgentCount)")
         .font(.caption.weight(.semibold)).monospacedDigit()
     }
     .foregroundStyle(activity.compactColor(for: appTheme))
-    .accessibilityLabel("\(activity.agents.count) active T3 Code agents")
+    .accessibilityLabel(presentation.accessibilityLabel)
   }
 }
 

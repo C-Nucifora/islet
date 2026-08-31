@@ -5,6 +5,29 @@ import SwiftUI
 
 @MainActor
 final class T3CodeActivity: NotchActivity, ObservableObject {
+  struct CompactPresentation: Equatable, Sendable {
+    let liveAgentCount: Int
+    let staleAgentCount: Int
+    let leadingPhase: T3AgentPhase?
+
+    var displayedAgentCount: Int {
+      liveAgentCount > 0 ? liveAgentCount : staleAgentCount
+    }
+
+    var isEntirelyStale: Bool { liveAgentCount == 0 && staleAgentCount > 0 }
+
+    var accessibilityLabel: String {
+      if isEntirelyStale {
+        return
+          "\(staleAgentCount) T3 Code agent\(staleAgentCount == 1 ? "" : "s") from the last update; connection stale"
+      }
+      let active =
+        "\(liveAgentCount) active T3 Code agent\(liveAgentCount == 1 ? "" : "s")"
+      guard staleAgentCount > 0 else { return active }
+      return "\(active); \(staleAgentCount) stale"
+    }
+  }
+
   let id = "t3Code"
   let priority = ActivityPriority.agent
   let tabIcon = "terminal.fill"
@@ -23,7 +46,31 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   private var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
 
   var agents: [T3AgentSnapshot] {
-    environments.flatMap(\.agents).sorted {
+    Self.sortedAgents(environments.flatMap(\.agents))
+  }
+
+  var liveAgents: [T3AgentSnapshot] {
+    Self.sortedAgents(environments.filter { !$0.isStale }.flatMap(\.agents))
+  }
+
+  var compactPresentation: CompactPresentation {
+    Self.compactPresentation(for: environments)
+  }
+
+  nonisolated static func compactPresentation(
+    for environments: [T3EnvironmentSnapshot]
+  ) -> CompactPresentation {
+    let live = sortedAgents(environments.filter { !$0.isStale }.flatMap(\.agents))
+    let stale = sortedAgents(environments.filter(\.isStale).flatMap(\.agents))
+    return CompactPresentation(
+      liveAgentCount: live.count, staleAgentCount: stale.count,
+      leadingPhase: live.first?.phase)
+  }
+
+  private nonisolated static func sortedAgents(
+    _ agents: [T3AgentSnapshot]
+  ) -> [T3AgentSnapshot] {
+    agents.sorted {
       if $0.phase.rank != $1.phase.rank { return $0.phase.rank < $1.phase.rank }
       return $0.updatedAt > $1.updatedAt
     }
@@ -198,10 +245,11 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   }
 
   func compactColor(for theme: AppTheme) -> Color {
-    if agents.contains(where: { $0.phase == .needsInput || $0.phase == .needsApproval }) {
+    if compactPresentation.isEntirelyStale { return .orange }
+    if liveAgents.contains(where: { $0.phase == .needsInput || $0.phase == .needsApproval }) {
       return .orange
     }
-    if agents.contains(where: { $0.phase == .failed }) { return .red }
+    if liveAgents.contains(where: { $0.phase == .failed }) { return .red }
     return theme.color(for: .t3Code)
   }
 
@@ -488,6 +536,10 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     let previous = current.first {
       $0.id == candidate.id || (candidate.isLocal && $0.isLocal)
     }
+    let retainedUsefulPayload =
+      previous.map {
+        $0.isStale || $0.state == .connected || !$0.agents.isEmpty
+      } ?? false
     return T3EnvironmentSnapshot(
       id: previous?.id ?? candidate.id,
       label: previous?.label ?? candidate.label,
@@ -497,7 +549,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       serverVersion: previous?.serverVersion ?? candidate.serverVersion,
       state: candidate.state,
       agents: previous?.agents ?? candidate.agents,
-      isStale: true)
+      isStale: retainedUsefulPayload)
   }
 
   nonisolated static func upserting(
