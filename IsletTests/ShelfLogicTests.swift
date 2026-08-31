@@ -339,6 +339,39 @@ final class ShelfLogicTests: XCTestCase {
   }
 
   @MainActor
+  func testThumbnailWorkContinuesUntilEveryVisiblePanelReleasesItsOwnership() async {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let stored = shelf.appendingPathComponent("shared.pdf")
+    let metadata = ThumbnailMetadataStore(
+      [stored: ShelfThumbnailMetadata(modificationDate: .now, fileSize: 1)])
+    let renderer = ThumbnailGeneratorProbe()
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([stored]) },
+      measureItem: { _ in .success(0) },
+      thumbnailMetadata: metadata.metadata,
+      generateThumbnailData: renderer.generate)
+    guard let item = model.items.first else {
+      return XCTFail("Expected the shared Shelf item")
+    }
+    let firstPanel = UUID()
+    let secondPanel = UUID()
+
+    model.setThumbnailVisibility(for: item, owner: firstPanel, isVisible: true)
+    model.setThumbnailVisibility(for: item, owner: secondPanel, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 1 { await Task.yield() }
+    model.setThumbnailVisibility(for: item, owner: firstPanel, isVisible: false)
+    await renderer.releaseNext()
+    for _ in 0..<100 where model.items.first?.thumbnail == nil { await Task.yield() }
+
+    XCTAssertNotNil(model.items.first?.thumbnail)
+    let requestCount = await renderer.requestCount()
+    XCTAssertEqual(requestCount, 1)
+    model.setThumbnailVisibility(for: item, owner: secondPanel, isVisible: false)
+  }
+
+  @MainActor
   func testThumbnailCacheUsesModificationMetadataAsItsVersion() async {
     let shelf = URL(fileURLWithPath: "/Shelf")
     let stored = shelf.appendingPathComponent("cached.pdf")
