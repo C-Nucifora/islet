@@ -209,13 +209,13 @@ final class BatteryInsightsTests: XCTestCase {
     let savedCapacity = Defaults[.batteryCapacityHistory]
     let savedAlerts = Defaults[.batteryInsightLastAlertDates]
     let savedDrainEnabled = Defaults[.unusualBatteryDrainWarnings]
-    let savedBatteryEnabled = Defaults[.batteryEnabled]
+    let savedDisabledActivities = Defaults[.disabledActivities]
     defer {
       Defaults[.batteryDrainBaseline] = savedBaseline
       Defaults[.batteryCapacityHistory] = savedCapacity
       Defaults[.batteryInsightLastAlertDates] = savedAlerts
       Defaults[.unusualBatteryDrainWarnings] = savedDrainEnabled
-      Defaults[.batteryEnabled] = savedBatteryEnabled
+      Defaults[.disabledActivities] = savedDisabledActivities
     }
 
     let clock = TestClock()
@@ -226,7 +226,8 @@ final class BatteryInsightsTests: XCTestCase {
     Defaults[.batteryCapacityHistory] = []
     Defaults[.batteryInsightLastAlertDates] = [:]
     Defaults[.unusualBatteryDrainWarnings] = true
-    Defaults[.batteryEnabled] = true
+    Defaults[.disabledActivities] = ActivityEnablement.updating(
+      savedDisabledActivities, activityID: "battery", enabled: true)
 
     var metrics = BatteryMetrics()
     metrics.batteryPowerWatts = -30
@@ -269,6 +270,20 @@ final class BatteryInsightsTests: XCTestCase {
       "Learning from 4 battery samples")
   }
 
+  func testDerivedBatteryPowerRemainsUsableWhenPrivateTelemetryIsUnsupported() {
+    var metrics = BatteryMetrics()
+    metrics.powerWatts = -10
+    metrics.telemetryStatus[.batteryPower] = .unsupported
+    let sample = BatteryInsightSample(
+      state: BatteryState(percent: 70, isCharging: false, onAC: false), metrics: metrics)
+    var analyzer = BatteryInsightAnalyzer(clock: TestClock())
+
+    let update = analyzer.ingest(sample)
+
+    XCTAssertEqual(update.snapshot.status, .learningBaseline(sampleCount: 1))
+    XCTAssertEqual(analyzer.baseline.map(\.watts), [10])
+  }
+
   func testCapacityTrendUsesReportedReadingWording() {
     let clock = TestClock()
     var analyzer = BatteryInsightAnalyzer(clock: clock)
@@ -285,9 +300,10 @@ final class BatteryInsightsTests: XCTestCase {
 
   func testHistoriesAreBoundedAndResettable() {
     let clock = TestClock()
-    let points = (0..<(BatteryInsightAnalyzer.maximumBaselinePoints + 50)).map { index in
+    let pointCount = BatteryInsightAnalyzer.maximumBaselinePoints + 50
+    let points = (0..<pointCount).map { index in
       BatteryDrainBaselinePoint(
-        date: clock.date.addingTimeInterval(Double(index) - 3_000), watts: 10)
+        date: clock.date.addingTimeInterval(Double(index - pointCount)), watts: 10)
     }
     var analyzer = BatteryInsightAnalyzer(baseline: points, clock: clock)
     XCTAssertEqual(analyzer.baseline.count, BatteryInsightAnalyzer.maximumBaselinePoints)
@@ -296,5 +312,23 @@ final class BatteryInsightsTests: XCTestCase {
     XCTAssertTrue(analyzer.baseline.isEmpty)
     XCTAssertTrue(analyzer.capacityHistory.isEmpty)
     XCTAssertTrue(analyzer.lastAlertDates.isEmpty)
+  }
+
+  func testMinuteCadenceRetainsTheFullInclusiveSevenDayWindow() {
+    let clock = TestClock()
+    let points = (0...Int(BatteryInsightAnalyzer.baselineLifetime / 60)).map { minute in
+      BatteryDrainBaselinePoint(
+        date: clock.date.addingTimeInterval(
+          -BatteryInsightAnalyzer.baselineLifetime + Double(minute * 60)),
+        watts: 10)
+    }
+
+    let analyzer = BatteryInsightAnalyzer(baseline: points, clock: clock)
+
+    XCTAssertEqual(analyzer.baseline.count, BatteryInsightAnalyzer.maximumBaselinePoints)
+    XCTAssertEqual(
+      analyzer.baseline.first?.date,
+      clock.date.addingTimeInterval(-BatteryInsightAnalyzer.baselineLifetime))
+    XCTAssertEqual(analyzer.baseline.last?.date, clock.date)
   }
 }

@@ -355,6 +355,11 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "Create context rule", "Edit context rule", "Reorder context rules",
         "Set a temporary context override",
       ]
+    case .batteryWarnings:
+      [
+        "Toggle unusual battery drain warnings", "Toggle charger capacity warnings",
+        "Set peripheral battery warning thresholds", "Reset learned battery data",
+      ]
     case .activityOrder:
       ["Show, hide, or reorder activities"]
         + ActivityCatalog.orderable.map { "Configure \($0.name) activity" }
