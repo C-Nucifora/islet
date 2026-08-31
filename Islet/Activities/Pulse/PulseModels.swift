@@ -25,6 +25,7 @@ enum PulseState: String, Codable, Sendable {
   case needsAction
   case succeeded
   case failed
+  case cancelled
 }
 
 struct PulseAction: Codable, Equatable, Identifiable, Sendable {
@@ -394,10 +395,16 @@ struct PulseProviderDescriptor: Identifiable, Equatable, Sendable {
       summary: "Shows GitHub run status observed on this Mac.",
       symbol: "shippingbox.fill", sourceIDs: ["github-actions", "github"],
       capabilities: [.events, .progress, .webActions],
-      setupHint: "Use the example locally or on a self-hosted Mac runner."),
+      setupHint: "Run the watcher after gh auth login; Islet never receives your GitHub token."),
+    .init(
+      id: "xcode", name: "Xcode builds",
+      summary: "Shows local xcodebuild and test progress.",
+      symbol: "hammer.fill", sourceIDs: ["xcode"],
+      capabilities: [.events, .progress, .webActions],
+      setupHint: "Wrap xcodebuild with Tools/islet-xcode-pulse.swift."),
     .init(
       id: "developer-tools", name: "Developer tools", summary: "Build, test, and agent status.",
-      symbol: "hammer.fill", sourceIDs: ["xcode", "build", "tests", "agent"],
+      symbol: "wrench.and.screwdriver.fill", sourceIDs: ["build", "tests", "agent"],
       capabilities: [.events, .progress, .webActions],
       setupHint: "Use a stable source name from your local automation."),
   ]
@@ -405,12 +412,14 @@ struct PulseProviderDescriptor: Identifiable, Equatable, Sendable {
 
 enum PulseProviderHealth: Equatable, Sendable {
   case active(Int)
+  case needsAttention(Int)
   case seen(Date)
   case neverSeen
 
   var summary: String {
     switch self {
     case .active(let count): "Active (\(count))"
+    case .needsAttention(let count): "Needs attention (\(count))"
     case .seen: "Seen this session"
     case .neverSeen: "Not connected yet"
     }

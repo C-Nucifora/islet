@@ -53,6 +53,22 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testCancelledStateIsAcceptedAsAProviderTerminalState() throws {
+    let center = makeCenter()
+    let now = Date(timeIntervalSince1970: 1_000)
+    let payload = PulsePayload(
+      id: "cancelled", source: "xcode", title: "Build cancelled", subtitle: "Islet · 4s",
+      symbol: nil, accentHex: nil, progress: 0.25, state: .cancelled, priority: .normal,
+      expiresAt: now.addingTimeInterval(15), actions: nil)
+
+    XCTAssertTrue(center.apply(command(.event, payload), now: now).ok)
+    let item = try XCTUnwrap(center.items.first)
+    XCTAssertEqual(item.state, .cancelled)
+    XCTAssertEqual(item.progress, 0.25)
+    XCTAssertEqual(item.expiresAt, now.addingTimeInterval(15))
+  }
+
+  @MainActor
   func testRejectsInvalidAccentAndDuplicateActionIdentity() throws {
     let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
@@ -125,6 +141,19 @@ final class PulseTests: XCTestCase {
     let response = center.apply(command(.show, payload), now: Date(timeIntervalSince1970: 1_000))
     XCTAssertFalse(response.ok)
     XCTAssertEqual(response.errorCode, .validationFailed)
+  }
+
+  @MainActor
+  func testCancelledStateRemainsDistinct() {
+    let center = makeCenter()
+    let payload = PulsePayload(
+      id: "cancelled", source: "github-actions", title: "CI cancelled", subtitle: nil,
+      symbol: nil, accentHex: nil, progress: nil, state: .cancelled, priority: .low,
+      expiresAt: nil, actions: nil)
+
+    XCTAssertTrue(
+      center.apply(command(.event, payload), now: Date(timeIntervalSince1970: 1_000)).ok)
+    XCTAssertEqual(center.items.first?.state, .cancelled)
   }
 
   @MainActor
@@ -303,6 +332,21 @@ final class PulseTests: XCTestCase {
     center.dismiss("cli-job", now: now.addingTimeInterval(1))
     let seen = try XCTUnwrap(center.providerStatuses.first { $0.id == "cli" })
     XCTAssertEqual(seen.health, .seen(now.addingTimeInterval(1)))
+  }
+
+  @MainActor
+  func testProviderHealthReportsNeedsAttentionFromProviderState() throws {
+    let center = makeCenter()
+    let now = Date(timeIntervalSince1970: 1_000)
+    let payload = PulsePayload(
+      id: "github-actions-health", source: "github-actions",
+      title: "GitHub authentication required", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .needsAction, priority: .critical,
+      expiresAt: now.addingTimeInterval(60), actions: nil)
+
+    XCTAssertTrue(center.apply(command(.update, payload), now: now).ok)
+    let status = try XCTUnwrap(center.providerStatuses.first { $0.id == "github-actions" })
+    XCTAssertEqual(status.health, .needsAttention(1))
   }
 
   @MainActor
