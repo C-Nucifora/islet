@@ -120,7 +120,6 @@ class ChromeDownloadProvider:
             action = self.reveal.action(
                 Path(filename),
                 action_id,
-                expires_in=TERMINAL_REVEAL_SECONDS if terminal else None,
             )
             if action:
                 activity["actions"] = [action]
@@ -130,8 +129,15 @@ class ChromeDownloadProvider:
             self.reveal.remove(action_id)
 
         command = {"operation": "event" if terminal else "update", "activity": activity}
-        self.pulse.send(command)
+        try:
+            self.pulse.send(command)
+        except PulseError:
+            if terminal and "actions" in activity:
+                self.reveal.remove(action_id)
+            raise
         if terminal:
+            if "actions" in activity:
+                self.reveal.expire(action_id, TERMINAL_REVEAL_SECONDS)
             self.published.discard(identifier)
         else:
             self.published.add(identifier)

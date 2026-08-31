@@ -503,6 +503,10 @@ class RcloneProvider:
             self.reveal_deadlines[reveal_action_id] = (
                 self.clock() + TERMINAL_REVEAL_SECONDS
             )
+        else:
+            stale_action_id = self._reveal_action_id(identifier)
+            self.reveal_deadlines.pop(stale_action_id, None)
+            self.reveal.remove(stale_action_id)
         self.pulse.send({"operation": "event", "activity": activity})
         if reveal_action_id:
             self.reveal_deadlines[reveal_action_id] = (

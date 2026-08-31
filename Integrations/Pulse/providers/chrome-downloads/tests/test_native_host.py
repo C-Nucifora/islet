@@ -5,6 +5,8 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
+from urllib import error, request
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "native_host.py"
@@ -57,6 +59,10 @@ class FakeReveal:
 
     def remove(self, action_id: str) -> None:
         self.removed.append(action_id)
+
+    def expire(self, _action_id: str, expires_in: float) -> bool:
+        self.expiries.append(expires_in)
+        return True
 
     def close(self) -> None:
         pass
@@ -173,6 +179,68 @@ class ChromeNativeHostTests(unittest.TestCase):
         action = command["activity"]["actions"][0]
         self.assertTrue(action["url"].startswith("http://127.0.0.1/"))
         self.assertEqual(reveal.expiries[-1], 8)
+
+    def test_terminal_reveal_remains_available_for_full_delayed_event(self) -> None:
+        now = [100.0]
+
+        class DelayedPulse(FakePulse):
+            received_at: float | None = None
+
+            def send(self, command: dict) -> dict:
+                now[0] += 2
+                self.received_at = now[0]
+                return super().send(command)
+
+        def reveal_is_available(url: str) -> bool:
+            try:
+                with request.urlopen(url, timeout=1) as response:
+                    return response.status == 204
+            except error.HTTPError as failure:
+                failure.close()
+                return False
+
+        pulse = DelayedPulse()
+        reveal = host.RevealServer(clock=lambda: now[0])
+        provider = host.ChromeDownloadProvider(pulse, reveal)
+        try:
+            with tempfile.NamedTemporaryFile() as temporary:
+                command = provider.command_for(
+                    self.message(10, filename=temporary.name, state="complete")
+                )
+                self.assertIsNotNone(command)
+                action_url = command["activity"]["actions"][0]["url"]
+                self.assertIsNotNone(pulse.received_at)
+                with mock.patch(f"{host.RevealServer.__module__}.subprocess.Popen"):
+                    now[0] = pulse.received_at + 7
+                    self.assertTrue(reveal_is_available(action_url))
+                    now[0] += 1
+                    self.assertFalse(reveal_is_available(action_url))
+        finally:
+            reveal.close()
+
+    def test_rejected_terminal_delivery_revokes_its_reveal_mapping(self) -> None:
+        class RejectingPulse(FakePulse):
+            def send(self, command: dict) -> dict:
+                super().send(command)
+                raise host.PulseError("rejected")
+
+        pulse = RejectingPulse()
+        reveal = host.RevealServer()
+        provider = host.ChromeDownloadProvider(pulse, reveal)
+        try:
+            with tempfile.NamedTemporaryFile() as temporary:
+                with self.assertRaisesRegex(host.PulseError, "rejected"):
+                    provider.command_for(
+                        self.message(11, filename=temporary.name, state="complete")
+                    )
+                action_url = pulse.commands[0]["activity"]["actions"][0]["url"]
+                with mock.patch(f"{host.RevealServer.__module__}.subprocess.Popen"):
+                    with self.assertRaises(error.HTTPError) as failure:
+                        request.urlopen(action_url, timeout=1)
+                self.assertEqual(failure.exception.code, 404)
+                failure.exception.close()
+        finally:
+            reveal.close()
 
 
 if __name__ == "__main__":

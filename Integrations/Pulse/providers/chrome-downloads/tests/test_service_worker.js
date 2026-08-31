@@ -59,6 +59,7 @@ function createHarness({
   search = async () => [],
   autoAcknowledge = true,
   autoDisconnectEvent = true,
+  onPortDisconnect = null,
 } = {}) {
   const events = {
     created: new FakeEvent(),
@@ -110,6 +111,7 @@ function createHarness({
       disconnect() {
         if (port.disconnected) return;
         port.disconnected = true;
+        if (onPortDisconnect) onPortDisconnect();
         if (autoDisconnectEvent) queueMicrotask(() => void onDisconnect.emit());
       },
     };
@@ -388,7 +390,7 @@ test("late disconnect from the disabled host cannot replace the re-enabled host"
   assert.equal(harness.ports.length, 2);
 });
 
-test("rejected terminal command releases the native host for restart recovery", async () => {
+test("rejected terminal command remains durable while waiting to retry", async () => {
   const harness = createHarness();
   await harness.settle();
   await harness.events.created.emit(download(12));
@@ -406,7 +408,8 @@ test("rejected terminal command releases the native host for restart recovery", 
   await harness.settle();
 
   assert.deepEqual(harness.state.knownIDs, [12]);
-  assert.equal(port.disconnected, true);
+  assert.equal(port.disconnected, false);
+  assert.equal(harness.timeouts.size, 1);
 });
 
 test("failed final terminal delivery retries without another browser event", async () => {
@@ -431,7 +434,7 @@ test("failed final terminal delivery retries without another browser event", asy
   harness.fireTimeouts();
   await harness.settle();
 
-  assert.equal(harness.ports.length, 2);
+  assert.equal(harness.ports.length, 1);
   assert.equal(
     harness.messages.filter(
       (command) => command.kind === "upsert" && command.item.state === "complete"
@@ -439,6 +442,59 @@ test("failed final terminal delivery retries without another browser event", asy
     2
   );
   assert.deepEqual(harness.state.knownIDs, []);
+});
+
+test("command rejection retries on the same host without ending another active download", async () => {
+  const hostActiveDownloads = new Set();
+  const harness = createHarness({
+    onPortDisconnect() {
+      hostActiveDownloads.clear();
+    },
+  });
+  await harness.settle();
+  await harness.events.created.emit(download(17));
+  await harness.settle();
+  hostActiveDownloads.add(17);
+  await harness.events.created.emit(download(18));
+  await harness.settle();
+  harness.setAutoAcknowledge(false);
+  harness.setSearch(async (query) =>
+    query.id === 18 ? [download(18, "complete", 100)] : []
+  );
+
+  await harness.events.changed.emit({ id: 18, state: { current: "complete" } });
+  await harness.settle();
+  const firstTerminal = harness.messages.at(-1);
+  await harness.events.created.emit(download(19));
+  await harness.settle();
+  const otherProgress = harness.messages.at(-1);
+  await harness.ports[0].onMessage.emit({ ok: false, requestID: firstTerminal.requestID });
+  await harness.ports[0].onMessage.emit({ ok: true, requestID: otherProgress.requestID });
+  await harness.settle();
+
+  assert.equal(harness.ports[0].disconnected, false);
+  assert.deepEqual(Array.from(hostActiveDownloads), [17]);
+  assert.equal(harness.timeouts.size, 1);
+  assert.equal(
+    harness.messages.filter(
+      (command) => command.kind === "upsert" && command.item.state === "complete"
+    ).length,
+    1
+  );
+
+  harness.setAutoAcknowledge(true);
+  harness.fireTimeouts();
+  await harness.settle();
+
+  assert.equal(harness.ports.length, 1);
+  assert.deepEqual(Array.from(hostActiveDownloads), [17]);
+  assert.equal(
+    harness.messages.filter(
+      (command) => command.kind === "upsert" && command.item.state === "complete"
+    ).length,
+    2
+  );
+  assert.deepEqual(harness.state.knownIDs, [17, 19]);
 });
 
 test("failed final terminal delivery uses a bounded retry budget", async () => {

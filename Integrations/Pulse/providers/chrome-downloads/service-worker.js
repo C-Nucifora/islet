@@ -74,8 +74,7 @@ function resetRetryState() {
 }
 
 function scheduleRetry() {
-  if (!pending.size || inFlight.size || retryTimer !== null || retryAttempts >= RETRY_LIMIT)
-    return;
+  if (!pending.size || retryTimer !== null || retryAttempts >= RETRY_LIMIT) return;
   const delay = Math.min(
     RETRY_INITIAL_MILLISECONDS * 2 ** retryAttempts,
     RETRY_MAX_MILLISECONDS
@@ -149,7 +148,6 @@ function connectHost() {
     inFlight.delete(requestID);
     const command = pending.get(key);
     if (response.ok === true) {
-      retryAttempts = 0;
       const finishAcknowledgement = () => {
         flushPending();
         notifyDrainWaiters();
@@ -162,9 +160,6 @@ function connectHost() {
       }
       return;
     }
-    if (nativePort === port) nativePort = null;
-    inFlight.clear();
-    port.disconnect();
     notifyDrainWaiters();
     scheduleRetry();
   });
@@ -184,6 +179,7 @@ function flushPending() {
     notifyDrainWaiters();
     return;
   }
+  if (retryTimer !== null) return;
   cancelHostIdleTimer();
   let port;
   try {

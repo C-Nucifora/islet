@@ -557,6 +557,37 @@ class RcloneProviderTests(unittest.TestCase):
         self.assertEqual(reveal.active, set())
         self.assertEqual(reveal.removed, [action_id])
 
+    def test_terminal_without_reveal_path_revokes_active_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "finished.bin"
+            path.touch()
+            rc = fixture([{"name": "finished.bin", "bytes": 1, "size": 2}])
+            provider, _ = self.provider(rc, reveal_root=root)
+
+            provider.observe()
+            reveal = provider.reveal
+            action_id = next(iter(reveal.active))
+            provider.reveal_deadlines[action_id] = provider.clock() + 8
+            path.unlink()
+            rc.responses[("core/stats", "job/7")] = {"transferring": []}
+            rc.responses[("core/transferred", "job/7")] = {
+                "transferred": [
+                    {
+                        "name": "finished.bin",
+                        "timestamp": 1_000,
+                        "error": "",
+                        "jobid": 7,
+                    }
+                ]
+            }
+
+            provider.observe()
+
+        self.assertEqual(reveal.active, set())
+        self.assertEqual(reveal.removed, [action_id])
+        self.assertNotIn(action_id, provider.reveal_deadlines)
+
     def test_removed_active_transfer_revokes_only_its_reveal_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -234,6 +234,14 @@ class RevealServer:
                 self._server.paths.pop(token, None)
                 self._server.deadlines.pop(token, None)
 
+    def expire(self, action_id: str, expires_in: float) -> bool:
+        with self._server.paths_lock:
+            token = self._server.action_tokens.get(action_id)
+            if token is None:
+                return False
+            self._server.deadlines[token] = self._server.clock() + expires_in
+            return True
+
     def close(self) -> None:
         self._server.shutdown()
         self._server.server_close()
