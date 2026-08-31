@@ -158,16 +158,20 @@ class _RevealHandler(BaseHTTPRequestHandler):
         if path is None or not path.exists():
             self.send_error(404)
             return
+        try:
+            subprocess.Popen(
+                ["/usr/bin/open", "-R", str(path)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError:
+            self.send_error(500)
+            return
         self.send_response(204)
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        subprocess.Popen(
-            ["/usr/bin/open", "-R", str(path)],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
 
     def log_message(self, _format: str, *_args: object) -> None:
         pass

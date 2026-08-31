@@ -89,6 +89,24 @@ class RevealServerTests(unittest.TestCase):
             finally:
                 server.close()
 
+    def test_reveal_reports_finder_launch_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.pdf"
+            path.touch()
+            server = pulse_client.RevealServer()
+            try:
+                action = server.action(path, "failed-reveal")
+                self.assertIsNotNone(action)
+
+                with mock.patch.object(
+                    pulse_client.subprocess, "Popen", side_effect=OSError
+                ):
+                    with self.assertRaises(error.HTTPError) as failure:
+                        request.urlopen(action["url"], timeout=1)
+                self.assertEqual(failure.exception.code, 500)
+            finally:
+                server.close()
+
     def test_expired_reveal_action_returns_not_found(self) -> None:
         now = [100.0]
         with tempfile.TemporaryDirectory() as directory:
