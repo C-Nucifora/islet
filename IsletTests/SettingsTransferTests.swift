@@ -1,3 +1,4 @@
+import Defaults
 import Foundation
 import XCTest
 
@@ -14,6 +15,38 @@ final class SettingsTransferTests: XCTestCase {
     XCTAssertEqual(preview.result, exported)
     XCTAssertEqual(preview.importedSettingCount, SettingsTransfer.portableKeys.count)
     XCTAssertTrue(preview.ignoredKeys.isEmpty)
+  }
+
+  @MainActor
+  func testSystemPresenceControlsRoundTripThroughDefaults() throws {
+    let saved = systemPresenceControlValues
+    let savedHoverCollapseTimeout = Defaults[.hoverCollapseTimeout]
+    defer {
+      setSystemPresenceControls(saved)
+      Defaults[.hoverCollapseTimeout] = savedHoverCollapseTimeout
+    }
+    let keys = [
+      "systemAutoPresentCPU", "systemAutoPresentThermal", "systemAutoPresentMemoryPressure",
+      "systemAutoPresentLowDiskSpace", "systemAutoPresentDiskThroughput",
+      "systemAutoPresentNetworkThroughput",
+    ]
+
+    Defaults[.hoverCollapseTimeout] = 0.5
+    setSystemPresenceControls(Array(repeating: false, count: keys.count))
+    let data = try SettingsTransfer.exportData(snapshot: SettingsTransferDefaults.snapshot())
+    let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let settings = try XCTUnwrap(object["settings"] as? [String: Any])
+    for key in keys {
+      XCTAssertEqual(settings[key] as? Bool, false, "Export omitted \(key)")
+    }
+
+    setSystemPresenceControls(Array(repeating: true, count: keys.count))
+    let preview = try SettingsTransfer.preview(
+      data: data, current: SettingsTransferDefaults.snapshot())
+    XCTAssertTrue(preview.ignoredKeys.isEmpty)
+    XCTAssertEqual(Set(preview.changes.map(\.key)).intersection(keys), Set(keys))
+    SettingsTransfer.apply(preview) { SettingsTransferDefaults.apply($0) }
+    XCTAssertEqual(systemPresenceControlValues, Array(repeating: false, count: keys.count))
   }
 
   func testPartialImportKeepsSettingsThatAreNotInTheFile() throws {
@@ -157,6 +190,25 @@ final class SettingsTransferTests: XCTestCase {
       ])
   }
 
+  @MainActor
+  private var systemPresenceControlValues: [Bool] {
+    [
+      Defaults[.systemAutoPresentCPU], Defaults[.systemAutoPresentThermal],
+      Defaults[.systemAutoPresentMemoryPressure], Defaults[.systemAutoPresentLowDiskSpace],
+      Defaults[.systemAutoPresentDiskThroughput], Defaults[.systemAutoPresentNetworkThroughput],
+    ]
+  }
+
+  @MainActor
+  private func setSystemPresenceControls(_ values: [Bool]) {
+    Defaults[.systemAutoPresentCPU] = values[0]
+    Defaults[.systemAutoPresentThermal] = values[1]
+    Defaults[.systemAutoPresentMemoryPressure] = values[2]
+    Defaults[.systemAutoPresentLowDiskSpace] = values[3]
+    Defaults[.systemAutoPresentDiskThroughput] = values[4]
+    Defaults[.systemAutoPresentNetworkThroughput] = values[5]
+  }
+
   private var defaultSnapshot: SettingsTransferSnapshot {
     SettingsTransferSnapshot(
       appTheme: .classic, batteryGraphStyle: .coloured, mediaSourceMode: .auto,
@@ -167,7 +219,11 @@ final class SettingsTransferTests: XCTestCase {
       hudEnabled: false, hudStyle: .bar, calendarEnabled: true, calendarLeadMinutes: 10,
       remindersEnabled: true, showOnAllDisplays: false, hideInFullscreen: false,
       launchAtLogin: false, activityOrder: ActivityCatalog.defaultOrder, disabledActivities: [],
-      disabledEventSources: [], systemAlwaysVisible: false, metricStyles: [:],
+      disabledEventSources: [], systemAlwaysVisible: false,
+      systemAutoPresentCPU: true, systemAutoPresentThermal: true,
+      systemAutoPresentMemoryPressure: true, systemAutoPresentLowDiskSpace: true,
+      systemAutoPresentDiskThroughput: true, systemAutoPresentNetworkThroughput: true,
+      metricStyles: [:],
       continuityAlwaysVisible: false, continuitySneaks: true)
   }
 
@@ -183,7 +239,11 @@ final class SettingsTransferTests: XCTestCase {
       showOnAllDisplays: true, hideInFullscreen: true, launchAtLogin: true,
       activityOrder: ActivityCatalog.defaultOrder.reversed(),
       disabledActivities: ["pulse", "clipboard"], disabledEventSources: ["wifi", "focus"],
-      systemAlwaysVisible: true, metricStyles: ["cpu": "combined", "thermal": "number"],
+      systemAlwaysVisible: true,
+      systemAutoPresentCPU: false, systemAutoPresentThermal: true,
+      systemAutoPresentMemoryPressure: false, systemAutoPresentLowDiskSpace: true,
+      systemAutoPresentDiskThroughput: false, systemAutoPresentNetworkThroughput: true,
+      metricStyles: ["cpu": "combined", "thermal": "number"],
       continuityAlwaysVisible: true, continuitySneaks: false)
   }
 }

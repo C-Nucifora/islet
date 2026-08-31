@@ -246,6 +246,16 @@ extension Defaults.Keys {
   /// Off: the System tab appears only while `SystemPresenceGate` is hot. On: it is always in the
   /// switcher, which is how you look at an idle machine's stats.
   static let systemAlwaysVisible = Key<Bool>("systemAlwaysVisible", default: false)
+  static let systemAutoPresentCPU = Key<Bool>("systemAutoPresentCPU", default: true)
+  static let systemAutoPresentThermal = Key<Bool>("systemAutoPresentThermal", default: true)
+  static let systemAutoPresentMemoryPressure = Key<Bool>(
+    "systemAutoPresentMemoryPressure", default: true)
+  static let systemAutoPresentLowDiskSpace = Key<Bool>(
+    "systemAutoPresentLowDiskSpace", default: true)
+  static let systemAutoPresentDiskThroughput = Key<Bool>(
+    "systemAutoPresentDiskThroughput", default: true)
+  static let systemAutoPresentNetworkThroughput = Key<Bool>(
+    "systemAutoPresentNetworkThroughput", default: true)
   /// Keyed by `SystemMetricKind.rawValue`, valued by `MetricDisplayStyle.rawValue`. Stored as
   /// strings so an unknown value from a future build resolves to the fallback instead of failing
   /// to decode the whole dictionary.
@@ -263,6 +273,10 @@ extension Defaults.Keys {
   /// available instead of silently hiding provider updates.
   static let pulseDeliveryProfile = Key<PulseDeliveryProfile>(
     "pulseDeliveryProfile", default: .everything)
+  /// Source names are normalized by `PulseCenter` before this map is written. Values stay raw
+  /// strings so a newer policy value cannot prevent older Islet versions from restoring the
+  /// policies they understand.
+  static let pulseSourcePolicies = Key<[String: String]>("pulseSourcePolicies", default: [:])
   static let t3RemoteEnvironments = Key<[T3EnvironmentProfile]>(
     "t3RemoteEnvironments", default: [])
   static let timerSessionData = Key<Data?>("timerSessionData")

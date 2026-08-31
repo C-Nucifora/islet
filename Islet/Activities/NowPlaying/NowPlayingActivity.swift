@@ -5,6 +5,10 @@ import SwiftUI
 
 @MainActor
 final class NowPlayingActivity: NotchActivity, ObservableObject {
+  typealias CommandPerformer =
+    @Sendable (MediaCommand, SourceID, Bool) async -> MediaCommandResult
+  typealias AnnouncementHandler = (String) -> Void
+
   let id = "nowPlaying"
   let priority = ActivityPriority.media
 
@@ -21,6 +25,9 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   @Published private(set) var strip: [SourceID] = []
   @Published private(set) var adapterStatus = "Starting…"
   @Published private(set) var mediaControlNotice: String?
+  /// The most recent command result. The view uses the accompanying notice only for failures,
+  /// while this preserves the success or failure result for observers and tests.
+  @Published private(set) var lastMediaCommandResult: MediaCommandResult?
   @Published private(set) var adapterFailure: String?
   private(set) var activationDate: Date?
 
@@ -36,12 +43,30 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   private let audio = AudioProcessMonitor()
   private var streamTask: Task<Void, Never>?
   private var expiryTask: Task<Void, Never>?
+  private var mediaControlNoticeTask: Task<Void, Never>?
   private var audioCancellable: AnyCancellable?
   private var preferenceCancellables: Set<AnyCancellable> = []
   /// Last primary reflected to observers. Defaults changes can alter this without changing the
   /// underlying source dictionary, so it participates in diffing separately.
   private var publishedPrimaryKey: SourceID?
   private var isMonitoring = false
+  private var mediaControlRequest = 0
+  private let commandPerformer: CommandPerformer
+  private let announce: AnnouncementHandler
+
+  init(
+    commandPerformer: @escaping CommandPerformer = {
+      command, source, isAdapterBacked in
+      await MediaRemoteCommands.shared.perform(
+        command,
+        shownSource: source,
+        sourceIsAdapterBacked: isAdapterBacked)
+    },
+    announce: @escaping AnnouncementHandler = { A11y.announce($0) }
+  ) {
+    self.commandPerformer = commandPerformer
+    self.announce = announce
+  }
 
   /// The source that owns the hero player.
   var primaryKey: SourceID? {
@@ -72,10 +97,12 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
       .sink { [weak self] latest in self?.publish(audioSources: latest) }
     Defaults.publisher(.mediaSourceMode)
       .dropFirst()
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.publish() }
       .store(in: &preferenceCancellables)
     Defaults.publisher(.mediaPriorityList)
       .dropFirst()
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.publish() }
       .store(in: &preferenceCancellables)
     streamTask = Task { [weak self] in
@@ -136,7 +163,8 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     resolvedBundleIdentifiers = []
     activationDate = nil
     adapterStatus = "Stopped"
-    mediaControlNotice = nil
+    mediaControlRequest &+= 1
+    clearMediaControlFeedback()
     adapterFailure = nil
   }
 
@@ -152,20 +180,55 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   }
 
   func perform(_ command: MediaCommand, for source: SourceID) async {
-    let result = await MediaRemoteCommands.shared.perform(
-      command,
-      shownSource: source,
-      sourceIsAdapterBacked: sources[source] != nil)
-    switch result {
-    case .sent:
+    mediaControlRequest &+= 1
+    let request = mediaControlRequest
+    // Do not leave an old failure beside a newer action while its command is still running.
+    mediaControlNoticeTask?.cancel()
+    mediaControlNoticeTask = nil
+    mediaControlNotice = nil
+    let result = await commandPerformer(command, source, sources[source] != nil)
+
+    if let reason = MediaControlFeedback.logReason(for: result) {
+      Log.media.notice(
+        "Media command \(command.feedbackName, privacy: .public) failed: \(reason, privacy: .public)"
+      )
+    }
+
+    // A later tap or source change owns the displayed feedback. The command queue still records
+    // the older result above, but it must not overwrite the user's newer action.
+    guard request == mediaControlRequest else { return }
+    lastMediaCommandResult = result
+    guard let notice = MediaControlFeedback.message(for: command, result: result) else {
+      mediaControlNoticeTask?.cancel()
+      mediaControlNoticeTask = nil
       mediaControlNotice = nil
-    case .sourceNotControllable:
-      mediaControlNotice =
-        "Audio detected from \(sourceName(for: source)); direct controls unavailable"
-    case .sourceTargetingUnavailable:
-      mediaControlNotice = "This media adapter cannot target the selected player safely"
-    case .rejected:
-      mediaControlNotice = "The selected player rejected the command"
+      return
+    }
+    mediaControlNotice = notice
+    announce("Media control error: \(notice)")
+    mediaControlNoticeTask?.cancel()
+    mediaControlNoticeTask = Task { [weak self] in
+      try? await Task.sleep(nanoseconds: 4_000_000_000)
+      guard !Task.isCancelled, let self, self.mediaControlRequest == request else { return }
+      self.mediaControlNotice = nil
+      self.mediaControlNoticeTask = nil
+    }
+  }
+
+  /// A control stays disabled unless the player capability and a source-scoped transport are
+  /// available.
+  func canPerform(_ command: MediaCommand, for source: SourceID) -> Bool {
+    guard mediaControlsAvailable(for: source), let state = sources[source], !state.isAdvertisement
+    else { return false }
+    switch command {
+    case .seek:
+      return state.duration.isFinite && state.duration > 0
+    case .skipBackward15:
+      return state.supportsSkipBackward15
+    case .skipForward15:
+      return state.supportsSkipForward15
+    default:
+      return true
     }
   }
 
@@ -247,7 +310,10 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     let nextPrimaryKey = adapterKeys.first
     let presentationChanged = publishedPrimaryKey != nextPrimaryKey
     publishedPrimaryKey = nextPrimaryKey
-    if presentationChanged { mediaControlNotice = nil }
+    if presentationChanged {
+      mediaControlRequest &+= 1
+      clearMediaControlFeedback()
+    }
     for source in merged { resolveApplication(for: source.displayBundleIdentifier) }
     var publishedPropertyChanged = false
     if sources != table.states {
@@ -269,7 +335,16 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     if presentationChanged, !publishedPropertyChanged { objectWillChange.send() }
   }
 
-  /// Schedule bounded artwork decoding when the payload changes, not from SwiftUI's `body`.
+  private func clearMediaControlFeedback() {
+    mediaControlNoticeTask?.cancel()
+    mediaControlNoticeTask = nil
+    mediaControlNotice = nil
+    lastMediaCommandResult = nil
+  }
+
+  /// Decode artwork and resolve application metadata when the model changes, not from SwiftUI's
+  /// `body`. Body can be recomputed many times per second while scrubbing or animating bars; doing
+  /// AppKit workspace and image-decoding work there caused avoidable UI and energy spikes.
   private func reconcileArtwork(with states: [SourceID: PlaybackState]) {
     let activeKeys = Set(states.keys)
     let staleKeys = artworkDecodeTasks.keys.filter { !activeKeys.contains($0) }
