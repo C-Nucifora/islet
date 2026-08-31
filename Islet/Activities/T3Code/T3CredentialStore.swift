@@ -347,20 +347,32 @@ final class T3CredentialVault {
   }
 
   private func restore(_ snapshots: [Address: Snapshot], orderedAddresses: [Address]) throws {
-    for address in orderedAddresses {
-      if let snapshot = snapshots[address]?.data {
-        try store.replace(
-          snapshot, service: address.service, account: address.account,
-          label: label(for: address))
-      } else {
-        try store.delete(service: address.service, account: address.account)
-      }
+    let restorations = orderedAddresses.compactMap { address -> (Address, Data)? in
+      guard let data = snapshots[address]?.data else { return nil }
+      return (address, data)
     }
-    for address in orderedAddresses {
+    for (address, data) in restorations {
+      try store.replace(
+        data, service: address.service, account: address.account,
+        label: label(for: address))
+    }
+    for (address, data) in restorations {
       guard
         try store.data(service: address.service, account: address.account)
-          == snapshots[address]?.data
+          == data
       else {
+        throw T3CredentialStoreError.rollbackFailed
+      }
+    }
+
+    // Newly created replacements are the only surviving copy after an aggregate source has been
+    // deleted. Keep them until every prior item is back in place and verified.
+    let removals = orderedAddresses.filter { snapshots[$0]?.data == nil }
+    for address in removals {
+      try store.delete(service: address.service, account: address.account)
+    }
+    for address in removals {
+      guard try store.data(service: address.service, account: address.account) == nil else {
         throw T3CredentialStoreError.rollbackFailed
       }
     }
