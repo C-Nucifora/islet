@@ -75,6 +75,17 @@ final class ShelfLogicTests: XCTestCase {
     }
   }
 
+  private actor MoveCallProbe {
+    private var callCountValue = 0
+
+    func move(source _: URL, to _: URL) -> Result<Void, Error> {
+      callCountValue += 1
+      return .failure(CopyFailure.expected)
+    }
+
+    func callCount() -> Int { callCountValue }
+  }
+
   private actor FailingSecondManifestSave {
     private var callCount = 0
 
@@ -94,6 +105,8 @@ final class ShelfLogicTests: XCTestCase {
     private let outcomes: [Outcome]
     private var callCountValue = 0
     private var continuations: [CheckedContinuation<Void, Never>] = []
+    private var callCountWaiters:
+      [(expected: Int, continuation: CheckedContinuation<Void, Never>)] = []
 
     init(outcomes: [Outcome]) {
       self.outcomes = outcomes
@@ -102,6 +115,9 @@ final class ShelfLogicTests: XCTestCase {
     func save(_ manifest: ShelfManifest, to url: URL) async -> Result<Void, Error> {
       let callIndex = callCountValue
       callCountValue += 1
+      let readyWaiters = callCountWaiters.filter { $0.expected <= callCountValue }
+      callCountWaiters.removeAll { $0.expected <= callCountValue }
+      for waiter in readyWaiters { waiter.continuation.resume() }
       await withCheckedContinuation { continuations.append($0) }
       guard callIndex < outcomes.count else { return .failure(CopyFailure.expected) }
       switch outcomes[callIndex] {
@@ -114,6 +130,13 @@ final class ShelfLogicTests: XCTestCase {
 
     func callCount() -> Int { callCountValue }
 
+    func waitUntilCallCount(_ expected: Int) async {
+      guard callCountValue < expected else { return }
+      await withCheckedContinuation {
+        callCountWaiters.append((expected: expected, continuation: $0))
+      }
+    }
+
     func releaseNext() {
       guard !continuations.isEmpty else { return }
       continuations.removeFirst().resume()
@@ -123,16 +146,25 @@ final class ShelfLogicTests: XCTestCase {
   private actor FirstManifestSaveGate {
     private var firstCallStarted = false
     private var continuation: CheckedContinuation<Void, Never>?
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
 
     func save(_ manifest: ShelfManifest, to url: URL) async -> Result<Void, Error> {
       if !firstCallStarted {
         firstCallStarted = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
         await withCheckedContinuation { continuation = $0 }
       }
       return await ShelfManifestStore.save(manifest, to: url)
     }
 
     func hasStarted() -> Bool { firstCallStarted }
+
+    func waitUntilStarted() async {
+      guard !firstCallStarted else { return }
+      await withCheckedContinuation { startWaiters.append($0) }
+    }
 
     func release() {
       continuation?.resume()
@@ -165,6 +197,27 @@ final class ShelfLogicTests: XCTestCase {
       released = true
       condition.broadcast()
       condition.unlock()
+    }
+  }
+
+  private final class MutableDateProvider: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Date
+
+    init(_ value: Date) {
+      self.value = value
+    }
+
+    func current() -> Date {
+      lock.lock()
+      defer { lock.unlock() }
+      return value
+    }
+
+    func set(_ value: Date) {
+      lock.lock()
+      self.value = value
+      lock.unlock()
     }
   }
 
@@ -1614,8 +1667,8 @@ final class ShelfLogicTests: XCTestCase {
     let stored = shelf.appendingPathComponent("crosses-deadline.txt")
     try Data("stored".utf8).write(to: stored)
     defer { try? FileManager.default.removeItem(at: root) }
-    let deadline = Date(
-      timeIntervalSince1970: floor(Date.now.timeIntervalSince1970) + 3)
+    let initialDate = Date(timeIntervalSince1970: 2_000_000_000)
+    let deadline = initialDate.addingTimeInterval(10)
     let stack = ShelfStack(id: UUID(), name: "Scratch", expiryRule: .never)
     let record = ShelfItemRecord(
       id: UUID(), fileName: stored.lastPathComponent, stackID: stack.id,
@@ -1625,18 +1678,15 @@ final class ShelfLogicTests: XCTestCase {
       sameFilePolicy: .reuseExisting, sameNamePolicy: .keepBoth)
     try await ShelfManifestStore.save(manifest, to: shelf.appendingPathExtension("json")).get()
     let saveGate = FirstManifestSaveGate()
-    let model = ShelfModel(directory: shelf, saveManifest: saveGate.save)
+    let dateProvider = MutableDateProvider(initialDate)
+    let model = ShelfModel(
+      directory: shelf, saveManifest: saveGate.save, currentDate: dateProvider.current)
 
     let ruleChange = Task { await model.setExpiryRule(.oneHour, for: stack) }
-    for _ in 0..<200 where !(await saveGate.hasStarted()) {
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    await saveGate.waitUntilStarted()
     let firstSaveStarted = await saveGate.hasStarted()
     XCTAssertTrue(firstSaveStarted)
-    XCTAssertLessThan(Date.now, deadline)
-    while Date.now <= deadline {
-      try await Task.sleep(for: .milliseconds(10))
-    }
+    dateProvider.set(deadline.addingTimeInterval(1))
     await saveGate.release()
 
     let ruleSaved = await ruleChange.value
@@ -1644,6 +1694,194 @@ final class ShelfLogicTests: XCTestCase {
     XCTAssertTrue(model.items.isEmpty)
     XCTAssertFalse(FileManager.default.fileExists(atPath: stored.path))
     XCTAssertTrue(ShelfModel(directory: shelf).items.isEmpty)
+  }
+
+  @MainActor
+  func testExpiryCleanupSkipsAWorkspaceWhileItsRuleChangeIsSaving() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    try FileManager.default.createDirectory(at: shelf, withIntermediateDirectories: true)
+    let stored = shelf.appendingPathComponent("extended-before-expiry.txt")
+    try Data("stored".utf8).write(to: stored)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let expiry = Date(timeIntervalSince1970: 2_000_000_000)
+    let stack = ShelfStack(id: UUID(), name: "Scratch", expiryRule: .oneHour)
+    let record = ShelfItemRecord(
+      id: UUID(), fileName: stored.lastPathComponent, stackID: stack.id,
+      importedAt: expiry.addingTimeInterval(-3_600), expiresAt: expiry, origin: nil)
+    let manifest = ShelfManifest(
+      stacks: [stack], items: [record], pendingImports: [],
+      sameFilePolicy: .reuseExisting, sameNamePolicy: .keepBoth)
+    try await ShelfManifestStore.save(manifest, to: shelf.appendingPathExtension("json")).get()
+    let saveGate = FirstManifestSaveGate()
+    let model = ShelfModel(
+      directory: shelf,
+      removeItem: { url in
+        let result = Result { try FileManager.default.removeItem(at: url) }
+        Task { await saveGate.release() }
+        return result
+      },
+      saveManifest: saveGate.save)
+
+    let ruleChange = Task { await model.setExpiryRule(.never, for: stack) }
+    await saveGate.waitUntilStarted()
+    let saveStarted = await saveGate.hasStarted()
+    XCTAssertTrue(saveStarted)
+
+    await model.cleanupExpired(at: expiry.addingTimeInterval(1))
+    await saveGate.release()
+    let ruleSaved = await ruleChange.value
+    XCTAssertTrue(ruleSaved)
+    XCTAssertEqual(model.items.map(\.id), [record.id])
+    XCTAssertNil(try XCTUnwrap(model.items.first).expiresAt)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: stored.path))
+  }
+
+  @MainActor
+  func testFailedExpiryRuleSaveRestoresAndCleansTheOldElapsedRule() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    try FileManager.default.createDirectory(at: shelf, withIntermediateDirectories: true)
+    let stored = shelf.appendingPathComponent("expires-while-save-fails.txt")
+    try Data("stored".utf8).write(to: stored)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let initialDate = Date(timeIntervalSince1970: 2_000_000_000)
+    let expiry = initialDate.addingTimeInterval(10)
+    let stack = ShelfStack(id: UUID(), name: "Scratch", expiryRule: .oneHour)
+    let record = ShelfItemRecord(
+      id: UUID(), fileName: stored.lastPathComponent, stackID: stack.id,
+      importedAt: expiry.addingTimeInterval(-3_600), expiresAt: expiry, origin: nil)
+    let manifest = ShelfManifest(
+      stacks: [stack], items: [record], pendingImports: [],
+      sameFilePolicy: .reuseExisting, sameNamePolicy: .keepBoth)
+    try await ShelfManifestStore.save(manifest, to: shelf.appendingPathExtension("json")).get()
+    let dateProvider = MutableDateProvider(initialDate)
+    let model = ShelfModel(
+      directory: shelf,
+      saveManifest: { _, _ in
+        dateProvider.set(expiry.addingTimeInterval(1))
+        return .failure(CopyFailure.expected)
+      },
+      currentDate: dateProvider.current)
+
+    let saved = await model.setExpiryRule(.never, for: stack)
+
+    XCTAssertFalse(saved)
+    XCTAssertEqual(model.stacks.first?.expiryRule, .oneHour)
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: stored.path))
+    XCTAssertTrue(ShelfModel(directory: shelf).items.isEmpty)
+  }
+
+  @MainActor
+  func testOverlappingExpiryRuleSavesPublishOnlyCommittedMetadata() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    try FileManager.default.createDirectory(at: shelf, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let stack = ShelfStack(id: UUID(), name: "Scratch", expiryRule: .never)
+    let manifest = ShelfManifest(
+      stacks: [stack], items: [], pendingImports: [],
+      sameFilePolicy: .reuseExisting, sameNamePolicy: .keepBoth)
+    try await ShelfManifestStore.save(manifest, to: shelf.appendingPathExtension("json")).get()
+    let saveGate = ManifestSaveGate(outcomes: [.success, .success])
+    let model = ShelfModel(directory: shelf, saveManifest: saveGate.save)
+
+    let firstChange = Task { await model.setExpiryRule(.oneHour, for: stack) }
+    await saveGate.waitUntilCallCount(1)
+    let secondChange = Task { await model.setExpiryRule(.oneDay, for: stack) }
+    await saveGate.releaseNext()
+    await saveGate.waitUntilCallCount(2)
+
+    XCTAssertEqual(model.stacks.first?.expiryRule, .oneHour)
+
+    await saveGate.releaseNext()
+    let firstSaved = await firstChange.value
+    let secondSaved = await secondChange.value
+    XCTAssertTrue(firstSaved)
+    XCTAssertTrue(secondSaved)
+    XCTAssertEqual(model.stacks.first?.expiryRule, .oneDay)
+    XCTAssertEqual(ShelfModel(directory: shelf).stacks.first?.expiryRule, .oneDay)
+  }
+
+  @MainActor
+  func testMissingItemCleanupContinuesWhileAnExpiryRuleSaveIsInFlight() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    try FileManager.default.createDirectory(at: shelf, withIntermediateDirectories: true)
+    let stored = shelf.appendingPathComponent("missing-during-rule-save.txt")
+    try Data("stored".utf8).write(to: stored)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let stack = ShelfStack(id: UUID(), name: "Scratch", expiryRule: .oneHour)
+    let importedAt = Date(timeIntervalSince1970: 2_000_000_000)
+    let record = ShelfItemRecord(
+      id: UUID(), fileName: stored.lastPathComponent, stackID: stack.id,
+      importedAt: importedAt, expiresAt: importedAt.addingTimeInterval(3_600), origin: nil)
+    let manifest = ShelfManifest(
+      stacks: [stack], items: [record], pendingImports: [],
+      sameFilePolicy: .reuseExisting, sameNamePolicy: .keepBoth)
+    try await ShelfManifestStore.save(manifest, to: shelf.appendingPathExtension("json")).get()
+    let saveGate = FirstManifestSaveGate()
+    let model = ShelfModel(
+      directory: shelf,
+      removeItem: { _ in
+        Task { await saveGate.release() }
+        return .failure(CocoaError(.fileNoSuchFile))
+      },
+      saveManifest: saveGate.save)
+
+    let ruleChange = Task { await model.setExpiryRule(.never, for: stack) }
+    await saveGate.waitUntilStarted()
+    try FileManager.default.removeItem(at: stored)
+
+    await model.cleanupStorage()
+    await saveGate.release()
+    let ruleSaved = await ruleChange.value
+
+    XCTAssertTrue(ruleSaved)
+    XCTAssertTrue(model.items.isEmpty)
+    XCTAssertTrue(ShelfModel(directory: shelf).items.isEmpty)
+  }
+
+  @MainActor
+  func testClearDuringPendingMetadataSaveDoesNotStartTheRename() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let shelf = root.appendingPathComponent("Shelf", isDirectory: true)
+    let source = root.appendingPathComponent("cancel-before-rename.txt")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try Data("source".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let saveGate = FirstManifestSaveGate()
+    let moveProbe = MoveCallProbe()
+    let model = ShelfModel(
+      directory: shelf,
+      moveItem: { source, destination in
+        await moveProbe.move(source: source, to: destination)
+      },
+      saveManifest: saveGate.save)
+
+    XCTAssertTrue(model.importDroppedURLs([source]))
+    await saveGate.waitUntilStarted()
+    let saveStarted = await saveGate.hasStarted()
+    XCTAssertTrue(saveStarted)
+
+    let clear = Task { await model.clear() }
+    for _ in 0..<200 where !model.isClearing { await Task.yield() }
+    XCTAssertTrue(model.isClearing)
+    await saveGate.release()
+    await clear.value
+
+    let moveCallCount = await moveProbe.callCount()
+    XCTAssertEqual(moveCallCount, 0)
+    XCTAssertTrue(model.items.isEmpty)
+    let remaining = try FileManager.default.contentsOfDirectory(
+      at: shelf, includingPropertiesForKeys: nil)
+    XCTAssertTrue(remaining.isEmpty)
   }
 
   @MainActor

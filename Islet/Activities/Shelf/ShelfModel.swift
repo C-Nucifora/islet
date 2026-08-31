@@ -176,6 +176,7 @@ final class ShelfModel: ObservableObject {
   typealias GenerateThumbnail = @Sendable (URL) async -> Data?
   typealias LoadManifest = @Sendable (URL) -> Result<ShelfManifest?, Error>
   typealias SaveManifest = @Sendable (ShelfManifest, URL) async -> Result<Void, Error>
+  typealias CurrentDate = @Sendable () -> Date
 
   @Published private(set) var items: [ShelfItem] = []
   @Published private(set) var lastError: String?
@@ -203,12 +204,14 @@ final class ShelfModel: ObservableObject {
   private let generateThumbnailData: GenerateThumbnail
   private let loadManifest: LoadManifest
   private let saveManifest: SaveManifest
+  private let currentDate: CurrentDate
   private var manifest: ShelfManifest
   private let manifestURL: URL
   private let quickLookController = ShelfQuickLookController()
   private var useCounts: [UUID: Int] = [:]
   private var removalReservations: Set<UUID> = []
   private var expiryTask: Task<Void, Never>?
+  private var expiryRuleMutationCounts: [UUID: Int] = [:]
   private var reservedOrigins: [ShelfOriginIdentity: URL] = [:]
   private var originWaiters: [ShelfOriginIdentity: [CheckedContinuation<ShelfItem?, Never>]] = [:]
   private var reservedNames: [String: URL] = [:]
@@ -244,6 +247,7 @@ final class ShelfModel: ObservableObject {
     generateThumbnailData: GenerateThumbnail? = nil,
     loadManifest: LoadManifest? = nil,
     saveManifest: SaveManifest? = nil,
+    currentDate: @escaping CurrentDate = { .now },
     storagePolicy: ShelfStoragePolicy = .standard
   ) {
     let base =
@@ -314,6 +318,7 @@ final class ShelfModel: ObservableObject {
     self.generateThumbnailData = generateThumbnailData ?? Self.thumbnailData(for:)
     self.loadManifest = loadManifest ?? ShelfManifestStore.load
     self.saveManifest = saveManifest ?? ShelfManifestStore.save
+    self.currentDate = currentDate
     self.storagePolicy = storagePolicy
     dir = base
     manifestURL = base.appendingPathExtension("json")
@@ -446,6 +451,7 @@ final class ShelfModel: ObservableObject {
   }
 
   func setExpiryRule(_ rule: ShelfExpiryRule, for stack: ShelfStack) async -> Bool {
+    beginExpiryRuleMutation(for: stack.id)
     let saved = await withManifestMutation {
       guard let index = manifest.stacks.firstIndex(where: { $0.id == stack.id }) else {
         return false
@@ -467,14 +473,14 @@ final class ShelfModel: ObservableObject {
         manifest = previous
         return false
       }
+      stacks = manifest.stacks
+      applyManifestItems()
       return true
     }
-    guard saved else { return false }
-    stacks = manifest.stacks
-    applyManifestItems()
+    endExpiryRuleMutation(for: stack.id)
     scheduleExpiry()
     await cleanupExpired()
-    return true
+    return saved
   }
 
   func setSameFileDuplicatePolicy(_ policy: ShelfSameFileDuplicatePolicy) async {
@@ -634,7 +640,7 @@ final class ShelfModel: ObservableObject {
     scheduleUsageScan()
     scheduleExpiry()
     if recovered != loadedManifest { _ = enqueueManifestSave() }
-    if items.contains(where: { $0.expiresAt.map { $0 <= .now } == true }) {
+    if items.contains(where: { $0.expiresAt.map { $0 <= currentDate() } == true }) {
       Task { [weak self] in await self?.cleanupExpired() }
     }
   }
@@ -922,7 +928,7 @@ final class ShelfModel: ObservableObject {
         return (nil, nil, nil)
       }
 
-      let importedAt = Date.now
+      let importedAt = currentDate()
       let pendingDraft = ShelfPendingImport(
         id: UUID(), fileName: dest.lastPathComponent, stackID: targetStack.id,
         importedAt: importedAt,
@@ -942,6 +948,11 @@ final class ShelfModel: ObservableObject {
         let error = "Couldn't save Shelf workspace data."
         setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
         return (nil, error, nil)
+      }
+      guard importIsCurrent(expectedImportGeneration) else {
+        removeStagingItem(staging)
+        await discardPendingImport(pending.id)
+        return (nil, nil, nil)
       }
 
       let moveResult = await moveItem(staging, dest)
@@ -1260,7 +1271,7 @@ final class ShelfModel: ObservableObject {
     } else {
       useCounts[item.id] = count - 1
     }
-    if items.first(where: { $0.id == item.id })?.expiresAt.map({ $0 <= .now }) == true {
+    if items.first(where: { $0.id == item.id })?.expiresAt.map({ $0 <= currentDate() }) == true {
       Task { [weak self] in await self?.cleanupExpired() }
     }
   }
@@ -1279,17 +1290,18 @@ final class ShelfModel: ObservableObject {
   }
 
   func cleanupStorage() async {
-    await cleanupItems(at: .now, includeMissing: true)
+    await cleanupItems(at: currentDate(), includeMissing: true)
   }
 
-  func cleanupExpired(at date: Date = .now) async {
-    await cleanupItems(at: date, includeMissing: false)
+  func cleanupExpired(at date: Date? = nil) async {
+    await cleanupItems(at: date ?? currentDate(), includeMissing: false)
   }
 
   private func cleanupItems(at date: Date, includeMissing: Bool) async {
     let candidates = items.filter { item in
       guard useCounts[item.id] == nil else { return false }
-      let expired = item.expiresAt.map { $0 <= date } == true
+      let expiryUpdateInFlight = expiryRuleMutationCounts[item.stackID] != nil
+      let expired = !expiryUpdateInFlight && item.expiresAt.map { $0 <= date } == true
       let missing = includeMissing && !FileManager.default.fileExists(atPath: item.url.path)
       return expired || missing
     }
@@ -1299,9 +1311,13 @@ final class ShelfModel: ObservableObject {
 
   private func scheduleExpiry() {
     expiryTask?.cancel()
-    guard let next = items.compactMap(\.expiresAt).filter({ $0 > .now }).min() else { return }
+    let now = currentDate()
+    guard
+      let next = items.lazy.filter({ self.expiryRuleMutationCounts[$0.stackID] == nil })
+        .compactMap(\.expiresAt).filter({ $0 > now }).min()
+    else { return }
     expiryTask = Task { [weak self] in
-      let interval = max(0, next.timeIntervalSinceNow)
+      let interval = max(0, next.timeIntervalSince(now))
       try? await Task.sleep(for: .seconds(interval))
       guard !Task.isCancelled else { return }
       await self?.cleanupExpired()
@@ -1314,6 +1330,20 @@ final class ShelfModel: ObservableObject {
       guard let record = records[items[index].id] else { continue }
       items[index].stackID = record.stackID
       items[index].expiresAt = record.expiresAt
+    }
+  }
+
+  private func beginExpiryRuleMutation(for stackID: UUID) {
+    expiryRuleMutationCounts[stackID, default: 0] += 1
+    expiryTask?.cancel()
+  }
+
+  private func endExpiryRuleMutation(for stackID: UUID) {
+    guard let count = expiryRuleMutationCounts[stackID] else { return }
+    if count <= 1 {
+      expiryRuleMutationCounts.removeValue(forKey: stackID)
+    } else {
+      expiryRuleMutationCounts[stackID] = count - 1
     }
   }
 
