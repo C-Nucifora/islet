@@ -72,6 +72,15 @@ final class ClipboardPrivacyPolicyTests: XCTestCase {
       ).reason)
   }
 
+  func testUntilNextLoginPauseSurvivesTemporaryMissingSessionIdentifier() {
+    let evaluation = ClipboardPrivacyEvaluator.evaluate(
+      configuration: ClipboardPrivacyConfiguration(pausedLoginSession: "login-a"),
+      context: ClipboardCaptureContext(), now: .distantPast, loginSession: nil)
+
+    XCTAssertEqual(evaluation.reason, .untilNextLogin)
+    XCTAssertEqual(evaluation.configuration.pausedLoginSession, "login-a")
+  }
+
   @MainActor
   func testAppSwitchDropsCopyBeforeReevaluatingTheNewFrontmostApp() throws {
     let pasteboard = testPasteboard()

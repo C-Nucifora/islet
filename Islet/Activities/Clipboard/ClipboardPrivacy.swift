@@ -138,7 +138,8 @@ enum ClipboardPrivacyEvaluator {
       configuration.pausedUntil = nil
     }
     if let pausedSession = configuration.pausedLoginSession,
-      loginSession == nil || pausedSession != loginSession
+      let loginSession,
+      pausedSession != loginSession
     {
       configuration.pausedLoginSession = nil
     }
