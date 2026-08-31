@@ -141,6 +141,26 @@ final class SettingsTransferTests: XCTestCase {
     XCTAssertEqual(applied, preview.result)
   }
 
+  @MainActor
+  func testDefaultsSnapshotAndValidatedApplyUseEventSourcePreferenceOwner() throws {
+    let preferences = EventSourcePreferences.shared
+    let original = preferences.disabledSourceIDs
+    defer { preferences.replaceDisabledSourceIDs(original) }
+
+    preferences.replaceDisabledSourceIDs(["wifi", "future-source"])
+    XCTAssertEqual(
+      SettingsTransferDefaults.snapshot().disabledEventSources, ["wifi", "future-source"])
+
+    let data = try document(settings: ["disabledEventSources": ["usb", "future-source"]])
+    let preview = try SettingsTransfer.preview(
+      data: data, current: SettingsTransferDefaults.snapshot())
+    SettingsTransfer.apply(preview) { SettingsTransferDefaults.apply($0) }
+
+    XCTAssertEqual(preferences.disabledSourceIDs, ["usb", "future-source"])
+    XCTAssertEqual(
+      SettingsTransferDefaults.snapshot().disabledEventSources, ["usb", "future-source"])
+  }
+
   func testExportAllowlistCannotContainSensitiveOrInstallationSpecificPreferences() throws {
     XCTAssertTrue(
       Set(SettingsTransfer.portableKeys).isDisjoint(with: SettingsTransfer.excludedPreferenceKeys))
