@@ -1278,11 +1278,15 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testOccupiedDefaultPortMovesToStableLoopbackFallbackAndPublishesIt() async throws {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-port-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
     var requestedPorts: [UInt16] = []
     var requestedHosts: [NWEndpoint.Host] = []
     var listeners: [FakePulseListener] = []
     var publishedPorts: [UInt16] = []
     let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: supportDirectory),
       listenerFactory: { parameters, port in
         requestedPorts.append(port.rawValue)
         if case .hostPort(let host, _) = parameters.requiredLocalEndpoint {
@@ -1292,7 +1296,6 @@ final class PulseTests: XCTestCase {
         listeners.append(listener)
         return listener
       },
-      tokenLoader: { Self.testToken },
       activePortWriter: { publishedPorts.append($0) },
       activePortRemover: {})
 
@@ -1321,14 +1324,17 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testOccupiedFallbacksEndInActionableStoppedState() {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-port-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
     var requestedPorts: [UInt16] = []
     var removedPortFile = false
     let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: supportDirectory),
       listenerFactory: { _, port in
         requestedPorts.append(port.rawValue)
         throw NWError.posix(.EADDRINUSE)
       },
-      tokenLoader: { Self.testToken },
       activePortWriter: { _ in XCTFail("An occupied listener must not publish a port") },
       activePortRemover: { removedPortFile = true })
 
@@ -1571,8 +1577,6 @@ final class PulseTests: XCTestCase {
       revisionPersistenceDelay: revisionPersistenceDelay, symbolAvailability: symbolAvailability,
       deliveryProfileKey: key, sourcePoliciesKey: sourcePoliciesKey)
   }
-
-  private static let testToken = Data(repeating: 0, count: 32).base64EncodedString()
 }
 
 private final class FakePulseListener: PulseListening, @unchecked Sendable {
