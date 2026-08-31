@@ -10,7 +10,7 @@ private let usage = """
   options:
     --source NAME            Stable provider source (default: cli)
     --progress NUMBER        Progress from 0 through 1
-    --state STATE            active|progress|needsAction|succeeded|failed
+    --state STATE            active|progress|needsAction|succeeded|failed|cancelled
     --priority PRIORITY      low|normal|high|critical
     --expires SECONDS        Expire after 2 through 86400 seconds
     --action TITLE URL       Add an HTTP(S) action (up to three)
@@ -213,7 +213,9 @@ if operation == "end" {
       activity["progress"] = progress
       index += 2
     case "--state":
-      let allowed = Set(["active", "progress", "needsAction", "succeeded", "failed"])
+      let allowed = Set([
+        "active", "progress", "needsAction", "succeeded", "failed", "cancelled",
+      ])
       guard index + 1 < arguments.count, allowed.contains(arguments[index + 1]) else {
         FileHandle.standardError.write(Data("invalid state\n".utf8))
         exit(64)

@@ -112,6 +112,16 @@ final class SourceStripTests: XCTestCase {
       "Spotify, Paused, Additional source")
     XCTAssertEqual(
       MediaSourceChooser.accessibilityHint(appName: "Spotify"),
-      "Makes Spotify the primary player")
+      "Makes Spotify the preferred player")
+  }
+
+  func testCoreAudioOnlyChooserCopyDoesNotPromiseDirectControl() {
+    XCTAssertEqual(
+      MediaSourceChooser.accessibilityLabel(
+        appName: "Zoom", isPlaying: true, isPrimary: false, isAdapterBacked: false),
+      "Zoom, Audio detected only, Additional source")
+    XCTAssertEqual(
+      MediaSourceChooser.accessibilityHint(appName: "Zoom", isAdapterBacked: false),
+      "Brings Zoom forward; Islet cannot control this audio source directly")
   }
 }

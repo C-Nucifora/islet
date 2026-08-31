@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Islet Pulse downloads",
+  "version": "1.0.0",
+  "description": "Shows Chrome download progress in Islet without retaining URLs or paths.",
+  "permissions": ["downloads", "nativeMessaging", "storage"],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  }
+}

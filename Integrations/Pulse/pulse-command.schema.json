@@ -47,7 +47,9 @@
         "symbol": { "type": "string", "maxLength": 80 },
         "accentHex": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
         "progress": { "type": "number", "minimum": 0, "maximum": 1 },
-        "state": { "enum": ["active", "progress", "needsAction", "succeeded", "failed"] },
+        "state": {
+          "enum": ["active", "progress", "needsAction", "succeeded", "failed", "cancelled"]
+        },
         "priority": { "enum": ["low", "normal", "high", "critical"] },
         "expiresAt": { "type": "string", "format": "date-time" },
         "actions": {

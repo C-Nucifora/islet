@@ -33,6 +33,72 @@ final class RemindersLogicTests: XCTestCase {
     XCTAssertEqual(RemindersLogic.display(items, limit: 5).count, 5)
   }
 
+  func testDashboardBoundsLargeStoreAndKeepsEarliestItems() {
+    let items = (0..<10_000).reversed().map {
+      item("r\($0)", due: TimeInterval($0) * 60)
+    }
+    let selection = RemindersLogic.dashboardSelection(items, now: now)
+
+    XCTAssertEqual(selection.items.map(\.id), (0..<8).map { "r\($0)" })
+    XCTAssertTrue(selection.hasMore)
+  }
+
+  func testDashboardIncludesOverdueNearTermAndImportantUndatedItems() {
+    let items = [
+      item("far-future", due: 31 * 86_400),
+      item("undated-low", priority: 9),
+      item("near-term", due: 29 * 86_400),
+      item("undated-high", priority: 1),
+      item("overdue", due: -86_400),
+      item("undated-none"),
+    ]
+    let policy = RemindersLogic.DashboardPolicy(
+      horizonDays: 30, displayLimit: 4, reservedUndatedItems: 2)
+    let selection = RemindersLogic.dashboardSelection(items, now: now, policy: policy)
+
+    XCTAssertEqual(
+      selection.items.map(\.id), ["overdue", "near-term", "undated-high", "undated-low"])
+    XCTAssertTrue(selection.hasMore)
+  }
+
+  func testDashboardUsesUndatedItemsWhenThereAreNotEnoughDatedItems() {
+    let items = [
+      item("dated", due: 60), item("undated-none"), item("undated-low", priority: 9),
+      item("undated-high", priority: 1),
+    ]
+    let policy = RemindersLogic.DashboardPolicy(
+      horizonDays: 30, displayLimit: 3, reservedUndatedItems: 1)
+
+    XCTAssertEqual(
+      RemindersLogic.dashboardSelection(items, now: now, policy: policy).items.map(\.id),
+      ["dated", "undated-high", "undated-low"])
+  }
+
+  func testUnprioritizedUndatedItemsDoNotEvictDatedItems() {
+    let dated = (0..<8).map { item("dated-\($0)", due: TimeInterval($0) * 60) }
+    let items = dated + [item("undated-a"), item("undated-b")]
+
+    let selection = RemindersLogic.dashboardSelection(items, now: now)
+
+    XCTAssertEqual(selection.items.map(\.id), dated.map(\.id))
+    XCTAssertTrue(selection.hasMore)
+  }
+
+  func testDashboardReportsNoMoreWhenEveryItemFits() {
+    let selection = RemindersLogic.dashboardSelection(
+      [item("overdue", due: -60), item("undated", priority: 1)], now: now)
+
+    XCTAssertFalse(selection.hasMore)
+  }
+
+  func testDashboardLeavesFarFutureItemsForMorePath() {
+    let selection = RemindersLogic.dashboardSelection(
+      [item("later", due: 31 * 86_400)], now: now)
+
+    XCTAssertTrue(selection.items.isEmpty)
+    XCTAssertTrue(selection.hasMore)
+  }
+
   func testOverdueDetection() {
     XCTAssertTrue(RemindersLogic.isOverdue(item("x", due: -60), now: now))
     XCTAssertFalse(RemindersLogic.isOverdue(item("y", due: 60), now: now))

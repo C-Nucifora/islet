@@ -4,6 +4,23 @@ import XCTest
 @testable import Islet
 
 final class MediaWatcherTests: XCTestCase {
+  private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() {
+      lock.lock()
+      count += 1
+      lock.unlock()
+    }
+
+    var value: Int {
+      lock.lock()
+      defer { lock.unlock() }
+      return count
+    }
+  }
+
   func testBackoffDoublesAndCaps() {
     XCTAssertEqual(MediaWatcher.backoffDelay(failureCount: 1), 1)
     XCTAssertEqual(MediaWatcher.backoffDelay(failureCount: 2), 2)
@@ -111,28 +128,32 @@ final class MediaWatcherTests: XCTestCase {
       try? FileManager.default.removeItem(atPath: log.path + ".get.lock")
     }
 
+    let snapshotAttempts = LockedCounter()
     let secondTimeout = expectation(description: "two snapshot attempts time out")
     secondTimeout.expectedFulfillmentCount = 2
     let watcher = MediaWatcher(
-      snapshotTimeouts: .init(startup: 0.15, idle: 0.15, total: 0.4),
+      snapshotTimeouts: .init(startup: 2, idle: 0.15, total: 3),
       initialSnapshotDelay: 0,
       commandProvider: { kind in
-        MediaWatcher.HelperCommand(
+        if case .snapshot = kind { snapshotAttempts.increment() }
+        return MediaWatcher.HelperCommand(
           executableURL: URL(fileURLWithPath: "/usr/bin/perl"),
           arguments: [helper.path, kind.rawValue, log.path])
       },
       snapshotBackoff: { _ in 0.05 })
     watcher.onStatus = { status in
-      if status.contains("snapshot startup timeout") { secondTimeout.fulfill() }
+      if status.contains("snapshot idle timeout") { secondTimeout.fulfill() }
     }
     watcher.start()
-    wait(for: [secondTimeout], timeout: 3)
+    wait(for: [secondTimeout], timeout: 5)
     watcher.stop()
 
     let records = try String(contentsOf: log, encoding: .utf8)
       .split(separator: "\n").map(String.init)
     let snapshotStarts = records.filter { $0.hasPrefix("started get ") }
+    XCTAssertGreaterThanOrEqual(snapshotAttempts.value, 2)
     XCTAssertGreaterThanOrEqual(snapshotStarts.count, 2)
+    XCTAssertLessThanOrEqual(snapshotStarts.count, snapshotAttempts.value)
     XCTAssertFalse(records.contains { $0.hasPrefix("overlap ") })
 
     for record in records where record.hasPrefix("started ") {

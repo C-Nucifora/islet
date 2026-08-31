@@ -53,6 +53,19 @@ struct ClipboardItem: Identifiable, Equatable {
   }
 }
 
+enum ClipboardFocusPolicy {
+  /// Keep focus on the next item when one exists. Removing the last item instead focuses the
+  /// preceding item, which keeps keyboard navigation inside the history after every deletion.
+  static func replacementItemID(
+    afterRemoving itemID: ClipboardItem.ID, from items: [ClipboardItem]
+  ) -> ClipboardItem.ID? {
+    guard let index = items.firstIndex(where: { $0.id == itemID }) else { return nil }
+    if index + 1 < items.count { return items[index + 1].id }
+    if index > 0 { return items[index - 1].id }
+    return nil
+  }
+}
+
 enum ClipboardPrivacyPolicy {
   static let maximumTextBytes = 64 * 1024
   static let maximumImageBytes = 12 * 1024 * 1024
@@ -358,6 +371,7 @@ final class ClipboardActivity: NotchActivity, ObservableObject {
 
 struct ClipboardView: View {
   @ObservedObject var model: ClipboardModel
+  @FocusState private var focusedItemID: ClipboardItem.ID?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
@@ -399,24 +413,50 @@ struct ClipboardView: View {
         ScrollView(.vertical, showsIndicators: false) {
           VStack(spacing: 4) {
             ForEach(model.items) { item in
-              Button {
-                _ = model.copyBack(item)
-              } label: {
-                HStack(spacing: 8) {
-                  Image(systemName: item.icon).font(.caption2).appThemeForeground(.clipboard)
-                    .frame(width: 16)
-                  Text(item.preview).font(.caption).lineLimit(1)
-                  if let detail = item.detail {
-                    Text(detail).font(.caption2).foregroundStyle(.secondary)
+              HStack(spacing: 4) {
+                Button {
+                  _ = model.copyBack(item)
+                } label: {
+                  HStack(spacing: 8) {
+                    Image(systemName: item.icon).font(.caption2).appThemeForeground(.clipboard)
+                      .frame(width: 16)
+                    Text(item.preview).font(.caption).lineLimit(1)
+                    if let detail = item.detail {
+                      Text(detail).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "doc.on.doc").font(.caption2).foregroundStyle(.secondary)
                   }
-                  Spacer(minLength: 0)
-                  Image(systemName: "doc.on.doc").font(.caption2).foregroundStyle(.secondary)
                 }
-                .padding(.vertical, 3).padding(.horizontal, 6)
-                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .focused($focusedItemID, equals: item.id)
+                .accessibilityLabel(copyLabel(for: item))
+                .accessibilityHint("Copies this item to the system clipboard")
+
+                Button {
+                  delete(item)
+                } label: {
+                  Image(systemName: "trash")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Delete clipboard item")
+                .accessibilityLabel("Delete clipboard item")
+                .accessibilityHint("Removes this item without changing the system clipboard")
               }
-              .buttonStyle(.plain)
+              .padding(.vertical, 3).padding(.horizontal, 6)
+              .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+              .contentShape(Rectangle())
+              .contextMenu {
+                Button(role: .destructive) {
+                  delete(item)
+                } label: {
+                  Label("Delete clipboard item", systemImage: "trash")
+                }
+              }
             }
           }
         }
@@ -424,5 +464,25 @@ struct ClipboardView: View {
     }
     .foregroundStyle(.white)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  private func delete(_ item: ClipboardItem) {
+    let replacementID = ClipboardFocusPolicy.replacementItemID(
+      afterRemoving: item.id, from: model.items)
+    model.remove(item)
+    focusedItemID = replacementID
+    A11y.announce("Deleted clipboard item")
+  }
+
+  private func copyLabel(for item: ClipboardItem) -> String {
+    switch item.kind {
+    case .text:
+      return "Copy text clipboard item"
+    case .fileURLs:
+      let detail = item.detail ?? "files"
+      return "Copy \(detail) clipboard item"
+    case .image:
+      return "Copy image clipboard item"
+    }
   }
 }

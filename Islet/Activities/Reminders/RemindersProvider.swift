@@ -18,6 +18,7 @@ final class RemindersProvider: ObservableObject {
   static let shared = RemindersProvider()
 
   @Published private(set) var reminders: [ReminderItem] = []
+  @Published private(set) var hasMoreReminders = false
   @Published private(set) var authorization = EventKitPermissionState(
     EKEventStore.authorizationStatus(for: .reminder))
   @Published private(set) var hasRequestedAccess = false
@@ -55,6 +56,7 @@ final class RemindersProvider: ObservableObject {
           self?.reloadState.invalidate(clearOptimisticCompletions: true)
           self?.reminders = []
           self?.availableLists = []
+          self?.hasMoreReminders = false
           self?.loadState = .idle
           return
         }
@@ -79,6 +81,7 @@ final class RemindersProvider: ObservableObject {
     reminders = []
     availableLists = []
     completionUndo = nil
+    hasMoreReminders = false
     loadState = .idle
     lastActionError = nil
   }
@@ -149,6 +152,7 @@ final class RemindersProvider: ObservableObject {
       reloadState.invalidate(clearOptimisticCompletions: true)
       reminders = []
       availableLists = []
+      hasMoreReminders = false
       loadState = .idle
     }
   }
@@ -162,6 +166,7 @@ final class RemindersProvider: ObservableObject {
       reloadState.invalidate(clearOptimisticCompletions: true)
       reminders = []
       availableLists = []
+      hasMoreReminders = false
       loadState = .idle
       return
     }
@@ -169,11 +174,16 @@ final class RemindersProvider: ObservableObject {
     loadState = .loading
     let predicate = store.predicateForIncompleteReminders(
       withDueDateStarting: nil, ending: nil, calendars: nil)
-    let items: [ReminderItem] = await withCheckedContinuation { continuation in
+    let result: (items: [ReminderItem], hasMore: Bool) = await withCheckedContinuation {
+      continuation in
       // Explicitly @Sendable so the closure is NOT @MainActor-isolated: EventKit invokes it on
       // its own queue, and a MainActor-isolated closure would trap on a dispatch-queue assertion.
       let handler: @Sendable ([EKReminder]?) -> Void = { fetched in
-        let mapped = (fetched ?? []).map { r in
+        let selection = RemindersLogic.dashboardSelection(
+          fetched ?? [],
+          dueDate: { RemindersLogic.dueDate(from: $0.dueDateComponents) },
+          priority: \.priority, stableID: \.calendarItemIdentifier)
+        let items = selection.items.map { r in
           let dueComponents = r.dueDateComponents
           let hasDueTime =
             dueComponents?.hour != nil || dueComponents?.minute != nil
@@ -188,16 +198,24 @@ final class RemindersProvider: ObservableObject {
             listID: r.calendar?.calendarIdentifier,
             listTitle: r.calendar?.title)
         }
-        continuation.resume(returning: mapped)
+        continuation.resume(returning: (items, selection.hasMore))
       }
       store.fetchReminders(matching: predicate, completion: handler)
     }
     guard isRunning, Defaults[.remindersEnabled],
-      let visibleItems = reloadState.finish(items, generation: generation)
+      let visibleItems = reloadState.finish(result.items, generation: generation)
     else { return }
     reminders = RemindersLogic.display(visibleItems)
     availableLists = writes.lists()
+    hasMoreReminders = result.hasMore
     loadState = .loaded
+  }
+
+  func openRemindersApp() {
+    guard
+      let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.reminders")
+    else { return }
+    NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
   }
 
   /// Marks a reminder complete and offers one short, source-revision-bound undo.
