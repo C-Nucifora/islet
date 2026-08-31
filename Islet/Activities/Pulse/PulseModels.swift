@@ -395,7 +395,7 @@ struct PulseProviderDescriptor: Identifiable, Equatable, Sendable {
       summary: "Shows GitHub run status observed on this Mac.",
       symbol: "shippingbox.fill", sourceIDs: ["github-actions", "github"],
       capabilities: [.events, .progress, .webActions],
-      setupHint: "Use the example locally or on a self-hosted Mac runner."),
+      setupHint: "Run the watcher after gh auth login; Islet never receives your GitHub token."),
     .init(
       id: "xcode", name: "Xcode builds",
       summary: "Shows local xcodebuild and test progress.",
@@ -412,12 +412,14 @@ struct PulseProviderDescriptor: Identifiable, Equatable, Sendable {
 
 enum PulseProviderHealth: Equatable, Sendable {
   case active(Int)
+  case needsAttention(Int)
   case seen(Date)
   case neverSeen
 
   var summary: String {
     switch self {
     case .active(let count): "Active (\(count))"
+    case .needsAttention(let count): "Needs attention (\(count))"
     case .seen: "Seen this session"
     case .neverSeen: "Not connected yet"
     }

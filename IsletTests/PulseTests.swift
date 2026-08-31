@@ -135,6 +135,19 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testCancelledStateRemainsDistinct() {
+    let center = PulseCenter()
+    let payload = PulsePayload(
+      id: "cancelled", source: "github-actions", title: "CI cancelled", subtitle: nil,
+      symbol: nil, accentHex: nil, progress: nil, state: .cancelled, priority: .low,
+      expiresAt: nil, actions: nil)
+
+    XCTAssertTrue(
+      center.apply(command(.event, payload), now: Date(timeIntervalSince1970: 1_000)).ok)
+    XCTAssertEqual(center.items.first?.state, .cancelled)
+  }
+
+  @MainActor
   func testPulseSymbolValidationKeepsValidSymbolsAndReplacesInvalidSymbols() throws {
     let now = Date(timeIntervalSince1970: 1_000)
     let validPayload = PulsePayload(
@@ -274,6 +287,21 @@ final class PulseTests: XCTestCase {
     center.dismiss("cli-job", now: now.addingTimeInterval(1))
     let seen = try XCTUnwrap(center.providerStatuses.first { $0.id == "cli" })
     XCTAssertEqual(seen.health, .seen(now.addingTimeInterval(1)))
+  }
+
+  @MainActor
+  func testProviderHealthReportsNeedsAttentionFromProviderState() throws {
+    let center = PulseCenter()
+    let now = Date(timeIntervalSince1970: 1_000)
+    let payload = PulsePayload(
+      id: "github-actions-health", source: "github-actions",
+      title: "GitHub authentication required", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .needsAction, priority: .critical,
+      expiresAt: now.addingTimeInterval(60), actions: nil)
+
+    XCTAssertTrue(center.apply(command(.update, payload), now: now).ok)
+    let status = try XCTUnwrap(center.providerStatuses.first { $0.id == "github-actions" })
+    XCTAssertEqual(status.health, .needsAttention(1))
   }
 
   @MainActor
