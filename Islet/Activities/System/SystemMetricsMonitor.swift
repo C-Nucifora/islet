@@ -35,9 +35,14 @@ final class SystemMetricsMonitor: ObservableObject {
   private var powerCancellable: AnyCancellable?
   private var energyCancellable: AnyCancellable?
   private let now: () -> Date
+  private let cpuPowerSamplingService: CPUPowerSamplingService
 
-  init(now: @escaping () -> Date = Date.init) {
+  init(
+    now: @escaping () -> Date = Date.init,
+    cpuPowerSamplingService: CPUPowerSamplingService = .shared
+  ) {
     self.now = now
+    self.cpuPowerSamplingService = cpuPowerSamplingService
   }
 
   func start() {
@@ -62,6 +67,7 @@ final class SystemMetricsMonitor: ObservableObject {
     guard isRunning else { return }
     isRunning = false
     generation += 1
+    cpuPowerSamplingService.setDemand(nil, for: .system)
     timer = nil
     powerCancellable = nil
     energyCancellable = nil

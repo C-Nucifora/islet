@@ -7,6 +7,7 @@ private struct BatteryReadSnapshot: Sendable {
   let state: BatteryState?
   let metrics: BatteryMetrics?
   let peripherals: [PeripheralBattery]?
+  let cpuPowerReading: CPUPowerReading
 }
 
 /// Owns one power-source notification on one run loop. Registering in common modes keeps IOPS
@@ -57,16 +58,25 @@ final class BatteryMonitor: ObservableObject {
   @Published private(set) var hasFreshState = false
   @Published private(set) var metrics: BatteryMetrics?
   @Published private(set) var peripherals: [PeripheralBattery] = []
+  @Published private(set) var cpuPowerReading = CPUPowerReading.unavailable
 
   /// Seeded snapshots keep off-screen previews deterministic without starting the IOKit readers.
   init(
     state: BatteryState? = nil,
     metrics: BatteryMetrics? = nil,
-    peripherals: [PeripheralBattery] = []
+    peripherals: [PeripheralBattery] = [],
+    cpuPowerSamplingService: CPUPowerSamplingService = .shared,
+    energyPolicy: @escaping () -> EnergyPolicy = {
+      EnergyPolicy(
+        mode: Defaults[.energyMode],
+        systemLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
+    }
   ) {
     self.state = state
     self.metrics = metrics
     self.peripherals = peripherals
+    self.cpuPowerSamplingService = cpuPowerSamplingService
+    energyPolicyProvider = energyPolicy
   }
 
   private let powerSourceRegistration = PowerSourceRunLoopRegistration(
@@ -84,6 +94,8 @@ final class BatteryMonitor: ObservableObject {
   private var lastStableRead: Date?
   private var generation = 0
   private var stateGracePeriod = BatteryStateGracePeriod()
+  private let cpuPowerSamplingService: CPUPowerSamplingService
+  private let energyPolicyProvider: () -> EnergyPolicy
 
   /// Temperature/power/charger change continuously, so refresh at a human-readable cadence while
   /// a battery view is on screen and slowly otherwise. Charge-source callbacks remain immediate.
@@ -99,6 +111,7 @@ final class BatteryMonitor: ObservableObject {
     guard !isRunning else { return }
     isRunning = true
     generation += 1
+    updateCPUPowerSampling()
     scheduleRefresh(includeStable: true)
     let opaque = Unmanaged.passUnretained(self).toOpaque()
     let callback: IOPowerSourceCallbackType = { context in
@@ -129,6 +142,7 @@ final class BatteryMonitor: ObservableObject {
     guard isRunning else { return }
     isRunning = false
     generation += 1
+    cpuPowerSamplingService.setDemand(nil, for: .battery)
     samplingTask?.cancel()
     samplingTask = nil
     isSampling = false
@@ -143,6 +157,7 @@ final class BatteryMonitor: ObservableObject {
     hasFreshState = false
     metrics = nil
     peripherals = []
+    cpuPowerReading = .unavailable
     lastStableRead = nil
     stateGracePeriod.reset()
   }
@@ -150,6 +165,7 @@ final class BatteryMonitor: ObservableObject {
   private func setFastMetrics(_ live: Bool) {
     guard live != fastMetrics else { return }
     fastMetrics = live
+    updateCPUPowerSampling()
     guard isRunning else { return }
     restartMetricsTimer()
     scheduleRefresh(includeStable: false)  // update immediately on the transition
@@ -177,7 +193,9 @@ final class BatteryMonitor: ObservableObject {
   func refresh() {
     applyState(Self.readState())
 
-    let fresh = SmartBatteryReader.read()
+    let reading = cpuPowerSamplingService.cachedReading()
+    if reading != cpuPowerReading { cpuPowerReading = reading }
+    let fresh = SmartBatteryReader.read(cpuPowerReading: reading)
     let smoothed = fresh.map { PowerSmoothing.smooth(metrics, into: $0) }
     if smoothed != metrics { metrics = smoothed }
 
@@ -196,12 +214,16 @@ final class BatteryMonitor: ObservableObject {
     }
     isSampling = true
     let expectedGeneration = generation
+    let cpuPowerSamplingService = cpuPowerSamplingService
     samplingTask = Task { [weak self] in
       let snapshot = await Task.detached(priority: .utility) {
-        BatteryReadSnapshot(
+        let cpuPowerReading = cpuPowerSamplingService.cachedReading()
+        return BatteryReadSnapshot(
           state: BatteryMonitor.readState(),
-          metrics: SmartBatteryReader.read(includeStable: includeStable),
-          peripherals: includeStable ? PeripheralBatteryReader.read() : nil)
+          metrics: SmartBatteryReader.read(
+            includeStable: includeStable, cpuPowerReading: cpuPowerReading),
+          peripherals: includeStable ? PeripheralBatteryReader.read() : nil,
+          cpuPowerReading: cpuPowerReading)
       }.value
       guard let self else { return }
       guard self.isRunning, self.generation == expectedGeneration else {
@@ -216,19 +238,29 @@ final class BatteryMonitor: ObservableObject {
   }
 
   private var energyPolicy: EnergyPolicy {
-    EnergyPolicy(
-      mode: Defaults[.energyMode],
-      systemLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
+    energyPolicyProvider()
   }
 
   private func energyPolicyDidChange() {
     guard isRunning else { return }
+    updateCPUPowerSampling()
     restartMetricsTimer()
     scheduleRefresh(includeStable: false)
   }
 
+  private func updateCPUPowerSampling() {
+    let policy = energyPolicy
+    cpuPowerSamplingService.setConstrained(policy.isConstrained)
+    cpuPowerSamplingService.setDemand(
+      isRunning && fastMetrics ? policy.batteryInterval(viewIsLive: true) : nil,
+      for: .battery)
+  }
+
   private func apply(_ snapshot: BatteryReadSnapshot, includeStable: Bool) {
     applyState(snapshot.state)
+    if snapshot.cpuPowerReading != cpuPowerReading {
+      cpuPowerReading = snapshot.cpuPowerReading
+    }
 
     var fresh = snapshot.metrics
     if !includeStable, var current = fresh, let previous = metrics {

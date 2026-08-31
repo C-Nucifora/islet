@@ -11,22 +11,209 @@ enum CPUPowerMath {
   }
 }
 
+/// The state of the last valid IOReport sample. A stale value remains useful as context, but callers
+/// can distinguish it from a value collected inside the current freshness window.
+enum CPUPowerReading: Equatable, Sendable {
+  case fresh(watts: Double)
+  case stale(watts: Double)
+  case unavailable
+
+  var freshWatts: Double? {
+    guard case .fresh(let watts) = self else { return nil }
+    return watts
+  }
+}
+
+/// A lock-backed cache lets the synchronous battery registry reader use the sampler's last value
+/// without hopping to the main actor or waiting for a new 250 ms IOReport window.
+final class CPUPowerReadingStore: @unchecked Sendable {
+  static let shared = CPUPowerReadingStore(
+    now: { ProcessInfo.processInfo.systemUptime },
+    staleAfter: CPUPowerSamplingService.normalStaleAfter)
+
+  private struct Sample {
+    let watts: Double
+    let instant: TimeInterval
+  }
+
+  private let lock = NSLock()
+  private let now: @Sendable () -> TimeInterval
+  private var latest: Sample?
+  private var staleAfter: TimeInterval
+
+  init(now: @escaping @Sendable () -> TimeInterval, staleAfter: TimeInterval) {
+    self.now = now
+    self.staleAfter = staleAfter
+  }
+
+  func record(watts: Double, at instant: TimeInterval) {
+    guard watts.isFinite, watts >= 0, instant.isFinite else { return }
+    lock.withLock { latest = Sample(watts: watts, instant: instant) }
+  }
+
+  func setStaleAfter(_ interval: TimeInterval) {
+    guard interval.isFinite, interval > 0 else { return }
+    lock.withLock { staleAfter = interval }
+  }
+
+  func reading() -> CPUPowerReading {
+    lock.withLock {
+      guard let latest else { return .unavailable }
+      let age = max(now() - latest.instant, 0)
+      return age <= staleAfter ? .fresh(watts: latest.watts) : .stale(watts: latest.watts)
+    }
+  }
+}
+
+enum CPUPowerConsumer: Hashable, Sendable {
+  case battery
+  case system
+}
+
+struct CPUPowerSamplingDependencies: Sendable {
+  let now: @Sendable () -> TimeInterval
+  let sleep: @Sendable (TimeInterval) async throws -> Void
+  let sample: @Sendable () async -> Double?
+
+  static let live = CPUPowerSamplingDependencies(
+    now: { ProcessInfo.processInfo.systemUptime },
+    sleep: { interval in
+      let nanoseconds = UInt64(max(interval, 0) * 1_000_000_000)
+      try await Task.sleep(nanoseconds: nanoseconds)
+    },
+    sample: { await CPUPowerReader.shared.readWatts() })
+}
+
+/// Owns the one process-wide CPU-power stream. Battery and System register only while their views
+/// need the reading. The service stops with no clients, uses a slower cadence under constrained
+/// power policy, and never starts a replacement loop until a cancelled sample has returned.
+@MainActor
+final class CPUPowerSamplingService {
+  static let shared = CPUPowerSamplingService()
+
+  nonisolated static let normalInterval: TimeInterval = 1
+  nonisolated static let constrainedInterval: TimeInterval = 30
+  nonisolated static let normalStaleAfter: TimeInterval = 5
+  nonisolated static let constrainedStaleAfter: TimeInterval = 60
+
+  private enum Phase {
+    case idle
+    case sampling
+    case sleeping
+  }
+
+  private let dependencies: CPUPowerSamplingDependencies
+  private let store: CPUPowerReadingStore
+  private var demands: [CPUPowerConsumer: TimeInterval] = [:]
+  private var constrained = false
+  private var phase = Phase.idle
+  private var loopTask: Task<Void, Never>?
+
+  init(
+    dependencies: CPUPowerSamplingDependencies = .live,
+    store: CPUPowerReadingStore = .shared
+  ) {
+    self.dependencies = dependencies
+    self.store = store
+  }
+
+  func setDemand(_ interval: TimeInterval?, for consumer: CPUPowerConsumer) {
+    let previousInterval = samplingInterval
+    if let interval, interval.isFinite, interval > 0 {
+      demands[consumer] = interval
+    } else {
+      demands.removeValue(forKey: consumer)
+    }
+    updateFreshnessWindow()
+    reconcileLoop(restartSleepingLoop: samplingInterval != previousInterval)
+  }
+
+  func setConstrained(_ constrained: Bool) {
+    guard constrained != self.constrained else { return }
+    self.constrained = constrained
+    updateFreshnessWindow()
+    reconcileLoop(restartSleepingLoop: true)
+  }
+
+  nonisolated func cachedReading() -> CPUPowerReading {
+    store.reading()
+  }
+
+  private func reconcileLoop(restartSleepingLoop: Bool) {
+    guard !demands.isEmpty else {
+      loopTask?.cancel()
+      return
+    }
+    guard loopTask != nil else {
+      startLoop()
+      return
+    }
+    if restartSleepingLoop, phase == .sleeping {
+      loopTask?.cancel()
+    }
+  }
+
+  private func startLoop() {
+    guard loopTask == nil, !demands.isEmpty else { return }
+    loopTask = Task { [weak self] in
+      await self?.runLoop()
+    }
+  }
+
+  private func runLoop() async {
+    while !Task.isCancelled, !demands.isEmpty {
+      phase = .sampling
+      let sampleStarted = dependencies.now()
+      let watts = await dependencies.sample()
+      guard !Task.isCancelled, !demands.isEmpty else { break }
+      if let watts, watts.isFinite, watts >= 0 {
+        store.record(watts: watts, at: dependencies.now())
+      }
+
+      phase = .sleeping
+      do {
+        let interval = samplingInterval ?? Self.normalInterval
+        let measuredElapsed = dependencies.now() - sampleStarted
+        let elapsed = measuredElapsed.isFinite ? max(measuredElapsed, 0) : 0
+        try await dependencies.sleep(max(interval - elapsed, 0))
+      } catch {
+        break
+      }
+    }
+
+    phase = .idle
+    loopTask = nil
+    if !demands.isEmpty { startLoop() }
+  }
+
+  private var samplingInterval: TimeInterval? {
+    guard let requested = demands.values.min() else { return nil }
+    return constrained ? max(requested, Self.constrainedInterval) : requested
+  }
+
+  private func updateFreshnessWindow() {
+    let baseline = constrained ? Self.constrainedStaleAfter : Self.normalStaleAfter
+    let cadenceWindow = samplingInterval.map { $0 * 2 } ?? 0
+    store.setStaleAfter(max(baseline, cadenceWindow))
+  }
+}
+
 /// Reads Apple's estimated aggregate CPU energy on Apple Silicon without invoking the root-only
 /// `powermetrics` process.
 ///
 /// IOReport is private and its channels differ between chips, so every lookup is dynamic and every
 /// result is optional. Failure simply leaves the existing whole-Mac branch intact. The subscription
-/// is retained for this process's lifetime; sampling is serialized because IOReport subscriptions
-/// are stateful and battery refreshes can be requested while an earlier read is still finishing.
-final class CPUPowerReader: @unchecked Sendable {
+/// is retained for this process's lifetime. The shared sampling service is its only normal caller,
+/// and the reader also rejects an overlapping request because IOReport subscriptions are stateful.
+actor CPUPowerReader {
   static let shared = CPUPowerReader()
 
   private static let sampleDuration: TimeInterval = 0.25
 
-  private let lock = NSLock()
   private let library: IOReportLibrary?
   private let subscription: UnsafeRawPointer?
   private let subscribedChannels: CFMutableDictionary?
+  private var isSampling = false
 
   private init() {
     guard let library = IOReportLibrary() else {
@@ -55,18 +242,23 @@ final class CPUPowerReader: @unchecked Sendable {
     subscribedChannels = unmanagedChannels?.takeRetainedValue()
   }
 
-  /// Average CPU watts over a short window. Normal monitoring calls this inside BatteryMonitor's
-  /// detached utility task, so the deliberate wait does not block the UI.
-  func readWatts() -> Double? {
-    lock.lock()
-    defer { lock.unlock() }
+  /// Average CPU watts over a short window. The cancellable suspension lets the sampling service
+  /// stop before collecting the second half of a sample when the last view disappears.
+  func readWatts() async -> Double? {
+    guard !isSampling else { return nil }
+    isSampling = true
+    defer { isSampling = false }
 
     guard let library, let subscription, let subscribedChannels,
       let first = library.createSamples(subscription, subscribedChannels, nil)?.takeRetainedValue()
     else { return nil }
 
     let started = DispatchTime.now().uptimeNanoseconds
-    Thread.sleep(forTimeInterval: Self.sampleDuration)
+    do {
+      try await Task.sleep(nanoseconds: UInt64(Self.sampleDuration * 1_000_000_000))
+    } catch {
+      return nil
+    }
     guard
       let second = library.createSamples(subscription, subscribedChannels, nil)?.takeRetainedValue()
     else { return nil }
