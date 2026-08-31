@@ -330,6 +330,9 @@ final class MediaWatcher: @unchecked Sendable {
   /// Keep the snapshot guarded by a stream generation so a newer live record always wins.
   func setPlaybackRecoverySources(_ bundleIdentifiers: Set<String>) {
     queue.async { [self] in
+      if bundleIdentifiers != playbackRecoveryBundleIdentifiers {
+        snapshotFailureCount = 0
+      }
       playbackRecoveryBundleIdentifiers = bundleIdentifiers
       if !bundleIdentifiers.isEmpty {
         scheduleRecoverySnapshot()
@@ -499,7 +502,7 @@ final class MediaWatcher: @unchecked Sendable {
 
   private func scheduleRecoverySnapshot(after delay: TimeInterval? = nil) {
     guard isRunning, !playbackRecoveryBundleIdentifiers.isEmpty, currentSource == nil,
-      snapshotProcess == nil, snapshotLaunchWorkItem == nil
+      snapshotProcess == nil, snapshotLaunchWorkItem == nil, snapshotFailureCount < 3
     else { return }
     let generation = streamGeneration
     let workItem = DispatchWorkItem { [weak self] in

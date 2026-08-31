@@ -333,6 +333,56 @@ final class MediaWatcherTests: XCTestCase {
     updates.cancel()
   }
 
+  func testRecoveryRetryBudgetResetsWhenAudioSourcesChange() throws {
+    let helper = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .appendingPathComponent("Fixtures/wrong-app-recovery-helper.pl")
+    let stateFile = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent("wrong-app-recovery-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: stateFile) }
+
+    XCTAssertTrue(FileManager.default.fileExists(atPath: helper.path))
+    let idle = expectation(description: "stream reports idle")
+    let firstRecoveryStopped = expectation(description: "first recovery budget is exhausted")
+    let recovered = expectation(description: "changed audio sources receive a fresh retry budget")
+    let snapshotAttempts = LockedCounter()
+    let watcher = MediaWatcher(
+      initialSnapshotDelay: 1,
+      commandProvider: { kind in
+        if case .snapshot = kind { snapshotAttempts.increment() }
+        return MediaWatcher.HelperCommand(
+          executableURL: URL(fileURLWithPath: "/usr/bin/perl"),
+          arguments: [helper.path, kind.rawValue, stateFile.path, "4"])
+      },
+      snapshotBackoff: { _ in 0.05 })
+    watcher.onStatus = { status in
+      guard status.contains("recovery stopped"), snapshotAttempts.value == 3 else { return }
+      firstRecoveryStopped.fulfill()
+      watcher.setPlaybackRecoverySources([])
+      watcher.setPlaybackRecoverySources(["company.thebrowser.Browser"])
+    }
+    let updates = Task {
+      for await update in watcher.updates {
+        switch update {
+        case .idle:
+          idle.fulfill()
+          watcher.setPlaybackRecoverySources(["company.thebrowser.Browser"])
+        case .nowPlaying(let source, _):
+          XCTAssertEqual(source.displayBundleIdentifier, "company.thebrowser.Browser")
+          recovered.fulfill()
+          return
+        case .ignored, .sourceGone:
+          continue
+        }
+      }
+    }
+
+    watcher.start()
+    wait(for: [idle, firstRecoveryStopped, recovered], timeout: 5, enforceOrder: true)
+    XCTAssertEqual(snapshotAttempts.value, 5)
+    watcher.stop()
+    updates.cancel()
+  }
+
   func testRecoveryOnlyAcceptsMetadataForAnActiveAudioApp() {
     let browser = key("company.thebrowser.Browser", 1)
     let music = key("com.apple.Music", 2)
