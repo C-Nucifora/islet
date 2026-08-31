@@ -32,6 +32,7 @@ struct NotchRootView: View {
   @ObservedObject private var sneaks = SneakQueue.shared
   @ObservedObject private var hud = HUDController.shared
   @ObservedObject private var reminders = RemindersProvider.shared
+  @ObservedObject private var keepAwake = KeepAwakeManager.shared
   @Default(.appTheme) private var appTheme
   @Default(.batteryGraphStyle) private var batteryGraphStyle
   @State private var compactLeadingWidth: CGFloat = 0
@@ -52,8 +53,24 @@ struct NotchRootView: View {
           ForEach(secondary, id: \.id) { activity in
             activity.compactLeading
           }
+          if keepAwake.isActive || keepAwake.hasUnreleasedAssertions {
+            KeepAwakeCompactIcon(releasePending: !keepAwake.isActive)
+          }
         })
       return (primary.compactLeading, trailing)
+    }
+    if keepAwake.isActive || keepAwake.hasUnreleasedAssertions {
+      return (
+        AnyView(KeepAwakeCompactIcon(releasePending: !keepAwake.isActive)),
+        AnyView(
+          Text(keepAwake.isActive ? keepAwake.statusText : "Release pending")
+            .font(.caption.weight(.semibold)).monospacedDigit()
+            .foregroundStyle(keepAwake.isActive ? Color.secondary : Color.orange)
+            .accessibilityLabel(
+              keepAwake.isActive
+                ? "Keep awake, \(keepAwake.statusText) remaining"
+                : "Keep-awake assertion release pending"))
+      )
     }
     if !reminders.reminders.isEmpty {
       // Idle affordance: a small checklist badge so pending reminders are visible at a glance.
@@ -197,6 +214,8 @@ struct NotchRootView: View {
     if let sneak = sneaks.current { return "sneak-\(sneak.id.uuidString)" }
     let activityIDs = center.activeActivities.map(\.id)
     if !activityIDs.isEmpty { return "activities-\(activityIDs.joined(separator: "|"))" }
+    if keepAwake.isActive { return "keep-awake" }
+    if keepAwake.hasUnreleasedAssertions { return "keep-awake-release-pending" }
     if !reminders.reminders.isEmpty { return "reminders-\(reminders.reminders.count)" }
     return "idle"
   }
@@ -272,6 +291,19 @@ struct NotchRootView: View {
     } else {
       Color.clear.frame(width: vm.geometry.notchSize.width, height: vm.geometry.notchSize.height)
     }
+  }
+}
+
+private struct KeepAwakeCompactIcon: View {
+  @Environment(\.appTheme) private var appTheme
+  let releasePending: Bool
+
+  var body: some View {
+    Image(systemName: releasePending ? "exclamationmark.triangle.fill" : "cup.and.heat.waves.fill")
+      .font(.caption2)
+      .foregroundStyle(releasePending ? Color.orange : appTheme.color(for: .interaction))
+      .accessibilityLabel(
+        releasePending ? "Keep-awake assertion release pending" : "Keep awake active")
   }
 }
 
