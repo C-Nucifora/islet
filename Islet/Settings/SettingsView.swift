@@ -186,8 +186,9 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .energy:
       pageContent + [
         "Energy use", "Mode", "Automatic", "Low Energy", "Live", "Low Power Mode",
-        "Keep awake", "Allow the display to sleep", "Stop on low battery", "Indefinitely",
-        "prevent idle system sleep display sleep assertions session timer",
+        "Keep awake", "Allow the display to sleep", "Keep awake with lid closed",
+        "Power Protect", "Stop on low battery", "Indefinitely",
+        "prevent idle system sleep display sleep assertions closed clamshell session timer",
         "refresh rates hidden activity remote T3 polling performance battery",
       ]
     case .activityOrder:
@@ -392,6 +393,7 @@ struct SettingsView: View {
   @Default(.metricStyles) private var metricStyles
   @Default(.energyMode) private var energyMode
   @Default(.allowDisplaySleep) private var allowDisplaySleep
+  @Default(.keepAwakeWithLidClosed) private var keepAwakeWithLidClosed
   @Default(.keepAwakeLowBatteryThreshold) private var keepAwakeLowBatteryThreshold
   @Default(.continuityAlwaysVisible) private var continuityAlwaysVisible
   @Default(.continuitySneaks) private var continuitySneaks
@@ -1244,6 +1246,26 @@ struct SettingsView: View {
           "An active session always prevents idle system sleep. Turn this off to keep the display awake too."
         )
         .font(.caption).foregroundStyle(.secondary)
+        Toggle("Keep awake with the lid closed", isOn: $keepAwakeWithLidClosed)
+        if keepAwakeWithLidClosed {
+          if keepAwake.powerProtectInstalled {
+            Label("Power Protect ready", systemImage: "checkmark.circle.fill")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          } else {
+            Text(
+              "Closed-display mode needs a one-time administrator-approved helper. It changes only the system SleepDisabled setting while an Islet session is active."
+            )
+            .font(.caption).foregroundStyle(.secondary)
+            Button(keepAwake.isInstallingPowerProtect ? "Installing..." : "Install Power Protect") {
+              Task { await keepAwake.installPowerProtect() }
+            }
+            .disabled(keepAwake.isInstallingPowerProtect)
+            if let error = keepAwake.lastError {
+              Text(error).font(.caption).foregroundStyle(.orange)
+            }
+          }
+        }
         Picker("Stop on low battery", selection: $keepAwakeLowBatteryThreshold) {
           Text("Off").tag(0)
           Text("10%").tag(10)
@@ -1252,9 +1274,7 @@ struct SettingsView: View {
         }
         Text("Battery protection only stops a session while the Mac is unplugged.")
           .font(.caption).foregroundStyle(.secondary)
-        if keepAwake.hasUnreleasedAssertions,
-          !keepAwake.isActive || allowDisplaySleep != keepAwake.effectivelyAllowsDisplaySleep
-        {
+        if keepAwake.needsAssertionRecovery {
           Text(keepAwake.lastError ?? "A power assertion is still awaiting release.")
             .font(.caption).foregroundStyle(.orange)
           Button("Retry power assertion change") {
@@ -1264,6 +1284,7 @@ struct SettingsView: View {
       }
     }
     .formStyle(.grouped)
+    .onAppear { keepAwake.refreshPowerProtectInstallation() }
   }
 
   private var permissionsForm: some View {
