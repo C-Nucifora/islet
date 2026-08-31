@@ -42,6 +42,7 @@ final class HUDController: ObservableObject {
   @Published private(set) var lastEventTapInterruption: Date?
   @Published private(set) var lastSuccessfulAdjustment: Date?
   @Published private(set) var lastControlFailure: String?
+  @Published private(set) var externalBrightnessDisplays: [ExternalBrightnessDisplayStatus] = []
 
   private var eventTap: CFMachPort?
   private var runLoopSource: CFRunLoopSource?
@@ -49,6 +50,27 @@ final class HUDController: ObservableObject {
   private var cancellables: Set<AnyCancellable> = []
   private var keyConsumption = HUDKeyConsumptionState()
   private var isObserving = false
+  private let externalBrightnessController: ExternalBrightnessController
+
+  private init(externalBrightnessController: ExternalBrightnessController = .init()) {
+    self.externalBrightnessController = externalBrightnessController
+    externalBrightnessController.didChange = { [weak self] statuses in
+      let previous = Dictionary(
+        uniqueKeysWithValues: (self?.externalBrightnessDisplays ?? []).map {
+          ($0.id, $0.capability)
+        })
+      self?.externalBrightnessDisplays = statuses
+      for status in statuses {
+        if case .unavailable(let failure) = status.capability,
+          previous[status.id] != status.capability
+        {
+          Log.app.error(
+            "External brightness unavailable for \(status.display.name, privacy: .public): \(failure.summary, privacy: .public)"
+          )
+        }
+      }
+    }
+  }
 
   func startObserving() {
     guard !isObserving else {
@@ -58,11 +80,14 @@ final class HUDController: ObservableObject {
     }
     isObserving = true
     Defaults.publisher(.hudEnabled)
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] change in
-        Task { @MainActor in
-          if change.newValue { self?.start() } else { self?.stop() }
-        }
+        if change.newValue { self?.start() } else { self?.stop() }
       }
+      .store(in: &cancellables)
+    Defaults.publisher(.disabledExternalBrightnessDisplays)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.refreshExternalBrightnessDisplays() }
       .store(in: &cancellables)
     NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
       .sink { [weak self] _ in
@@ -70,6 +95,16 @@ final class HUDController: ObservableObject {
           self?.refreshPermissionStatus()
           self?.start()
         }
+      }
+      .store(in: &cancellables)
+    NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+      .sink { [weak self] _ in
+        Task { @MainActor in self?.refreshExternalBrightnessDisplays() }
+      }
+      .store(in: &cancellables)
+    NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
+      .sink { [weak self] _ in
+        Task { @MainActor in self?.refreshExternalBrightnessDisplays() }
       }
       .store(in: &cancellables)
     start()
@@ -99,9 +134,11 @@ final class HUDController: ObservableObject {
     refreshPermissionStatus()
     guard Defaults[.hudEnabled] else {
       tearDownTap()
+      externalBrightnessController.cancelAll()
       eventTapStatus = .disabled
       return
     }
+    refreshExternalBrightnessDisplays()
     guard accessibilityTrusted else {
       eventTapStatus = .accessibilityRequired
       return
@@ -147,6 +184,7 @@ final class HUDController: ObservableObject {
     hideTask = nil
     eventTapStatus = .disabled
     hud = nil
+    externalBrightnessController.cancelAll()
   }
 
   private func tearDownTap() {
@@ -214,16 +252,25 @@ final class HUDController: ObservableObject {
       let level = VolumeController.readVolume() ?? 0
       return .init(kind: .volume, level: muted ? 0 : level, isMuted: muted)
     case .brightnessUp, .brightnessDown:
-      let displays = NSScreen.screens.compactMap { screen -> BrightnessDisplayTarget? in
+      let screens = NSScreen.screens
+      let displays = screens.compactMap { screen -> BrightnessDisplayTarget? in
         guard let displayID = screen.displayID else { return nil }
         return BrightnessDisplayTarget(displayID: displayID, frame: screen.frame)
       }
       guard
         let displayID = BrightnessTargetResolver.displayID(
-          at: NSEvent.mouseLocation, displays: displays),
-        let actual = BrightnessController.adjustBrightness(
-          displayID: displayID, up: key == .brightnessUp, divisor: divisor)
+          at: NSEvent.mouseLocation, displays: displays)
       else { return nil }
+      let actual: Float?
+      if CGDisplayIsBuiltin(displayID) == 1 {
+        actual = BrightnessController.adjustBrightness(
+          displayID: displayID, up: key == .brightnessUp, divisor: divisor)
+      } else {
+        // This is a cached state transition only. DDC work runs away from the event-tap thread.
+        actual = externalBrightnessController.adjust(
+          displayID: displayID, up: key == .brightnessUp, divisor: divisor)
+      }
+      guard let actual else { return nil }
       return .init(kind: .brightness, level: actual, isMuted: false)
     }
   }
@@ -240,6 +287,34 @@ final class HUDController: ObservableObject {
 
   /// Debug-only: exercise the HUD render path without the event tap / accessibility.
   func debugPresent(_ snapshot: HUDSnapshot) { present(snapshot) }
+
+  var externalBrightnessDiagnostics: String { externalBrightnessController.diagnostics }
+
+  func setExternalBrightnessEnabled(_ enabled: Bool, displayID: String) {
+    var disabled = Defaults[.disabledExternalBrightnessDisplays]
+    if enabled {
+      disabled.removeAll { $0 == displayID }
+    } else if !disabled.contains(displayID) {
+      disabled.append(displayID)
+    }
+    Defaults[.disabledExternalBrightnessDisplays] = disabled
+    refreshExternalBrightnessDisplays()
+  }
+
+  private func refreshExternalBrightnessDisplays() {
+    let displays = NSScreen.screens.compactMap { screen -> ExternalBrightnessDisplay? in
+      guard let displayID = screen.displayID, CGDisplayIsBuiltin(displayID) == 0,
+        let id = screen.displayUUID
+      else { return nil }
+      return ExternalBrightnessDisplay(
+        displayID: displayID, id: id, name: screen.localizedName,
+        vendorID: CGDisplayVendorNumber(displayID), productID: CGDisplayModelNumber(displayID),
+        serialNumber: CGDisplaySerialNumber(displayID))
+    }
+    externalBrightnessController.refresh(
+      displays: displays,
+      disabledDisplayIDs: Set(Defaults[.disabledExternalBrightnessDisplays]))
+  }
 
   private func present(_ snapshot: HUDSnapshot) {
     hud = snapshot

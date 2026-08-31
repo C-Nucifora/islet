@@ -84,13 +84,13 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
     Defaults.publisher(.t3RemoteEnvironments)
       .dropFirst()
-      .sink { [weak self] _ in Task { @MainActor in self?.restartMonitors() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.restartMonitors() }
       .store(in: &cancellables)
     Defaults.publisher(.energyMode)
       .dropFirst()
-      .sink { [weak self] _ in
-        Task { @MainActor in self?.restartMonitors(clearSnapshots: false) }
-      }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.restartMonitors(clearSnapshots: false) }
       .store(in: &cancellables)
     NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)
       .receive(on: DispatchQueue.main)

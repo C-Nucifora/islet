@@ -36,7 +36,8 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 
   var searchTerms: String {
     switch self {
-    case .general: "launch login displays fullscreen recording hover click haptics energy"
+    case .general:
+      "launch login displays fullscreen recording hover click haptics energy keep awake sleep battery"
     case .activities:
       "tabs order battery calendar reminders clipboard ports audio hud timer shelf system media iphone continuity live activities"
     case .notifications:
@@ -108,7 +109,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .startupDisplays: "Login item and display placement"
     case .appearance: "Choose the colours used across Islet"
     case .interaction: "How the notch opens and closes"
-    case .energy: "Refresh rates and Low Power Mode"
+    case .energy: "Refresh rates, sleep and battery protection"
     case .activityOrder: "Show, hide and reorder activities"
     case .calendarReminders: "Agenda, countdown and reminder options"
     case .nowPlaying: "Choose which active player opens first"
@@ -185,6 +186,9 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .energy:
       pageContent + [
         "Energy use", "Mode", "Automatic", "Low Energy", "Live", "Low Power Mode",
+        "Keep awake", "Allow the display to sleep", "Keep awake with lid closed",
+        "Power Protect", "Stop on low battery", "Indefinitely",
+        "prevent idle system sleep display sleep assertions closed clamshell session timer",
         "refresh rates hidden activity remote T3 polling performance battery",
       ]
     case .activityOrder:
@@ -208,11 +212,13 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "iPhone Live Activities", "Show iPhone Live Activities", "Availability", "Detected now",
         "Keep iPhone in the activity switcher when idle",
         "Announce when a Live Activity starts or ends", "Request Accessibility access",
-        "Open Accessibility Settings", "Control Centre remote app names",
+        "Open Accessibility Settings", "Retry Continuity", "Control Centre remote app names",
       ]
     case .systemMetrics:
       pageContent + [
         "Visibility", "System activity", "Always show System in the activity switcher",
+        "Automatic presence", "High CPU", "Thermal pressure", "Memory pressure",
+        "Low disk space", "Heavy disk activity", "High network traffic",
         "Metric presentation", "Presentation", "Compact", "Balanced", "Detailed", "Custom",
         "Customize individual metrics", "current value recent graph state labels",
       ] + SystemMetricKind.allCases.map(\.displayName)
@@ -264,8 +270,11 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       pageContent + [
         "Diagnostics", "Bundle identifier", "Version", "Energy mode", "Copy diagnostics",
         "Open logs folder", "Restart Islet", "Quit Islet", "Integration health", "Media adapter",
+        "T3 Code credentials", "Pulse", "Media-key HUD", "Continuity reader",
+        "Last successful read", "Retry Continuity",
         "Focus event source", "Focus last parsed", "Focus schema", "Retry Focus source",
-        "T3 Code credentials", "Pulse", "Media-key HUD", "signing support status", "About",
+        "USB reader", "Retry USB enumeration",
+        "signing support status", "About",
         "GitHub contributors C-Nucifora nedlane",
       ]
     case .settingsTransfer:
@@ -349,6 +358,9 @@ struct SettingsView: View {
   @ObservedObject private var t3Code = AppState.t3Code
   @ObservedObject private var focus = AppState.focus
   @ObservedObject private var launchAtLoginStatus = LaunchAtLoginStatus.shared
+  @ObservedObject private var eventSourcePreferences = EventSourcePreferences.shared
+  @ObservedObject private var ports = PortMonitor.shared
+  @ObservedObject private var keepAwake = KeepAwakeManager.shared
 
   @Default(.appTheme) private var appTheme
   @Default(.batteryGraphStyle) private var batteryGraphStyle
@@ -372,9 +384,17 @@ struct SettingsView: View {
   @Default(.activityOrder) private var activityOrder
   @Default(.disabledActivities) private var disabledActivities
   @Default(.systemAlwaysVisible) private var systemAlwaysVisible
+  @Default(.systemAutoPresentCPU) private var systemAutoPresentCPU
+  @Default(.systemAutoPresentThermal) private var systemAutoPresentThermal
+  @Default(.systemAutoPresentMemoryPressure) private var systemAutoPresentMemoryPressure
+  @Default(.systemAutoPresentLowDiskSpace) private var systemAutoPresentLowDiskSpace
+  @Default(.systemAutoPresentDiskThroughput) private var systemAutoPresentDiskThroughput
+  @Default(.systemAutoPresentNetworkThroughput) private var systemAutoPresentNetworkThroughput
   @Default(.metricStyles) private var metricStyles
-  @Default(.disabledEventSources) private var disabledEventSources
   @Default(.energyMode) private var energyMode
+  @Default(.allowDisplaySleep) private var allowDisplaySleep
+  @Default(.keepAwakeWithLidClosed) private var keepAwakeWithLidClosed
+  @Default(.keepAwakeLowBatteryThreshold) private var keepAwakeLowBatteryThreshold
   @Default(.continuityAlwaysVisible) private var continuityAlwaysVisible
   @Default(.continuitySneaks) private var continuitySneaks
 
@@ -501,7 +521,7 @@ struct SettingsView: View {
 
   private func eventSourceEnabled(_ id: String) -> Binding<Bool> {
     Binding(
-      get: { !disabledEventSources.contains(id) },
+      get: { eventSourcePreferences.isEnabled(id) },
       set: { on in SystemEventBus.shared.setEnabled(on, for: id) })
   }
 
@@ -1034,6 +1054,18 @@ struct SettingsView: View {
         }
       }
       if isActivityEnabled("system") {
+        Section("Automatic presence") {
+          Toggle("High CPU", isOn: $systemAutoPresentCPU)
+          Toggle("Thermal pressure", isOn: $systemAutoPresentThermal)
+          Toggle("Memory pressure", isOn: $systemAutoPresentMemoryPressure)
+          Toggle("Low disk space", isOn: $systemAutoPresentLowDiskSpace)
+          Toggle("Heavy disk activity", isOn: $systemAutoPresentDiskThroughput)
+          Toggle("High network traffic", isOn: $systemAutoPresentNetworkThroughput)
+          Text(
+            "Islet waits for sustained conditions and a clear recovery margin. Disk and network rates show unusually heavy traffic, not measured saturation, because device and link capacity are unavailable."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
         Section("Metric presentation") {
           Picker("Presentation", selection: metricPresetBinding) {
             ForEach(SystemMetricPreset.allCases) { preset in
@@ -1079,6 +1111,12 @@ struct SettingsView: View {
           LabeledContent("Detected now") {
             Text("\(continuity.cards.count)").monospacedDigit().foregroundStyle(.secondary)
           }
+          LabeledContent("Last successful read") {
+            Text(continuityLastSuccessfulReadText).foregroundStyle(.secondary)
+          }
+          if let detail = continuity.lastCompatibilityError?.diagnosticSummary {
+            Text(detail).font(.caption).foregroundStyle(.orange)
+          }
           Toggle("Keep iPhone in the activity switcher when idle", isOn: $continuityAlwaysVisible)
           Toggle("Announce when a Live Activity starts or ends", isOn: $continuitySneaks)
           if continuity.availability == .needsAccessibility {
@@ -1086,6 +1124,10 @@ struct SettingsView: View {
               Button("Request Accessibility access") { AccessibilityPermission.prompt() }
               Button("Open Accessibility Settings") { permissions.open(.accessibility) }
             }
+          } else if continuity.availability == .controlCenterUnavailable
+            || continuity.availability == .incompatibleSchema
+          {
+            Button("Retry Continuity") { continuity.retry() }
           }
         }
       }
@@ -1156,6 +1198,32 @@ struct SettingsView: View {
         )
         .font(.caption).foregroundStyle(.secondary)
       }
+      if !hud.externalBrightnessDisplays.isEmpty {
+        Section("External display brightness") {
+          ForEach(hud.externalBrightnessDisplays) { status in
+            VStack(alignment: .leading, spacing: 3) {
+              Toggle(
+                status.display.name,
+                isOn: Binding(
+                  get: {
+                    if case .disabled = status.capability { return false }
+                    return true
+                  },
+                  set: { enabled in
+                    hud.setExternalBrightnessEnabled(enabled, displayID: status.display.id)
+                  }))
+              Text(status.capability.summary)
+                .font(.caption)
+                .foregroundStyle(
+                  status.capability.isAvailable ? Color.secondary : Color.orange)
+            }
+          }
+          Text(
+            "Islet probes DDC/CI without changing brightness. Disable a display here if its monitor firmware behaves poorly."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
+      }
     }
     .formStyle(.grouped)
   }
@@ -1172,8 +1240,51 @@ struct SettingsView: View {
           .font(.caption)
           .foregroundStyle(energyMode == .live ? .orange : .secondary)
       }
+      Section("Keep awake") {
+        Toggle("Allow the display to sleep", isOn: $allowDisplaySleep)
+        Text(
+          "An active session always prevents idle system sleep. Turn this off to keep the display awake too."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Toggle("Keep awake with the lid closed", isOn: $keepAwakeWithLidClosed)
+        if keepAwakeWithLidClosed {
+          if keepAwake.powerProtectInstalled {
+            Label("Power Protect ready", systemImage: "checkmark.circle.fill")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          } else {
+            Text(
+              "Closed-display mode needs a one-time administrator-approved helper. It changes only the system SleepDisabled setting while an Islet session is active."
+            )
+            .font(.caption).foregroundStyle(.secondary)
+            Button(keepAwake.isInstallingPowerProtect ? "Installing..." : "Install Power Protect") {
+              Task { await keepAwake.installPowerProtect() }
+            }
+            .disabled(keepAwake.isInstallingPowerProtect)
+            if let error = keepAwake.lastError {
+              Text(error).font(.caption).foregroundStyle(.orange)
+            }
+          }
+        }
+        Picker("Stop on low battery", selection: $keepAwakeLowBatteryThreshold) {
+          Text("Off").tag(0)
+          Text("10%").tag(10)
+          Text("20%").tag(20)
+          Text("30%").tag(30)
+        }
+        Text("Battery protection only stops a session while the Mac is unplugged.")
+          .font(.caption).foregroundStyle(.secondary)
+        if keepAwake.needsAssertionRecovery {
+          Text(keepAwake.lastError ?? "A power assertion is still awaiting release.")
+            .font(.caption).foregroundStyle(.orange)
+          Button("Retry power assertion change") {
+            keepAwake.retryUnreleasedAssertions()
+          }
+        }
+      }
     }
     .formStyle(.grouped)
+    .onAppear { keepAwake.refreshPowerProtectInstallation() }
   }
 
   private var permissionsForm: some View {
@@ -1416,6 +1527,26 @@ struct SettingsView: View {
       }
       Section("Integration health") {
         PermissionStatusRow(
+          title: "Continuity reader", icon: "iphone.gen3",
+          status: continuityStatusText, color: continuityStatusColor)
+        LabeledContent("Continuity last successful read") {
+          Text(continuityLastSuccessfulReadText).foregroundStyle(.secondary)
+        }
+        if let detail = continuity.lastCompatibilityError?.diagnosticSummary {
+          Text(detail).font(.caption).foregroundStyle(.orange)
+        }
+        if continuity.availability == .needsAccessibility {
+          HStack {
+            Button("Request Accessibility access") { AccessibilityPermission.prompt() }
+            Button("Open Accessibility Settings") { permissions.open(.accessibility) }
+            Button("Retry Continuity") { continuity.retry() }
+          }
+        } else if continuity.availability == .controlCenterUnavailable
+          || continuity.availability == .incompatibleSchema
+        {
+          Button("Retry Continuity") { continuity.retry() }
+        }
+        PermissionStatusRow(
           title: "Focus event source", icon: "moon.circle.fill", status: focus.health.summary,
           color: focus.health.isFailure ? .orange : focus.health == .stopped ? .secondary : .green)
         if let lastSuccessfulParse = focus.lastSuccessfulParse {
@@ -1449,6 +1580,10 @@ struct SettingsView: View {
           status: hud.lastControlFailure ?? hud.eventTapStatus.summary,
           color: hud.lastControlFailure == nil
             ? (hud.eventTapStatus == .active ? .green : .secondary) : .orange)
+        PermissionStatusRow(
+          title: "USB reader", icon: "cable.connector", status: ports.readerHealth.summary,
+          color: usbReaderHealthColor)
+        Button("Retry USB enumeration") { ports.retry() }
       }
       Section("About") {
         Link("C-Nucifora on GitHub", destination: URL(string: "https://github.com/C-Nucifora")!)
@@ -1524,7 +1659,8 @@ struct SettingsView: View {
   private var continuityStatusText: String {
     switch continuity.availability {
     case .needsAccessibility: "Needs Accessibility"
-    case .unsupported: "Unavailable"
+    case .controlCenterUnavailable: "Control Centre unavailable"
+    case .incompatibleSchema: "Unsupported AX layout"
     case .systemDisabled: "Off in macOS"
     case .waiting: "Waiting"
     case .active: "Active"
@@ -1536,8 +1672,13 @@ struct SettingsView: View {
     case .active: .green
     case .waiting: .secondary
     case .needsAccessibility, .systemDisabled: .orange
-    case .unsupported: .red
+    case .controlCenterUnavailable, .incompatibleSchema: .red
     }
+  }
+
+  private var continuityLastSuccessfulReadText: String {
+    guard let date = continuity.lastSuccessfulRead else { return "Never" }
+    return date.formatted(date: .abbreviated, time: .standard)
   }
 
   private func authorizationColor(_ status: EventKitPermissionState) -> Color {
@@ -1614,13 +1755,27 @@ struct SettingsView: View {
       + "\nMedia adapter: \(nowPlaying.adapterStatus)"
       + (nowPlaying.adapterFailure.map { "\nMedia adapter failure: \($0)" } ?? "")
       + "\nHUD event tap: \(hud.eventTapStatus.summary)"
+      + "\n\(hud.externalBrightnessDiagnostics)"
+      + "\nContinuity: \(continuityStatusText)"
+      + "\nContinuity last successful read: \(continuity.lastSuccessfulRead?.formatted(.iso8601) ?? "Never")"
+      + "\nContinuity compatibility error: \(continuity.lastCompatibilityError?.diagnosticSummary ?? "None recorded")"
       + "\nFocus event source: \(focus.health.summary)"
       + "\nFocus last parsed: \(focus.lastSuccessfulParse?.formatted() ?? "Never")"
       + "\nFocus schema: \(focus.schemaSignature ?? "Unavailable")"
       + "\nPulse: \(pulseServer.isRunning ? "Running" : "Stopped")"
       + "\nPulse items: \(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
+      + "\nUSB reader: \(ports.readerHealth.summary)"
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(text, forType: .string)
+  }
+
+  private var usbReaderHealthColor: Color {
+    switch ports.readerHealth {
+    case .current: .green
+    case .awaitingFirstRead: .secondary
+    case .stale: .orange
+    case .failed: .red
+    }
   }
 
   private func rotatePulseToken() {
@@ -1691,8 +1846,15 @@ struct SettingsView: View {
     priorityList = ["com.spotify.client", "com.apple.Music"]
     activityOrder = ActivityCatalog.defaultOrder
     systemAlwaysVisible = false
+    systemAutoPresentCPU = true
+    systemAutoPresentThermal = true
+    systemAutoPresentMemoryPressure = true
+    systemAutoPresentLowDiskSpace = true
+    systemAutoPresentDiskThroughput = true
+    systemAutoPresentNetworkThroughput = true
     metricStyles = [:]
     hudStyle = .bar
+    Defaults[.disabledExternalBrightnessDisplays] = []
   }
 }
 
@@ -1954,6 +2116,7 @@ private struct PulseProviderRow: View {
   private var healthColor: Color {
     switch status.health {
     case .active: .green
+    case .needsAttention: .orange
     case .seen: .blue
     case .neverSeen: .secondary
     }

@@ -16,27 +16,24 @@ final class ActivityCenter: ObservableObject {
   init() {
     // Republish when the user reorders or disables activities so the notch updates live.
     Defaults.publisher(.disabledActivities)
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
-        Task { @MainActor in
-          self?.cacheInvalidated = true
-          self?.objectWillChange.send()
-        }
+        self?.cacheInvalidated = true
+        self?.objectWillChange.send()
       }
       .store(in: &cancellables)
     Defaults.publisher(.activityOrder)
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
-        Task { @MainActor in
-          self?.cacheInvalidated = true
-          self?.objectWillChange.send()
-        }
+        self?.cacheInvalidated = true
+        self?.objectWillChange.send()
       }
       .store(in: &cancellables)
     Defaults.publisher(.systemAlwaysVisible)
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
-        Task { @MainActor in
-          self?.cacheInvalidated = true
-          self?.objectWillChange.send()
-        }
+        self?.cacheInvalidated = true
+        self?.objectWillChange.send()
       }
       .store(in: &cancellables)
   }
@@ -84,12 +81,21 @@ final class ActivityCenter: ObservableObject {
   /// Activities shown as expanded tabs. Utility surfaces such as the File Shelf stay reachable
   /// without claiming the compact notch when they have no live content.
   var expandedActivities: [any NotchActivity] {
+    expandedActivities(temporarilyIncluding: nil)
+  }
+
+  /// A notification click may reveal one active disabled activity without changing the user's
+  /// persisted switch. The caller owns the lifetime of this temporary presentation.
+  func expandedActivities(temporarilyIncluding temporaryActivityID: String?)
+    -> [any NotchActivity]
+  {
     let order = Defaults[.activityOrder]
     let disabled = Set(Defaults[.disabledActivities])
     return sorted(
       activities.filter {
         ($0.isActive || $0.isAvailableWhenInactive)
-          && ActivityEnablement.isEnabled($0.id, disabledActivities: disabled)
+          && (ActivityEnablement.isEnabled($0.id, disabledActivities: disabled)
+            || ($0.isActive && $0.id == temporaryActivityID))
       },
       order: order)
   }
