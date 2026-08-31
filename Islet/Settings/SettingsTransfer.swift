@@ -6,6 +6,7 @@ struct SettingsTransferSnapshot: Equatable {
   var batteryGraphStyle: BatteryGraphStyle
   var mediaSourceMode: MediaSourceMode
   var mediaPriorityList: [String]
+  var excludedAudioOnlySourceBundleIdentifiers: [String]
   var interactionMode: InteractionMode
   var hoverCollapseTimeout: Double
   var hapticsEnabled: Bool
@@ -44,6 +45,7 @@ struct SettingsTransferPatch: Equatable {
   var batteryGraphStyle: BatteryGraphStyle?
   var mediaSourceMode: MediaSourceMode?
   var mediaPriorityList: [String]?
+  var excludedAudioOnlySourceBundleIdentifiers: [String]?
   var interactionMode: InteractionMode?
   var hoverCollapseTimeout: Double?
   var hapticsEnabled: Bool?
@@ -82,6 +84,9 @@ struct SettingsTransferPatch: Equatable {
     if let batteryGraphStyle { result.batteryGraphStyle = batteryGraphStyle }
     if let mediaSourceMode { result.mediaSourceMode = mediaSourceMode }
     if let mediaPriorityList { result.mediaPriorityList = mediaPriorityList }
+    if let excludedAudioOnlySourceBundleIdentifiers {
+      result.excludedAudioOnlySourceBundleIdentifiers = excludedAudioOnlySourceBundleIdentifiers
+    }
     if let interactionMode { result.interactionMode = interactionMode }
     if let hoverCollapseTimeout { result.hoverCollapseTimeout = hoverCollapseTimeout }
     if let hapticsEnabled { result.hapticsEnabled = hapticsEnabled }
@@ -191,10 +196,11 @@ enum SettingsTransfer {
   static let portableKeys: [String] = [
     "activityOrder", "allowDisplaySleep", "appTheme", "barrierPushDistance", "batteryGraphStyle",
     "calendarEnabled", "calendarLeadMinutes", "continuityAlwaysVisible", "continuitySneaks",
-    "disabledActivities", "disabledEventSources", "energyMode", "hapticStrength",
-    "hapticsEnabled", "hideFromScreenRecording", "hideInFullscreen", "hoverCollapseTimeout",
-    "hudEnabled", "hudStyle", "interactionMode", "keepAwakeLowBatteryThreshold",
-    "keepAwakeWithLidClosed", "launchAtLogin",
+    "disabledActivities", "disabledEventSources", "energyMode",
+    "excludedAudioOnlySourceBundleIdentifiers", "hapticStrength", "hapticsEnabled",
+    "hideFromScreenRecording", "hideInFullscreen", "hoverCollapseTimeout", "hudEnabled",
+    "hudStyle", "interactionMode", "keepAwakeLowBatteryThreshold", "keepAwakeWithLidClosed",
+    "launchAtLogin",
     "mediaPriorityList", "mediaSourceMode", "metricStyles", "remindersEnabled",
     "showOnAllDisplays", "systemAlwaysVisible", "systemAutoPresentCPU",
     "systemAutoPresentDiskThroughput", "systemAutoPresentLowDiskSpace",
@@ -282,6 +288,8 @@ enum SettingsTransfer {
     case "batteryGraphStyle": patch.batteryGraphStyle != nil
     case "mediaSourceMode": patch.mediaSourceMode != nil
     case "mediaPriorityList": patch.mediaPriorityList != nil
+    case "excludedAudioOnlySourceBundleIdentifiers":
+      patch.excludedAudioOnlySourceBundleIdentifiers != nil
     case "interactionMode": patch.interactionMode != nil
     case "hoverCollapseTimeout": patch.hoverCollapseTimeout != nil
     case "hapticsEnabled": patch.hapticsEnabled != nil
@@ -323,6 +331,8 @@ enum SettingsTransfer {
       "batteryGraphStyle": value.batteryGraphStyle.rawValue,
       "mediaSourceMode": value.mediaSourceMode.rawValue,
       "mediaPriorityList": value.mediaPriorityList,
+      "excludedAudioOnlySourceBundleIdentifiers":
+        value.excludedAudioOnlySourceBundleIdentifiers,
       "interactionMode": value.interactionMode.rawValue,
       "hoverCollapseTimeout": value.hoverCollapseTimeout,
       "hapticsEnabled": value.hapticsEnabled,
@@ -379,6 +389,13 @@ enum SettingsTransfer {
     patch.mediaSourceMode = try enumeration(
       "mediaSourceMode", in: values, type: MediaSourceMode.self)
     patch.mediaPriorityList = try stringArray("mediaPriorityList", in: values, unique: true)
+    if let exclusions = try stringArray(
+      "excludedAudioOnlySourceBundleIdentifiers", in: values, unique: true,
+      maximumItems: SourceFilter.maximumAudioOnlyExclusions)
+    {
+      patch.excludedAudioOnlySourceBundleIdentifiers =
+        SourceFilter.migratedAudioOnlyExclusions(exclusions)
+    }
     patch.interactionMode = try enumeration(
       "interactionMode", in: values, type: InteractionMode.self)
     patch.hoverCollapseTimeout = try number(
@@ -476,14 +493,15 @@ enum SettingsTransfer {
   }
 
   private static func stringArray(
-    _ key: String, in values: [String: Any], unique: Bool
+    _ key: String, in values: [String: Any], unique: Bool,
+    maximumItems: Int = maximumListItems
   ) throws -> [String]? {
     guard let raw = values[key] else { return nil }
     guard let array = raw as? [Any], array.allSatisfy({ $0 is String }) else {
       throw SettingsTransferError.invalidValue(key: key, expected: "an array of text values")
     }
     let result = array.compactMap { $0 as? String }
-    guard result.count <= maximumListItems,
+    guard result.count <= maximumItems,
       result.allSatisfy({
         !$0.isEmpty && $0.lengthOfBytes(using: .utf8) <= maximumTextBytes
       }),
@@ -492,7 +510,7 @@ enum SettingsTransfer {
       throw SettingsTransferError.invalidValue(
         key: key,
         expected:
-          "at most \(maximumListItems) unique, non-empty text values up to \(maximumTextBytes) bytes each"
+          "at most \(maximumItems) unique, non-empty text values up to \(maximumTextBytes) bytes each"
       )
     }
     return result
@@ -552,6 +570,10 @@ enum SettingsTransfer {
     add(
       "keepAwakeLowBatteryThreshold", "Keep-awake battery stop",
       old.keepAwakeLowBatteryThreshold, new.keepAwakeLowBatteryThreshold)
+    add(
+      "excludedAudioOnlySourceBundleIdentifiers", "Excluded audio-only sources",
+      old.excludedAudioOnlySourceBundleIdentifiers,
+      new.excludedAudioOnlySourceBundleIdentifiers)
     add(
       "hapticStrength", "Haptic strength", old.hapticStrength.rawValue, new.hapticStrength.rawValue)
     add("hapticsEnabled", "Haptics", old.hapticsEnabled, new.hapticsEnabled)
@@ -617,6 +639,9 @@ enum SettingsTransferDefaults {
     SettingsTransferSnapshot(
       appTheme: Defaults[.appTheme], batteryGraphStyle: Defaults[.batteryGraphStyle],
       mediaSourceMode: Defaults[.mediaSourceMode], mediaPriorityList: Defaults[.mediaPriorityList],
+      excludedAudioOnlySourceBundleIdentifiers:
+        SourceFilter.migratedAudioOnlyExclusions(
+          Defaults[.excludedAudioOnlySourceBundleIdentifiers]),
       interactionMode: Defaults[.interactionMode],
       hoverCollapseTimeout: Defaults[.hoverCollapseTimeout],
       hapticsEnabled: Defaults[.hapticsEnabled], hapticStrength: Defaults[.hapticStrength],
@@ -651,6 +676,9 @@ enum SettingsTransferDefaults {
     if let value = patch.batteryGraphStyle { Defaults[.batteryGraphStyle] = value }
     if let value = patch.mediaSourceMode { Defaults[.mediaSourceMode] = value }
     if let value = patch.mediaPriorityList { Defaults[.mediaPriorityList] = value }
+    if let value = patch.excludedAudioOnlySourceBundleIdentifiers {
+      Defaults[.excludedAudioOnlySourceBundleIdentifiers] = value
+    }
     if let value = patch.interactionMode { Defaults[.interactionMode] = value }
     if let value = patch.hoverCollapseTimeout { Defaults[.hoverCollapseTimeout] = value }
     if let value = patch.hapticsEnabled { Defaults[.hapticsEnabled] = value }
