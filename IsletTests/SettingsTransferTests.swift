@@ -27,6 +27,20 @@ final class SettingsTransferTests: XCTestCase {
     XCTAssertEqual(preview.changes.map(\.key), ["appTheme"])
   }
 
+  func testPulseStaleTimeoutRoundTripsAndRejectsUnsupportedValues() throws {
+    let data = try document(settings: ["pulseStaleTimeout": 900])
+    let preview = try SettingsTransfer.preview(data: data, current: defaultSnapshot)
+
+    XCTAssertEqual(preview.patch.pulseStaleTimeout, 900)
+    XCTAssertEqual(preview.result.pulseStaleTimeout, 900)
+    XCTAssertEqual(preview.changes.map(\.key), ["pulseStaleTimeout"])
+
+    let invalid = try document(settings: ["pulseStaleTimeout": 61])
+    XCTAssertThrowsError(try SettingsTransfer.preview(data: invalid, current: defaultSnapshot)) {
+      XCTAssertTrue($0.localizedDescription.contains("pulseStaleTimeout"))
+    }
+  }
+
   func testCorruptAndTypeInvalidFilesFailBeforeProducingAPreview() throws {
     XCTAssertThrowsError(
       try SettingsTransfer.preview(data: Data("not json".utf8), current: defaultSnapshot))
@@ -147,7 +161,7 @@ final class SettingsTransferTests: XCTestCase {
       remindersEnabled: true, showOnAllDisplays: false, hideInFullscreen: false,
       launchAtLogin: false, activityOrder: ActivityCatalog.defaultOrder, disabledActivities: [],
       disabledEventSources: [], systemAlwaysVisible: false, metricStyles: [:],
-      continuityAlwaysVisible: false, continuitySneaks: true)
+      continuityAlwaysVisible: false, continuitySneaks: true, pulseStaleTimeout: 300)
   }
 
   private var sampleSnapshot: SettingsTransferSnapshot {
@@ -162,6 +176,6 @@ final class SettingsTransferTests: XCTestCase {
       activityOrder: ActivityCatalog.defaultOrder.reversed(),
       disabledActivities: ["pulse", "clipboard"], disabledEventSources: ["wifi", "focus"],
       systemAlwaysVisible: true, metricStyles: ["cpu": "combined", "thermal": "number"],
-      continuityAlwaysVisible: true, continuitySneaks: false)
+      continuityAlwaysVisible: true, continuitySneaks: false, pulseStaleTimeout: 1_800)
   }
 }

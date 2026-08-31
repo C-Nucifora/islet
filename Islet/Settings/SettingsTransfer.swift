@@ -28,6 +28,7 @@ struct SettingsTransferSnapshot: Equatable {
   var metricStyles: [String: String]
   var continuityAlwaysVisible: Bool
   var continuitySneaks: Bool
+  var pulseStaleTimeout: Double
 }
 
 struct SettingsTransferPatch: Equatable {
@@ -57,6 +58,7 @@ struct SettingsTransferPatch: Equatable {
   var metricStyles: [String: String]?
   var continuityAlwaysVisible: Bool?
   var continuitySneaks: Bool?
+  var pulseStaleTimeout: Double?
 
   func applying(to snapshot: SettingsTransferSnapshot) -> SettingsTransferSnapshot {
     var result = snapshot
@@ -86,6 +88,7 @@ struct SettingsTransferPatch: Equatable {
     if let metricStyles { result.metricStyles = metricStyles }
     if let continuityAlwaysVisible { result.continuityAlwaysVisible = continuityAlwaysVisible }
     if let continuitySneaks { result.continuitySneaks = continuitySneaks }
+    if let pulseStaleTimeout { result.pulseStaleTimeout = pulseStaleTimeout }
     return result
   }
 }
@@ -155,7 +158,7 @@ enum SettingsTransfer {
     "disabledActivities", "disabledEventSources", "energyMode", "hapticStrength",
     "hapticsEnabled", "hideFromScreenRecording", "hideInFullscreen", "hoverCollapseTimeout",
     "hudEnabled", "hudStyle", "interactionMode", "launchAtLogin", "mediaPriorityList",
-    "mediaSourceMode", "metricStyles", "remindersEnabled", "showOnAllDisplays",
+    "mediaSourceMode", "metricStyles", "pulseStaleTimeout", "remindersEnabled", "showOnAllDisplays",
     "systemAlwaysVisible",
   ]
 
@@ -258,6 +261,7 @@ enum SettingsTransfer {
     case "metricStyles": patch.metricStyles != nil
     case "continuityAlwaysVisible": patch.continuityAlwaysVisible != nil
     case "continuitySneaks": patch.continuitySneaks != nil
+    case "pulseStaleTimeout": patch.pulseStaleTimeout != nil
     default: false
     }
   }
@@ -290,6 +294,7 @@ enum SettingsTransfer {
       "metricStyles": value.metricStyles,
       "continuityAlwaysVisible": value.continuityAlwaysVisible,
       "continuitySneaks": value.continuitySneaks,
+      "pulseStaleTimeout": value.pulseStaleTimeout,
     ]
   }
 
@@ -342,6 +347,9 @@ enum SettingsTransfer {
     patch.metricStyles = try stringDictionary("metricStyles", in: values)
     patch.continuityAlwaysVisible = try boolean("continuityAlwaysVisible", in: values)
     patch.continuitySneaks = try boolean("continuitySneaks", in: values)
+    patch.pulseStaleTimeout = try allowedInteger(
+      "pulseStaleTimeout", in: values, allowed: [60, 300, 900, 1_800, 3_600]
+    ).map(Double.init)
     return patch
   }
 
@@ -487,6 +495,7 @@ enum SettingsTransfer {
       "mediaSourceMode", "Primary player", old.mediaSourceMode.rawValue,
       new.mediaSourceMode.rawValue)
     add("metricStyles", "System metrics", old.metricStyles, new.metricStyles)
+    add("pulseStaleTimeout", "Pulse stale timeout", old.pulseStaleTimeout, new.pulseStaleTimeout)
     add("remindersEnabled", "Reminders", old.remindersEnabled, new.remindersEnabled)
     add("showOnAllDisplays", "Display placement", old.showOnAllDisplays, new.showOnAllDisplays)
     add(
@@ -531,7 +540,8 @@ enum SettingsTransferDefaults {
       disabledEventSources: Defaults[.disabledEventSources],
       systemAlwaysVisible: Defaults[.systemAlwaysVisible], metricStyles: Defaults[.metricStyles],
       continuityAlwaysVisible: Defaults[.continuityAlwaysVisible],
-      continuitySneaks: Defaults[.continuitySneaks])
+      continuitySneaks: Defaults[.continuitySneaks],
+      pulseStaleTimeout: Defaults[.pulseStaleTimeout])
   }
 
   static func apply(_ patch: SettingsTransferPatch) {
@@ -561,5 +571,6 @@ enum SettingsTransferDefaults {
     if let value = patch.metricStyles { Defaults[.metricStyles] = value }
     if let value = patch.continuityAlwaysVisible { Defaults[.continuityAlwaysVisible] = value }
     if let value = patch.continuitySneaks { Defaults[.continuitySneaks] = value }
+    if let value = patch.pulseStaleTimeout { Defaults[.pulseStaleTimeout] = value }
   }
 }
