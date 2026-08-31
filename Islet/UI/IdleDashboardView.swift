@@ -5,29 +5,91 @@ import SwiftUI
 struct IdleDashboardView: View {
   @ObservedObject var calendar = AppState.calendar
   @ObservedObject var reminders = RemindersProvider.shared
+  @ObservedObject private var keepAwake = KeepAwakeManager.shared
   @Default(.calendarEnabled) private var calendarEnabled
   @Default(.remindersEnabled) private var remindersEnabled
 
   var body: some View {
-    Group {
-      if calendarEnabled || remindersEnabled {
-        HStack(alignment: .top, spacing: 14) {
-          if calendarEnabled {
-            column("Today", systemImage: "calendar") { agenda }
+    VStack(alignment: .leading, spacing: 8) {
+      keepAwakeControls
+      Divider().overlay(Color.white.opacity(0.12))
+      Group {
+        if calendarEnabled || remindersEnabled {
+          HStack(alignment: .top, spacing: 14) {
+            if calendarEnabled {
+              column("Today", systemImage: "calendar") { agenda }
+            }
+            if calendarEnabled && remindersEnabled {
+              Divider().overlay(Color.white.opacity(0.12))
+            }
+            if remindersEnabled {
+              column("Reminders", systemImage: "checklist") { remindersList }
+            }
           }
-          if calendarEnabled && remindersEnabled {
-            Divider().overlay(Color.white.opacity(0.12))
-          }
-          if remindersEnabled {
-            column("Reminders", systemImage: "checklist") { remindersList }
-          }
+        } else {
+          enableHint
         }
-      } else {
-        enableHint
       }
     }
     .foregroundStyle(.white)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  private var keepAwakeControls: some View {
+    HStack(spacing: 8) {
+      Image(systemName: keepAwake.isActive ? "cup.and.heat.waves.fill" : "cup.and.heat.waves")
+        .appThemeForeground(.interaction)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(keepAwake.isActive ? "Mac stays awake" : "Keep Mac awake")
+          .font(.caption.weight(.semibold))
+        if keepAwake.isActive {
+          Text(keepAwake.lastError ?? keepAwake.statusText)
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(keepAwake.lastError == nil ? Color.secondary : Color.orange)
+            .lineLimit(1)
+        } else if let error = keepAwake.lastError {
+          Text(error).font(.caption2).foregroundStyle(.orange).lineLimit(1)
+        }
+      }
+      Spacer(minLength: 4)
+      if keepAwake.isActive {
+        Menu {
+          Button("Indefinitely") { keepAwake.start(duration: .indefinitely) }
+          ForEach(Array(KeepAwakeDuration.presets.enumerated()), id: \.offset) { _, preset in
+            Button(preset.title) { keepAwake.start(duration: preset.duration) }
+          }
+        } label: {
+          Image(systemName: "timer")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("Change keep-awake duration")
+        .accessibilityHint("Replaces the current keep-awake timer")
+        Button("Stop") { keepAwake.stop(reason: .manual) }
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+          .accessibilityHint("Allows the Mac to idle-sleep again")
+      } else if keepAwake.hasUnreleasedAssertions {
+        Button("Retry") { keepAwake.retryUnreleasedAssertions() }
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+          .accessibilityLabel("Retry releasing keep-awake assertions")
+          .accessibilityHint("Tries again to let the Mac and display idle-sleep")
+      } else {
+        Menu("Start") {
+          Button("Indefinitely") { keepAwake.start(duration: .indefinitely) }
+          ForEach(Array(KeepAwakeDuration.presets.enumerated()), id: \.offset) { _, preset in
+            Button(preset.title) { keepAwake.start(duration: preset.duration) }
+          }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityLabel("Start keep-awake session")
+        .accessibilityHint("Choose how long the Mac should stay awake")
+      }
+    }
+    .accessibilityElement(children: .contain)
   }
 
   private func column<Content: View>(
@@ -111,7 +173,14 @@ struct IdleDashboardView: View {
           .buttonStyle(.link).font(.caption2)
       }
     } else if reminders.reminders.isEmpty {
-      emptyRow("All clear")
+      if reminders.hasMoreReminders {
+        VStack(alignment: .leading, spacing: 5) {
+          emptyRow("No reminders due soon")
+          moreRemindersButton
+        }
+      } else {
+        emptyRow("All clear")
+      }
     } else {
       ScrollView(.vertical, showsIndicators: false) {
         VStack(alignment: .leading, spacing: 6) {
@@ -161,6 +230,9 @@ struct IdleDashboardView: View {
               .accessibilityLabel("Snooze \(item.title)")
             }
           }
+          if reminders.hasMoreReminders {
+            moreRemindersButton
+          }
         }
       }
     }
@@ -179,6 +251,13 @@ struct IdleDashboardView: View {
 
   private func emptyRow(_ text: String) -> some View {
     Text(text).font(.caption).foregroundStyle(.secondary)
+  }
+
+  private var moreRemindersButton: some View {
+    Button("More in Reminders") { reminders.openRemindersApp() }
+      .buttonStyle(.link)
+      .font(.caption2)
+      .accessibilityHint("Opens the Reminders app")
   }
 
   @ViewBuilder private func reminderDueText(_ item: ReminderItem, due: Date) -> some View {

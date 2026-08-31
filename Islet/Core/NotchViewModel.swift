@@ -8,6 +8,7 @@ final class NotchViewModel: ObservableObject {
   @Published private(set) var state: NotchState = .closed
   /// The expanded switcher's explicit choice. A nil value lets the view choose its normal default.
   @Published private(set) var selectedActivityID: String?
+  @Published private(set) var temporarilyPresentedActivityID: String?
   /// Screen-coordinate footprint the visible island should occupy right now. The AppKit panel is
   /// permanently reserved at `reservedPanelFrame`; keeping this logical footprint separate lets
   /// pointer passthrough and alignment follow only the pixels the island actually draws.
@@ -63,6 +64,7 @@ final class NotchViewModel: ObservableObject {
     self.actualPanelFrame = initialFrame
     self.state = initialPresentation.notchState
     self.selectedActivityID = initialPresentation.selectedActivityID
+    self.temporarilyPresentedActivityID = initialPresentation.temporarilyPresentedActivityID
     if state.isExpanded {
       expandedWidth = min(
         maximumExpandedWidth,
@@ -89,11 +91,38 @@ final class NotchViewModel: ObservableObject {
   var presentationState: PanelPresentationState {
     PanelPresentationState(
       notchState: state, selectedActivityID: selectedActivityID,
+      temporarilyPresentedActivityID: temporarilyPresentedActivityID,
       expandedWidth: expandedWidth, expandedHeight: expandedHeight)
   }
 
   func selectActivity(_ id: String?) {
+    if temporarilyPresentedActivityID != id { temporarilyPresentedActivityID = nil }
     if selectedActivityID != id { selectedActivityID = id }
+  }
+
+  /// Selects an activity and opens the island if needed. Notification activation uses this rather
+  /// than synthetic mouse events, so the completed timer is shown on the same display deterministically.
+  func open(activityID: String, allowingDisabledActivity: Bool = false) {
+    temporarilyPresentedActivityID = allowingDisabledActivity ? activityID : nil
+    selectActivity(activityID)
+    if !state.isExpanded { apply(.clickedNotch) }
+  }
+
+  func clearTemporaryPresentationIfUnavailable(availableActivityIDs: [String]) {
+    guard let activityID = temporarilyPresentedActivityID,
+      !availableActivityIDs.contains(activityID)
+    else { return }
+    temporarilyPresentedActivityID = nil
+    if selectedActivityID == activityID { selectedActivityID = nil }
+  }
+
+  func isPresenting(activityID: String) -> Bool {
+    guard state.isExpanded else { return false }
+    if selectedActivityID == activityID {
+      return temporarilyPresentedActivityID == activityID
+        || ActivityEnablement.isEnabled(activityID)
+    }
+    return selectedActivityID == nil && ActivityCenter.shared.primaryActivity?.id == activityID
   }
 
   /// Resumes hover bookkeeping after ScreenManager restores an expanded presentation. Without
@@ -334,7 +363,7 @@ final class NotchViewModel: ObservableObject {
     if !next.isExpanded, expandedWidth != Metrics.expandedSize.width {
       expandedWidth = Metrics.expandedSize.width
     }
-    if !next.isExpanded, selectedActivityID != nil { selectedActivityID = nil }
+    if !next.isExpanded { selectActivity(nil) }
     // hover-region may have changed shape; re-evaluate containment so exit fires correctly
     wasInside = region(hoverRegion, contains: lastMouseLocation)
   }

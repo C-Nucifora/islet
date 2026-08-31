@@ -36,7 +36,8 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 
   var searchTerms: String {
     switch self {
-    case .general: "launch login displays fullscreen recording hover click haptics energy"
+    case .general:
+      "launch login displays fullscreen recording hover click haptics energy keep awake sleep battery"
     case .activities:
       "tabs order battery calendar reminders clipboard ports audio hud timer shelf system media iphone continuity live activities"
     case .notifications:
@@ -108,7 +109,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .startupDisplays: "Login item and display placement"
     case .appearance: "Choose the colours used across Islet"
     case .interaction: "How the notch opens and closes"
-    case .energy: "Refresh rates and Low Power Mode"
+    case .energy: "Refresh rates, sleep and battery protection"
     case .activityOrder: "Show, hide and reorder activities"
     case .calendarReminders: "Agenda, countdown and reminder options"
     case .nowPlaying: "Choose which active player opens first"
@@ -185,6 +186,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .energy:
       pageContent + [
         "Energy use", "Mode", "Automatic", "Low Energy", "Live", "Low Power Mode",
+        "Keep awake", "Allow the display to sleep", "Stop on low battery", "Indefinitely",
+        "prevent idle system sleep display sleep assertions session timer",
         "refresh rates hidden activity remote T3 polling performance battery",
       ]
     case .activityOrder:
@@ -265,7 +268,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "Diagnostics", "Bundle identifier", "Version", "Energy mode", "Copy diagnostics",
         "Open logs folder", "Restart Islet", "Quit Islet", "Integration health", "Media adapter",
         "Focus event source", "Focus last parsed", "Focus schema", "Retry Focus source",
-        "T3 Code credentials", "Pulse", "Media-key HUD", "signing support status", "About",
+        "T3 Code credentials", "Pulse", "Media-key HUD", "USB reader", "Retry USB enumeration",
+        "signing support status", "About",
         "GitHub contributors C-Nucifora nedlane",
       ]
     case .settingsTransfer:
@@ -349,6 +353,8 @@ struct SettingsView: View {
   @ObservedObject private var t3Code = AppState.t3Code
   @ObservedObject private var focus = AppState.focus
   @ObservedObject private var launchAtLoginStatus = LaunchAtLoginStatus.shared
+  @ObservedObject private var ports = PortMonitor.shared
+  @ObservedObject private var keepAwake = KeepAwakeManager.shared
 
   @Default(.appTheme) private var appTheme
   @Default(.batteryGraphStyle) private var batteryGraphStyle
@@ -375,6 +381,8 @@ struct SettingsView: View {
   @Default(.metricStyles) private var metricStyles
   @Default(.disabledEventSources) private var disabledEventSources
   @Default(.energyMode) private var energyMode
+  @Default(.allowDisplaySleep) private var allowDisplaySleep
+  @Default(.keepAwakeLowBatteryThreshold) private var keepAwakeLowBatteryThreshold
   @Default(.continuityAlwaysVisible) private var continuityAlwaysVisible
   @Default(.continuitySneaks) private var continuitySneaks
 
@@ -1156,6 +1164,32 @@ struct SettingsView: View {
         )
         .font(.caption).foregroundStyle(.secondary)
       }
+      if !hud.externalBrightnessDisplays.isEmpty {
+        Section("External display brightness") {
+          ForEach(hud.externalBrightnessDisplays) { status in
+            VStack(alignment: .leading, spacing: 3) {
+              Toggle(
+                status.display.name,
+                isOn: Binding(
+                  get: {
+                    if case .disabled = status.capability { return false }
+                    return true
+                  },
+                  set: { enabled in
+                    hud.setExternalBrightnessEnabled(enabled, displayID: status.display.id)
+                  }))
+              Text(status.capability.summary)
+                .font(.caption)
+                .foregroundStyle(
+                  status.capability.isAvailable ? Color.secondary : Color.orange)
+            }
+          }
+          Text(
+            "Islet probes DDC/CI without changing brightness. Disable a display here if its monitor firmware behaves poorly."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
+      }
     }
     .formStyle(.grouped)
   }
@@ -1171,6 +1205,30 @@ struct SettingsView: View {
         Text(energyModeDetail)
           .font(.caption)
           .foregroundStyle(energyMode == .live ? .orange : .secondary)
+      }
+      Section("Keep awake") {
+        Toggle("Allow the display to sleep", isOn: $allowDisplaySleep)
+        Text(
+          "An active session always prevents idle system sleep. Turn this off to keep the display awake too."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Picker("Stop on low battery", selection: $keepAwakeLowBatteryThreshold) {
+          Text("Off").tag(0)
+          Text("10%").tag(10)
+          Text("20%").tag(20)
+          Text("30%").tag(30)
+        }
+        Text("Battery protection only stops a session while the Mac is unplugged.")
+          .font(.caption).foregroundStyle(.secondary)
+        if keepAwake.hasUnreleasedAssertions,
+          !keepAwake.isActive || allowDisplaySleep != keepAwake.effectivelyAllowsDisplaySleep
+        {
+          Text(keepAwake.lastError ?? "A power assertion is still awaiting release.")
+            .font(.caption).foregroundStyle(.orange)
+          Button("Retry power assertion change") {
+            keepAwake.retryUnreleasedAssertions()
+          }
+        }
       }
     }
     .formStyle(.grouped)
@@ -1449,6 +1507,10 @@ struct SettingsView: View {
           status: hud.lastControlFailure ?? hud.eventTapStatus.summary,
           color: hud.lastControlFailure == nil
             ? (hud.eventTapStatus == .active ? .green : .secondary) : .orange)
+        PermissionStatusRow(
+          title: "USB reader", icon: "cable.connector", status: ports.readerHealth.summary,
+          color: usbReaderHealthColor)
+        Button("Retry USB enumeration") { ports.retry() }
       }
       Section("About") {
         Link("C-Nucifora on GitHub", destination: URL(string: "https://github.com/C-Nucifora")!)
@@ -1614,13 +1676,24 @@ struct SettingsView: View {
       + "\nMedia adapter: \(nowPlaying.adapterStatus)"
       + (nowPlaying.adapterFailure.map { "\nMedia adapter failure: \($0)" } ?? "")
       + "\nHUD event tap: \(hud.eventTapStatus.summary)"
+      + "\n\(hud.externalBrightnessDiagnostics)"
       + "\nFocus event source: \(focus.health.summary)"
       + "\nFocus last parsed: \(focus.lastSuccessfulParse?.formatted() ?? "Never")"
       + "\nFocus schema: \(focus.schemaSignature ?? "Unavailable")"
       + "\nPulse: \(pulseServer.isRunning ? "Running" : "Stopped")"
       + "\nPulse items: \(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
+      + "\nUSB reader: \(ports.readerHealth.summary)"
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(text, forType: .string)
+  }
+
+  private var usbReaderHealthColor: Color {
+    switch ports.readerHealth {
+    case .current: .green
+    case .awaitingFirstRead: .secondary
+    case .stale: .orange
+    case .failed: .red
+    }
   }
 
   private func rotatePulseToken() {
@@ -1693,6 +1766,7 @@ struct SettingsView: View {
     systemAlwaysVisible = false
     metricStyles = [:]
     hudStyle = .bar
+    Defaults[.disabledExternalBrightnessDisplays] = []
   }
 }
 
@@ -1954,6 +2028,7 @@ private struct PulseProviderRow: View {
   private var healthColor: Color {
     switch status.health {
     case .active: .green
+    case .needsAttention: .orange
     case .seen: .blue
     case .neverSeen: .secondary
     }
