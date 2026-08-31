@@ -1,6 +1,17 @@
 import Combine
 import SwiftUI
 
+private struct ShelfDropTargetedEnvironmentKey: EnvironmentKey {
+  static let defaultValue = false
+}
+
+extension EnvironmentValues {
+  var shelfDropTargeted: Bool {
+    get { self[ShelfDropTargetedEnvironmentKey.self] }
+    set { self[ShelfDropTargetedEnvironmentKey.self] = newValue }
+  }
+}
+
 /// Surfaces the file shelf in the island: a tray indicator in the compact view and a drop grid
 /// (open, drag-out, and AirDrop) when expanded. Active while it holds files or a drop is underway.
 @MainActor
@@ -66,6 +77,7 @@ struct ShelfView: View {
   @ObservedObject var model: ShelfModel
   @ObservedObject var airDrop: AirDropShareController
   @Environment(\.appTheme) private var appTheme
+  @Environment(\.shelfDropTargeted) private var shelfDropTargeted
   @State private var isCreatingStack = false
   @State private var newStackName = ""
 
@@ -238,7 +250,7 @@ struct ShelfView: View {
     .contentShape(Rectangle())
     .onAppear { airDrop.refreshAvailability() }
     .overlay {
-      if model.isDragActive {
+      if shelfDropTargeted {
         RoundedRectangle(cornerRadius: 12)
           .strokeBorder(appTheme.color(for: .shelf), lineWidth: 2)
       }
@@ -356,6 +368,7 @@ struct ShelfItemView: View {
   @ObservedObject var model: ShelfModel
   @State private var hovering = false
   @State private var thumbnailImage: NSImage?
+  @State private var thumbnailVisibilityOwner = UUID()
 
   var body: some View {
     VStack(spacing: 3) {
@@ -400,10 +413,14 @@ struct ShelfItemView: View {
     }
     .onHover { hovering = $0 }
     .onAppear {
-      model.setThumbnailVisibility(for: item, isVisible: true)
+      model.setThumbnailVisibility(
+        for: item, owner: thumbnailVisibilityOwner, isVisible: true)
       updateThumbnail()
     }
-    .onDisappear { model.setThumbnailVisibility(for: item, isVisible: false) }
+    .onDisappear {
+      model.setThumbnailVisibility(
+        for: item, owner: thumbnailVisibilityOwner, isVisible: false)
+    }
     .onChange(of: item.thumbnail) { _, _ in updateThumbnail() }
     .accessibilityElement(children: .contain)
     .contextMenu {

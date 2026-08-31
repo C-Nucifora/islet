@@ -198,6 +198,7 @@ struct ExpandedContainerView: View {
       $0.id == effectiveSelection
     }) {
       activity.expandedView
+        .environment(\.shelfDropTargeted, vm.isShelfDropTargeted)
     } else {
       IdleDashboardView(vm: vm) { vm.selectActivity($0) }
     }
