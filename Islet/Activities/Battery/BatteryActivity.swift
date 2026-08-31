@@ -35,12 +35,15 @@ final class BatteryActivity: NotchActivity, ObservableObject {
     cancellables.removeAll()
     eventHistory.reset()
     activationDate = nil
+    KeepAwakeManager.shared.clearBatteryState()
     objectWillChange.send()
   }
 
   private func handle(_ new: BatteryState?, hasFreshState: Bool) {
     let events = eventHistory.events(for: new, isFresh: hasFreshState)
-    guard hasFreshState, new != nil else { return }
+    guard hasFreshState, let new else { return }
+    KeepAwakeManager.shared.handleBattery(
+      new, lowBatteryThreshold: Defaults[.keepAwakeLowBatteryThreshold])
     // Now that the tab is always active, its activation date is simply when it first had a reading.
     if activationDate == nil { activationDate = Date() }
     objectWillChange.send()

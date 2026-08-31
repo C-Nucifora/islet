@@ -150,8 +150,8 @@ enum QuickActionsOpener {
     let window = NSPanel(contentViewController: hosting)
     window.title = "Islet Quick Actions"
     window.styleMask = [.titled, .closable, .resizable, .utilityWindow]
-    window.setContentSize(NSSize(width: 560, height: 430))
-    window.contentMinSize = NSSize(width: 440, height: 320)
+    window.setContentSize(NSSize(width: 560, height: 470))
+    window.contentMinSize = NSSize(width: 440, height: 360)
     window.isFloatingPanel = true
     window.hidesOnDeactivate = false
     window.isReleasedWhenClosed = false
@@ -197,6 +197,12 @@ private struct QuickActionsView: View {
         }
       }
       .padding(14)
+      Divider()
+      TimerEditor(timer: timer) {
+        QuickActionsOpener.close()
+      }
+      .padding(.horizontal, 14)
+      .padding(.vertical, 10)
       Divider()
       if actions.isEmpty {
         ContentUnavailableView.search(text: query)
@@ -256,6 +262,78 @@ private struct QuickActionsView: View {
   private func perform(_ action: IsletQuickAction) {
     QuickActionsOpener.close()
     action.perform()
+  }
+}
+
+private struct TimerEditor: View {
+  private enum Field: Hashable {
+    case duration
+    case label
+  }
+
+  @ObservedObject var timer: TimerActivity
+  let onStart: () -> Void
+
+  @State private var minutes = ""
+  @State private var label = ""
+  @State private var hasAttemptedStart = false
+  @FocusState private var focusedField: Field?
+
+  private var validation: TimerEditorValidation {
+    TimerEditorValidation.validate(minutes: minutes)
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("Start a custom timer").font(.headline)
+      HStack(spacing: 8) {
+        TextField("Minutes", text: $minutes)
+          .textFieldStyle(.roundedBorder)
+          .frame(width: 100)
+          .focused($focusedField, equals: .duration)
+          .accessibilityLabel("Timer duration in minutes")
+          .accessibilityHint(
+            "Enter a whole number from 1 to \(TimerEditorValidation.maximumMinutes).")
+        TextField("Label (optional)", text: $label)
+          .textFieldStyle(.roundedBorder)
+          .focused($focusedField, equals: .label)
+          .accessibilityLabel("Timer label, optional")
+        Button("Start") { start() }
+          .buttonStyle(.borderedProminent)
+          .accessibilityHint("Starts the timer with this duration and label.")
+      }
+      .onSubmit(start)
+
+      if hasAttemptedStart, let message = validation.message {
+        Text(message)
+          .font(.caption)
+          .foregroundStyle(.orange)
+          .accessibilityLabel("Timer duration error: \(message)")
+      }
+      HStack(spacing: 8) {
+        Text("Shortcuts").font(.caption).foregroundStyle(.secondary)
+        Button("5 min") { startPreset(minutes: 5, label: "Timer") }
+        Button("25 min") { startPreset(minutes: 25, label: "Focus") }
+      }
+      .font(.caption)
+    }
+    .onAppear { focusedField = .duration }
+  }
+
+  private func start() {
+    hasAttemptedStart = true
+    guard case .valid(let duration) = validation else {
+      if let message = validation.message { A11y.announce(message) }
+      focusedField = .duration
+      return
+    }
+    timer.start(duration, label: label)
+    onStart()
+  }
+
+  private func startPreset(minutes: Int, label: String) {
+    timer.start(TimeInterval(minutes * 60), label: label)
+    onStart()
   }
 }
 

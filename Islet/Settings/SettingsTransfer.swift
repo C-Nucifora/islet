@@ -13,6 +13,8 @@ struct SettingsTransferSnapshot: Equatable {
   var hapticStrength: HapticStrength
   var barrierPushDistance: Double
   var energyMode: EnergyMode
+  var allowDisplaySleep: Bool
+  var keepAwakeLowBatteryThreshold: Int
   var hideFromScreenRecording: Bool
   var hudEnabled: Bool
   var hudStyle: HUDStyle
@@ -43,6 +45,8 @@ struct SettingsTransferPatch: Equatable {
   var hapticStrength: HapticStrength?
   var barrierPushDistance: Double?
   var energyMode: EnergyMode?
+  var allowDisplaySleep: Bool?
+  var keepAwakeLowBatteryThreshold: Int?
   var hideFromScreenRecording: Bool?
   var hudEnabled: Bool?
   var hudStyle: HUDStyle?
@@ -75,6 +79,10 @@ struct SettingsTransferPatch: Equatable {
     if let hapticStrength { result.hapticStrength = hapticStrength }
     if let barrierPushDistance { result.barrierPushDistance = barrierPushDistance }
     if let energyMode { result.energyMode = energyMode }
+    if let allowDisplaySleep { result.allowDisplaySleep = allowDisplaySleep }
+    if let keepAwakeLowBatteryThreshold {
+      result.keepAwakeLowBatteryThreshold = keepAwakeLowBatteryThreshold
+    }
     if let hideFromScreenRecording { result.hideFromScreenRecording = hideFromScreenRecording }
     if let hudEnabled { result.hudEnabled = hudEnabled }
     if let hudStyle { result.hudStyle = hudStyle }
@@ -155,13 +163,12 @@ enum SettingsTransfer {
   static let maximumTextBytes = 1_024
 
   static let portableKeys: [String] = [
-    "activityOrder", "appTheme", "barrierPushDistance", "batteryGraphStyle",
+    "activityOrder", "allowDisplaySleep", "appTheme", "barrierPushDistance", "batteryGraphStyle",
     "calendarEnabled", "calendarLeadMinutes", "continuityAlwaysVisible", "continuitySneaks",
-    "disabledActivities", "disabledEventSources", "energyMode",
-    "excludedAudioOnlySourceBundleIdentifiers", "hapticStrength", "hapticsEnabled",
-    "hideFromScreenRecording",
-    "hideInFullscreen", "hoverCollapseTimeout", "hudEnabled", "hudStyle", "interactionMode",
-    "launchAtLogin", "mediaPriorityList", "mediaSourceMode", "metricStyles", "remindersEnabled",
+    "disabledActivities", "disabledEventSources", "energyMode", "excludedAudioOnlySourceBundleIdentifiers",
+    "hapticStrength", "hapticsEnabled", "hideFromScreenRecording", "hideInFullscreen", "hoverCollapseTimeout",
+    "hudEnabled", "hudStyle", "interactionMode", "keepAwakeLowBatteryThreshold", "launchAtLogin",
+    "mediaPriorityList", "mediaSourceMode", "metricStyles", "remindersEnabled",
     "showOnAllDisplays", "systemAlwaysVisible",
   ]
 
@@ -250,6 +257,8 @@ enum SettingsTransfer {
     case "hapticStrength": patch.hapticStrength != nil
     case "barrierPushDistance": patch.barrierPushDistance != nil
     case "energyMode": patch.energyMode != nil
+    case "allowDisplaySleep": patch.allowDisplaySleep != nil
+    case "keepAwakeLowBatteryThreshold": patch.keepAwakeLowBatteryThreshold != nil
     case "hideFromScreenRecording": patch.hideFromScreenRecording != nil
     case "hudEnabled": patch.hudEnabled != nil
     case "hudStyle": patch.hudStyle != nil
@@ -284,6 +293,8 @@ enum SettingsTransfer {
       "hapticStrength": value.hapticStrength.rawValue,
       "barrierPushDistance": value.barrierPushDistance,
       "energyMode": value.energyMode.rawValue,
+      "allowDisplaySleep": value.allowDisplaySleep,
+      "keepAwakeLowBatteryThreshold": value.keepAwakeLowBatteryThreshold,
       "hideFromScreenRecording": value.hideFromScreenRecording,
       "hudEnabled": value.hudEnabled,
       "hudStyle": value.hudStyle.rawValue,
@@ -342,6 +353,9 @@ enum SettingsTransfer {
       "barrierPushDistance", in: values,
       range: PushDistanceScale.minimum...PushDistanceScale.maximum)
     patch.energyMode = try enumeration("energyMode", in: values, type: EnergyMode.self)
+    patch.allowDisplaySleep = try boolean("allowDisplaySleep", in: values)
+    patch.keepAwakeLowBatteryThreshold = try allowedInteger(
+      "keepAwakeLowBatteryThreshold", in: values, allowed: [0, 10, 20, 30])
     patch.hideFromScreenRecording = try boolean("hideFromScreenRecording", in: values)
     patch.hudEnabled = try boolean("hudEnabled", in: values)
     patch.hudStyle = try enumeration("hudStyle", in: values, type: HUDStyle.self)
@@ -486,6 +500,10 @@ enum SettingsTransfer {
     add(
       "disabledEventSources", "Disabled events", old.disabledEventSources, new.disabledEventSources)
     add("energyMode", "Energy mode", old.energyMode.rawValue, new.energyMode.rawValue)
+    add("allowDisplaySleep", "Allow display sleep", old.allowDisplaySleep, new.allowDisplaySleep)
+    add(
+      "keepAwakeLowBatteryThreshold", "Keep-awake battery stop",
+      old.keepAwakeLowBatteryThreshold, new.keepAwakeLowBatteryThreshold)
     add(
       "excludedAudioOnlySourceBundleIdentifiers", "Excluded audio-only sources",
       old.excludedAudioOnlySourceBundleIdentifiers,
@@ -544,6 +562,8 @@ enum SettingsTransferDefaults {
       hoverCollapseTimeout: Defaults[.hoverCollapseTimeout],
       hapticsEnabled: Defaults[.hapticsEnabled], hapticStrength: Defaults[.hapticStrength],
       barrierPushDistance: Defaults[.barrierPushDistance], energyMode: Defaults[.energyMode],
+      allowDisplaySleep: Defaults[.allowDisplaySleep],
+      keepAwakeLowBatteryThreshold: Defaults[.keepAwakeLowBatteryThreshold],
       hideFromScreenRecording: Defaults[.hideFromScreenRecording],
       hudEnabled: Defaults[.hudEnabled],
       hudStyle: Defaults[.hudStyle], calendarEnabled: Defaults[.calendarEnabled],
@@ -573,6 +593,10 @@ enum SettingsTransferDefaults {
     if let value = patch.hapticStrength { Defaults[.hapticStrength] = value }
     if let value = patch.barrierPushDistance { Defaults[.barrierPushDistance] = value }
     if let value = patch.energyMode { Defaults[.energyMode] = value }
+    if let value = patch.allowDisplaySleep { Defaults[.allowDisplaySleep] = value }
+    if let value = patch.keepAwakeLowBatteryThreshold {
+      Defaults[.keepAwakeLowBatteryThreshold] = value
+    }
     if let value = patch.hideFromScreenRecording { Defaults[.hideFromScreenRecording] = value }
     if let value = patch.hudEnabled { Defaults[.hudEnabled] = value }
     if let value = patch.hudStyle { Defaults[.hudStyle] = value }
