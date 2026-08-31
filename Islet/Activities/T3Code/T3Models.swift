@@ -121,11 +121,14 @@ enum T3AgentPhase: String, Codable, Sendable {
 
   var rank: Int {
     switch self {
-    case .needsInput, .needsApproval: 0
-    case .working: 1
-    case .monitoring: 2
-    case .failed: 3
-    case .finished: 4
+    // Failures need attention even when they are not waiting for a response. Keep them with the
+    // actionable phases, ahead of routine work and monitoring.
+    case .needsInput: 0
+    case .needsApproval: 1
+    case .failed: 2
+    case .working: 3
+    case .monitoring: 4
+    case .finished: 5
     }
   }
 }
@@ -158,7 +161,7 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
     let projects = shell.projects.reduce(into: [String: String]()) { projects, project in
       if projects[project.id] == nil { projects[project.id] = project.title }
     }
-    return shell.threads.compactMap { thread in
+    let agents: [Self] = shell.threads.compactMap { thread in
       guard thread.archivedAt == nil,
         let phase = phase(for: thread, now: now)
       else { return nil }
@@ -178,9 +181,16 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
         totalPlanSteps: thread.planProgress?.totalSteps,
         updatedAt: parseDate(thread.updatedAt) ?? .distantPast)
     }
-    .sorted {
+    return sortedForAttention(agents)
+  }
+
+  /// Orders agents for every T3 presentation. Attention comes first, then newer agents within
+  /// the same phase. The id tie-breaker keeps a simultaneous snapshot stable across refreshes.
+  static func sortedForAttention(_ agents: [Self]) -> [Self] {
+    agents.sorted {
       if $0.phase.rank != $1.phase.rank { return $0.phase.rank < $1.phase.rank }
-      return $0.updatedAt > $1.updatedAt
+      if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
+      return $0.id < $1.id
     }
   }
 
@@ -326,5 +336,19 @@ struct T3EnvironmentSnapshot: Equatable, Identifiable, Sendable {
     self.state = state
     self.agents = agents
     self.isStale = isStale
+  }
+}
+
+/// One row in the expanded T3 presentation. Agents share one global attention order, while a
+/// configured machine with no agent keeps its connection-state row and recovery actions.
+enum T3ExpandedRow: Equatable, Identifiable, Sendable {
+  case agent(T3AgentSnapshot, environmentLabel: String)
+  case environment(T3EnvironmentSnapshot)
+
+  var id: String {
+    switch self {
+    case .agent(let agent, _): "agent|\(agent.id)"
+    case .environment(let environment): "environment|\(environment.id)"
+    }
   }
 }

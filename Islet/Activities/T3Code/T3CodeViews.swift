@@ -139,8 +139,13 @@ struct T3CodeExpandedView: View {
               .frame(maxWidth: .infinity)
               .padding(.bottom, 2)
             }
-            ForEach(visibleEnvironments) { environment in
-              environmentGroup(environment)
+            ForEach(expandedRows) { row in
+              switch row {
+              case .agent(let agent, let environmentLabel):
+                T3AgentRow(agent: agent, environmentLabel: environmentLabel)
+              case .environment(let environment):
+                environmentGroup(environment)
+              }
             }
           }
         }
@@ -161,6 +166,10 @@ struct T3CodeExpandedView: View {
     T3CodeActivity.visibleEnvironments(snapshots: activity.environments, profiles: profiles)
   }
 
+  private var expandedRows: [T3ExpandedRow] {
+    T3CodeActivity.expandedRows(snapshots: activity.environments, profiles: profiles)
+  }
+
   private func environmentGroup(_ environment: T3EnvironmentSnapshot) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 5) {
@@ -171,23 +180,17 @@ struct T3CodeExpandedView: View {
       }
       .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
 
-      if environment.agents.isEmpty {
-        HStack(spacing: 5) {
-          T3ConnectionIndicatorView(state: environment.state, isStale: environment.isStale)
-            .font(.caption2)
-          if let detail = environment.state.detail {
-            Text(detail).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
-          }
-          Spacer(minLength: 0)
-          environmentActions(for: environment)
+      HStack(spacing: 5) {
+        T3ConnectionIndicatorView(state: environment.state, isStale: environment.isStale)
+          .font(.caption2)
+        if let detail = environment.state.detail {
+          Text(detail).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
         }
-        .padding(.vertical, 4).padding(.horizontal, 7)
-        .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.06)))
-      } else {
-        ForEach(environment.agents) { agent in
-          T3AgentRow(agent: agent)
-        }
+        Spacer(minLength: 0)
+        environmentActions(for: environment)
       }
+      .padding(.vertical, 4).padding(.horizontal, 7)
+      .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.06)))
     }
   }
 
@@ -225,6 +228,7 @@ struct T3CodeExpandedView: View {
 
 private struct T3AgentRow: View {
   let agent: T3AgentSnapshot
+  let environmentLabel: String?
 
   var body: some View {
     HStack(spacing: 8) {
@@ -242,6 +246,9 @@ private struct T3AgentRow: View {
             .font(.system(size: 9)).lineLimit(1)
         }
         .foregroundStyle(.secondary)
+        if let environmentLabel {
+          Text(environmentLabel).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(1)
+        }
         if let step = agent.planStep {
           HStack(spacing: 4) {
             if let completed = agent.completedPlanSteps, let total = agent.totalPlanSteps {

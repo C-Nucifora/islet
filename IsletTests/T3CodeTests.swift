@@ -180,6 +180,69 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(agents[0].planStep, "Wire the API")
   }
 
+  func testAgentAttentionOrderCoversEveryPhase() {
+    let now = Date(timeIntervalSince1970: 1_788_000_000)
+    let agents = [
+      Self.agent(id: "finished", phase: .finished, updatedAt: now),
+      Self.agent(id: "monitoring", phase: .monitoring, updatedAt: now),
+      Self.agent(id: "working", phase: .working, updatedAt: now),
+      Self.agent(id: "failed", phase: .failed, updatedAt: now),
+      Self.agent(id: "approval", phase: .needsApproval, updatedAt: now),
+      Self.agent(id: "input", phase: .needsInput, updatedAt: now),
+    ]
+
+    XCTAssertEqual(
+      T3AgentSnapshot.sortedForAttention(agents).map(\.phase),
+      [.needsInput, .needsApproval, .failed, .working, .monitoring, .finished])
+  }
+
+  func testAgentAttentionOrderUsesRecencyWithinEachPhase() {
+    let now = Date(timeIntervalSince1970: 1_788_000_000)
+    let agents = [
+      Self.agent(id: "older", phase: .monitoring, updatedAt: now.addingTimeInterval(-20)),
+      Self.agent(id: "newer", phase: .monitoring, updatedAt: now.addingTimeInterval(-5)),
+      Self.agent(id: "failed", phase: .failed, updatedAt: now.addingTimeInterval(-30)),
+    ]
+
+    XCTAssertEqual(
+      T3AgentSnapshot.sortedForAttention(agents).map(\.id),
+      ["machine:failed", "machine:newer", "machine:older"])
+  }
+
+  func testExpandedRowsKeepEveryMachineAlongsideGloballyOrderedAgents() {
+    let now = Date(timeIntervalSince1970: 1_788_000_000)
+    let remoteURL = "https://office.example"
+    let snapshots = [
+      T3EnvironmentSnapshot(
+        id: "machine", label: "This Mac", baseURL: "http://127.0.0.1", isLocal: true,
+        platform: nil, serverVersion: nil, state: .connected,
+        agents: [
+          Self.agent(id: "working", phase: .working, updatedAt: now),
+          Self.agent(id: "failed", phase: .failed, updatedAt: now.addingTimeInterval(-10)),
+        ]),
+      T3EnvironmentSnapshot(
+        id: T3CodeActivity.remoteSnapshotID(environmentID: "office", baseURL: remoteURL),
+        label: "Office Mac", baseURL: remoteURL, isLocal: false,
+        platform: nil, serverVersion: nil, state: .offline("No route"), agents: []),
+    ]
+    let rows = T3CodeActivity.expandedRows(
+      snapshots: snapshots,
+      profiles: [T3EnvironmentProfile(id: "office", label: "Office Mac", baseURL: remoteURL)])
+
+    let agentRows = rows.compactMap { row -> (T3AgentPhase, String)? in
+      guard case .agent(let agent, let environmentLabel) = row else { return nil }
+      return (agent.phase, environmentLabel)
+    }
+    XCTAssertEqual(agentRows.map(\.0), [.failed, .working])
+    XCTAssertEqual(agentRows.map(\.1), ["This Mac", "This Mac"])
+    let environments = rows.compactMap { row -> T3EnvironmentSnapshot? in
+      guard case .environment(let environment) = row else { return nil }
+      return environment
+    }
+    XCTAssertEqual(environments.map(\.label), ["This Mac", "Office Mac"])
+    XCTAssertEqual(environments.map(\.state), [.connected, .offline("No route")])
+  }
+
   func testDuplicateProjectIDsDoNotCrashAgentDerivation() throws {
     let json = """
       {
@@ -704,6 +767,15 @@ final class T3CodeTests: XCTestCase {
           hasActionableProposedPlan: false, backgroundLiveness: nil, planProgress: nil)
       ],
       updatedAt: timestamp)
+  }
+
+  private static func agent(
+    id: String, phase: T3AgentPhase, updatedAt: Date
+  ) -> T3AgentSnapshot {
+    T3AgentSnapshot(
+      environmentID: "machine", threadID: id, title: id, project: "Project",
+      providerInstance: "provider", model: "model", branch: nil, phase: phase,
+      planStep: nil, completedPlanSteps: nil, totalPlanSteps: nil, updatedAt: updatedAt)
   }
 }
 
