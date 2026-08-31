@@ -72,6 +72,8 @@ struct PulseActionDestination: Equatable, Sendable {
       canonicalHost = try canonicalIPv4(parsed.host)
       formattedHost = canonicalHost
       kind = canonicalHost.hasPrefix("127.") ? .loopback : .external
+    } else if isLegacyNumericIPv4(parsed.host) {
+      throw PulseValidationError.unsafeActionURL
     } else {
       canonicalHost = try canonicalDNSHost(parsed.host)
       formattedHost = canonicalHost
@@ -148,6 +150,20 @@ struct PulseActionDestination: Equatable, Sendable {
       normalized.append(String(value))
     }
     return normalized.joined(separator: ".")
+  }
+
+  /// Darwin accepts legacy hexadecimal and shortened IPv4 spellings during name resolution.
+  /// Reject them before the DNS branch so a loopback address cannot be presented as external.
+  private static func isLegacyNumericIPv4(_ host: String) -> Bool {
+    let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+    guard (1...4).contains(labels.count) else { return false }
+    return labels.allSatisfy { label in
+      if label.hasPrefix("0x") || label.hasPrefix("0X") {
+        let digits = label.dropFirst(2)
+        return !digits.isEmpty && digits.allSatisfy(\.isHexDigit)
+      }
+      return !label.isEmpty && label.allSatisfy(\.isNumber)
+    }
   }
 
   private static func canonicalIPv6(_ host: String) throws -> String {
@@ -271,33 +287,31 @@ final class PulseActionTrustStore: ObservableObject {
   @Published private(set) var lastError: String?
 
   let storeURL: URL
+  private let lockURL: URL
   private let now: () -> Date
-  private var hasLoaded = false
+  private let maximumStoreBytes: Int
+  private var hasPreparedDirectory = false
 
   init(
     supportDirectory: URL = PulsePaths.supportDirectory,
-    now: @escaping () -> Date = Date.init
+    now: @escaping () -> Date = Date.init,
+    maximumStoreBytes: Int = PulseActionTrustStore.maximumStoreBytes
   ) {
     storeURL = supportDirectory.appendingPathComponent("pulse-action-hosts.json")
+    lockURL = supportDirectory.appendingPathComponent("pulse-action-hosts.lock")
     self.now = now
+    self.maximumStoreBytes = maximumStoreBytes
   }
 
   func prepare() throws {
-    guard !hasLoaded else { return }
     do {
-      try secureDirectory(at: storeURL.deletingLastPathComponent())
-      if FileManager.default.fileExists(atPath: storeURL.path) {
-        let registry = try readRegistry()
-        guard registry.version == 0 || registry.version == Self.currentVersion else {
-          throw PulseActionTrustError.corruptStore
-        }
-        trusts = try validate(registry.trusts)
-        if registry.version == 0 { try persist() }
-      } else {
-        trusts = []
-        try persist()
+      if !hasPreparedDirectory {
+        try secureDirectory(at: storeURL.deletingLastPathComponent())
+        hasPreparedDirectory = true
       }
-      hasLoaded = true
+      try withStoreLock {
+        try reloadStoreLocked()
+      }
       lastError = nil
     } catch {
       trusts = []
@@ -319,49 +333,73 @@ final class PulseActionTrustStore: ObservableObject {
     -> PulseActionTrust
   {
     try prepare()
-    if let existing = trusts.first(where: {
-      $0.provider == provider && $0.canonicalOrigin == destination.canonicalOrigin
-    }) {
-      return existing
+    return try withStoreLock {
+      try reloadStoreLocked()
+      if let existing = trusts.first(where: {
+        $0.provider == provider && $0.canonicalOrigin == destination.canonicalOrigin
+      }) {
+        return existing
+      }
+      guard trusts.count < Self.maximumRecords else { throw PulseActionTrustError.corruptStore }
+      let previous = trusts
+      let record = PulseActionTrust(provider: provider, destination: destination, approvedAt: now())
+      trusts.append(record)
+      trusts.sort {
+        ($0.provider.sourceKey, $0.canonicalOrigin) < ($1.provider.sourceKey, $1.canonicalOrigin)
+      }
+      do {
+        try persist()
+      } catch {
+        trusts = previous
+        throw error
+      }
+      return record
     }
-    guard trusts.count < Self.maximumRecords else { throw PulseActionTrustError.corruptStore }
-    let record = PulseActionTrust(provider: provider, destination: destination, approvedAt: now())
-    trusts.append(record)
-    trusts.sort {
-      ($0.provider.sourceKey, $0.canonicalOrigin) < ($1.provider.sourceKey, $1.canonicalOrigin)
-    }
-    do {
-      try persist()
-    } catch {
-      trusts.removeAll { $0.id == record.id }
-      throw error
-    }
-    return record
   }
 
   func revoke(_ trust: PulseActionTrust) throws {
     try prepare()
-    let previous = trusts
-    trusts.removeAll { $0.id == trust.id }
-    guard trusts != previous else { return }
-    do {
-      try persist()
-    } catch {
-      trusts = previous
-      throw error
+    try withStoreLock {
+      try reloadStoreLocked()
+      let previous = trusts
+      trusts.removeAll { $0.id == trust.id }
+      guard trusts != previous else { return }
+      do {
+        try persist()
+      } catch {
+        trusts = previous
+        throw error
+      }
     }
   }
 
   func revokeAll(forCredentialID credentialID: String) throws {
     try prepare()
-    let previous = trusts
-    trusts.removeAll { $0.provider.credentialID == credentialID }
-    guard trusts != previous else { return }
-    do {
+    try withStoreLock {
+      try reloadStoreLocked()
+      let previous = trusts
+      trusts.removeAll { $0.provider.credentialID == credentialID }
+      guard trusts != previous else { return }
+      do {
+        try persist()
+      } catch {
+        trusts = previous
+        throw error
+      }
+    }
+  }
+
+  private func reloadStoreLocked() throws {
+    if FileManager.default.fileExists(atPath: storeURL.path) {
+      let registry = try readRegistry()
+      guard registry.version == 0 || registry.version == Self.currentVersion else {
+        throw PulseActionTrustError.corruptStore
+      }
+      trusts = try validate(registry.trusts)
+      if registry.version == 0 { try persist() }
+    } else {
+      trusts = []
       try persist()
-    } catch {
-      trusts = previous
-      throw error
     }
   }
 
@@ -402,6 +440,7 @@ final class PulseActionTrustStore: ObservableObject {
     encoder.dateEncodingStrategy = .iso8601
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     let data = try encoder.encode(Registry(version: Self.currentVersion, trusts: trusts))
+    guard data.count <= maximumStoreBytes else { throw PulseActionTrustError.corruptStore }
     let temporary = storeURL.deletingLastPathComponent().appendingPathComponent(
       ".\(storeURL.lastPathComponent)-\(UUID().uuidString).tmp")
     guard
@@ -432,6 +471,34 @@ final class PulseActionTrustStore: ObservableObject {
     else { throw PulseActionTrustError.unsafeStoreFile }
   }
 
+  private func withStoreLock<T>(_ operation: () throws -> T) throws -> T {
+    let descriptor = lockURL.path.withCString {
+      Darwin.open($0, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
+    }
+    guard descriptor >= 0 else { throw PulseActionTrustError.unsafeStoreFile }
+    defer { Darwin.close(descriptor) }
+    var info = stat()
+    guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
+      info.st_uid == getuid(), (info.st_mode & 0o077) == 0,
+      fchmod(descriptor, 0o600) == 0
+    else { throw PulseActionTrustError.unsafeStoreFile }
+    var lock = Darwin.flock()
+    lock.l_start = 0
+    lock.l_len = 0
+    lock.l_pid = 0
+    lock.l_type = Int16(F_WRLCK)
+    lock.l_whence = Int16(SEEK_SET)
+    while fcntl(descriptor, F_SETLKW, &lock) != 0 {
+      if errno == EINTR { continue }
+      throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+    }
+    defer {
+      lock.l_type = Int16(F_UNLCK)
+      _ = fcntl(descriptor, F_SETLK, &lock)
+    }
+    return try operation()
+  }
+
   private func readSecureData() throws -> Data {
     let descriptor = storeURL.path.withCString {
       Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
@@ -453,7 +520,7 @@ final class PulseActionTrustStore: ObservableObject {
         if errno == EINTR { continue }
         throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
       }
-      guard result.count <= Self.maximumStoreBytes - count else {
+      guard result.count <= maximumStoreBytes - count else {
         throw PulseActionTrustError.unsafeStoreFile
       }
       result.append(contentsOf: buffer.prefix(count))
