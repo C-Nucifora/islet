@@ -87,7 +87,7 @@ struct ShowIsletIntent: AppIntent {
 
   @MainActor
   func perform() async throws -> some IntentResult {
-    ScreenManager.shared.viewModel?.apply(.clickedNotch)
+    ScreenManager.shared.performOnActionTarget { $0.apply(.clickedNotch) }
     return .result()
   }
 }

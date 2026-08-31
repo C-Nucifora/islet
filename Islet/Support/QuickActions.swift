@@ -17,15 +17,18 @@ struct IsletQuickAction: Identifiable {
       .init(
         id: "show", title: "Show Islet", detail: "Expand the notch panel",
         symbol: "waveform.path.ecg", keywords: "open expand island notch", isAvailable: { true },
-        perform: { ScreenManager.shared.viewModel?.apply(.clickedNotch) }),
+        perform: {
+          ScreenManager.shared.performOnActionTarget { $0.apply(.clickedNotch) }
+        }),
       .init(
         id: "shelf-open", title: "Open File Shelf", detail: "View files held in Islet",
         symbol: "tray.full.fill", keywords: "files drop drag tray open",
         isAvailable: { ActivityCenter.shared.isAvailableInExpandedSwitcher("shelf") },
         perform: {
           ShelfModel.shared.requestPresentation()
-          let viewModel = ScreenManager.shared.viewModel
-          if viewModel?.state.isExpanded != true { viewModel?.apply(.clickedNotch) }
+          ScreenManager.shared.performOnActionTarget { viewModel in
+            if !viewModel.state.isExpanded { viewModel.apply(.clickedNotch) }
+          }
         }),
       .init(
         id: "timer-5", title: "Start 5-minute timer", detail: "Set a five-minute countdown",
@@ -140,6 +143,7 @@ enum QuickActionsOpener {
   private static var panel: NSPanel?
 
   static func open() {
+    ScreenManager.shared.captureActiveApplicationDisplay()
     NSApp.activate(ignoringOtherApps: true)
     if let panel {
       panel.contentViewController = NSHostingController(rootView: QuickActionsView())
