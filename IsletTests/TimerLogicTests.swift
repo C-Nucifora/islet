@@ -17,6 +17,44 @@ final class TimerLogicTests: XCTestCase {
       TimerLogic.maximumDuration)
   }
 
+  func testTimerEditorAcceptsWholeMinutesAndLeavesTheLabelOptional() {
+    XCTAssertEqual(TimerEditorValidation.validate(minutes: "25"), .valid(1_500))
+    XCTAssertEqual(TimerEditorValidation.validate(minutes: " 5 "), .valid(300))
+  }
+
+  func testTimerEditorRejectsEmptyAndNonNumericDurations() {
+    XCTAssertEqual(TimerEditorValidation.validate(minutes: ""), .missingDuration)
+    XCTAssertEqual(TimerEditorValidation.validate(minutes: "five"), .invalidDuration)
+    XCTAssertEqual(TimerEditorValidation.validate(minutes: "2.5"), .invalidDuration)
+  }
+
+  func testTimerEditorRejectsZeroAndNegativeDurationsBeforeStart() {
+    XCTAssertEqual(TimerEditorValidation.validate(minutes: "0"), .nonPositiveDuration)
+    XCTAssertEqual(TimerEditorValidation.validate(minutes: "-1"), .nonPositiveDuration)
+  }
+
+  func testTimerEditorRejectsDurationsOverOneWeekBeforeStart() {
+    XCTAssertEqual(
+      TimerEditorValidation.validate(minutes: "\(TimerEditorValidation.maximumMinutes + 1)"),
+      .overMaximumDuration)
+    XCTAssertEqual(
+      TimerEditorValidation.validate(minutes: "\(TimerEditorValidation.maximumMinutes)"),
+      .valid(TimerLogic.maximumDuration))
+  }
+
+  func testCustomTimerStartTrimsAnOptionalLabel() {
+    let box = TimerPersistenceBox()
+    let activity = TimerActivity(
+      persistenceStore: box.store, completionNotifier: TimerNotifierStub())
+
+    activity.start(300, label: "  Tea  ")
+    XCTAssertEqual(activity.label, "Tea")
+
+    activity.start(300, label: " \n")
+    XCTAssertNil(activity.label)
+    activity.cancel()
+  }
+
   func testAdjustCannotFinishTimerAccidentally() {
     XCTAssertEqual(TimerLogic.adjustedRemaining(30, by: -60), 1)
   }

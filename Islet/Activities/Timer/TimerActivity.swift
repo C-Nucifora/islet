@@ -508,6 +508,40 @@ enum TimerLogic {
   }
 }
 
+enum TimerEditorValidation: Equatable {
+  case valid(TimeInterval)
+  case missingDuration
+  case invalidDuration
+  case nonPositiveDuration
+  case overMaximumDuration
+
+  static func validate(minutes input: String) -> Self {
+    let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return .missingDuration }
+    guard let minutes = Int(trimmed) else { return .invalidDuration }
+    guard minutes > 0 else { return .nonPositiveDuration }
+    guard minutes <= maximumMinutes else { return .overMaximumDuration }
+    return .valid(TimeInterval(minutes * 60))
+  }
+
+  static var maximumMinutes: Int { Int(TimerLogic.maximumDuration / 60) }
+
+  var message: String? {
+    switch self {
+    case .valid:
+      nil
+    case .missingDuration:
+      "Enter a duration in minutes."
+    case .invalidDuration:
+      "Enter a whole number of minutes."
+    case .nonPositiveDuration:
+      "Duration must be at least one minute."
+    case .overMaximumDuration:
+      "Duration cannot exceed \(Self.maximumMinutes) minutes."
+    }
+  }
+}
+
 enum TimerFormat {
   static func mmss(_ t: TimeInterval) -> String {
     guard t.isFinite else { return "0:00" }
