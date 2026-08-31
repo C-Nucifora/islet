@@ -1,6 +1,77 @@
 import Defaults
 import SwiftUI
 
+/// A connection status is intentionally rendered with both a symbol and a label. Colour is a
+/// useful secondary cue, but it is not sufficient for users with colour-vision differences or
+/// increased contrast enabled.
+struct T3ConnectionIndicatorView: View {
+  enum Tone: Equatable {
+    case secondary
+    case primary
+    case green
+    case orange
+    case yellow
+    case red
+  }
+
+  let state: T3ConnectionState
+  var isStale = false
+  @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+  @Environment(\.colorScheme) private var colorScheme
+
+  var body: some View {
+    Label {
+      HStack(spacing: 3) {
+        Text(state.label)
+        if isStale { Text("Stale").foregroundStyle(.secondary) }
+      }
+    } icon: {
+      Image(systemName: state.icon)
+    }
+    .foregroundStyle(color)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(accessibilityLabel)
+  }
+
+  private var accessibilityLabel: String {
+    Self.accessibilityLabel(for: state, isStale: isStale)
+  }
+
+  static func accessibilityLabel(for state: T3ConnectionState, isStale: Bool) -> String {
+    isStale ? "\(state.accessibilityLabel), showing the last update" : state.accessibilityLabel
+  }
+
+  private var color: Color {
+    switch Self.tone(
+      for: state, increasedContrast: colorSchemeContrast == .increased,
+      colorScheme: colorScheme)
+    {
+    case .secondary: Color.secondary
+    case .primary: Color.primary
+    case .green: Color.green
+    case .orange: Color.orange
+    case .yellow: Color.yellow
+    case .red: Color.red
+    }
+  }
+
+  static func tone(
+    for state: T3ConnectionState, increasedContrast: Bool, colorScheme: ColorScheme = .light
+  ) -> Tone {
+    switch state.semanticColor {
+    case .neutral:
+      guard increasedContrast else { return .secondary }
+      switch colorScheme {
+      case .light, .dark: return .primary
+      @unknown default: return .primary
+      }
+    case .positive: return .green
+    case .warning: return increasedContrast ? .yellow : .orange
+    case .negative: return .red
+    }
+  }
+}
+
 struct T3CompactLeadingView: View {
   @ObservedObject var activity: T3CodeActivity
   @Environment(\.appTheme) private var appTheme
@@ -18,15 +89,21 @@ struct T3CompactStatusView: View {
   @Environment(\.appTheme) private var appTheme
 
   var body: some View {
+    let presentation = activity.compactPresentation
     HStack(spacing: 3) {
-      if let first = activity.agents.first {
-        Image(systemName: first.phase.symbol).font(.system(size: 8))
+      if let phase = presentation.leadingPhase {
+        Image(systemName: phase.symbol).font(.system(size: 8))
       }
-      Text("\(activity.agents.count)")
+      if presentation.staleAgentCount > 0 {
+        Image(systemName: "exclamationmark.triangle.fill")
+          .font(.system(size: 8))
+          .foregroundStyle(.orange)
+      }
+      Text("\(presentation.displayedAgentCount)")
         .font(.caption.weight(.semibold)).monospacedDigit()
     }
     .foregroundStyle(activity.compactColor(for: appTheme))
-    .accessibilityLabel("\(activity.agents.count) active T3 Code agents")
+    .accessibilityLabel(presentation.accessibilityLabel)
   }
 }
 
@@ -90,14 +167,14 @@ struct T3CodeExpandedView: View {
         Image(systemName: environment.isLocal ? "laptopcomputer" : "network")
         Text(environment.label).lineLimit(1)
         Spacer()
-        Circle().fill(connectionColor(environment.state)).frame(width: 5, height: 5)
+        T3ConnectionIndicatorView(state: environment.state, isStale: environment.isStale)
       }
       .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
 
       if environment.agents.isEmpty {
         HStack(spacing: 5) {
-          Text(environment.state.label).font(.caption2).foregroundStyle(
-            connectionColor(environment.state))
+          T3ConnectionIndicatorView(state: environment.state, isStale: environment.isStale)
+            .font(.caption2)
           if let detail = environment.state.detail {
             Text(detail).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
           }
@@ -144,14 +221,6 @@ struct T3CodeExpandedView: View {
     }
   }
 
-  private func connectionColor(_ state: T3ConnectionState) -> Color {
-    switch state {
-    case .connected: .green
-    case .needsPairing, .reconnecting: .orange
-    case .offline, .credentialError: .red
-    case .connecting: .secondary
-    }
-  }
 }
 
 private struct T3AgentRow: View {
@@ -343,8 +412,14 @@ struct T3SettingsSection: View {
             get: { profile.enabled },
             set: { activity.setRemoteEnabled($0, environmentID: profile.id) }))
         Spacer()
-        Text(snapshot?.state.label ?? (profile.enabled ? "Connecting" : "Off"))
-          .font(.caption).foregroundStyle(connectionColor(snapshot?.state))
+        if let snapshot {
+          T3ConnectionIndicatorView(state: snapshot.state, isStale: snapshot.isStale)
+            .font(.caption)
+        } else if profile.enabled {
+          T3ConnectionIndicatorView(state: .connecting).font(.caption)
+        } else {
+          Text("Off").font(.caption).foregroundStyle(.secondary)
+        }
         Button(role: .destructive) {
           pendingRemoval = profile
         } label: {
@@ -357,18 +432,10 @@ struct T3SettingsSection: View {
 
   private func machineRow(_ snapshot: T3EnvironmentSnapshot) -> some View {
     LabeledContent {
-      Text(snapshot.state.label).font(.caption).foregroundStyle(connectionColor(snapshot.state))
+      T3ConnectionIndicatorView(state: snapshot.state, isStale: snapshot.isStale)
+        .font(.caption)
     } label: {
       Label(snapshot.label, systemImage: snapshot.isLocal ? "laptopcomputer" : "network")
-    }
-  }
-
-  private func connectionColor(_ state: T3ConnectionState?) -> Color {
-    switch state {
-    case .some(.connected): .green
-    case .some(.needsPairing), .some(.reconnecting): .orange
-    case .some(.offline), .some(.credentialError): .red
-    default: .secondary
     }
   }
 
