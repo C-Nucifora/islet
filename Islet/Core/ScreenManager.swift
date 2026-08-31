@@ -301,23 +301,24 @@ final class ScreenManager {
       .sink { [weak self] _ in self?.isSessionActive = true }
       .store(in: &cancellables)
     Defaults.publisher(.hideFromScreenRecording)
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] change in
-        Task { @MainActor in
-          if let instances = self?.instances.values {
-            for instance in instances {
-              instance.panel.sharingType = ScreenCaptureExclusionPolicy.current.sharingType(
-                exclusionRequested: change.newValue)
-            }
+        if let instances = self?.instances.values {
+          for instance in instances {
+            instance.panel.sharingType = ScreenCaptureExclusionPolicy.current.sharingType(
+              exclusionRequested: change.newValue)
           }
         }
       }
       .store(in: &cancellables)
     Defaults.publisher(.showOnAllDisplays)
       .dropFirst()
-      .sink { [weak self] _ in Task { @MainActor in self?.rebuild() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.rebuild() }
       .store(in: &cancellables)
     Defaults.publisher(.hideInFullscreen)
-      .sink { [weak self] _ in Task { @MainActor in self?.updateFullscreenObserving() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.updateFullscreenObserving() }
       .store(in: &cancellables)
     updateFullscreenObserving()
   }

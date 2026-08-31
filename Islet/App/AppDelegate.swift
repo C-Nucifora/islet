@@ -33,10 +33,12 @@ final class ActivityLifecycleController {
   func startObserving() {
     guard cancellables.isEmpty else { return }
     Defaults.publisher(.disabledActivities)
-      .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.reconcile() }
       .store(in: &cancellables)
     Defaults.publisher(.calendarEnabled)
-      .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.reconcile() }
       .store(in: &cancellables)
     NotificationCenter.default.publisher(for: .keepAwakeSessionDidChange)
       .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
@@ -65,7 +67,7 @@ final class ActivityLifecycleController {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-  private var launchAtLoginObserver: Defaults.Observation?
+  private var launchAtLoginObserver: AnyCancellable?
   private var activityLifecycleController: ActivityLifecycleController?
   private var audioDeviceLifecycleCancellable: AnyCancellable?
   /// Kept by the delegate for the entire app lifetime so notification responses still reach the
@@ -131,9 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       }
       HUDController.shared.startObserving()
       LaunchAtLogin.sync()
-      launchAtLoginObserver = Defaults.observe(.launchAtLogin) { change in
-        Task { @MainActor in LaunchAtLogin.apply(change.newValue) }
-      }
+      launchAtLoginObserver = LaunchAtLogin.observe()
       OnboardingOpener.openIfNeeded()
     }
     Log.app.info("Islet launched")
@@ -206,7 +206,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     activityLifecycleController = controller
     controller.startObserving()
     audioDeviceLifecycleCancellable = Defaults.publisher(.disabledEventSources)
-      .sink { [weak self] _ in Task { @MainActor in self?.reconcileAudioDeviceLifecycle() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.reconcileAudioDeviceLifecycle() }
     reconcileAudioDeviceLifecycle()
   }
 

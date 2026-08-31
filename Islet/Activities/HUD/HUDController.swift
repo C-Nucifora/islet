@@ -80,16 +80,14 @@ final class HUDController: ObservableObject {
     }
     isObserving = true
     Defaults.publisher(.hudEnabled)
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] change in
-        Task { @MainActor in
-          if change.newValue { self?.start() } else { self?.stop() }
-        }
+        if change.newValue { self?.start() } else { self?.stop() }
       }
       .store(in: &cancellables)
     Defaults.publisher(.disabledExternalBrightnessDisplays)
-      .sink { [weak self] _ in
-        Task { @MainActor in self?.refreshExternalBrightnessDisplays() }
-      }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.refreshExternalBrightnessDisplays() }
       .store(in: &cancellables)
     NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
       .sink { [weak self] _ in
