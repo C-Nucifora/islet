@@ -13,20 +13,38 @@ final class PulseCenter: ObservableObject {
   @Published private(set) var items: [PulseItem] = []
   @Published private(set) var history: [PulseHistoryEntry] = []
   @Published private(set) var sourcePolicies: [String: PulseSourcePolicy] = [:]
-  @Published var deliveryProfile: PulseDeliveryProfile = .everything {
+  @Published var deliveryProfile: PulseDeliveryProfile {
     didSet {
       guard deliveryProfile != oldValue else { return }
+      Defaults[deliveryProfileKey] = deliveryProfile
       refreshVisibleItems()
     }
   }
+  private let deliveryProfileKey: Defaults.Key<PulseDeliveryProfile>
+  private let sourcePoliciesKey: Defaults.Key<[String: String]>
   private let symbolAvailability: (String) -> Bool?
   private var storedItems: [PulseItem] = []
   private var expiryTask: Task<Void, Never>?
 
   init(
-    symbolAvailability: @escaping (String) -> Bool? = PulseSymbolValidator.platformAvailability
+    symbolAvailability: @escaping (String) -> Bool? = PulseSymbolValidator.platformAvailability,
+    deliveryProfileKey: Defaults.Key<PulseDeliveryProfile> = .pulseDeliveryProfile,
+    sourcePoliciesKey: Defaults.Key<[String: String]> = .pulseSourcePolicies
   ) {
     self.symbolAvailability = symbolAvailability
+    self.deliveryProfileKey = deliveryProfileKey
+    self.sourcePoliciesKey = sourcePoliciesKey
+    deliveryProfile = Defaults[deliveryProfileKey]
+    let rawStoredPolicies = sourcePoliciesKey.suite.dictionary(forKey: sourcePoliciesKey.name)
+    let storageIsValid =
+      sourcePoliciesKey.suite.object(forKey: sourcePoliciesKey.name) == nil
+      || rawStoredPolicies?.values.allSatisfy { $0 is String } == true
+    let storedPolicies = Defaults[sourcePoliciesKey]
+    sourcePolicies = Self.restoreSourcePolicies(from: storedPolicies)
+    let canonicalPolicies = Self.persistedSourcePolicies(from: sourcePolicies)
+    if !storageIsValid || storedPolicies != canonicalPolicies {
+      Defaults[sourcePoliciesKey] = canonicalPolicies
+    }
   }
 
   var primary: PulseItem? { items.first }
@@ -171,6 +189,7 @@ final class PulseCenter: ObservableObject {
     let key = sourceKey(source)
     guard !key.isEmpty else { return }
     if policy == .allowed { sourcePolicies[key] = nil } else { sourcePolicies[key] = policy }
+    Defaults[sourcePoliciesKey] = Self.persistedSourcePolicies(from: sourcePolicies)
     if policy == .revoked {
       let removed = storedItems.filter { sourceKey($0.source) == key }
       storedItems.removeAll { sourceKey($0.source) == key }
@@ -190,11 +209,16 @@ final class PulseCenter: ObservableObject {
 
   var providerStatuses: [PulseProviderStatus] {
     PulseProviderDescriptor.gallery.map { descriptor in
-      let activeCount = storedItems.count {
+      let activeItems = storedItems.filter {
         descriptor.sourceIDs.contains(sourceKey($0.source))
       }
-      if activeCount > 0 {
-        return PulseProviderStatus(descriptor: descriptor, health: .active(activeCount))
+      let attentionCount = activeItems.count { $0.state == .failed || $0.state == .needsAction }
+      if attentionCount > 0 {
+        return PulseProviderStatus(
+          descriptor: descriptor, health: .needsAttention(attentionCount))
+      }
+      if !activeItems.isEmpty {
+        return PulseProviderStatus(descriptor: descriptor, health: .active(activeItems.count))
       }
       let lastSeen = history.first {
         guard let source = $0.source else { return false }
@@ -296,6 +320,35 @@ final class PulseCenter: ObservableObject {
   }
 
   private func sourceKey(_ source: String) -> String {
+    Self.sourceKey(source)
+  }
+
+  private static func restoreSourcePolicies(
+    from storedPolicies: [String: String]
+  ) -> [String: PulseSourcePolicy] {
+    storedPolicies.reduce(into: [:]) { policies, entry in
+      let key = sourceKey(entry.key)
+      guard !key.isEmpty, let policy = PulseSourcePolicy(rawValue: entry.value), policy != .allowed
+      else { return }
+      if policy == .revoked || policies[key] == nil {
+        policies[key] = policy
+      }
+    }
+  }
+
+  private static func persistedSourcePolicies(
+    from policies: [String: PulseSourcePolicy]
+  ) -> [String: String] {
+    policies.reduce(into: [:]) { persisted, entry in
+      let key = sourceKey(entry.key)
+      guard !key.isEmpty, entry.value != .allowed else { return }
+      if entry.value == .revoked || persisted[key] == nil {
+        persisted[key] = entry.value.rawValue
+      }
+    }
+  }
+
+  private static func sourceKey(_ source: String) -> String {
     source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
   }
 }

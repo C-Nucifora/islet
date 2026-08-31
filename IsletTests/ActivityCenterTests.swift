@@ -57,6 +57,20 @@ final class ActivityCenterTests: XCTestCase {
     XCTAssertEqual(center.primaryActivity?.id, "nowPlaying")
   }
 
+  func testTemporaryPresentationRevealsOnlyTheRequestedDisabledActivity() {
+    let saved = Defaults[.disabledActivities]
+    defer { Defaults[.disabledActivities] = saved }
+    Defaults[.disabledActivities] = ["timer", "battery"]
+    let center = ActivityCenter()
+    center.register(Fake(id: "timer", priority: .timer, active: true))
+    center.register(Fake(id: "battery", priority: .ambient, active: true))
+
+    XCTAssertTrue(center.expandedActivities.isEmpty)
+    XCTAssertEqual(
+      center.expandedActivities(temporarilyIncluding: "timer").map(\.id), ["timer"])
+    XCTAssertTrue(center.expandedActivities.isEmpty)
+  }
+
   func testInactiveIgnored() {
     let center = ActivityCenter()
     center.register(Fake(id: "media", priority: .media, active: false))
@@ -120,6 +134,33 @@ final class ActivityCenterTests: XCTestCase {
     await Task.yield()
 
     XCTAssertEqual(center.activeActivities.map(\.id), ["system"])
+  }
+
+  func testDefaultsChangesFromUtilityTaskPublishOnMainThread() async {
+    let savedDisabled = Defaults[.disabledActivities]
+    let marker = "activity-center-main-thread-test"
+    let changedDisabled =
+      savedDisabled.contains(marker)
+      ? savedDisabled.filter { $0 != marker }
+      : savedDisabled + [marker]
+    defer { Defaults[.disabledActivities] = savedDisabled }
+
+    let center = ActivityCenter()
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main.async { continuation.resume() }
+    }
+    let published = expectation(description: "ActivityCenter republishes the Defaults change")
+    let cancellable = center.objectWillChange.sink { _ in
+      XCTAssertTrue(Thread.isMainThread)
+      published.fulfill()
+    }
+
+    await Task.detached(priority: .utility) {
+      Defaults[.disabledActivities] = changedDisabled
+    }.value
+    await fulfillment(of: [published], timeout: 2)
+
+    cancellable.cancel()
   }
 
   func testTieBrokenByRecency() {
@@ -303,6 +344,35 @@ final class ActivityCenterTests: XCTestCase {
     await Task.yield()
     await Task.yield()
     XCTAssertTrue(running)
+    controller.stopObserving()
+  }
+
+  func testKeepAwakeDemandKeepsBatteryMonitoringAliveWhenActivityIsOff() async {
+    let savedDisabled = Defaults[.disabledActivities]
+    defer { Defaults[.disabledActivities] = savedDisabled }
+    Defaults[.disabledActivities] = ["battery"]
+
+    var keepAwakeDemand = false
+    var batteryMonitoring = false
+    let controller = ActivityLifecycleController(controls: [
+      ActivityLifecycleControl(
+        activityID: "battery", additionalRuntimeDemand: { keepAwakeDemand },
+        start: { batteryMonitoring = true }, stop: { batteryMonitoring = false })
+    ])
+    controller.startObserving()
+    XCTAssertFalse(batteryMonitoring)
+
+    keepAwakeDemand = true
+    NotificationCenter.default.post(name: .keepAwakeSessionDidChange, object: nil)
+    await Task.yield()
+    await Task.yield()
+    XCTAssertTrue(batteryMonitoring)
+
+    keepAwakeDemand = false
+    NotificationCenter.default.post(name: .keepAwakeSessionDidChange, object: nil)
+    await Task.yield()
+    await Task.yield()
+    XCTAssertFalse(batteryMonitoring)
     controller.stopObserving()
   }
 }

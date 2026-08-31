@@ -1,10 +1,19 @@
-import Defaults
 import SwiftUI
 import XCTest
 
 @testable import Islet
 
 final class SystemEventTests: XCTestCase {
+  private var persistentSuiteNames: [String] = []
+
+  override func tearDown() {
+    for suiteName in persistentSuiteNames {
+      UserDefaults.standard.removePersistentDomain(forName: suiteName)
+    }
+    persistentSuiteNames.removeAll()
+    super.tearDown()
+  }
+
   // MARK: - Identity and equality
 
   /// Two events describing the same thing must compare equal so the coalescer and the queue can
@@ -152,9 +161,18 @@ final class SystemEventTests: XCTestCase {
   }
 
   @MainActor
-  private func makeBus() -> SystemEventBus {
-    Defaults[.disabledEventSources] = []
-    return SystemEventBus(queue: nil)
+  private func makeBus(disabledSourceIDs: [String] = []) -> SystemEventBus {
+    let preferences = EventSourcePreferences(defaults: makePersistentDefaults().defaults)
+    preferences.replaceDisabledSourceIDs(disabledSourceIDs)
+    return SystemEventBus(queue: nil, preferences: preferences)
+  }
+
+  private func makePersistentDefaults() -> (suiteName: String, defaults: UserDefaults) {
+    let suiteName = "dev.islet.tests.event-sources.\(UUID().uuidString)"
+    persistentSuiteNames.append(suiteName)
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+    return (suiteName, defaults)
   }
 
   @MainActor
@@ -169,7 +187,6 @@ final class SystemEventTests: XCTestCase {
   @MainActor
   func testDisablingStopsTheSourceAndEnablingRestartsIt() {
     let bus = makeBus()
-    defer { Defaults[.disabledEventSources] = [] }
     let stub = StubSource(id: "usb")
     bus.register(stub)
     bus.startEnabled()
@@ -186,9 +203,7 @@ final class SystemEventTests: XCTestCase {
 
   @MainActor
   func testStartEnabledSkipsDisabledSources() {
-    Defaults[.disabledEventSources] = ["usb"]
-    defer { Defaults[.disabledEventSources] = [] }
-    let bus = SystemEventBus(queue: nil)
+    let bus = makeBus(disabledSourceIDs: ["usb"])
     let off = StubSource(id: "usb")
     let on = StubSource(id: "wifi", tier: .extended)
     bus.register(off)
@@ -203,7 +218,6 @@ final class SystemEventTests: XCTestCase {
   @MainActor
   func testEmitFromADisabledSourceIsDropped() {
     let bus = makeBus()
-    defer { Defaults[.disabledEventSources] = [] }
     var delivered: [Sneak] = []
     bus.onSneak = { delivered.append($0) }
     bus.startEnabled()
@@ -242,5 +256,109 @@ final class SystemEventTests: XCTestCase {
     XCTAssertEqual(bus.sources.count, 1)
     bus.startEnabled()
     XCTAssertEqual(stub.startCount, 1)
+  }
+
+  /// This uses a named suite backed by a persistent domain, releases the original state owner,
+  /// then constructs both the owner and bus again as a clean app launch would.
+  @MainActor
+  func testEveryEventSourceChoiceSurvivesOwnerRecreation() {
+    let domain = makePersistentDefaults()
+    let expected = Dictionary(
+      uniqueKeysWithValues: SourceCatalog.all.enumerated().map { index, source in
+        (source.id, index.isMultiple(of: 2))
+      })
+
+    do {
+      let preferences = EventSourcePreferences(defaults: domain.defaults)
+      let bus = SystemEventBus(queue: nil, preferences: preferences)
+      for source in SourceCatalog.all {
+        bus.setEnabled(expected[source.id]!, for: source.id)
+      }
+      XCTAssertTrue(preferences.flush())
+    }
+
+    let relaunchedDefaults = UserDefaults(suiteName: domain.suiteName)!
+    let relaunchedPreferences = EventSourcePreferences(defaults: relaunchedDefaults)
+    let relaunchedBus = SystemEventBus(queue: nil, preferences: relaunchedPreferences)
+
+    for source in SourceCatalog.all {
+      XCTAssertEqual(relaunchedPreferences.isEnabled(source.id), expected[source.id])
+      XCTAssertEqual(relaunchedBus.isEnabled(source.id), expected[source.id])
+    }
+  }
+
+  @MainActor
+  func testChangingOneSourcePreservesOtherChoicesAndRepairsDuplicateIDs() {
+    let domain = makePersistentDefaults()
+    domain.defaults.set(
+      ["wifi", "wifi", "session", "future-source", "session"],
+      forKey: EventSourcePreferences.storageKey)
+    XCTAssertTrue(domain.defaults.synchronize())
+
+    let preferences = EventSourcePreferences(defaults: domain.defaults)
+    XCTAssertEqual(preferences.disabledSourceIDs, ["wifi", "session", "future-source"])
+
+    preferences.setEnabled(false, for: "bluetooth")
+    preferences.setEnabled(false, for: "bluetooth")
+    XCTAssertEqual(
+      preferences.disabledSourceIDs, ["wifi", "session", "future-source", "bluetooth"])
+
+    preferences.setEnabled(true, for: "session")
+    XCTAssertEqual(preferences.disabledSourceIDs, ["wifi", "future-source", "bluetooth"])
+  }
+
+  @MainActor
+  func testReplacingPreferencesReconcilesAlreadyRunningSources() async {
+    let preferences = EventSourcePreferences(defaults: makePersistentDefaults().defaults)
+    preferences.replaceDisabledSourceIDs([])
+    let bus = SystemEventBus(queue: nil, preferences: preferences)
+    let wifi = StubSource(id: "wifi")
+    let session = StubSource(id: "session")
+    bus.register(wifi)
+    bus.register(session)
+    bus.startEnabled()
+
+    preferences.replaceDisabledSourceIDs([" wifi ", "wifi", "\n"])
+    await Task.yield()
+
+    XCTAssertEqual(preferences.disabledSourceIDs, ["wifi"])
+    XCTAssertEqual(wifi.stopCount, 1)
+    XCTAssertEqual(session.stopCount, 0)
+    XCTAssertEqual(session.startCount, 1)
+  }
+
+  @MainActor
+  func testAddingANewSourceKeepsExistingChoices() {
+    let domain = makePersistentDefaults()
+
+    do {
+      let preferences = EventSourcePreferences(defaults: domain.defaults)
+      preferences.replaceDisabledSourceIDs(["wifi", "session"])
+      XCTAssertTrue(preferences.flush())
+    }
+
+    let updatedVersion = EventSourcePreferences(
+      defaults: UserDefaults(suiteName: domain.suiteName)!)
+    XCTAssertFalse(updatedVersion.isEnabled("wifi"))
+    XCTAssertFalse(updatedVersion.isEnabled("session"))
+    XCTAssertTrue(updatedVersion.isEnabled("source-added-in-a-later-version"))
+
+    updatedVersion.setEnabled(false, for: "source-added-in-a-later-version")
+    XCTAssertEqual(
+      updatedVersion.disabledSourceIDs,
+      ["wifi", "session", "source-added-in-a-later-version"])
+  }
+
+  @MainActor
+  func testSuccessfulLegacyImportReloadsTheExistingOwner() {
+    let domain = makePersistentDefaults()
+    let preferences = EventSourcePreferences(defaults: domain.defaults)
+    preferences.replaceDisabledSourceIDs([])
+
+    domain.defaults.set(["wifi", "session"], forKey: EventSourcePreferences.storageKey)
+    XCTAssertTrue(domain.defaults.synchronize())
+    preferences.reloadFromDefaults()
+
+    XCTAssertEqual(preferences.disabledSourceIDs, ["wifi", "session"])
   }
 }

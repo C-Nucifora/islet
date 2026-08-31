@@ -50,9 +50,9 @@ let metricsMaxSampleGap: TimeInterval = 60
 
 /// The native width of a cumulative counter, which is the width its wraparound happens at.
 enum CounterWidth: Sendable {
-  /// `if_data.ifi_ibytes` / `ifi_obytes` — wraps in about 34 s on a saturated 1 Gb/s link.
+  /// Legacy 32-bit counters, retained for rollover arithmetic tests.
   case bits32
-  /// `IOBlockStorageDriver` → `Statistics` → `Bytes (Read)` / `Bytes (Write)`.
+  /// Current disk counters and `if_data64` network counters.
   case bits64
 }
 
