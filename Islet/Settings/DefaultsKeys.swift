@@ -242,6 +242,15 @@ extension Defaults.Keys {
     ActivityEnablement.migrationVersionKey, default: 0)
   /// Retained only as input to the one-time activity enablement migration.
   static let legacyClipboardEnabled = Key<Bool>("clipboardEnabled", default: false)
+  static let clipboardExcludedBundleIdentifiers = Key<[String]>(
+    "clipboardExcludedBundleIdentifiers", default: [])
+  static let clipboardPausedFocusIdentifiers = Key<[String]>(
+    "clipboardPausedFocusIdentifiers", default: [])
+  static let clipboardClearHistoryOnPause = Key<Bool>(
+    "clipboardClearHistoryOnPause", default: true)
+  static let clipboardManuallyPaused = Key<Bool>("clipboardManuallyPaused", default: false)
+  static let clipboardPausedUntil = Key<Date?>("clipboardPausedUntil")
+  static let clipboardPausedLoginSession = Key<String?>("clipboardPausedLoginSession")
   static let legacyPortsEnabled = Key<Bool>("portsEnabled", default: true)
   /// Retained only as input to the one-time activity enablement migration.
   static let legacySystemEnabled = Key<Bool>("systemEnabled", default: true)

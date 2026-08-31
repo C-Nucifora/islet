@@ -225,7 +225,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         + MetricDisplayStyle.allCases.map(\.displayName)
     case .clipboard:
       pageContent + [
-        "Clipboard history", "Activity", "Pause and Clear", "Quick Actions", "Privacy",
+        "Clipboard history", "Activity", "Pause and Clear", "Quick Actions", "Privacy pause",
+        "5 minutes", "30 minutes", "next login", "excluded applications", "Focus modes",
         "history stays in memory", "concealed items credential formats sensitive text secrets copy",
       ]
     case .systemHUD:
@@ -357,6 +358,7 @@ struct SettingsView: View {
   @ObservedObject private var nowPlaying = AppState.nowPlaying
   @ObservedObject private var t3Code = AppState.t3Code
   @ObservedObject private var focus = AppState.focus
+  @ObservedObject private var clipboard = ClipboardModel.shared
   @ObservedObject private var launchAtLoginStatus = LaunchAtLoginStatus.shared
   @ObservedObject private var eventSourcePreferences = EventSourcePreferences.shared
   @ObservedObject private var ports = PortMonitor.shared
@@ -397,12 +399,18 @@ struct SettingsView: View {
   @Default(.keepAwakeLowBatteryThreshold) private var keepAwakeLowBatteryThreshold
   @Default(.continuityAlwaysVisible) private var continuityAlwaysVisible
   @Default(.continuitySneaks) private var continuitySneaks
+  @Default(.clipboardExcludedBundleIdentifiers) private var clipboardExcludedBundleIdentifiers
+  @Default(.clipboardPausedFocusIdentifiers) private var clipboardPausedFocusIdentifiers
+  @Default(.clipboardClearHistoryOnPause) private var clipboardClearHistoryOnPause
 
   @State private var selection: SettingsCategory?
   @State private var detailPage: SettingsDetailPage?
   @State private var forwardDetailPage: SettingsDetailPage?
   @State private var searchText = ""
   @State private var newBundleID = ""
+  @State private var newClipboardBundleIdentifier = ""
+  @State private var newClipboardFocusIdentifier = ""
+  @State private var clipboardPrivacyError: String?
   @State private var confirmingRestore = false
   @State private var confirmingPulseTokenRotation = false
   @State private var pulseTokenRotationResult: String?
@@ -1143,8 +1151,97 @@ struct SettingsView: View {
         }
         Text("Turning Clipboard off stops polling and clears its history.")
           .font(.caption).foregroundStyle(.secondary)
-        Text("Pause and Clear are beside the history and in Quick Actions.")
-          .font(.caption).foregroundStyle(.secondary)
+        LabeledContent("Capture") {
+          Text(clipboardCaptureStatus).foregroundStyle(clipboard.isPaused ? .orange : .secondary)
+        }
+        HStack {
+          Menu("Privacy pause") {
+            Button("5 minutes") { clipboard.pause(for: 5 * 60) }
+            Button("30 minutes") { clipboard.pause(for: 30 * 60) }
+            Button("Until next login") { clipboard.pauseUntilNextLogin() }
+            Button("Until I resume") { clipboard.setPaused(true) }
+          }
+          if clipboard.canResumeManualPause {
+            Button("Resume now") { clipboard.setPaused(false) }
+          }
+          Button("Clear history") { clipboard.clear() }
+            .disabled(clipboard.items.isEmpty)
+        }
+        Toggle("Clear current history when capture pauses", isOn: $clipboardClearHistoryOnPause)
+        Text(
+          "Turning this off keeps existing in-memory entries. Copies made during a pause are never backfilled."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+      Section("Excluded applications") {
+        if clipboardExcludedBundleIdentifiers.isEmpty {
+          Text("No applications excluded").foregroundStyle(.secondary)
+        } else {
+          ForEach(clipboardExcludedBundleIdentifiers, id: \.self) { bundleIdentifier in
+            HStack(spacing: 10) {
+              if let icon = clipboardApplicationIcon(bundleIdentifier) {
+                Image(nsImage: icon).resizable().frame(width: 24, height: 24)
+              } else {
+                Image(systemName: "app.dashed").frame(width: 24, height: 24)
+              }
+              VStack(alignment: .leading, spacing: 1) {
+                Text(clipboardApplicationName(bundleIdentifier))
+                Text(bundleIdentifier).font(.caption.monospaced()).foregroundStyle(.secondary)
+              }
+              Spacer()
+              Button {
+                clipboardExcludedBundleIdentifiers.removeAll { $0 == bundleIdentifier }
+              } label: {
+                Image(systemName: "minus.circle")
+              }
+              .buttonStyle(.plain).accessibilityLabel("Remove \(bundleIdentifier)")
+            }
+          }
+        }
+        Button("Add application…") { chooseClipboardApplication() }
+        DisclosureGroup("Add by bundle identifier") {
+          HStack {
+            TextField("com.example.application", text: $newClipboardBundleIdentifier)
+            Button("Add") { addClipboardApplication(newClipboardBundleIdentifier) }
+          }
+        }
+        Text(
+          "Islet can only see the app that is frontmost when it checks the pasteboard. macOS does not reliably identify the app that wrote a copy. Islet skips copies around app switches rather than guessing."
+        )
+        .font(.caption).foregroundStyle(.orange)
+      }
+      Section("Focus rules") {
+        if clipboardPausedFocusIdentifiers.isEmpty {
+          Text("No Focus modes pause capture").foregroundStyle(.secondary)
+        } else {
+          ForEach(clipboardPausedFocusIdentifiers, id: \.self) { identifier in
+            HStack {
+              Label(identifier, systemImage: "moon.circle.fill")
+              Spacer()
+              Button {
+                clipboardPausedFocusIdentifiers.removeAll { $0 == identifier }
+              } label: {
+                Image(systemName: "minus.circle")
+              }
+              .buttonStyle(.plain).accessibilityLabel("Remove Focus \(identifier)")
+            }
+          }
+        }
+        if let currentFocusIdentifier = clipboard.currentFocusIdentifier,
+          !clipboardPausedFocusIdentifiers.contains(currentFocusIdentifier)
+        {
+          Button("Pause for current Focus: \(currentFocusIdentifier)") {
+            addClipboardFocus(currentFocusIdentifier)
+          }
+        }
+        HStack {
+          TextField("Focus name or identifier", text: $newClipboardFocusIdentifier)
+          Button("Add") { addClipboardFocus(newClipboardFocusIdentifier) }
+        }
+        Text(
+          "Focus detection uses an undocumented macOS state file. If its format is unknown, Islet does not guess that a Focus is active."
+        )
+        .font(.caption).foregroundStyle(.secondary)
       }
       Section("Privacy") {
         Label(
@@ -1152,6 +1249,10 @@ struct SettingsView: View {
           systemImage: "lock.shield"
         )
         .font(.caption).foregroundStyle(.orange)
+        if let clipboardPrivacyError {
+          Label(clipboardPrivacyError, systemImage: "exclamationmark.triangle")
+            .font(.caption).foregroundStyle(.red)
+        }
       }
     }
     .formStyle(.grouped)
@@ -1708,6 +1809,72 @@ struct SettingsView: View {
     guard !bundleID.isEmpty, !priorityList.contains(bundleID) else { return }
     priorityList.append(bundleID)
     newBundleID = ""
+  }
+
+  private var clipboardCaptureStatus: String {
+    guard isActivityEnabled("clipboard") else { return "Stopped with the activity" }
+    return clipboard.pauseReason?.summary ?? "Capturing new copies"
+  }
+
+  private func addClipboardApplication(_ rawBundleIdentifier: String) {
+    guard let bundleIdentifier = ClipboardIdentifierPolicy.bundleIdentifier(rawBundleIdentifier)
+    else {
+      clipboardPrivacyError = "Enter a valid application bundle identifier up to 255 bytes."
+      return
+    }
+    let updated = ClipboardIdentifierPolicy.bundleIdentifiers(
+      clipboardExcludedBundleIdentifiers + [bundleIdentifier])
+    guard updated.contains(bundleIdentifier) else {
+      clipboardPrivacyError = "The exclusion list is limited to 128 applications."
+      return
+    }
+    clipboardExcludedBundleIdentifiers = updated
+    newClipboardBundleIdentifier = ""
+    clipboardPrivacyError = nil
+  }
+
+  private func chooseClipboardApplication() {
+    let panel = NSOpenPanel()
+    panel.allowedContentTypes = [.applicationBundle]
+    panel.allowsMultipleSelection = false
+    panel.canChooseDirectories = false
+    panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+    panel.title = "Exclude an application from clipboard history"
+    panel.prompt = "Exclude"
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    guard let bundleIdentifier = Bundle(url: url)?.bundleIdentifier else {
+      clipboardPrivacyError = "That application does not declare a bundle identifier."
+      return
+    }
+    addClipboardApplication(bundleIdentifier)
+  }
+
+  private func addClipboardFocus(_ rawIdentifier: String) {
+    guard let identifier = ClipboardIdentifierPolicy.focusIdentifier(rawIdentifier) else {
+      clipboardPrivacyError = "Enter a valid Focus name or identifier up to 128 bytes."
+      return
+    }
+    let updated = ClipboardIdentifierPolicy.focusIdentifiers(
+      clipboardPausedFocusIdentifiers + [identifier])
+    guard updated.contains(identifier) else {
+      clipboardPrivacyError = "The Focus rule list is limited to 64 entries."
+      return
+    }
+    clipboardPausedFocusIdentifiers = updated
+    newClipboardFocusIdentifier = ""
+    clipboardPrivacyError = nil
+  }
+
+  private func clipboardApplicationName(_ bundleIdentifier: String) -> String {
+    guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
+    else { return bundleIdentifier }
+    return FileManager.default.displayName(atPath: url.path)
+  }
+
+  private func clipboardApplicationIcon(_ bundleIdentifier: String) -> NSImage? {
+    guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
+    else { return nil }
+    return NSWorkspace.shared.icon(forFile: url.path)
   }
 
   private func refreshPermissionState() {
