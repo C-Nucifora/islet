@@ -1,5 +1,16 @@
 import SwiftUI
 
+enum BatteryFlowRendering {
+  static let ribbonFillOpacity = 0.82
+  static let ribbonStrokeOpacity = 0.90
+  static let sourceNodeOpacity = 0.82
+  static let destinationNodeOpacity = 0.92
+
+  static let graphicalOpacities = [
+    ribbonFillOpacity, ribbonStrokeOpacity, sourceNodeOpacity, destinationNodeOpacity,
+  ]
+}
+
 /// The power screen leads with the live story: what is supplying the Mac, and where that power is
 /// going. Battery health and electrical diagnostics remain available in the compact strip below.
 struct BatteryExpandedView: View {
@@ -285,8 +296,11 @@ struct BatteryExpandedView: View {
                 from: CGPoint(x: sourceX, y: segment.edgeY),
                 to: CGPoint(x: busX - 3, y: segment.busY),
                 thickness: segment.thickness)
-              context.fill(path, with: .color(tint.opacity(0.19)))
-              context.stroke(path, with: .color(tint.opacity(0.48)), lineWidth: 0.65)
+              context.fill(
+                path, with: .color(tint.opacity(BatteryFlowRendering.ribbonFillOpacity)))
+              context.stroke(
+                path, with: .color(tint.opacity(BatteryFlowRendering.ribbonStrokeOpacity)),
+                lineWidth: 0.65)
             }
 
             for segment in destinationSegments {
@@ -295,21 +309,24 @@ struct BatteryExpandedView: View {
                 from: CGPoint(x: busX + 3, y: segment.busY),
                 to: CGPoint(x: destinationX, y: segment.edgeY),
                 thickness: segment.thickness)
-              context.fill(path, with: .color(tint.opacity(0.25)))
-              context.stroke(path, with: .color(tint.opacity(0.56)), lineWidth: 0.65)
+              context.fill(
+                path, with: .color(tint.opacity(BatteryFlowRendering.ribbonFillOpacity)))
+              context.stroke(
+                path, with: .color(tint.opacity(BatteryFlowRendering.ribbonStrokeOpacity)),
+                lineWidth: 0.65)
             }
 
             for segment in sourceSegments {
               let tint = color(for: segment.item)
               context.fill(
                 Path(roundedRect: nodeRect(x: sourceX, segment: segment), cornerRadius: 2),
-                with: .color(tint.opacity(0.82)))
+                with: .color(tint.opacity(BatteryFlowRendering.sourceNodeOpacity)))
             }
             for segment in destinationSegments {
               let tint = color(for: segment.item)
               context.fill(
                 Path(roundedRect: nodeRect(x: destinationX, segment: segment), cornerRadius: 2),
-                with: .color(tint.opacity(0.92)))
+                with: .color(tint.opacity(BatteryFlowRendering.destinationNodeOpacity)))
             }
 
             let busTop = min(

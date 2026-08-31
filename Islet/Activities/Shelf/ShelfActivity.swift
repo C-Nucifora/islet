@@ -78,8 +78,7 @@ final class ShelfActivity: NotchActivity, ObservableObject {
 
   func performAccessibilityPrimaryAction() -> Bool {
     guard let item = model.items.first else { return false }
-    model.open(item)
-    return true
+    return model.open(item)
   }
 
   func dismissAccessibilityTransient() -> Bool {

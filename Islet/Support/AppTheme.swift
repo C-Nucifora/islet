@@ -36,18 +36,18 @@ enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
     case (.classic, .externalPower), (.classic, .batteryCharge): .green
     case (.classic, .batterySupplement): .orange
     case (.classic, .systemLoad): .cyan
-    case (.classic, .usbOutput): .purple
+    case (.classic, .usbOutput): Color(red: 0.72, green: 0.48, blue: 1)
 
     case (.ocean, .externalPower), (.ocean, .batteryCharge): .cyan
     case (.ocean, .batterySupplement): .blue
     case (.ocean, .systemLoad): .teal
-    case (.ocean, .usbOutput): .indigo
+    case (.ocean, .usbOutput): Self.readableIndigo
 
     case (.violet, .externalPower), (.violet, .batteryCharge):
       Color(red: 0.72, green: 0.48, blue: 1)
     case (.violet, .batterySupplement): .pink
-    case (.violet, .systemLoad): .purple
-    case (.violet, .usbOutput): .indigo
+    case (.violet, .systemLoad): Color(red: 0.72, green: 0.48, blue: 1)
+    case (.violet, .usbOutput): Self.readableIndigo
 
     case (.sunset, .externalPower), (.sunset, .batteryCharge): .yellow
     case (.sunset, .batterySupplement): .orange
@@ -175,6 +175,23 @@ enum AppThemeContrast {
     else { return nil }
     let lighter = max(relativeLuminance(foreground), relativeLuminance(background))
     let darker = min(relativeLuminance(foreground), relativeLuminance(background))
+    return (lighter + 0.05) / (darker + 0.05)
+  }
+
+  static func ratio(
+    foreground: Color, opacity: Double, background: Color = .black
+  ) -> Double? {
+    guard let foreground = NSColor(foreground).usingColorSpace(.sRGB),
+      let background = NSColor(background).usingColorSpace(.sRGB)
+    else { return nil }
+    let alpha = min(1, max(0, foreground.alphaComponent * opacity))
+    let composited = NSColor(
+      red: foreground.redComponent * alpha + background.redComponent * (1 - alpha),
+      green: foreground.greenComponent * alpha + background.greenComponent * (1 - alpha),
+      blue: foreground.blueComponent * alpha + background.blueComponent * (1 - alpha),
+      alpha: 1)
+    let lighter = max(relativeLuminance(composited), relativeLuminance(background))
+    let darker = min(relativeLuminance(composited), relativeLuminance(background))
     return (lighter + 0.05) / (darker + 0.05)
   }
 

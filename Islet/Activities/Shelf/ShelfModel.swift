@@ -179,6 +179,7 @@ final class ShelfModel: ObservableObject {
   typealias LoadManifest = @Sendable (URL) -> Result<ShelfManifest?, Error>
   typealias SaveManifest = @Sendable (ShelfManifest, URL) async -> Result<Void, Error>
   typealias CurrentDate = @Sendable () -> Date
+  typealias OpenItem = (URL) -> Bool
 
   @Published private(set) var items: [ShelfItem] = []
   @Published private(set) var lastError: String?
@@ -220,6 +221,7 @@ final class ShelfModel: ObservableObject {
   private var manifestSaveTail: Task<Result<Void, Error>, Never>?
   private var manifestMutationInProgress = false
   private var manifestMutationWaiters: [CheckedContinuation<Void, Never>] = []
+  private let openItem: OpenItem
   private var itemUsageBytes: [URL: Int64] = [:]
   private var reservedImports: [URL: StorageReservation] = [:]
   private var importQueue: [ImportBatch] = []
@@ -255,6 +257,7 @@ final class ShelfModel: ObservableObject {
     loadManifest: LoadManifest? = nil,
     saveManifest: SaveManifest? = nil,
     currentDate: @escaping CurrentDate = { .now },
+    openItem: OpenItem? = nil,
     storagePolicy: ShelfStoragePolicy = .standard
   ) {
     let base =
@@ -326,6 +329,7 @@ final class ShelfModel: ObservableObject {
     self.loadManifest = loadManifest ?? ShelfManifestStore.load
     self.saveManifest = saveManifest ?? ShelfManifestStore.save
     self.currentDate = currentDate
+    self.openItem = openItem ?? { NSWorkspace.shared.open($0) }
     self.storagePolicy = storagePolicy
     dir = base
     manifestURL = base.appendingPathExtension("json")
@@ -1267,15 +1271,16 @@ final class ShelfModel: ObservableObject {
     }
   }
 
-  func open(_ item: ShelfItem) {
+  @discardableResult
+  func open(_ item: ShelfItem) -> Bool {
     guard beginUsing(item) else {
       lastError = "\(item.name) is no longer available."
-      return
+      return false
     }
-    guard NSWorkspace.shared.open(item.url) else {
+    guard openItem(item.url) else {
       endUsing(item)
       lastError = "Couldn’t open \(item.name)."
-      return
+      return false
     }
     // Keep the path stable while LaunchServices hands it to the destination app. Once that app has
     // opened the file, removing the Shelf directory entry cannot invalidate its open descriptor.
@@ -1284,6 +1289,7 @@ final class ShelfModel: ObservableObject {
       self?.endUsing(item)
     }
     lastError = nil
+    return true
   }
 
   func quickLook(_ item: ShelfItem) {

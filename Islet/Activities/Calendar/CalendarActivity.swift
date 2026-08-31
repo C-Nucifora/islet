@@ -444,8 +444,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
 
   func performAccessibilityPrimaryAction() -> Bool {
     guard let meeting = primaryMeeting else { return false }
-    NSWorkspace.shared.open(meeting.link.url)
-    return true
+    return NSWorkspace.shared.open(meeting.link.url)
   }
 
   private var primaryMeeting: (event: AgendaEvent, link: CalendarMeetingLink)? {

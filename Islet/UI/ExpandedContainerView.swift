@@ -195,6 +195,7 @@ struct ExpandedContainerView: View {
     .accessibilityLabel(tab.id == Self.homeTab ? "Home" : ActivityCatalog.name(for: tab.id))
     .accessibilityValue(selected ? "Selected" : "Not selected")
     .accessibilityAddTraits(selected ? .isSelected : [])
+    .accessibilitySortPriority(100)
   }
 
   @ViewBuilder private var content: some View {

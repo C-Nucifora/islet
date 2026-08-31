@@ -63,7 +63,6 @@ final class ContinuityActivity: NotchActivity, ObservableObject {
       let url = NSWorkspace.shared.urlForApplication(
         withBundleIdentifier: "com.apple.ScreenContinuity")
     else { return false }
-    NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-    return true
+    return NSWorkspace.shared.open(url)
   }
 }

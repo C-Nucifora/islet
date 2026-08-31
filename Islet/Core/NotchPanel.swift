@@ -35,6 +35,14 @@ final class NotchPanel: NSPanel, NSDraggingDestination {
   override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { false }
 
+  func updateKeyboardFocus(isExpanded: Bool) {
+    if isExpanded {
+      makeKey()
+    } else if isKeyWindow {
+      resignKey()
+    }
+  }
+
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
     if dispatchKeyboardCommand(event) { return true }
     return super.performKeyEquivalent(with: event)

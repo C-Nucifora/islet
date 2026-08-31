@@ -15,6 +15,7 @@ final class SneakQueue: ObservableObject {
 
   private var logic = SneakLogic()
   private var drainTask: Task<Void, Never>?
+  private var drainGeneration: UInt = 0
 
   func submit(_ sneak: Sneak) {
     logic.enqueue(sneak)
@@ -24,31 +25,44 @@ final class SneakQueue: ObservableObject {
   @discardableResult
   func dismissCurrent() -> Bool {
     guard current != nil else { return false }
+    drainTask?.cancel()
+    drainGeneration &+= 1
+    drainTask = nil
     withAnimation(Motion.gated(Motion.compact)) { current = nil }
+    drainIfNeeded()
     return true
   }
 
   private func drainIfNeeded() {
     guard drainTask == nil else { return }
+    let generation = drainGeneration
     drainTask = Task { [weak self] in
-      await self?.drain()
+      await self?.drain(generation: generation)
+      guard self?.drainGeneration == generation else { return }
       self?.drainTask = nil
     }
   }
 
-  private func drain() async {
+  private func drain(generation: UInt) async {
     while true {
       while isSuspended() {
-        try? await Task.sleep(for: .milliseconds(200))
-        guard !Task.isCancelled else { return }
+        do {
+          try await Task.sleep(for: .milliseconds(200))
+        } catch { return }
+        guard !Task.isCancelled, generation == drainGeneration else { return }
       }
       guard let next = logic.popNext() else { return }
       withAnimation(Motion.gated(Motion.compact)) { current = next }
       if let announcement = next.announcement { A11y.announce(announcement) }
-      try? await Task.sleep(for: .seconds(next.duration))
+      do {
+        try await Task.sleep(for: .seconds(next.duration))
+      } catch { return }
+      guard !Task.isCancelled, generation == drainGeneration else { return }
       withAnimation(Motion.gated(Motion.compact)) { current = nil }
-      try? await Task.sleep(for: .milliseconds(250))
-      guard !Task.isCancelled else { return }
+      do {
+        try await Task.sleep(for: .milliseconds(250))
+      } catch { return }
+      guard !Task.isCancelled, generation == drainGeneration else { return }
     }
   }
 }
