@@ -12,10 +12,11 @@ its Perl loader. `MediaRemoteAdapter-LICENSE` contains the upstream license.
 - Source archive and SHA-256: `MediaRemoteAdapter.provenance.json`
 
 That commit was the tip of upstream `master` when Islet added the framework on
-2026-07-22. The vendored framework and license match that commit. The loader at
-`Islet/Resources/mediaremote-adapter.pl` applies the reviewed timeout change in
-`MediaRemoteAdapter.loader.patch`. A clean build of the pinned commit and patch
-with the pinned toolchain reproduces every checked-in artifact byte for byte.
+2026-07-22. The vendored loader at `Islet/Resources/mediaremote-adapter.pl`
+comes from that commit with the tracked, hashed
+`MediaRemoteAdapter-loader.patch` applied with patch fuzz disabled. The license
+file matches the pinned commit. A clean build with the pinned toolchain and
+loader patch reproduces the checked-in artifacts byte for byte.
 
 ## Rebuild and verify
 
@@ -35,15 +36,14 @@ cmp Vendor/MediaRemoteAdapter-LICENSE \
 ```
 
 The rebuild script downloads the exact source archive and CMake release listed
-in `MediaRemoteAdapter.provenance.json`, checks their SHA-256 values, verifies
-and applies the loader patch, checks the Xcode and SDK versions, and builds with
-the recorded generator and deployment target. It writes only to ignored build
-and download-cache directories.
+in `MediaRemoteAdapter.provenance.json`, checks both SHA-256 values, checks the
+Xcode and SDK versions, and builds with the recorded generator and deployment
+target. It writes only to ignored build and download-cache directories.
 
 The verifier checks the framework's full binary checksum, the checksum of each
 architecture slice, architectures, exported symbols, `Info.plist`, signature
-resources, loader script and patch, and code signature. CI verifies both the
-checked-in framework and a clean rebuild.
+resources, loader script, loader patch, and code signature. CI verifies both
+the checked-in framework and a clean rebuild.
 
 ## Review an update
 
@@ -58,10 +58,9 @@ checked-in framework and a clean rebuild.
    `MediaRemoteAdapter.expected-exports.txt`. Review the framework
    `Info.plist` against `MediaRemoteAdapter.expected-Info.plist`.
 4. Replace the framework, loader, and license only after that review. Take all
-   three from `Vendor/mediaremote-adapter-build`. If Islet needs a local loader
-   change, keep it as a minimal reviewed patch against the pinned source.
-   Regenerate the two expected files and artifact checksums in the provenance
-   manifest from the reviewed build.
+   three from `Vendor/mediaremote-adapter-build`. Regenerate the two expected
+   files and artifact checksums in the provenance manifest from the reviewed
+   build.
 5. Run `Scripts/verify-mediaremote-adapter.sh`, the clean rebuild comparison
    above, Islet's arm64 and Intel tests, and `git diff --check`.
 

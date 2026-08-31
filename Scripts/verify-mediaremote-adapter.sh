@@ -4,13 +4,13 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/.." && pwd)
 manifest="$repo_root/Vendor/MediaRemoteAdapter.provenance.json"
-loader_patch="$repo_root/Vendor/MediaRemoteAdapter.loader.patch"
 framework=${1:-"$repo_root/Vendor/MediaRemoteAdapter.framework"}
 expected_plist="$repo_root/Vendor/MediaRemoteAdapter.expected-Info.plist"
 expected_exports="$repo_root/Vendor/MediaRemoteAdapter.expected-exports.txt"
 binary="$framework/MediaRemoteAdapter"
 plist="$framework/Resources/Info.plist"
 code_resources="$framework/Versions/A/_CodeSignature/CodeResources"
+loader_patch="$repo_root/Vendor/MediaRemoteAdapter-loader.patch"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/islet-mediaremote-verify.XXXXXX")
 trap 'rm -rf "$work_dir"' EXIT
 
