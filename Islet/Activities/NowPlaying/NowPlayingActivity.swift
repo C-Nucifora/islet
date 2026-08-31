@@ -20,6 +20,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   /// which carry no metadata at all — only "this app is producing audio".
   @Published private(set) var strip: [SourceID] = []
   @Published private(set) var adapterStatus = "Starting…"
+  @Published private(set) var mediaControlNotice: String?
   @Published private(set) var adapterFailure: String?
   private(set) var activationDate: Date?
 
@@ -135,11 +136,12 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     resolvedBundleIdentifiers = []
     activationDate = nil
     adapterStatus = "Stopped"
+    mediaControlNotice = nil
     adapterFailure = nil
   }
 
-  /// Tapping a source makes its display identity the first configured primary player, then asks
-  /// MediaRemote to focus it. See `MediaRemoteCommands.promote` for the activation fallback.
+  /// Tapping a source makes its display identity the first configured preference and brings the
+  /// app forward. The current adapter cannot focus a MediaRemote player by source.
   func promote(_ source: SourceID) {
     let selection = MediaSourceChooser.selection(
       for: source, priorityList: Defaults[.mediaPriorityList])
@@ -147,6 +149,47 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     Defaults[.mediaPriorityList] = selection.priorityList
     publish()
     MediaRemoteCommands.shared.promote(source)
+  }
+
+  func perform(_ command: MediaCommand, for source: SourceID) async {
+    let result = await MediaRemoteCommands.shared.perform(
+      command,
+      shownSource: source,
+      sourceIsAdapterBacked: sources[source] != nil)
+    switch result {
+    case .sent:
+      mediaControlNotice = nil
+    case .sourceNotControllable:
+      mediaControlNotice =
+        "Audio detected from \(sourceName(for: source)); direct controls unavailable"
+    case .sourceTargetingUnavailable:
+      mediaControlNotice = "This media adapter cannot target the selected player safely"
+    case .rejected:
+      mediaControlNotice = "The selected player rejected the command"
+    }
+  }
+
+  func mediaControlsAvailable(for source: SourceID) -> Bool {
+    sources[source] != nil && MediaRemoteCommands.shared.targeting.controlsAvailable
+  }
+
+  func mediaControlScopeLabel(for source: SourceID) -> String {
+    MediaControlPresentation.scopeLabel(
+      appName: sourceName(for: source),
+      targeting: MediaRemoteCommands.shared.targeting)
+  }
+
+  func mediaControlHelp(action: String, for source: SourceID) -> String {
+    MediaControlPresentation.help(
+      action: action,
+      appName: sourceName(for: source),
+      targeting: MediaRemoteCommands.shared.targeting)
+  }
+
+  func mediaControlAccessibilityLabel(action: String) -> String {
+    MediaControlPresentation.accessibilityLabel(
+      action: action,
+      targeting: MediaRemoteCommands.shared.targeting)
   }
 
   func artwork(for source: SourceID?) -> NSImage? {
@@ -165,11 +208,13 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     MediaSourceChooser.accessibilityLabel(
       appName: sourceName(for: source),
       isPlaying: sources[source]?.isPlaying ?? true,
-      isPrimary: isPrimary)
+      isPrimary: isPrimary,
+      isAdapterBacked: sources[source] != nil)
   }
 
   func sourceSelectionAccessibilityHint(for source: SourceID) -> String {
-    MediaSourceChooser.accessibilityHint(appName: sourceName(for: source))
+    MediaSourceChooser.accessibilityHint(
+      appName: sourceName(for: source), isAdapterBacked: sources[source] != nil)
   }
 
   var knownBundleIdentifiers: [String] {
@@ -202,6 +247,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     let nextPrimaryKey = adapterKeys.first
     let presentationChanged = publishedPrimaryKey != nextPrimaryKey
     publishedPrimaryKey = nextPrimaryKey
+    if presentationChanged { mediaControlNotice = nil }
     for source in merged { resolveApplication(for: source.displayBundleIdentifier) }
     var publishedPropertyChanged = false
     if sources != table.states {
