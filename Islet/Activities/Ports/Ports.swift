@@ -1,4 +1,5 @@
 import Combine
+import Foundation
 import IOKit
 import IOKit.usb
 import SwiftUI
@@ -28,6 +29,30 @@ struct USBDeviceRegistryEntry {
   let productName: String?
   let vendorName: String?
   let deviceSpeed: Int?
+  /// The negotiated bit rate exposed by the USB host stack, in bits per second.
+  let linkSpeed: Int?
+  /// The USB host connection-speed ID exposed by the matching property.
+  let usbSpeed: Int?
+
+  init(
+    registryEntryID: UInt64?,
+    servicePath: String?,
+    locationID: UInt32?,
+    productName: String?,
+    vendorName: String?,
+    deviceSpeed: Int?,
+    linkSpeed: Int? = nil,
+    usbSpeed: Int? = nil
+  ) {
+    self.registryEntryID = registryEntryID
+    self.servicePath = servicePath
+    self.locationID = locationID
+    self.productName = productName
+    self.vendorName = vendorName
+    self.deviceSpeed = deviceSpeed
+    self.linkSpeed = linkSpeed
+    self.usbSpeed = usbSpeed
+  }
 }
 
 enum PortDeviceIdentity {
@@ -52,14 +77,54 @@ enum PortDeviceIdentity {
   }
 }
 
+/// A failed IOKit match is different from a successful enumeration with no devices. Keeping the
+/// failure typed stops callers from interpreting a reader outage as a simultaneous detach.
+enum PortEnumerationError: Error, Equatable, LocalizedError {
+  case matchingServices(kern_return_t)
+
+  var errorDescription: String? {
+    switch self {
+    case .matchingServices(let result):
+      return String(format: "IOKit matching failed (0x%08X)", UInt32(bitPattern: result))
+    }
+  }
+}
+
+enum PortEnumerationResult: Equatable {
+  case devices([PortDevice])
+  case error(PortEnumerationError)
+}
+
+enum PortReaderHealth: Equatable {
+  case awaitingFirstRead
+  case current(lastSuccessfulRead: Date)
+  case stale(error: PortEnumerationError, lastSuccessfulRead: Date)
+  case failed(error: PortEnumerationError, lastSuccessfulRead: Date?)
+
+  var summary: String {
+    switch self {
+    case .awaitingFirstRead:
+      "Waiting for first enumeration"
+    case .current:
+      "Available"
+    case .stale(let error, _):
+      "Using the last USB snapshot. \(error.localizedDescription)"
+    case .failed(let error, _):
+      error.localizedDescription
+    }
+  }
+}
+
 /// Enumerates connected USB devices (name, vendor, negotiated speed, port).
 enum PortsReader {
-  static func read() -> [PortDevice] {
+  static func read() -> PortEnumerationResult {
     var iterator: io_iterator_t = 0
-    guard
-      IOServiceGetMatchingServices(
-        kIOMainPortDefault, IOServiceMatching("IOUSBHostDevice"), &iterator) == KERN_SUCCESS
-    else { return [] }
+    let result = IOServiceGetMatchingServices(
+      kIOMainPortDefault, IOServiceMatching("IOUSBHostDevice"), &iterator)
+    guard result == KERN_SUCCESS else {
+      if iterator != 0 { IOObjectRelease(iterator) }
+      return .error(.matchingServices(result))
+    }
     defer { IOObjectRelease(iterator) }
 
     var out: [PortDevice] = []
@@ -69,7 +134,7 @@ enum PortsReader {
       IOObjectRelease(service)
       service = IOIteratorNext(iterator)
     }
-    return out.sorted { $0.id < $1.id }
+    return .devices(out.sorted { $0.id < $1.id })
   }
 
   static func device(from entry: USBDeviceRegistryEntry) -> PortDevice? {
@@ -83,7 +148,7 @@ enum PortsReader {
       id: id,
       name: name ?? "USB Device",
       vendor: entry.vendorName,
-      speed: speedString(entry.deviceSpeed),
+      speed: speedString(for: entry),
       locationID: entry.locationID)
   }
 
@@ -91,20 +156,63 @@ enum PortsReader {
     USBDeviceRegistryEntry(
       registryEntryID: registryEntryID(service),
       servicePath: registryPath(service),
-      locationID: intProp(service, "locationID").map { UInt32(truncatingIfNeeded: $0) },
-      productName: strProp(service, "USB Product Name"),
-      vendorName: strProp(service, "USB Vendor Name"),
-      deviceSpeed: intProp(service, "Device Speed"))
+      locationID: intProp(service, kUSBHostPropertyLocationID).map {
+        UInt32(truncatingIfNeeded: $0)
+      },
+      productName: strProp(service, kUSBProductString),
+      vendorName: strProp(service, kUSBVendorString),
+      deviceSpeed: intProp(service, kUSBDevicePropertySpeed),
+      linkSpeed: intProp(service, kUSBHostPropertyLinkSpeed),
+      usbSpeed: intProp(service, kUSBHostMatchingPropertySpeed))
   }
 
-  private static func speedString(_ speed: Int?) -> String? {
+  private static func speedString(for entry: USBDeviceRegistryEntry) -> String? {
+    if let linkSpeed = entry.linkSpeed {
+      return linkSpeedString(linkSpeed)
+    }
+    if let usbSpeed = entry.usbSpeed {
+      return usbSpeedString(usbSpeed)
+    }
+    return deviceSpeedString(entry.deviceSpeed)
+  }
+
+  private static func linkSpeedString(_ speed: Int) -> String {
+    switch UInt64(bitPattern: Int64(speed)) {
+    case UInt64(kIOUSBLinkSpeedLow): "1.5 Mbps"
+    case UInt64(kIOUSBLinkSpeedFull): "12 Mbps"
+    case UInt64(kIOUSBLinkSpeedHigh): "480 Mbps"
+    case UInt64(kIOUSBLinkSpeed5Gbps): "5 Gbps"
+    case UInt64(kIOUSBLinkSpeed10Gbps): "10 Gbps"
+    case UInt64(kIOUSBLinkSpeed20Gbps): "20 Gbps"
+    case UInt64(kIOUSBLinkSpeed40Gbps): "40 Gbps"
+    case UInt64(kIOUSBLinkSpeed80Gbps): "80 Gbps"
+    default: "Unknown (\(speed))"
+    }
+  }
+
+  private static func usbSpeedString(_ speed: Int) -> String {
     switch speed {
-    case 0: "1.5 Mbps"
-    case 1: "12 Mbps"
-    case 2: "480 Mbps"
-    case 3: "5 Gbps"
-    case 4: "10 Gbps"
-    case 5: "20 Gbps"
+    case Int(kIOUSBHostConnectionSpeedNone.rawValue): "Unknown (\(speed))"
+    case Int(kIOUSBHostConnectionSpeedFull.rawValue): "12 Mbps"
+    case Int(kIOUSBHostConnectionSpeedLow.rawValue): "1.5 Mbps"
+    case Int(kIOUSBHostConnectionSpeedHigh.rawValue): "480 Mbps"
+    case Int(kIOUSBHostConnectionSpeedSuper.rawValue): "5 Gbps"
+    case Int(kIOUSBHostConnectionSpeedSuperPlus.rawValue): "10 Gbps"
+    case Int(kIOUSBHostConnectionSpeedSuperPlusBy2.rawValue): "20 Gbps"
+    case Int(kIOUSBHostConnectionSpeedOther.rawValue): "Unknown (\(speed))"
+    default: "Unknown (\(speed))"
+    }
+  }
+
+  private static func deviceSpeedString(_ speed: Int?) -> String? {
+    switch speed {
+    case Int(kUSBDeviceSpeedLow): "1.5 Mbps"
+    case Int(kUSBDeviceSpeedFull): "12 Mbps"
+    case Int(kUSBDeviceSpeedHigh): "480 Mbps"
+    case Int(kUSBDeviceSpeedSuper): "5 Gbps"
+    case Int(kUSBDeviceSpeedSuperPlus): "10 Gbps"
+    case Int(kUSBDeviceSpeedSuperPlusBy2): "20 Gbps"
+    case let speed?: "Unknown (\(speed))"
     default: nil
     }
   }
@@ -141,10 +249,33 @@ final class PortMonitor: ObservableObject {
   static let shared = PortMonitor()
 
   @Published private(set) var devices: [PortDevice] = []
+  /// Changes only after a successful IOKit enumeration. Event sources subscribe here rather than
+  /// `devices`, because the UI deliberately clears an expired stale snapshot after a read failure.
+  @Published private(set) var eventDevices: [PortDevice] = []
+  @Published private(set) var readerHealth: PortReaderHealth = .awaitingFirstRead
 
   private var notifyPort: IONotificationPortRef?
   private var iterators: [io_iterator_t] = []
   private var owners: Set<String> = []
+  private let reader: () -> PortEnumerationResult
+  private let now: () -> Date
+  private let monotonicNow: () -> TimeInterval
+  private let gracePeriod: TimeInterval
+  private var lastSuccessfulRead: Date?
+  private var staleStartedAt: TimeInterval?
+  private var graceExpiryTask: Task<Void, Never>?
+
+  init(
+    reader: @escaping () -> PortEnumerationResult = PortsReader.read,
+    now: @escaping () -> Date = Date.init,
+    monotonicNow: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+    gracePeriod: TimeInterval = 30
+  ) {
+    self.reader = reader
+    self.now = now
+    self.monotonicNow = monotonicNow
+    self.gracePeriod = gracePeriod
+  }
 
   @discardableResult
   func start(owner: String) -> Bool {
@@ -201,8 +332,14 @@ final class PortMonitor: ObservableObject {
     owners.remove(owner)
     guard owners.isEmpty else { return }
     tearDownNotifications()
-    previousDevices = devices
+    graceExpiryTask?.cancel()
+    graceExpiryTask = nil
+    previousDevices = []
     devices = []
+    eventDevices = []
+    lastSuccessfulRead = nil
+    staleStartedAt = nil
+    readerHealth = .awaitingFirstRead
   }
 
   private func tearDownNotifications() {
@@ -218,15 +355,89 @@ final class PortMonitor: ObservableObject {
     Task { @MainActor in self.refresh() }
   }
 
-  /// The list as it was before the most recent refresh, so an observer can diff the two. Kept here
-  /// rather than in the observer because the IOKit callback can fire twice before an observer runs,
-  /// and a diff against a stale snapshot reports a device twice.
+  /// The list as it was before the most recent successful enumeration, so an observer can diff the
+  /// two. Keeping it here avoids duplicate notifications if IOKit fires twice before an observer.
   private(set) var previousDevices: [PortDevice] = []
 
   func refresh() {
-    let next = PortsReader.read()
-    guard next != devices else { return }  // IOKit re-arms fire spuriously; don't republish
-    previousDevices = devices
-    devices = next
+    let timestamp = now()
+    switch reader() {
+    case .devices(let next):
+      accept(next, at: timestamp)
+    case .error(let error):
+      record(error)
+    }
+  }
+
+  /// Performs an immediate read for the diagnostics button or a caller that needs to recover from
+  /// a failed matching pass without waiting for another IOKit notification.
+  func retry() { refresh() }
+
+  /// Called by the grace timer and exposed internally for deterministic clock-driven tests.
+  func expireGraceIfNeeded() {
+    guard case .stale(let error, let lastSuccessfulRead) = readerHealth,
+      let staleStartedAt
+    else { return }
+    guard monotonicNow() >= staleStartedAt + gracePeriod else {
+      scheduleGraceExpiry(from: staleStartedAt)
+      return
+    }
+
+    readerHealth = .failed(error: error, lastSuccessfulRead: lastSuccessfulRead)
+    if !devices.isEmpty { devices = [] }
+    graceExpiryTask = nil
+  }
+
+  private func accept(_ next: [PortDevice], at timestamp: Date) {
+    let isFirstSuccess = lastSuccessfulRead == nil
+    graceExpiryTask?.cancel()
+    graceExpiryTask = nil
+    staleStartedAt = nil
+    lastSuccessfulRead = timestamp
+    readerHealth = .current(lastSuccessfulRead: timestamp)
+
+    if next != devices { devices = next }
+    guard next != eventDevices else { return }
+    previousDevices = isFirstSuccess ? next : eventDevices
+    eventDevices = next
+  }
+
+  private func record(_ error: PortEnumerationError) {
+    guard let lastSuccessfulRead, gracePeriod > 0 else {
+      staleStartedAt = nil
+      graceExpiryTask?.cancel()
+      graceExpiryTask = nil
+      readerHealth = .failed(error: error, lastSuccessfulRead: lastSuccessfulRead)
+      if !devices.isEmpty { devices = [] }
+      return
+    }
+
+    let current = monotonicNow()
+    let staleStartedAt = self.staleStartedAt ?? current
+    guard current < staleStartedAt + gracePeriod else {
+      graceExpiryTask?.cancel()
+      graceExpiryTask = nil
+      readerHealth = .failed(error: error, lastSuccessfulRead: lastSuccessfulRead)
+      if !devices.isEmpty { devices = [] }
+      return
+    }
+
+    self.staleStartedAt = staleStartedAt
+    readerHealth = .stale(error: error, lastSuccessfulRead: lastSuccessfulRead)
+    scheduleGraceExpiry(from: staleStartedAt)
+  }
+
+  private func scheduleGraceExpiry(from staleStartedAt: TimeInterval) {
+    graceExpiryTask?.cancel()
+    let delay = max(0, staleStartedAt + gracePeriod - monotonicNow())
+    graceExpiryTask = Task { [weak self] in
+      do {
+        try await Task.sleep(for: .seconds(delay))
+      } catch {
+        return
+      }
+      guard !Task.isCancelled else { return }
+      self?.expireGraceIfNeeded()
+    }
   }
 }

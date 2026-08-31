@@ -216,6 +216,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .systemMetrics:
       pageContent + [
         "Visibility", "System activity", "Always show System in the activity switcher",
+        "Automatic presence", "High CPU", "Thermal pressure", "Memory pressure",
+        "Low disk space", "Heavy disk activity", "High network traffic",
         "Metric presentation", "Presentation", "Compact", "Balanced", "Detailed", "Custom",
         "Customize individual metrics", "current value recent graph state labels",
       ] + SystemMetricKind.allCases.map(\.displayName)
@@ -268,7 +270,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "Diagnostics", "Bundle identifier", "Version", "Energy mode", "Copy diagnostics",
         "Open logs folder", "Restart Islet", "Quit Islet", "Integration health", "Media adapter",
         "Focus event source", "Focus last parsed", "Focus schema", "Retry Focus source",
-        "T3 Code credentials", "Pulse", "Media-key HUD", "signing support status", "About",
+        "T3 Code credentials", "Pulse", "Media-key HUD", "USB reader", "Retry USB enumeration",
+        "signing support status", "About",
         "GitHub contributors C-Nucifora nedlane",
       ]
     case .settingsTransfer:
@@ -352,6 +355,7 @@ struct SettingsView: View {
   @ObservedObject private var t3Code = AppState.t3Code
   @ObservedObject private var focus = AppState.focus
   @ObservedObject private var launchAtLoginStatus = LaunchAtLoginStatus.shared
+  @ObservedObject private var ports = PortMonitor.shared
   @ObservedObject private var keepAwake = KeepAwakeManager.shared
 
   @Default(.appTheme) private var appTheme
@@ -376,6 +380,12 @@ struct SettingsView: View {
   @Default(.activityOrder) private var activityOrder
   @Default(.disabledActivities) private var disabledActivities
   @Default(.systemAlwaysVisible) private var systemAlwaysVisible
+  @Default(.systemAutoPresentCPU) private var systemAutoPresentCPU
+  @Default(.systemAutoPresentThermal) private var systemAutoPresentThermal
+  @Default(.systemAutoPresentMemoryPressure) private var systemAutoPresentMemoryPressure
+  @Default(.systemAutoPresentLowDiskSpace) private var systemAutoPresentLowDiskSpace
+  @Default(.systemAutoPresentDiskThroughput) private var systemAutoPresentDiskThroughput
+  @Default(.systemAutoPresentNetworkThroughput) private var systemAutoPresentNetworkThroughput
   @Default(.metricStyles) private var metricStyles
   @Default(.disabledEventSources) private var disabledEventSources
   @Default(.energyMode) private var energyMode
@@ -1040,6 +1050,18 @@ struct SettingsView: View {
         }
       }
       if isActivityEnabled("system") {
+        Section("Automatic presence") {
+          Toggle("High CPU", isOn: $systemAutoPresentCPU)
+          Toggle("Thermal pressure", isOn: $systemAutoPresentThermal)
+          Toggle("Memory pressure", isOn: $systemAutoPresentMemoryPressure)
+          Toggle("Low disk space", isOn: $systemAutoPresentLowDiskSpace)
+          Toggle("Heavy disk activity", isOn: $systemAutoPresentDiskThroughput)
+          Toggle("High network traffic", isOn: $systemAutoPresentNetworkThroughput)
+          Text(
+            "Islet waits for sustained conditions and a clear recovery margin. Disk and network rates show unusually heavy traffic, not measured saturation, because device and link capacity are unavailable."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
         Section("Metric presentation") {
           Picker("Presentation", selection: metricPresetBinding) {
             ForEach(SystemMetricPreset.allCases) { preset in
@@ -1505,6 +1527,10 @@ struct SettingsView: View {
           status: hud.lastControlFailure ?? hud.eventTapStatus.summary,
           color: hud.lastControlFailure == nil
             ? (hud.eventTapStatus == .active ? .green : .secondary) : .orange)
+        PermissionStatusRow(
+          title: "USB reader", icon: "cable.connector", status: ports.readerHealth.summary,
+          color: usbReaderHealthColor)
+        Button("Retry USB enumeration") { ports.retry() }
       }
       Section("About") {
         Link("C-Nucifora on GitHub", destination: URL(string: "https://github.com/C-Nucifora")!)
@@ -1676,8 +1702,18 @@ struct SettingsView: View {
       + "\nFocus schema: \(focus.schemaSignature ?? "Unavailable")"
       + "\nPulse: \(pulseServer.isRunning ? "Running" : "Stopped")"
       + "\nPulse items: \(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
+      + "\nUSB reader: \(ports.readerHealth.summary)"
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(text, forType: .string)
+  }
+
+  private var usbReaderHealthColor: Color {
+    switch ports.readerHealth {
+    case .current: .green
+    case .awaitingFirstRead: .secondary
+    case .stale: .orange
+    case .failed: .red
+    }
   }
 
   private func rotatePulseToken() {
@@ -1748,6 +1784,12 @@ struct SettingsView: View {
     priorityList = ["com.spotify.client", "com.apple.Music"]
     activityOrder = ActivityCatalog.defaultOrder
     systemAlwaysVisible = false
+    systemAutoPresentCPU = true
+    systemAutoPresentThermal = true
+    systemAutoPresentMemoryPressure = true
+    systemAutoPresentLowDiskSpace = true
+    systemAutoPresentDiskThroughput = true
+    systemAutoPresentNetworkThroughput = true
     metricStyles = [:]
     hudStyle = .bar
     Defaults[.disabledExternalBrightnessDisplays] = []
@@ -2012,6 +2054,7 @@ private struct PulseProviderRow: View {
   private var healthColor: Color {
     switch status.health {
     case .active: .green
+    case .needsAttention: .orange
     case .seen: .blue
     case .neverSeen: .secondary
     }

@@ -81,12 +81,21 @@ final class ActivityCenter: ObservableObject {
   /// Activities shown as expanded tabs. Utility surfaces such as the File Shelf stay reachable
   /// without claiming the compact notch when they have no live content.
   var expandedActivities: [any NotchActivity] {
+    expandedActivities(temporarilyIncluding: nil)
+  }
+
+  /// A notification click may reveal one active disabled activity without changing the user's
+  /// persisted switch. The caller owns the lifetime of this temporary presentation.
+  func expandedActivities(temporarilyIncluding temporaryActivityID: String?)
+    -> [any NotchActivity]
+  {
     let order = Defaults[.activityOrder]
     let disabled = Set(Defaults[.disabledActivities])
     return sorted(
       activities.filter {
         ($0.isActive || $0.isAvailableWhenInactive)
-          && ActivityEnablement.isEnabled($0.id, disabledActivities: disabled)
+          && (ActivityEnablement.isEnabled($0.id, disabledActivities: disabled)
+            || ($0.isActive && $0.id == temporaryActivityID))
       },
       order: order)
   }

@@ -1,0 +1,15 @@
+{
+  "total_count": 2,
+  "jobs": [
+    {
+      "name": "Build and test",
+      "conclusion": "failure",
+      "html_url": "https://github.com/C-Nucifora/islet/actions/runs/104/job/1001"
+    },
+    {
+      "name": "Lint",
+      "conclusion": "success",
+      "html_url": "https://github.com/C-Nucifora/islet/actions/runs/104/job/1002"
+    }
+  ]
+}
