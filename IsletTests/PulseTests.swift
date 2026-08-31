@@ -529,6 +529,51 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testPulseBindsNumericIPv4AndIPv6LoopbackAndAdvertisesLocalhost() async throws {
+    var requestedPorts: [UInt16] = []
+    var requestedEndpoints: [NWEndpoint] = []
+    var listeners: [FakePulseListener] = []
+    let server = PulseServer(
+      listenerFactory: { parameters, port in
+        requestedPorts.append(port.rawValue)
+        if let endpoint = parameters.requiredLocalEndpoint { requestedEndpoints.append(endpoint) }
+        let listener = FakePulseListener(port: port)
+        listeners.append(listener)
+        return listener
+      },
+      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {})
+
+    server.start()
+
+    XCTAssertEqual(requestedPorts, [47_717, 47_717])
+    XCTAssertEqual(
+      requestedEndpoints,
+      [
+        .hostPort(host: "127.0.0.1", port: .any),
+        .hostPort(host: "::1", port: .any),
+      ])
+    XCTAssertFalse(
+      requestedEndpoints.contains(.hostPort(host: "localhost", port: .any)))
+    listeners[0].emit(.ready)
+    await Task.yield()
+    XCTAssertFalse(server.isRunning)
+    listeners[1].emit(.ready)
+    await Task.yield()
+
+    XCTAssertTrue(server.isRunning)
+    XCTAssertEqual(server.listeningAddress, "localhost:47717")
+    server.stop()
+  }
+
+  func testPulsePeerValidationAcceptsIPv4AndIPv6LoopbackButRejectsNonLoopback() {
+    let port = PulsePaths.defaultPort
+    XCTAssertTrue(PulseServer.isLoopbackPeer(.hostPort(host: "127.0.0.1", port: port)))
+    XCTAssertTrue(PulseServer.isLoopbackPeer(.hostPort(host: "::1", port: port)))
+    XCTAssertFalse(PulseServer.isLoopbackPeer(.hostPort(host: "192.168.1.2", port: port)))
+    XCTAssertFalse(PulseServer.isLoopbackPeer(.hostPort(host: "fe80::1", port: port)))
+  }
+
+  @MainActor
   func testOccupiedDefaultPortMovesToStableLoopbackFallbackAndPublishesIt() async throws {
     var requestedPorts: [UInt16] = []
     var requestedHosts: [NWEndpoint.Host] = []
@@ -549,21 +594,22 @@ final class PulseTests: XCTestCase {
       activePortRemover: {})
 
     server.start()
-    XCTAssertEqual(requestedPorts, [47_717])
+    XCTAssertEqual(requestedPorts, [47_717, 47_717])
     listeners[0].emit(.failed(.posix(.EADDRINUSE)))
     await Task.yield()
 
-    XCTAssertEqual(requestedPorts, [47_717, 47_718])
-    XCTAssertEqual(requestedHosts, ["127.0.0.1", "127.0.0.1"])
+    XCTAssertEqual(requestedPorts, [47_717, 47_717, 47_718, 47_718])
+    XCTAssertEqual(requestedHosts, ["127.0.0.1", "::1", "127.0.0.1", "::1"])
     XCTAssertFalse(server.isRunning)
     XCTAssertNil(server.activePort)
 
-    listeners[1].emit(.ready)
+    listeners[2].emit(.ready)
+    listeners[3].emit(.ready)
     await Task.yield()
 
     XCTAssertTrue(server.isRunning)
     XCTAssertEqual(server.activePort, 47_718)
-    XCTAssertEqual(server.listeningAddress, "127.0.0.1:47718")
+    XCTAssertEqual(server.listeningAddress, "localhost:47718")
     XCTAssertEqual(publishedPorts, [47_718])
     XCTAssertNil(server.lastError)
     XCTAssertNotNil(server.portRecoveryMessage)
@@ -642,7 +688,7 @@ final class PulseTests: XCTestCase {
     XCTAssertFalse(server.isRunning)
 
     scheduler.fire(at: 0)
-    XCTAssertEqual(listeners.count, 2)
+    XCTAssertEqual(listeners.count, 4)
     XCTAssertNil(server.nextRetryAt)
     server.stop()
   }
@@ -668,12 +714,12 @@ final class PulseTests: XCTestCase {
     XCTAssertTrue(scheduler.tasks[0].cancelled)
     XCTAssertNil(server.nextRetryAt)
     scheduler.fire(at: 0)
-    XCTAssertEqual(listeners.count, 1)
+    XCTAssertEqual(listeners.count, 2)
 
     server.start()
-    XCTAssertEqual(listeners.count, 2)
+    XCTAssertEqual(listeners.count, 4)
     scheduler.fire(at: 0)
-    XCTAssertEqual(listeners.count, 2)
+    XCTAssertEqual(listeners.count, 4)
     server.stop()
   }
 
@@ -699,17 +745,17 @@ final class PulseTests: XCTestCase {
     server.start()
     listeners[0].emit(.failed(.posix(.ETIMEDOUT)))
     await Task.yield()
-    XCTAssertEqual(listeners.count, 1)
+    XCTAssertEqual(listeners.count, 2)
     XCTAssertNotNil(server.nextRetryAt)
 
     try server.rotateToken()
 
     XCTAssertEqual(server.token, replacementToken)
-    XCTAssertEqual(listeners.count, 2)
+    XCTAssertEqual(listeners.count, 4)
     XCTAssertTrue(scheduler.tasks[0].cancelled)
     XCTAssertNil(server.nextRetryAt)
     scheduler.fire(at: 0)
-    XCTAssertEqual(listeners.count, 2)
+    XCTAssertEqual(listeners.count, 4)
     server.stop()
   }
 
@@ -730,12 +776,13 @@ final class PulseTests: XCTestCase {
     listeners[0].emit(.failed(.posix(.ETIMEDOUT)))
     await Task.yield()
     scheduler.fire(at: 0)
-    listeners[1].emit(.ready)
+    listeners[2].emit(.ready)
+    listeners[3].emit(.ready)
     await Task.yield()
 
     XCTAssertEqual(scheduler.delays, [1, PulseServer.retryStableReadyPeriod])
     scheduler.fire(at: 1)
-    listeners[1].emit(.failed(.posix(.ETIMEDOUT)))
+    listeners[2].emit(.failed(.posix(.ETIMEDOUT)))
     await Task.yield()
 
     XCTAssertEqual(scheduler.delays.last, 1)
