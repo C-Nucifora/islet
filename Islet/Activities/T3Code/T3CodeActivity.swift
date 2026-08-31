@@ -5,6 +5,29 @@ import SwiftUI
 
 @MainActor
 final class T3CodeActivity: NotchActivity, ObservableObject {
+  struct CompactPresentation: Equatable, Sendable {
+    let liveAgentCount: Int
+    let staleAgentCount: Int
+    let leadingPhase: T3AgentPhase?
+
+    var displayedAgentCount: Int {
+      liveAgentCount > 0 ? liveAgentCount : staleAgentCount
+    }
+
+    var isEntirelyStale: Bool { liveAgentCount == 0 && staleAgentCount > 0 }
+
+    var accessibilityLabel: String {
+      if isEntirelyStale {
+        return
+          "\(staleAgentCount) T3 Code agent\(staleAgentCount == 1 ? "" : "s") from the last update; connection stale"
+      }
+      let active =
+        "\(liveAgentCount) active T3 Code agent\(liveAgentCount == 1 ? "" : "s")"
+      guard staleAgentCount > 0 else { return active }
+      return "\(active); \(staleAgentCount) stale"
+    }
+  }
+
   let id = "t3Code"
   let priority = ActivityPriority.agent
   let tabIcon = "terminal.fill"
@@ -23,7 +46,31 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   private var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
 
   var agents: [T3AgentSnapshot] {
-    environments.flatMap(\.agents).sorted {
+    Self.sortedAgents(environments.flatMap(\.agents))
+  }
+
+  var liveAgents: [T3AgentSnapshot] {
+    Self.sortedAgents(environments.filter { !$0.isStale }.flatMap(\.agents))
+  }
+
+  var compactPresentation: CompactPresentation {
+    Self.compactPresentation(for: environments)
+  }
+
+  nonisolated static func compactPresentation(
+    for environments: [T3EnvironmentSnapshot]
+  ) -> CompactPresentation {
+    let live = sortedAgents(environments.filter { !$0.isStale }.flatMap(\.agents))
+    let stale = sortedAgents(environments.filter(\.isStale).flatMap(\.agents))
+    return CompactPresentation(
+      liveAgentCount: live.count, staleAgentCount: stale.count,
+      leadingPhase: live.first?.phase)
+  }
+
+  private nonisolated static func sortedAgents(
+    _ agents: [T3AgentSnapshot]
+  ) -> [T3AgentSnapshot] {
+    agents.sorted {
       if $0.phase.rank != $1.phase.rank { return $0.phase.rank < $1.phase.rank }
       return $0.updatedAt > $1.updatedAt
     }
@@ -198,10 +245,11 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   }
 
   func compactColor(for theme: AppTheme) -> Color {
-    if agents.contains(where: { $0.phase == .needsInput || $0.phase == .needsApproval }) {
+    if compactPresentation.isEntirelyStale { return .orange }
+    if liveAgents.contains(where: { $0.phase == .needsInput || $0.phase == .needsApproval }) {
       return .orange
     }
-    if agents.contains(where: { $0.phase == .failed }) { return .red }
+    if liveAgents.contains(where: { $0.phase == .failed }) { return .red }
     return theme.color(for: .t3Code)
   }
 
@@ -246,10 +294,12 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         let error = T3ClientError.untrustedLocalEndpoint
         updateCredentialError(error, for: "local")
         upsert(
-          T3EnvironmentSnapshot(
-            id: "local", label: "This Mac", baseURL: "http://127.0.0.1/",
-            isLocal: true, platform: nil, serverVersion: nil,
-            state: .offline(error.localizedDescription), agents: []))
+          Self.retainingStalePayload(
+            T3EnvironmentSnapshot(
+              id: "local", label: "This Mac", baseURL: "http://127.0.0.1/",
+              isLocal: true, platform: nil, serverVersion: nil,
+              state: .offline(error.localizedDescription), agents: []),
+            from: environments))
         let delay = Self.reconnectDelay(failureCount: failures, remote: false)
         try? await Task.sleep(for: .seconds(Self.jitter(delay)))
         continue
@@ -292,25 +342,44 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
             Log.app.error(
               "Could not remove rejected local T3 credential: \(error.localizedDescription)")
           }
+          upsert(
+            T3EnvironmentSnapshot(
+              id: Self.localSnapshotID(descriptor.environmentId),
+              label: descriptor.label.isEmpty ? "This Mac" : descriptor.label,
+              baseURL: endpoint.baseURL.absoluteString, isLocal: true,
+              platform: nil, serverVersion: descriptor.serverVersion,
+              state: .needsPairing, agents: []))
+        } else {
+          upsert(
+            Self.retainingStalePayload(
+              T3EnvironmentSnapshot(
+                id: "local", label: "This Mac", baseURL: endpoint.baseURL.absoluteString,
+                isLocal: true, platform: nil, serverVersion: nil,
+                state: .reconnecting("Authorization expired"), agents: []),
+              from: environments))
         }
       } catch let error as T3CredentialStoreError {
         guard !Task.isCancelled else { return }
         updateCredentialError(error, for: "local")
         failures += 1
         upsert(
-          T3EnvironmentSnapshot(
-            id: "local", label: "This Mac", baseURL: endpoint.baseURL.absoluteString,
-            isLocal: true, platform: nil, serverVersion: nil,
-            state: .credentialError(error.localizedDescription), agents: []))
+          Self.retainingStalePayload(
+            T3EnvironmentSnapshot(
+              id: "local", label: "This Mac", baseURL: endpoint.baseURL.absoluteString,
+              isLocal: true, platform: nil, serverVersion: nil,
+              state: .credentialError(error.localizedDescription), agents: []),
+            from: environments))
       } catch {
         guard !Task.isCancelled else { return }
         updateCredentialError(error, for: "local")
         failures += 1
         upsert(
-          T3EnvironmentSnapshot(
-            id: "local", label: "This Mac", baseURL: endpoint.baseURL.absoluteString,
-            isLocal: true, platform: nil, serverVersion: nil,
-            state: .offline(error.localizedDescription), agents: []))
+          Self.retainingStalePayload(
+            T3EnvironmentSnapshot(
+              id: "local", label: "This Mac", baseURL: endpoint.baseURL.absoluteString,
+              isLocal: true, platform: nil, serverVersion: nil,
+              state: .offline(error.localizedDescription), agents: []),
+            from: environments))
       }
       let delay = Self.reconnectDelay(failureCount: failures, remote: false)
       try? await Task.sleep(for: .seconds(Self.jitter(delay)))
@@ -322,7 +391,10 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       let url = URL(string: profile.baseURL),
       let endpoint = try? T3Endpoint(url, allowInsecureRemoteHTTP: true)
     else {
-      upsert(snapshot(profile, descriptor: nil, state: .offline("Invalid endpoint"), agents: []))
+      upsert(
+        Self.retainingStalePayload(
+          snapshot(profile, descriptor: nil, state: .offline("Invalid endpoint"), agents: []),
+          from: environments))
       return
     }
     var failures = 0
@@ -360,9 +432,11 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         failures += 1
         updateCredentialError(error, for: monitorKey)
         upsert(
-          snapshot(
-            profile, descriptor: nil, state: .credentialError(error.localizedDescription),
-            agents: []))
+          Self.retainingStalePayload(
+            snapshot(
+              profile, descriptor: nil, state: .credentialError(error.localizedDescription),
+              agents: []),
+            from: environments))
       } catch {
         guard !Task.isCancelled else { return }
         updateCredentialError(error, for: monitorKey)
@@ -372,8 +446,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
           ? .offline(error.localizedDescription)
           : .reconnecting(error.localizedDescription)
         upsert(
-          snapshot(
-            profile, descriptor: nil, state: state, agents: []))
+          Self.retainingStalePayload(
+            snapshot(profile, descriptor: nil, state: state, agents: []), from: environments))
       }
       let delay = Self.reconnectDelay(failureCount: failures, remote: true)
       try? await Task.sleep(for: .seconds(Self.jitter(delay)))
@@ -452,6 +526,30 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     guard next != environments else { return }
     environments = next
     activationDate = agents.isEmpty ? nil : (activationDate ?? Date())
+  }
+
+  /// Keep the last useful payload visible while a connection error is being reported. A failed
+  /// request must not make active agents disappear simply because the next response is stale.
+  nonisolated static func retainingStalePayload(
+    _ candidate: T3EnvironmentSnapshot, from current: [T3EnvironmentSnapshot]
+  ) -> T3EnvironmentSnapshot {
+    let previous = current.first {
+      $0.id == candidate.id || (candidate.isLocal && $0.isLocal)
+    }
+    let retainedUsefulPayload =
+      previous.map {
+        $0.isStale || $0.state == .connected || !$0.agents.isEmpty
+      } ?? false
+    return T3EnvironmentSnapshot(
+      id: previous?.id ?? candidate.id,
+      label: previous?.label ?? candidate.label,
+      baseURL: previous?.baseURL ?? candidate.baseURL,
+      isLocal: candidate.isLocal,
+      platform: previous?.platform ?? candidate.platform,
+      serverVersion: previous?.serverVersion ?? candidate.serverVersion,
+      state: candidate.state,
+      agents: previous?.agents ?? candidate.agents,
+      isStale: retainedUsefulPayload)
   }
 
   nonisolated static func upserting(

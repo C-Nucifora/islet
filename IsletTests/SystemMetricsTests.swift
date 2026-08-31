@@ -308,6 +308,10 @@ final class SystemMetricsTests: XCTestCase {
 
   // MARK: - Ring buffer
 
+  private func date(_ seconds: TimeInterval) -> Date {
+    Date(timeIntervalSinceReferenceDate: seconds)
+  }
+
   func testRingStartsEmpty() {
     let ring = MetricRing(capacity: 60)
     XCTAssertTrue(ring.values.isEmpty)
@@ -351,6 +355,123 @@ final class SystemMetricsTests: XCTestCase {
     ring.push(0.1)
     ring.push(0.9)
     XCTAssertEqual(ring.latest, 0.9)
+  }
+
+  func testRingRetainsAMeasuredTimeWindowRatherThanASampleCount() {
+    var ring = MetricRing(capacity: 100, timeWindow: 60, maximumContiguousGap: 120)
+    ring.push(0.1, at: date(0))
+    ring.push(0.2, at: date(20))
+    ring.push(0.3, at: date(61))
+
+    XCTAssertEqual(ring.samples.map(\.timestamp), [date(20), date(61)])
+    XCTAssertEqual(ring.values, [0.2, 0.3])
+  }
+
+  func testRingDropsHistoryAcrossASleepSizedGap() {
+    var ring = MetricRing(capacity: 100, timeWindow: 300, maximumContiguousGap: 60)
+    ring.push(0.1, at: date(0))
+    ring.push(0.2, at: date(30))
+    ring.push(0.3, at: date(91))
+
+    // Do not join an old measurement to the post-sleep value with a misleading line.
+    XCTAssertEqual(ring.samples, [TimedMetricSample(timestamp: date(91), value: 0.3)])
+  }
+
+  func testRingRejectsOutOfOrderAndNonFiniteMeasurements() {
+    var ring = MetricRing(capacity: 100, timeWindow: 300, maximumContiguousGap: 60)
+    ring.push(0.4, at: date(20))
+    ring.push(0.2, at: date(10))
+    ring.push(.nan, at: date(30))
+    ring.push(.infinity, at: date(30))
+
+    XCTAssertEqual(ring.samples, [TimedMetricSample(timestamp: date(20), value: 0.4)])
+  }
+
+  func testRingCapacityBoundsBurstMeasurementsInsideTheTimeWindow() {
+    var ring = MetricRing(capacity: 3, timeWindow: 300, maximumContiguousGap: 60)
+    for second in 0...3 {
+      ring.push(Double(second), at: date(TimeInterval(second)))
+    }
+    XCTAssertEqual(ring.samples.map(\.value), [1, 2, 3])
+  }
+
+  func testDocumentedChartHistoryBudgetIsFiveMinutesAndSixtyRenderedSamples() {
+    XCTAssertEqual(SystemChartHistory.timeWindow, 5 * 60)
+    XCTAssertEqual(SystemChartHistory.maximumRenderedSamples, 60)
+    XCTAssertEqual(SystemMetricsMonitor.ringCapacity, 300)
+    XCTAssertEqual(SystemChartHistory.timeSpanLabel, "5m")
+  }
+
+  func testTimeBasedDownsamplingKeepsRealMixedCadenceMeasurements() {
+    let samples = [0.0, 1, 2, 3, 120, 150, 180, 200].enumerated().map { index, second in
+      TimedMetricSample(timestamp: date(second), value: Double(index))
+    }
+
+    let downsampled = downsampleMetricSamples(samples, maximumCount: 4)
+
+    XCTAssertEqual(downsampled.map(\.timestamp), [date(0), date(120), date(150), date(200)])
+    XCTAssertTrue(downsampled.allSatisfy(samples.contains))
+  }
+
+  func testTimedSparklineUsesWallClockPositionsAcrossCadenceChanges() {
+    let points = timedSparklinePoints(
+      [
+        TimedMetricSample(timestamp: date(0), value: 0.1),
+        TimedMetricSample(timestamp: date(20), value: 0.4),
+        TimedMetricSample(timestamp: date(50), value: 0.9),
+      ],
+      now: date(60), timeWindow: 60, maximumContiguousGap: 60, maximumCount: 60,
+      scale: .fixed(min: 0, max: 1))
+
+    XCTAssertEqual(points.count, 3)
+    XCTAssertEqual(points[0].point.x, 0, accuracy: 1e-9)
+    XCTAssertEqual(points[1].point.x, 1.0 / 3, accuracy: 1e-9)
+    XCTAssertEqual(points[2].point.x, 5.0 / 6, accuracy: 1e-9)
+    XCTAssertEqual(points[0].point.y, 0.1, accuracy: 1e-9)
+    XCTAssertEqual(points[1].point.y, 0.4, accuracy: 1e-9)
+    XCTAssertEqual(points[2].point.y, 0.9, accuracy: 1e-9)
+  }
+
+  func testTimedSingleSampleDrawsAShortFlatSegmentAtItsTimestamp() {
+    let points = timedSparklinePoints(
+      [TimedMetricSample(timestamp: date(60), value: 0.25)],
+      now: date(60), timeWindow: 60, maximumContiguousGap: 60, maximumCount: 60,
+      scale: .fixed(min: 0, max: 1))
+
+    XCTAssertEqual(points.count, 2)
+    XCTAssertEqual(points.map(\.startsSegment), [true, false])
+    XCTAssertEqual(points[0].point.x, 0.98, accuracy: 1e-9)
+    XCTAssertEqual(points[1].point.x, 1, accuracy: 1e-9)
+    XCTAssertEqual(points[0].point.y, 0.25, accuracy: 1e-9)
+    XCTAssertEqual(points[1].point.y, 0.25, accuracy: 1e-9)
+  }
+
+  func testTimedSparklineMarksLongGapsInsteadOfJoiningThem() {
+    let points = timedSparklinePoints(
+      [
+        TimedMetricSample(timestamp: date(0), value: 0.2),
+        TimedMetricSample(timestamp: date(10), value: 0.4),
+        TimedMetricSample(timestamp: date(80), value: 0.6),
+      ],
+      now: date(100), timeWindow: 100, maximumContiguousGap: 60, maximumCount: 60,
+      scale: .fixed(min: 0, max: 1))
+
+    XCTAssertEqual(points.map(\.startsSegment), [true, false, true])
+  }
+
+  func testDownsamplingDoesNotTurnContinuousMeasurementsIntoASleepGap() {
+    let points = timedSparklinePoints(
+      [
+        TimedMetricSample(timestamp: date(0), value: 0.1),
+        TimedMetricSample(timestamp: date(50), value: 0.2),
+        TimedMetricSample(timestamp: date(51), value: 0.3),
+        TimedMetricSample(timestamp: date(52), value: 0.4),
+        TimedMetricSample(timestamp: date(110), value: 0.5),
+      ],
+      now: date(120), timeWindow: 120, maximumContiguousGap: 60, maximumCount: 4,
+      scale: .fixed(min: 0, max: 1))
+
+    XCTAssertEqual(points.map(\.startsSegment), [true, false, false])
   }
 
   // MARK: - Sparkline normalisation
