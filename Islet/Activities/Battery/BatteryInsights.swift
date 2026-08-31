@@ -29,11 +29,19 @@ struct BatteryInsightSample: Equatable, Sendable {
 
   init(state: BatteryState, metrics: BatteryMetrics) {
     self.state = state
-    batteryPowerWatts = metrics.batteryPowerWatts ?? metrics.powerWatts
+    if let measuredPower = metrics.batteryPowerWatts {
+      batteryPowerWatts = measuredPower
+      batteryPowerStatus = metrics.status(for: .batteryPower) ?? .available
+    } else if let derivedPower = metrics.powerWatts {
+      batteryPowerWatts = derivedPower
+      batteryPowerStatus = .available
+    } else {
+      batteryPowerWatts = nil
+      batteryPowerStatus = metrics.status(for: .batteryPower)
+    }
     systemInputWatts = metrics.systemPowerInWatts
     reportedCapacityMAh = metrics.rawMaxCapacityMAh ?? metrics.nominalCapacityMAh
     fullyCharged = metrics.fullyCharged ?? false
-    batteryPowerStatus = metrics.status(for: .batteryPower)
     systemInputStatus = metrics.status(for: .systemInput)
   }
 
@@ -125,10 +133,10 @@ struct BatteryInsightUpdate: Equatable, Sendable {
 
 struct BatteryInsightAnalyzer: Sendable {
   static let baselineLifetime: TimeInterval = 7 * 24 * 60 * 60
-  static let maximumBaselinePoints = 2_016
+  static let baselineSampleInterval: TimeInterval = 60
+  static let maximumBaselinePoints = Int(baselineLifetime / baselineSampleInterval) + 1
   static let maximumCapacityPoints = 90
   static let minimumBaselinePoints = 6
-  static let baselineSampleInterval: TimeInterval = 60
   static let unusualDrainEvidence: TimeInterval = 3 * 60
   static let chargerDischargeEvidence: TimeInterval = 2 * 60
   static let slowChargeEvidence: TimeInterval = 8 * 60
