@@ -1,4 +1,3 @@
-import Darwin
 import XCTest
 
 @testable import Islet
@@ -70,7 +69,7 @@ final class TimerLogicTests: XCTestCase {
       .paused(session))
   }
 
-  func testElapsedDeadlineRestoresAsCompletedAndClearsStoredSession() throws {
+  func testElapsedDeadlineRestoresAsCompletedAndRetainsStoredSession() throws {
     let now = Date(timeIntervalSinceReferenceDate: 30_000)
     let session = TimerSessionSnapshot(
       savedAt: now.addingTimeInterval(-120),
@@ -79,18 +78,37 @@ final class TimerLogicTests: XCTestCase {
       deadline: now.addingTimeInterval(-60),
       isPaused: false,
       pausedRemaining: nil)
-    let box = TimerPersistenceBox(sessionData: try XCTUnwrap(TimerPersistence.encode(session)))
+    let encoded = try XCTUnwrap(TimerPersistence.encode(session))
+    let box = TimerPersistenceBox(sessionData: encoded)
 
     XCTAssertEqual(
       TimerPersistence.restoreSession(from: box.store, now: now),
       .completed(session))
-    XCTAssertNil(box.sessionData)
+    XCTAssertEqual(box.sessionData, encoded)
   }
 
-  func testCompletedTimerRemainsActiveUntilDismissed() async throws {
-    let activity = try completedActivity()
+  func testCompletedTimerRemainsActiveWhenClockAdvancesUntilDismissed() throws {
+    let now = Date(timeIntervalSinceReferenceDate: 30_000)
+    let session = TimerSessionSnapshot(
+      savedAt: now.addingTimeInterval(-120),
+      label: "Tea",
+      duration: 60,
+      deadline: now.addingTimeInterval(-60),
+      isPaused: false,
+      pausedRemaining: nil)
+    let preset = TimerPresetSnapshot(duration: 60, label: "Tea")
+    let persistence = TimerPersistenceBox(
+      sessionData: try XCTUnwrap(TimerPersistence.encode(session)),
+      presetData: try XCTUnwrap(TimerPersistence.encode(preset)))
+    let clock = MutableTimerClock(now: now)
+    let completionGate = ControlledTimerCompletionGate()
+    let activity = TimerActivity(
+      persistenceStore: persistence.store, now: now, completionNotifier: TimerNotifierStub(),
+      clock: { clock.now }, completionScheduler: completionGate)
 
-    try await Task.sleep(for: .milliseconds(6_100))
+    clock.now = now.addingTimeInterval(7)
+    completionGate.makeDueCompletionsReady(at: clock.now)
+    completionGate.runReadyCompletions()
 
     XCTAssertTrue(activity.finished)
     XCTAssertTrue(activity.isActive)
@@ -102,23 +120,74 @@ final class TimerLogicTests: XCTestCase {
     XCTAssertFalse(activity.isActive)
   }
 
-  func testElapsedPausePathEmitsCompletionOnlyOnce() async {
+  func testReadyCompletionIsCancelledBeforeElapsedPausePathCanFireTwice() {
+    let start = Date(timeIntervalSinceReferenceDate: 60_000)
+    let clock = MutableTimerClock(now: start)
+    let completionGate = ControlledTimerCompletionGate()
     let notifier = TimerNotifierStub()
     let persistence = TimerPersistenceBox()
     let activity = TimerActivity(
-      persistenceStore: persistence.store, completionNotifier: notifier)
+      persistenceStore: persistence.store, now: start, completionNotifier: notifier,
+      clock: { clock.now }, completionScheduler: completionGate)
     activity.start(1, label: "Tea")
 
-    // Keep the main actor occupied until the deadline has elapsed. The deadline task is then ready
-    // but cannot run before the control path observes 0:00 and completes the timer itself.
-    usleep(1_100_000)
+    clock.now = start.addingTimeInterval(1)
+    completionGate.makeDueCompletionsReady(at: clock.now)
+    XCTAssertEqual(completionGate.readyCount, 1)
+
     activity.togglePause()
-    await Task.yield()
-    await Task.yield()
+    completionGate.runReadyCompletions()
 
     XCTAssertTrue(activity.finished)
     XCTAssertEqual(notifier.finishedCompletionIDs.count, 1)
     activity.cancel()
+  }
+
+  func testNaturalCompletionPersistsStableIdentityAndTimestampAcrossRelaunch() throws {
+    let start = Date(timeIntervalSinceReferenceDate: 70_000)
+    let completedAt = start.addingTimeInterval(60)
+    let clock = MutableTimerClock(now: start)
+    let completionGate = ControlledTimerCompletionGate()
+    let notifier = TimerNotifierStub()
+    let persistence = TimerPersistenceBox()
+    var activity: TimerActivity? = TimerActivity(
+      persistenceStore: persistence.store, now: start, completionNotifier: notifier,
+      clock: { clock.now }, completionScheduler: completionGate)
+    activity?.start(60, label: "Tea")
+
+    clock.now = completedAt
+    completionGate.makeDueCompletionsReady(at: completedAt)
+    completionGate.runReadyCompletions()
+
+    XCTAssertTrue(activity?.finished == true)
+    XCTAssertEqual(notifier.finishedCompletionIDs.count, 1)
+    XCTAssertEqual(notifier.finishedSnapshots.first?.completedAt, completedAt)
+    let completionID = try XCTUnwrap(notifier.finishedCompletionIDs.first)
+    let persisted = try XCTUnwrap(
+      JSONDecoder().decode(
+        TimerSessionSnapshot.self, from: try XCTUnwrap(persistence.sessionData)))
+    XCTAssertEqual(
+      persisted.completionIdentifier,
+      TimerCompletionNotificationCoordinator.identifier(for: completionID))
+    XCTAssertEqual(persisted.completedAt, completedAt)
+
+    activity = nil
+    clock.now = completedAt.addingTimeInterval(60)
+    let restored = TimerActivity(
+      persistenceStore: persistence.store, now: clock.now, completionNotifier: notifier,
+      clock: { clock.now }, completionScheduler: ControlledTimerCompletionGate())
+
+    XCTAssertTrue(restored.finished)
+    XCTAssertEqual(restored.label, "Tea")
+    XCTAssertEqual(notifier.finishedCompletionIDs.count, 1)
+    let restoredSnapshot = try XCTUnwrap(
+      JSONDecoder().decode(
+        TimerSessionSnapshot.self, from: try XCTUnwrap(persistence.sessionData)))
+    XCTAssertEqual(restoredSnapshot.completionIdentifier, persisted.completionIdentifier)
+    XCTAssertEqual(restoredSnapshot.completedAt, persisted.completedAt)
+
+    restored.cancel()
+    XCTAssertNil(persistence.sessionData)
   }
 
   func testRestartReplacesCompletedTimerWithARunningTimer() throws {
@@ -155,6 +224,44 @@ final class TimerLogicTests: XCTestCase {
       isPaused: false,
       pausedRemaining: nil)
     let box = TimerPersistenceBox(sessionData: try XCTUnwrap(TimerPersistence.encode(session)))
+
+    XCTAssertEqual(TimerPersistence.restoreSession(from: box.store, now: now), .discard)
+    XCTAssertNil(box.sessionData)
+  }
+
+  func testPersistedCompletedStateDoesNotExpireBeforeAcknowledgement() throws {
+    let now = Date(timeIntervalSinceReferenceDate: 80_000_000)
+    let completedAt = now.addingTimeInterval(-(TimerPersistence.maximumRecordAge * 2))
+    let session = TimerSessionSnapshot(
+      savedAt: completedAt,
+      label: "Long-finished timer",
+      duration: 60,
+      deadline: completedAt,
+      isPaused: false,
+      pausedRemaining: nil,
+      completionIdentifier: "timer-completion-99999999-9999-9999-9999-999999999999",
+      completedAt: completedAt)
+    let encoded = try XCTUnwrap(TimerPersistence.encode(session))
+    let box = TimerPersistenceBox(sessionData: encoded)
+
+    XCTAssertEqual(TimerPersistence.restoreSession(from: box.store, now: now), .completed(session))
+    XCTAssertEqual(box.sessionData, encoded)
+  }
+
+  func testPersistedCompletedStateStillRejectsFutureTimestamp() throws {
+    let now = Date(timeIntervalSinceReferenceDate: 80_000_000)
+    let completedAt = now.addingTimeInterval(TimerPersistence.maximumFutureClockSkew + 1)
+    let session = TimerSessionSnapshot(
+      savedAt: now,
+      label: "Future completion",
+      duration: 60,
+      deadline: completedAt,
+      isPaused: false,
+      pausedRemaining: nil,
+      completionIdentifier: "timer-completion-AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+      completedAt: completedAt)
+    let box = TimerPersistenceBox(
+      sessionData: try XCTUnwrap(TimerPersistence.encode(session)))
 
     XCTAssertEqual(TimerPersistence.restoreSession(from: box.store, now: now), .discard)
     XCTAssertNil(box.sessionData)
@@ -210,6 +317,7 @@ private final class TimerPersistenceBox {
 @MainActor
 private final class TimerNotifierStub: TimerCompletionNotifying {
   private(set) var finishedCompletionIDs: [UUID] = []
+  private(set) var finishedSnapshots: [TimerCompletionSnapshot] = []
 
   func prepareForTimerStart(onUnavailable: @escaping @MainActor () -> Void) {}
 
@@ -218,5 +326,70 @@ private final class TimerNotifierStub: TimerCompletionNotifying {
     onUnavailable: @escaping @MainActor () -> Void
   ) {
     finishedCompletionIDs.append(completionID)
+    finishedSnapshots.append(snapshot)
+  }
+}
+
+@MainActor
+private final class MutableTimerClock {
+  var now: Date
+
+  init(now: Date) {
+    self.now = now
+  }
+}
+
+@MainActor
+private final class ControlledTimerCompletionGate: TimerCompletionScheduling {
+  private struct Completion {
+    let id: UInt
+    let deadline: Date
+    let action: @MainActor () -> Void
+  }
+
+  private final class Handle: TimerScheduledCompletion {
+    private weak var gate: ControlledTimerCompletionGate?
+    private let id: UInt
+
+    init(gate: ControlledTimerCompletionGate, id: UInt) {
+      self.gate = gate
+      self.id = id
+    }
+
+    func cancel() {
+      gate?.cancel(id: id)
+    }
+  }
+
+  private var nextID: UInt = 0
+  private var waiting: [Completion] = []
+  private var ready: [Completion] = []
+
+  var readyCount: Int { ready.count }
+
+  func schedule(
+    at deadline: Date, action: @escaping @MainActor () -> Void
+  ) -> any TimerScheduledCompletion {
+    nextID &+= 1
+    let id = nextID
+    waiting.append(Completion(id: id, deadline: deadline, action: action))
+    return Handle(gate: self, id: id)
+  }
+
+  func makeDueCompletionsReady(at now: Date) {
+    let due = waiting.filter { $0.deadline <= now }
+    waiting.removeAll { $0.deadline <= now }
+    ready.append(contentsOf: due)
+  }
+
+  func runReadyCompletions() {
+    let completions = ready
+    ready.removeAll()
+    for completion in completions { completion.action() }
+  }
+
+  private func cancel(id: UInt) {
+    waiting.removeAll { $0.id == id }
+    ready.removeAll { $0.id == id }
   }
 }
