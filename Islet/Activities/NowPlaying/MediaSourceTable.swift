@@ -26,14 +26,15 @@ struct MediaSourceTable: Equatable {
 
   /// States corrected for presentation using the independent CoreAudio playback signal.
   var presentationStates: [SourceID: PlaybackState] {
-    Dictionary(uniqueKeysWithValues: states.map { key, state in
-      guard !state.isPlaying, isEffectivelyPlaying(key, state: state) else {
-        return (key, state)
-      }
-      var presented = state
-      presented.isPlaying = true
-      return (key, presented)
-    })
+    Dictionary(
+      uniqueKeysWithValues: states.map { key, state in
+        guard !state.isPlaying, isEffectivelyPlaying(key, state: state) else {
+          return (key, state)
+        }
+        var presented = state
+        presented.isPlaying = true
+        return (key, presented)
+      })
   }
 
   private func isEffectivelyPlaying(_ key: SourceID, state: PlaybackState) -> Bool {

@@ -54,9 +54,9 @@ func systemMetricsSample(
   // A different NIC means the two counters are unrelated; differencing them invents traffic.
   if let old = previous.network, let new = current.network, old.interface == new.interface {
     sample.netInBytesPerSec = ratePerSecond(
-      from: old.inBytes, to: new.inBytes, elapsed: elapsed, width: .bits32)
+      from: old.inBytes, to: new.inBytes, elapsed: elapsed, width: .bits64)
     sample.netOutBytesPerSec = ratePerSecond(
-      from: old.outBytes, to: new.outBytes, elapsed: elapsed, width: .bits32)
+      from: old.outBytes, to: new.outBytes, elapsed: elapsed, width: .bits64)
   }
 
   return sample

@@ -636,14 +636,16 @@ final class MediaWatcher: @unchecked Sendable {
     let recoveryGeneration = snapshotRecoveryGeneration
     cleanupSnapshot(terminate: false)
     guard isRunning else { return }
-    let shouldAccept = recoveryGeneration.map {
-      Self.shouldAcceptRecoverySnapshot(
-        requestedGeneration: $0,
-        currentGeneration: streamGeneration,
-        currentSource: currentSource,
-        playbackRecoveryActive: !playbackRecoveryBundleIdentifiers.isEmpty)
-    } ?? Self.shouldAcceptInitialSnapshot(
-      streamHasEmittedRecord: streamHasEmittedRecord, currentSource: currentSource)
+    let shouldAccept =
+      recoveryGeneration.map {
+        Self.shouldAcceptRecoverySnapshot(
+          requestedGeneration: $0,
+          currentGeneration: streamGeneration,
+          currentSource: currentSource,
+          playbackRecoveryActive: !playbackRecoveryBundleIdentifiers.isEmpty)
+      }
+      ?? Self.shouldAcceptInitialSnapshot(
+        streamHasEmittedRecord: streamHasEmittedRecord, currentSource: currentSource)
     guard shouldAccept else { return }
     guard !capture.exceededLimit else {
       snapshotFailed(
@@ -667,6 +669,10 @@ final class MediaWatcher: @unchecked Sendable {
       !Self.shouldAcceptRecoveredUpdate(
         parsed, activeBundleIdentifiers: playbackRecoveryBundleIdentifiers)
     {
+      snapshotFailed(
+        reason: "recovered source is not an active audio app",
+        stderr: stderr,
+        recoveryGeneration: recoveryGeneration)
       return
     }
     accept(parsed)
@@ -729,14 +735,16 @@ final class MediaWatcher: @unchecked Sendable {
     reason: String, stderr: StderrCapture? = nil, recoveryGeneration: UInt64?
   ) {
     guard isRunning else { return }
-    let shouldRetry = recoveryGeneration.map {
-      Self.shouldAcceptRecoverySnapshot(
-        requestedGeneration: $0,
-        currentGeneration: streamGeneration,
-        currentSource: currentSource,
-        playbackRecoveryActive: !playbackRecoveryBundleIdentifiers.isEmpty)
-    } ?? Self.shouldAcceptInitialSnapshot(
-      streamHasEmittedRecord: streamHasEmittedRecord, currentSource: currentSource)
+    let shouldRetry =
+      recoveryGeneration.map {
+        Self.shouldAcceptRecoverySnapshot(
+          requestedGeneration: $0,
+          currentGeneration: streamGeneration,
+          currentSource: currentSource,
+          playbackRecoveryActive: !playbackRecoveryBundleIdentifiers.isEmpty)
+      }
+      ?? Self.shouldAcceptInitialSnapshot(
+        streamHasEmittedRecord: streamHasEmittedRecord, currentSource: currentSource)
     guard shouldRetry else { return }
     snapshotFailureCount += 1
     let willRetry = recoveryGeneration == nil || snapshotFailureCount < 3

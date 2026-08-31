@@ -250,6 +250,50 @@ final class MediaWatcherTests: XCTestCase {
     updates.cancel()
   }
 
+  func testNonActiveRecoverySnapshotRetriesBeforeAcceptingTheActiveApp() throws {
+    let helper = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .appendingPathComponent("Fixtures/wrong-app-recovery-helper.pl")
+    let stateFile = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent("wrong-app-recovery-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: stateFile) }
+
+    XCTAssertTrue(FileManager.default.fileExists(atPath: helper.path))
+    let idle = expectation(description: "stream reports idle")
+    let recovered = expectation(description: "active app is recovered after wrong snapshot")
+    let snapshotAttempts = LockedCounter()
+    let watcher = MediaWatcher(
+      initialSnapshotDelay: 1,
+      commandProvider: { kind in
+        if case .snapshot = kind { snapshotAttempts.increment() }
+        return MediaWatcher.HelperCommand(
+          executableURL: URL(fileURLWithPath: "/usr/bin/perl"),
+          arguments: [helper.path, kind.rawValue, stateFile.path])
+      },
+      snapshotBackoff: { _ in 0.05 })
+    let updates = Task {
+      for await update in watcher.updates {
+        switch update {
+        case .idle:
+          idle.fulfill()
+          watcher.setPlaybackRecoverySources(["company.thebrowser.Browser"])
+        case .nowPlaying(let source, let playback):
+          XCTAssertEqual(source.displayBundleIdentifier, "company.thebrowser.Browser")
+          XCTAssertEqual(playback.title, "Recovered video")
+          recovered.fulfill()
+          return
+        case .ignored, .sourceGone:
+          continue
+        }
+      }
+    }
+
+    watcher.start()
+    wait(for: [idle, recovered], timeout: 5, enforceOrder: true)
+    XCTAssertEqual(snapshotAttempts.value, 2)
+    watcher.stop()
+    updates.cancel()
+  }
+
   func testRecoveryOnlyAcceptsMetadataForAnActiveAudioApp() {
     let browser = key("company.thebrowser.Browser", 1)
     let music = key("com.apple.Music", 2)
