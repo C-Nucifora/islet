@@ -1,8 +1,42 @@
+import Combine
+import Defaults
 import XCTest
 
 @testable import Islet
 
 final class SystemMetricsTests: XCTestCase {
+
+  @MainActor
+  func testEnergyModeChangeFromUtilityTaskPublishesNextSampleOnMainThread() async {
+    let savedEnergyMode = Defaults[.energyMode]
+    let changedEnergyMode: EnergyMode = savedEnergyMode == .automatic ? .live : .automatic
+    let monitor = SystemMetricsMonitor()
+    var cancellables: Set<AnyCancellable> = []
+    defer {
+      cancellables.removeAll()
+      monitor.stop()
+      Defaults[.energyMode] = savedEnergyMode
+    }
+
+    let initialSample = expectation(description: "SystemMetricsMonitor publishes its first sample")
+    monitor.$sample.dropFirst().prefix(1).sink { _ in initialSample.fulfill() }
+      .store(in: &cancellables)
+    monitor.start()
+    await fulfillment(of: [initialSample], timeout: 2)
+    cancellables.removeAll()
+
+    let changedSample = expectation(
+      description: "SystemMetricsMonitor publishes after the energy preference changes")
+    monitor.$sample.dropFirst().prefix(1).sink { _ in
+      XCTAssertTrue(Thread.isMainThread)
+      changedSample.fulfill()
+    }.store(in: &cancellables)
+
+    await Task.detached(priority: .utility) {
+      Defaults[.energyMode] = changedEnergyMode
+    }.value
+    await fulfillment(of: [changedSample], timeout: 2)
+  }
 
   func testSamplingCadenceUsesASlowBackgroundBudget() {
     XCTAssertEqual(SystemMetricsMonitor.liveInterval, 1)
@@ -580,5 +614,37 @@ final class SystemMetricsTests: XCTestCase {
     XCTAssertEqual(sample.cpuTotal ?? -1, 0.5, accuracy: 1e-9)
     XCTAssertEqual(sample.cpuPerformance ?? -1, 1.0, accuracy: 1e-9)
     XCTAssertEqual(sample.cpuEfficiency ?? -1, 0.0, accuracy: 1e-9)
+  }
+}
+
+@MainActor
+final class LaunchAtLoginTests: XCTestCase {
+  func testPreferenceSubscriptionDeliversInitialAndUtilityChangeOnMainThread() async {
+    let savedLaunchAtLogin = Defaults[.launchAtLogin]
+    let changedLaunchAtLogin = !savedLaunchAtLogin
+    var deliveries: [Bool] = []
+    let initialDelivery = expectation(description: "LaunchAtLogin delivers the initial preference")
+    let changedDelivery = expectation(description: "LaunchAtLogin delivers the changed preference")
+    let cancellable = LaunchAtLogin.observe { value in
+      XCTAssertTrue(Thread.isMainThread)
+      deliveries.append(value)
+      if deliveries.count == 1 {
+        initialDelivery.fulfill()
+      } else if value == changedLaunchAtLogin {
+        changedDelivery.fulfill()
+      }
+    }
+    defer {
+      cancellable.cancel()
+      Defaults[.launchAtLogin] = savedLaunchAtLogin
+    }
+
+    await fulfillment(of: [initialDelivery], timeout: 2)
+    await Task.detached(priority: .utility) {
+      Defaults[.launchAtLogin] = changedLaunchAtLogin
+    }.value
+    await fulfillment(of: [changedDelivery], timeout: 2)
+
+    XCTAssertEqual(deliveries, [savedLaunchAtLogin, changedLaunchAtLogin])
   }
 }
