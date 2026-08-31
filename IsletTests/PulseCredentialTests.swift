@@ -197,6 +197,38 @@ final class PulseCredentialTests: XCTestCase {
   }
 
   @MainActor
+  func testServerRotationClearsRetainedItemsFromTheRotatedProvider() throws {
+    let directory = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let center = PulseCenter.shared
+    center.removeAll()
+    defer { center.removeAll() }
+    let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: directory),
+      actionTrustStore: PulseActionTrustStore(supportDirectory: directory))
+    let summary = try server.createProvider(
+      name: "Build", source: "build", permissions: [.persistentActivities, .webActions])
+    let provider = try PulseProviderIdentity(credentialID: summary.id, source: summary.source)
+    let payload = PulsePayload(
+      id: "job", source: summary.source, title: "Old credential", subtitle: nil,
+      symbol: nil, accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil,
+      actions: [PulseAction(title: "Open", url: URL(string: "https://example.com")!)])
+    XCTAssertTrue(
+      center.apply(
+        PulseCommand(
+          token: "unused", operation: .show, activity: payload, id: nil,
+          requestID: "retained-before-rotation", source: summary.source),
+        providerIdentity: provider
+      ).ok)
+    XCTAssertEqual(center.retainedItemCount, 1)
+
+    try server.rotateCredential(summary.id)
+
+    XCTAssertEqual(center.retainedItemCount, 0)
+  }
+
+  @MainActor
   func testMetadataPersistsAgeLastUsePermissionsAndRevocationWithoutTokenMaterial() throws {
     let directory = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
