@@ -36,6 +36,26 @@ final class MediaWatcher: @unchecked Sendable {
     case total
   }
 
+  struct RecoveryEvidence: Equatable {
+    let source: SourceID
+    let title: String
+    let artist: String
+    let album: String
+    let duration: TimeInterval
+    let elapsed: TimeInterval
+
+    fileprivate func hasSameIdentity(as other: RecoveryEvidence) -> Bool {
+      source == other.source && title == other.title && artist == other.artist
+        && album == other.album && duration == other.duration
+    }
+  }
+
+  enum RecoveryDecision: Equatable {
+    case accept(AdapterUpdate)
+    case awaitConfirmation(RecoveryEvidence)
+    case reject
+  }
+
   /// Monotonic snapshot deadline state. Keeping this independent of Dispatch makes boundary and
   /// precedence tests deterministic; the watcher only supplies the current uptime.
   struct SnapshotDeadlineTracker: Equatable, Sendable {
@@ -201,6 +221,7 @@ final class MediaWatcher: @unchecked Sendable {
   static let maximumHelperStderrBytes = 16_384
   private static let helperTerminationGrace: TimeInterval = 0.25
   private static let helperKillGrace: TimeInterval = 1
+  private static let recoveryElapsedAdvanceThreshold: TimeInterval = 0.5
 
   private let queue = DispatchQueue(label: "dev.islet.mediawatcher")
   private let queueKey = DispatchSpecificKey<Void>()
@@ -230,6 +251,7 @@ final class MediaWatcher: @unchecked Sendable {
   /// Recovery launches spent for the current CoreAudio source set. This stays independent from
   /// snapshot failure diagnostics so repeated idle stream records cannot reopen the retry budget.
   private var recoverySnapshotAttemptCount = 0
+  private var recoveryEvidence: RecoveryEvidence?
   /// Diff base per source. The vendored adapter collapses concurrent players, so this holds at
   /// most one entry today. The shape is what the fork described in the design spec's
   /// "Upgrade path - fork the MediaRemote adapter for true per-source media" section needs.
@@ -327,6 +349,7 @@ final class MediaWatcher: @unchecked Sendable {
       failureCount = 0
       snapshotFailureCount = 0
       recoverySnapshotAttemptCount = 0
+      recoveryEvidence = nil
       onStatus?("Stopped")
       onDiagnostic?(nil)
     }
@@ -339,14 +362,18 @@ final class MediaWatcher: @unchecked Sendable {
       if bundleIdentifiers != playbackRecoveryBundleIdentifiers {
         snapshotFailureCount = 0
         recoverySnapshotAttemptCount = 0
+        recoveryEvidence = nil
       }
       playbackRecoveryBundleIdentifiers = bundleIdentifiers
       if !bundleIdentifiers.isEmpty {
         scheduleRecoverySnapshot()
-      } else if snapshotRecoveryGeneration != nil {
-        snapshotLaunchWorkItem?.cancel()
-        snapshotLaunchWorkItem = nil
-        cleanupSnapshot(terminate: true)
+      } else {
+        recoveryEvidence = nil
+        if snapshotRecoveryGeneration != nil {
+          snapshotLaunchWorkItem?.cancel()
+          snapshotLaunchWorkItem = nil
+          cleanupSnapshot(terminate: true)
+        }
       }
     }
   }
@@ -699,14 +726,33 @@ final class MediaWatcher: @unchecked Sendable {
         reason: "invalid output", stderr: stderr, recoveryGeneration: recoveryGeneration)
       return
     }
-    if recoveryGeneration != nil,
-      !Self.shouldAcceptRecoveredUpdate(
-        parsed, activeBundleIdentifiers: playbackRecoveryBundleIdentifiers)
-    {
-      snapshotFailed(
-        reason: "recovered source is not an active audio app",
-        stderr: stderr,
-        recoveryGeneration: recoveryGeneration)
+    if recoveryGeneration != nil {
+      switch Self.recoveryDecision(
+        for: parsed,
+        activeBundleIdentifiers: playbackRecoveryBundleIdentifiers,
+        previous: recoveryEvidence)
+      {
+      case .accept(let update):
+        recoveryEvidence = nil
+        snapshotFailureCount = 0
+        recoverySnapshotAttemptCount = 0
+        onStatus?("Streaming")
+        accept(update)
+      case .awaitConfirmation(let evidence):
+        recoveryEvidence = evidence
+        if recoverySnapshotAttemptCount < 3 {
+          let delay = snapshotBackoff(max(1, recoverySnapshotAttemptCount))
+          scheduleRecoverySnapshot(after: delay)
+        } else {
+          recoveryEvidence = nil
+        }
+      case .reject:
+        recoveryEvidence = nil
+        snapshotFailed(
+          reason: "recovered source is not an active audio app",
+          stderr: stderr,
+          recoveryGeneration: recoveryGeneration)
+      }
       return
     }
     snapshotFailureCount = 0
@@ -854,6 +900,7 @@ final class MediaWatcher: @unchecked Sendable {
     let base = currentSource.flatMap { lastStates[$0] }
     let parsed = AdapterParser.parse(line: line, current: base)
     guard parsed != .ignored else { return }
+    recoveryEvidence = nil
     streamGeneration &+= 1
     streamHasEmittedRecord = true
     snapshotFailureCount = 0
@@ -888,6 +935,36 @@ final class MediaWatcher: @unchecked Sendable {
   ) -> Bool {
     guard case .nowPlaying(let source, _) = update else { return false }
     return activeBundleIdentifiers.contains(source.displayBundleIdentifier)
+  }
+
+  static func recoveryDecision(
+    for update: AdapterUpdate,
+    activeBundleIdentifiers: Set<String>,
+    previous: RecoveryEvidence?
+  ) -> RecoveryDecision {
+    guard case .nowPlaying(let source, let state) = update,
+      activeBundleIdentifiers.contains(source.displayBundleIdentifier)
+    else { return .reject }
+    if state.isPlaying { return .accept(update) }
+
+    let current = RecoveryEvidence(
+      source: source,
+      title: state.title,
+      artist: state.artist,
+      album: state.album,
+      duration: state.duration,
+      elapsed: state.elapsed)
+    if let previous,
+      current.hasSameIdentity(as: previous),
+      current.elapsed.isFinite,
+      previous.elapsed.isFinite,
+      current.elapsed - previous.elapsed >= recoveryElapsedAdvanceThreshold
+    {
+      var confirmedState = state
+      confirmedState.isPlaying = true
+      return .accept(.nowPlaying(source, confirmedState))
+    }
+    return .awaitConfirmation(current)
   }
 
   private func accept(_ parsed: AdapterUpdate) {
