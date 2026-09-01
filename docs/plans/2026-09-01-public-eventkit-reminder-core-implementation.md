@@ -307,9 +307,9 @@ The production `save` and `delete` flow is:
 5. Apply the patch to the existing object.
 6. Stage a save with `commit: false`, read back every changed field, and reset the store if the staged object cannot represent the request.
 7. Commit, re-fetch, and compare every changed field again.
-8. Return `.saved` for an exact commit, `.committedWithNormalization(actual:mismatches:)` for a provider-normalized commit, or `.commitStatusUnknown` when the commit call returns but no authoritative post-commit record can be fetched.
+8. Return `.saved` for an exact commit, `.committedWithNormalization(actual:mismatches:)` for a provider-normalized commit, or `.commitStatusUnknown` when a commit attempt has no authoritative post-commit result.
 
-A normalized create returns the committed identifier. A retry targets that reminder and never creates a duplicate. A pre-commit mismatch resets the EventKit store and throws without changing the dashboard. After a commit-status-unknown outcome, preserve any nonempty item and external identifiers as a receipt, publish no unverified record, and never issue a second create automatically. Do not match by title or external identifier. Later tasks keep the editor pending and disable retry until a reload resolves an authoritative record or the user hands off to Reminders.app.
+A normalized create returns the committed identifier. A retry targets that reminder and never creates a duplicate. A failed stage or staged mismatch resets the EventKit store and throws without changing the dashboard. If `commit()` throws after a successful stage, capture the receipt, reset the exclusive pending batch once so a later write cannot commit it accidentally, and return `.commitStatusUnknown`. If commit succeeds but authoritative readback fails, return the same outcome without resetting. After either unknown outcome, preserve any nonempty item and external identifiers as a receipt, publish no unverified record, and never issue a second create automatically. Do not match by title or external identifier. Later tasks keep the editor pending and disable retry until a reload resolves an authoritative record or the user hands off to Reminders.app.
 
 Keep all EventKit object access on the main actor. Remove the production store implementation from `ReminderWriteCoordinator.swift` after the new file compiles.
 
