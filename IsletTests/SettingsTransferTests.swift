@@ -1,3 +1,4 @@
+import Defaults
 import Foundation
 import XCTest
 
@@ -14,6 +15,38 @@ final class SettingsTransferTests: XCTestCase {
     XCTAssertEqual(preview.result, exported)
     XCTAssertEqual(preview.importedSettingCount, SettingsTransfer.portableKeys.count)
     XCTAssertTrue(preview.ignoredKeys.isEmpty)
+  }
+
+  @MainActor
+  func testSystemPresenceControlsRoundTripThroughDefaults() throws {
+    let saved = systemPresenceControlValues
+    let savedHoverCollapseTimeout = Defaults[.hoverCollapseTimeout]
+    defer {
+      setSystemPresenceControls(saved)
+      Defaults[.hoverCollapseTimeout] = savedHoverCollapseTimeout
+    }
+    let keys = [
+      "systemAutoPresentCPU", "systemAutoPresentThermal", "systemAutoPresentMemoryPressure",
+      "systemAutoPresentLowDiskSpace", "systemAutoPresentDiskThroughput",
+      "systemAutoPresentNetworkThroughput",
+    ]
+
+    Defaults[.hoverCollapseTimeout] = 0.5
+    setSystemPresenceControls(Array(repeating: false, count: keys.count))
+    let data = try SettingsTransfer.exportData(snapshot: SettingsTransferDefaults.snapshot())
+    let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let settings = try XCTUnwrap(object["settings"] as? [String: Any])
+    for key in keys {
+      XCTAssertEqual(settings[key] as? Bool, false, "Export omitted \(key)")
+    }
+
+    setSystemPresenceControls(Array(repeating: true, count: keys.count))
+    let preview = try SettingsTransfer.preview(
+      data: data, current: SettingsTransferDefaults.snapshot())
+    XCTAssertTrue(preview.ignoredKeys.isEmpty)
+    XCTAssertEqual(Set(preview.changes.map(\.key)).intersection(keys), Set(keys))
+    SettingsTransfer.apply(preview) { SettingsTransferDefaults.apply($0) }
+    XCTAssertEqual(systemPresenceControlValues, Array(repeating: false, count: keys.count))
   }
 
   func testPartialImportKeepsSettingsThatAreNotInTheFile() throws {
@@ -50,6 +83,23 @@ final class SettingsTransferTests: XCTestCase {
     let invalidList = try document(settings: ["disabledActivities": tooManyActivities])
     XCTAssertThrowsError(
       try SettingsTransfer.preview(data: invalidList, current: defaultSnapshot))
+  }
+
+  func testAudioOnlyExclusionsNormalizeAndEnforceTheirSmallerBound() throws {
+    let normalized = try document(
+      settings: [
+        "excludedAudioOnlySourceBundleIdentifiers": [
+          "com.google.Chrome.helper.Renderer", "com.google.Chrome", "com.apple.PowerChime",
+        ]
+      ])
+    let preview = try SettingsTransfer.preview(data: normalized, current: defaultSnapshot)
+    XCTAssertEqual(
+      preview.result.excludedAudioOnlySourceBundleIdentifiers, ["com.google.Chrome"])
+
+    let tooMany = (0...SourceFilter.maximumAudioOnlyExclusions).map { "com.example.app\($0)" }
+    let invalid = try document(
+      settings: ["excludedAudioOnlySourceBundleIdentifiers": tooMany])
+    XCTAssertThrowsError(try SettingsTransfer.preview(data: invalid, current: defaultSnapshot))
   }
 
   func testVersionOneAliasesMigrate() throws {
@@ -108,6 +158,26 @@ final class SettingsTransferTests: XCTestCase {
     XCTAssertEqual(applied, preview.result)
   }
 
+  @MainActor
+  func testDefaultsSnapshotAndValidatedApplyUseEventSourcePreferenceOwner() throws {
+    let preferences = EventSourcePreferences.shared
+    let original = preferences.disabledSourceIDs
+    defer { preferences.replaceDisabledSourceIDs(original) }
+
+    preferences.replaceDisabledSourceIDs(["wifi", "future-source"])
+    XCTAssertEqual(
+      SettingsTransferDefaults.snapshot().disabledEventSources, ["wifi", "future-source"])
+
+    let data = try document(settings: ["disabledEventSources": ["usb", "future-source"]])
+    let preview = try SettingsTransfer.preview(
+      data: data, current: SettingsTransferDefaults.snapshot())
+    SettingsTransfer.apply(preview) { SettingsTransferDefaults.apply($0) }
+
+    XCTAssertEqual(preferences.disabledSourceIDs, ["usb", "future-source"])
+    XCTAssertEqual(
+      SettingsTransferDefaults.snapshot().disabledEventSources, ["usb", "future-source"])
+  }
+
   func testExportAllowlistCannotContainSensitiveOrInstallationSpecificPreferences() throws {
     XCTAssertTrue(
       Set(SettingsTransfer.portableKeys).isDisjoint(with: SettingsTransfer.excludedPreferenceKeys))
@@ -137,17 +207,42 @@ final class SettingsTransferTests: XCTestCase {
       ])
   }
 
+  @MainActor
+  private var systemPresenceControlValues: [Bool] {
+    [
+      Defaults[.systemAutoPresentCPU], Defaults[.systemAutoPresentThermal],
+      Defaults[.systemAutoPresentMemoryPressure], Defaults[.systemAutoPresentLowDiskSpace],
+      Defaults[.systemAutoPresentDiskThroughput], Defaults[.systemAutoPresentNetworkThroughput],
+    ]
+  }
+
+  @MainActor
+  private func setSystemPresenceControls(_ values: [Bool]) {
+    Defaults[.systemAutoPresentCPU] = values[0]
+    Defaults[.systemAutoPresentThermal] = values[1]
+    Defaults[.systemAutoPresentMemoryPressure] = values[2]
+    Defaults[.systemAutoPresentLowDiskSpace] = values[3]
+    Defaults[.systemAutoPresentDiskThroughput] = values[4]
+    Defaults[.systemAutoPresentNetworkThroughput] = values[5]
+  }
+
   private var defaultSnapshot: SettingsTransferSnapshot {
     SettingsTransferSnapshot(
       appTheme: .classic, batteryGraphStyle: .coloured, mediaSourceMode: .auto,
-      mediaPriorityList: ["com.spotify.client", "com.apple.Music"], interactionMode: .hover,
+      mediaPriorityList: ["com.spotify.client", "com.apple.Music"],
+      excludedAudioOnlySourceBundleIdentifiers: [], interactionMode: .hover,
       hoverCollapseTimeout: 0.5, hapticsEnabled: true, hapticStrength: .medium,
       barrierPushDistance: 120, energyMode: .automatic, allowDisplaySleep: true,
-      keepAwakeLowBatteryThreshold: 20, hideFromScreenRecording: false,
+      keepAwakeWithLidClosed: false, keepAwakeLowBatteryThreshold: 20,
+      hideFromScreenRecording: false,
       hudEnabled: false, hudStyle: .bar, calendarEnabled: true, calendarLeadMinutes: 10,
       remindersEnabled: true, showOnAllDisplays: false, hideInFullscreen: false,
       launchAtLogin: false, activityOrder: ActivityCatalog.defaultOrder, disabledActivities: [],
-      disabledEventSources: [], systemAlwaysVisible: false, metricStyles: [:],
+      disabledEventSources: [], systemAlwaysVisible: false,
+      systemAutoPresentCPU: true, systemAutoPresentThermal: true,
+      systemAutoPresentMemoryPressure: true, systemAutoPresentLowDiskSpace: true,
+      systemAutoPresentDiskThroughput: true, systemAutoPresentNetworkThroughput: true,
+      metricStyles: [:],
       continuityAlwaysVisible: false, continuitySneaks: true)
   }
 
@@ -155,15 +250,21 @@ final class SettingsTransferTests: XCTestCase {
     SettingsTransferSnapshot(
       appTheme: .catppuccin, batteryGraphStyle: .monochrome, mediaSourceMode: .prioritized,
       mediaPriorityList: ["com.apple.Music", "com.spotify.client"],
+      excludedAudioOnlySourceBundleIdentifiers: ["com.example.CallApp"],
       interactionMode: .clickToPin, hoverCollapseTimeout: 2.4, hapticsEnabled: false,
       hapticStrength: .strong, barrierPushDistance: 640, energyMode: .lowEnergy,
-      allowDisplaySleep: false, keepAwakeLowBatteryThreshold: 10,
+      allowDisplaySleep: false, keepAwakeWithLidClosed: true,
+      keepAwakeLowBatteryThreshold: 10,
       hideFromScreenRecording: true, hudEnabled: true, hudStyle: .gauge,
       calendarEnabled: false, calendarLeadMinutes: 30, remindersEnabled: false,
       showOnAllDisplays: true, hideInFullscreen: true, launchAtLogin: true,
       activityOrder: ActivityCatalog.defaultOrder.reversed(),
       disabledActivities: ["pulse", "clipboard"], disabledEventSources: ["wifi", "focus"],
-      systemAlwaysVisible: true, metricStyles: ["cpu": "combined", "thermal": "number"],
+      systemAlwaysVisible: true,
+      systemAutoPresentCPU: false, systemAutoPresentThermal: true,
+      systemAutoPresentMemoryPressure: false, systemAutoPresentLowDiskSpace: true,
+      systemAutoPresentDiskThroughput: false, systemAutoPresentNetworkThroughput: true,
+      metricStyles: ["cpu": "combined", "thermal": "number"],
       continuityAlwaysVisible: true, continuitySneaks: false)
   }
 }

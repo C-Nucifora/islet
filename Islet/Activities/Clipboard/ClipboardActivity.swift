@@ -164,33 +164,72 @@ final class ClipboardModel: ObservableObject {
   static let shared = ClipboardModel()
 
   @Published private(set) var items: [ClipboardItem] = []
-  @Published private(set) var isPaused = false
+  @Published private(set) var isPaused = true
+  @Published private(set) var pauseReason: ClipboardPauseReason? = .unidentifiedApplication
+  @Published private(set) var currentApplication: ClipboardApplicationIdentity?
+  @Published private(set) var currentFocusIdentifier: String?
   @Published private(set) var lastWriteError: String?
+  var canResumeManualPause: Bool {
+    switch pauseReason {
+    case .manual, .timed, .untilNextLogin: true
+    case .excludedApplication, .focusMode, .unidentifiedApplication, nil: false
+    }
+  }
   private let maxItems = 20
   private let maximumRetainedBytes = 32 * 1024 * 1024
-  private var lastChange = NSPasteboard.general.changeCount
+  private let pasteboard: NSPasteboard
+  private let privacyStore: any ClipboardPrivacyStoring
+  private let contextMonitor: any ClipboardContextMonitoring
+  private let now: () -> Date
+  private let loginSession: () -> String?
+  private var lastChange: Int
   private var ownWriteChange = -1
   private var timer: AnyCancellable?
-  private var cancellables: Set<AnyCancellable> = []
   private var isRunning = false
+
+  init(
+    pasteboard: NSPasteboard = .general,
+    privacyStore: (any ClipboardPrivacyStoring)? = nil,
+    contextMonitor: (any ClipboardContextMonitoring)? = nil,
+    now: @escaping () -> Date = Date.init,
+    loginSession: @escaping () -> String? = ClipboardLoginSession.currentIdentifier
+  ) {
+    self.pasteboard = pasteboard
+    self.privacyStore = privacyStore ?? DefaultsClipboardPrivacyStore()
+    self.contextMonitor = contextMonitor ?? WorkspaceClipboardContextMonitor()
+    self.now = now
+    self.loginSession = loginSession
+    self.lastChange = pasteboard.changeCount
+    self.privacyStore.onChange = { [weak self] in self?.privacyConfigurationDidChange() }
+    self.contextMonitor.onChange = { [weak self] context in self?.contextDidChange(context) }
+  }
 
   func start() {
     guard !isRunning else { return }
     isRunning = true
+    contextMonitor.start()
+    currentApplication = contextMonitor.context.application
+    currentFocusIdentifier = contextMonitor.context.focusIdentifier
+    lastChange = pasteboard.changeCount
+    refreshPrivacyState()
     startPolling()
   }
 
   func stop() {
     guard isRunning else { return }
     isRunning = false
-    cancellables.removeAll()
+    contextMonitor.stop()
+    currentApplication = nil
+    currentFocusIdentifier = nil
+    pauseReason = .unidentifiedApplication
+    isPaused = true
     stopPolling()
   }
 
   private func startPolling() {
-    lastChange = NSPasteboard.general.changeCount
+    lastChange = pasteboard.changeCount
     timer = Timer.publish(every: 0.7, on: .main, in: .common).autoconnect()
-      .sink { [weak self] _ in self?.poll() }
+      .sink { [weak self] _ in self?.pollNow() }
   }
 
   private func stopPolling() {
@@ -199,8 +238,10 @@ final class ClipboardModel: ObservableObject {
     lastWriteError = nil
   }
 
-  private func poll() {
-    let pb = NSPasteboard.general
+  func pollNow() {
+    refreshPrivacyState()
+    guard !contextMonitor.refreshApplication() else { return }
+    let pb = pasteboard
     guard pb.changeCount != lastChange else { return }
     lastChange = pb.changeCount
     guard pb.changeCount != ownWriteChange else { return }  // ignore our own re-copy
@@ -223,6 +264,9 @@ final class ClipboardModel: ObservableObject {
       item = nil
     }
     guard let item else { return }
+    // Reading a large image or file set can take long enough for another app to become active.
+    // Recheck before retaining anything. Any app transition makes this generation ambiguous.
+    guard !contextMonitor.refreshApplication(), !isPaused else { return }
     items.removeAll { $0.kind == item.kind }
     items.insert(item, at: 0)
     if items.count > maxItems { items = Array(items.prefix(maxItems)) }
@@ -233,7 +277,7 @@ final class ClipboardModel: ObservableObject {
 
   @discardableResult
   func copyBack(_ item: ClipboardItem) -> Bool {
-    let pb = NSPasteboard.general
+    let pb = pasteboard
     let succeeded = ClipboardPasteboardTransaction.replace(on: pb) {
       switch item.kind {
       case .text(let s): pb.setString(s, forType: .string)
@@ -266,10 +310,71 @@ final class ClipboardModel: ObservableObject {
   /// Pausing immediately clears retained history. Copies made while paused are deliberately not
   /// backfilled when capture resumes.
   func setPaused(_ paused: Bool) {
-    guard isPaused != paused else { return }
-    isPaused = paused
-    items = []
-    lastChange = NSPasteboard.general.changeCount
+    var configuration = privacyStore.load()
+    configuration.manuallyPaused = paused
+    if !paused {
+      configuration.pausedUntil = nil
+      configuration.pausedLoginSession = nil
+    }
+    if paused, configuration.clearHistoryOnPause { clear() }
+    privacyStore.save(configuration)
+    privacyConfigurationDidChange()
+  }
+
+  func pause(for duration: TimeInterval) {
+    guard duration > 0 else { return }
+    var configuration = privacyStore.load()
+    configuration.manuallyPaused = false
+    configuration.pausedUntil = now().addingTimeInterval(duration)
+    configuration.pausedLoginSession = nil
+    if configuration.clearHistoryOnPause { clear() }
+    privacyStore.save(configuration)
+    privacyConfigurationDidChange()
+  }
+
+  func pauseUntilNextLogin() {
+    var configuration = privacyStore.load()
+    configuration.manuallyPaused = false
+    configuration.pausedUntil = nil
+    configuration.pausedLoginSession = loginSession()
+    // If macOS cannot provide a login-session identity, fail closed with an ordinary manual pause.
+    configuration.manuallyPaused = configuration.pausedLoginSession == nil
+    if configuration.clearHistoryOnPause { clear() }
+    privacyStore.save(configuration)
+    privacyConfigurationDidChange()
+  }
+
+  private func privacyConfigurationDidChange() {
+    lastChange = pasteboard.changeCount
+    refreshPrivacyState()
+  }
+
+  private func contextDidChange(_ context: ClipboardCaptureContext) {
+    // The frontmost app is only a proxy for the true pasteboard writer. Dropping everything up to
+    // this generation means a copy around an app switch is never charged to the newly active app.
+    lastChange = pasteboard.changeCount
+    currentApplication = context.application
+    currentFocusIdentifier = context.focusIdentifier
+    refreshPrivacyState()
+  }
+
+  private func refreshPrivacyState() {
+    let stored = privacyStore.load()
+    let evaluation = ClipboardPrivacyEvaluator.evaluate(
+      configuration: stored, context: contextMonitor.context, now: now(),
+      loginSession: loginSession())
+    if evaluation.configuration != stored { privacyStore.save(evaluation.configuration) }
+
+    let wasPaused = pauseReason != nil
+    let willPause = evaluation.reason != nil
+    pauseReason = evaluation.reason
+    isPaused = willPause
+    if !wasPaused, willPause, evaluation.configuration.clearHistoryOnPause { clear() }
+    if wasPaused, !willPause {
+      // Establish a fresh generation boundary before capture resumes. This prevents a copy made
+      // during a timed pause from being retained when no poll ran between the copy and expiry.
+      lastChange = pasteboard.changeCount
+    }
   }
 
   private static func imagePayload(from pasteboard: NSPasteboard) -> ClipboardItem.ImagePayload? {
@@ -379,15 +484,21 @@ struct ClipboardView: View {
         Label("Clipboard", systemImage: "doc.on.clipboard")
           .font(.caption.weight(.semibold)).appThemeForeground(.clipboard)
         Spacer()
-        Button {
-          model.setPaused(!model.isPaused)
+        Menu {
+          if model.canResumeManualPause {
+            Button("Resume now") { model.setPaused(false) }
+            Divider()
+          }
+          Button("Pause for 5 minutes") { model.pause(for: 5 * 60) }
+          Button("Pause for 30 minutes") { model.pause(for: 30 * 60) }
+          Button("Pause until next login") { model.pauseUntilNextLogin() }
+          Button("Pause until resumed") { model.setPaused(true) }
         } label: {
           Image(systemName: model.isPaused ? "play.fill" : "pause.fill")
         }
-        .buttonStyle(.plain)
-        .help(model.isPaused ? "Resume clipboard history" : "Pause and clear clipboard history")
-        .accessibilityLabel(
-          model.isPaused ? "Resume clipboard history" : "Pause and clear clipboard history")
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .help("Clipboard privacy pause")
+        .accessibilityLabel("Clipboard privacy pause")
         if !model.items.isEmpty {
           Button {
             model.clear()
@@ -399,8 +510,8 @@ struct ClipboardView: View {
           .accessibilityLabel("Clear clipboard history")
         }
       }
-      if model.isPaused {
-        Text("History paused").font(.caption).foregroundStyle(.secondary)
+      if let pauseReason = model.pauseReason {
+        Text(pauseReason.summary).font(.caption).foregroundStyle(.secondary)
       } else if let error = model.lastWriteError {
         HStack(spacing: 5) {
           Text(error).font(.caption).foregroundStyle(.orange).lineLimit(1)

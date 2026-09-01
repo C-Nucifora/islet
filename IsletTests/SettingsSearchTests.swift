@@ -36,6 +36,7 @@ final class SettingsSearchTests: XCTestCase {
     XCTAssertTrue(SettingsDetailPage.systemHUD.matchesSearch("brightness accessibility"))
     XCTAssertFalse(SettingsDetailPage.systemHUD.matchesSearch("brightness calendar"))
     XCTAssertTrue(SettingsDetailPage.energy.matchesSearch("allow display sleep"))
+    XCTAssertTrue(SettingsDetailPage.energy.matchesSearch("closed lid power protect"))
     XCTAssertTrue(SettingsDetailPage.energy.matchesSearch("low battery stop"))
   }
 
@@ -47,5 +48,16 @@ final class SettingsSearchTests: XCTestCase {
 
   func testBlankQueryMatches() {
     XCTAssertTrue(SettingsSearch.matches("  ", in: ["Anything"]))
+  }
+
+  func testDisplayPreferenceTermsFindStartupAndDisplays() {
+    XCTAssertTrue(SettingsDetailPage.startupDisplays.matchesSearch("preferred display"))
+    XCTAssertTrue(SettingsDetailPage.startupDisplays.matchesSearch("clamshell reconnect"))
+  }
+
+  func testT3ConnectAccountActionsAreSearchable() {
+    XCTAssertTrue(SettingsDetailPage.t3Code.matchesSearch("link account"))
+    XCTAssertTrue(SettingsDetailPage.t3Code.matchesSearch("sign out"))
+    XCTAssertTrue(SettingsDetailPage.t3Code.matchesSearch("reconnect now"))
   }
 }

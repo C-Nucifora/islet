@@ -16,27 +16,24 @@ final class ActivityCenter: ObservableObject {
   init() {
     // Republish when the user reorders or disables activities so the notch updates live.
     Defaults.publisher(.disabledActivities)
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
-        Task { @MainActor in
-          self?.cacheInvalidated = true
-          self?.objectWillChange.send()
-        }
+        self?.cacheInvalidated = true
+        self?.objectWillChange.send()
       }
       .store(in: &cancellables)
     Defaults.publisher(.activityOrder)
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
-        Task { @MainActor in
-          self?.cacheInvalidated = true
-          self?.objectWillChange.send()
-        }
+        self?.cacheInvalidated = true
+        self?.objectWillChange.send()
       }
       .store(in: &cancellables)
     Defaults.publisher(.systemAlwaysVisible)
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
-        Task { @MainActor in
-          self?.cacheInvalidated = true
-          self?.objectWillChange.send()
-        }
+        self?.cacheInvalidated = true
+        self?.objectWillChange.send()
       }
       .store(in: &cancellables)
   }

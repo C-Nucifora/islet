@@ -87,7 +87,7 @@ struct ShowIsletIntent: AppIntent {
 
   @MainActor
   func perform() async throws -> some IntentResult {
-    ScreenManager.shared.viewModel?.apply(.clickedNotch)
+    ScreenManager.shared.performOnActionTarget { $0.apply(.clickedNotch) }
     return .result()
   }
 }
@@ -284,7 +284,11 @@ struct ResumeClipboardHistoryIntent: AppIntent {
 
   @MainActor
   func perform() async throws -> some IntentResult & ProvidesDialog {
-    ClipboardModel.shared.setPaused(false)
+    let clipboard = ClipboardModel.shared
+    clipboard.setPaused(false)
+    if let reason = clipboard.pauseReason {
+      return .result(dialog: "The manual pause ended. \(reason.summary).")
+    }
     return .result(dialog: "Resumed Islet clipboard history.")
   }
 }

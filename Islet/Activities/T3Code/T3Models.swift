@@ -27,6 +27,36 @@ struct T3EnvironmentDescriptor: Decodable, Equatable, Sendable {
   let serverVersion: String?
 }
 
+struct T3EnvironmentAuthState: Decodable, Equatable, Sendable {
+  struct Auth: Decodable, Equatable, Sendable {
+    let policy: String
+    let bootstrapMethods: [String]
+    let sessionMethods: [String]
+    let sessionCookieName: String
+  }
+
+  let authenticated: Bool
+  let auth: Auth
+}
+
+struct T3ConnectEnvironment: Equatable, Identifiable, Sendable {
+  let environmentID: String
+  let label: String
+  let httpBaseURL: URL
+  let webSocketBaseURL: URL
+  let providerKind: String
+  let linkedAt: Date
+
+  var id: String { environmentID }
+}
+
+struct T3ConnectEnvironmentAuthorization: Sendable {
+  let descriptor: T3EnvironmentDescriptor
+  let endpoint: T3Endpoint
+  let authorization: T3Authorization
+  let expiresAt: Date
+}
+
 struct T3ShellSnapshot: Decodable, Equatable, Sendable {
   let snapshotSequence: Int?
   let projects: [T3ProjectShell]
@@ -121,11 +151,14 @@ enum T3AgentPhase: String, Codable, Sendable {
 
   var rank: Int {
     switch self {
-    case .needsInput, .needsApproval: 0
-    case .working: 1
-    case .monitoring: 2
-    case .failed: 3
-    case .finished: 4
+    // Failures need attention even when they are not waiting for a response. Keep them with the
+    // actionable phases, ahead of routine work and monitoring.
+    case .needsInput: 0
+    case .needsApproval: 1
+    case .failed: 2
+    case .working: 3
+    case .monitoring: 4
+    case .finished: 5
     }
   }
 }
@@ -133,7 +166,7 @@ enum T3AgentPhase: String, Codable, Sendable {
 struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
   private static let maximumFutureClockSkew: TimeInterval = 5 * 60
 
-  let environmentID: String
+  let logicalEnvironmentID: String
   let threadID: String
   let title: String
   let project: String
@@ -146,11 +179,11 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
   let totalPlanSteps: Int?
   let updatedAt: Date
 
-  var id: String { "\(environmentID):\(threadID)" }
+  var id: String { "\(logicalEnvironmentID):\(threadID)" }
 
   static func activeAgents(
     in shell: T3ShellSnapshot,
-    environmentID: String,
+    logicalEnvironmentID: String,
     now: Date = Date()
   ) -> [Self] {
     // The shell snapshot is server-controlled. Keep the first project for a duplicated id rather
@@ -158,12 +191,12 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
     let projects = shell.projects.reduce(into: [String: String]()) { projects, project in
       if projects[project.id] == nil { projects[project.id] = project.title }
     }
-    return shell.threads.compactMap { thread in
+    let agents: [Self] = shell.threads.compactMap { thread in
       guard thread.archivedAt == nil,
         let phase = phase(for: thread, now: now)
       else { return nil }
       return Self(
-        environmentID: environmentID,
+        logicalEnvironmentID: logicalEnvironmentID,
         threadID: thread.id,
         title: thread.title,
         project: projects[thread.projectId] ?? "Unknown project",
@@ -178,9 +211,16 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
         totalPlanSteps: thread.planProgress?.totalSteps,
         updatedAt: parseDate(thread.updatedAt) ?? .distantPast)
     }
-    .sorted {
+    return sortedForAttention(agents)
+  }
+
+  /// Orders agents for every T3 presentation. Attention comes first, then newer agents within
+  /// the same phase. The id tie-breaker keeps a simultaneous snapshot stable across refreshes.
+  static func sortedForAttention(_ agents: [Self]) -> [Self] {
+    agents.sorted {
       if $0.phase.rank != $1.phase.rank { return $0.phase.rank < $1.phase.rank }
-      return $0.updatedAt > $1.updatedAt
+      if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
+      return $0.id < $1.id
     }
   }
 
@@ -233,6 +273,15 @@ enum T3ConnectionState: Equatable, Sendable {
   case needsPairing
   case credentialError(String)
 
+  /// The colour is deliberately a semantic category rather than a `Color`. This keeps the model
+  /// independent of SwiftUI and lets the view choose a high-contrast rendering for the category.
+  enum SemanticColor: String, Equatable, Sendable {
+    case neutral
+    case positive
+    case warning
+    case negative
+  }
+
   var label: String {
     switch self {
     case .connecting: "Connecting"
@@ -242,6 +291,32 @@ enum T3ConnectionState: Equatable, Sendable {
     case .needsPairing: "Pair again"
     case .credentialError: "Credential error"
     }
+  }
+
+  var icon: String {
+    switch self {
+    case .connecting: "arrow.triangle.2.circlepath"
+    case .connected: "checkmark.circle.fill"
+    case .offline: "wifi.slash"
+    case .reconnecting: "arrow.clockwise.circle.fill"
+    case .needsPairing: "link.badge.plus"
+    case .credentialError: "key.slash.fill"
+    }
+  }
+
+  var semanticColor: SemanticColor {
+    switch self {
+    case .connecting: .neutral
+    case .connected: .positive
+    case .offline, .credentialError: .negative
+    case .reconnecting, .needsPairing: .warning
+    }
+  }
+
+  /// A complete spoken description makes the indicator useful without relying on its colour.
+  var accessibilityLabel: String {
+    guard let detail = detail else { return label }
+    return "\(label): \(detail)"
   }
 
   var detail: String? {
@@ -259,13 +334,62 @@ enum T3EnvironmentAction: Equatable, Sendable {
   case openSettings
 }
 
+enum T3EnvironmentSource: String, Codable, Equatable, Sendable {
+  case local
+  case connect
+  case manual
+}
+
 struct T3EnvironmentSnapshot: Equatable, Identifiable, Sendable {
   let id: String
+  let logicalEnvironmentID: String
+  let source: T3EnvironmentSource
   let label: String
   let baseURL: String
-  let isLocal: Bool
   let platform: String?
   let serverVersion: String?
   let state: T3ConnectionState
   let agents: [T3AgentSnapshot]
+  /// True when this row is showing the last successful payload while a refresh is failing.
+  let isStale: Bool
+
+  init(
+    id: String,
+    logicalEnvironmentID: String,
+    source: T3EnvironmentSource,
+    label: String,
+    baseURL: String,
+    platform: String?,
+    serverVersion: String?,
+    state: T3ConnectionState,
+    agents: [T3AgentSnapshot],
+    isStale: Bool = false
+  ) {
+    self.id = id
+    self.logicalEnvironmentID = logicalEnvironmentID
+    self.source = source
+    self.label = label
+    self.baseURL = baseURL
+    self.platform = platform
+    self.serverVersion = serverVersion
+    self.state = state
+    self.agents = agents
+    self.isStale = isStale
+  }
+
+  var isLocal: Bool { source == .local }
+}
+
+/// One row in the expanded T3 presentation. Agents share one global attention order, while a
+/// configured machine with no agent keeps its connection-state row and recovery actions.
+enum T3ExpandedRow: Equatable, Identifiable, Sendable {
+  case agent(T3AgentSnapshot, environmentLabel: String)
+  case environment(T3EnvironmentSnapshot)
+
+  var id: String {
+    switch self {
+    case .agent(let agent, _): "agent|\(agent.id)"
+    case .environment(let environment): "environment|\(environment.id)"
+    }
+  }
 }

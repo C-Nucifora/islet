@@ -57,13 +57,27 @@ enum AudioSourceResolver {
   static func displayBundleID(
     bundleID: String, pid: Int32, runningAppBundleID: (Int32) -> String?
   ) -> String {
+    let inferred = inferredDisplayBundleID(for: bundleID)
+    if inferred != bundleID.trimmingCharacters(in: .whitespacesAndNewlines) { return inferred }
+    if let app = runningAppBundleID(pid)?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !app.isEmpty
+    {
+      return app
+    }
+    return inferred
+  }
+
+  /// Resolves the stable parent identity that can be inferred from a process bundle identifier
+  /// alone. Preference migration uses this path because old persisted exclusions have no PID to
+  /// look up in the current process table.
+  static func inferredDisplayBundleID(for bundleID: String) -> String {
+    let bundleID = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
     if let mapped = helperParents[bundleID] { return mapped }
     // Chromium-family helpers are "<parent>.helper", "<parent>.helper.Renderer", and so on.
     if let range = bundleID.range(of: ".helper", options: [.caseInsensitive]) {
       let parent = String(bundleID[bundleID.startIndex..<range.lowerBound])
       if !parent.isEmpty { return parent }
     }
-    if let app = runningAppBundleID(pid), !app.isEmpty { return app }
     return bundleID
   }
 

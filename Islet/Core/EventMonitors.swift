@@ -77,9 +77,8 @@ final class EventMonitors {
     fileDragMonitor = fileDrag
     fileDrag.start()
     interactionModeCancellable = Defaults.publisher(.interactionMode)
-      .sink { [weak self] change in
-        Task { @MainActor in self?.setMovementMonitoring(change.newValue == .hover) }
-      }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] change in self?.setMovementMonitoring(change.newValue == .hover) }
     setMovementMonitoring(Defaults[.interactionMode] == .hover)
   }
 

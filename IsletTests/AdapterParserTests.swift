@@ -39,7 +39,19 @@ final class AdapterParserTests: XCTestCase {
     XCTAssertTrue(state.isShuffleOn)
     XCTAssertEqual(state.repeatMode, 2)
     XCTAssertTrue(state.supportsSkip15)
+    XCTAssertTrue(state.supportsSkipBackward15)
+    XCTAssertTrue(state.supportsSkipForward15)
     XCTAssertFalse(state.isAdvertisement)
+  }
+
+  func testSkipCapabilitiesStayIndependent() {
+    let line =
+      #"{"title":"Chapter","bundleIdentifier":"com.example.Reader","processIdentifier":42,"supportsRewind15Seconds":false,"supportsFastForward15Seconds":true}"#
+    guard case .nowPlaying(_, let state) = AdapterParser.parseSnapshot(line: line) else {
+      return XCTFail("expected nowPlaying snapshot")
+    }
+    XCTAssertFalse(state.supportsSkipBackward15)
+    XCTAssertTrue(state.supportsSkipForward15)
   }
 
   func testDiffMergesOntoCurrent() throws {

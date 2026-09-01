@@ -274,7 +274,7 @@ private struct OnboardingView: View {
     _remindersEnabled = State(initialValue: Defaults[.remindersEnabled])
     _bluetoothEventsEnabled = State(
       initialValue: OnboardingState.isComplete
-        && !Defaults[.disabledEventSources].contains("bluetooth"))
+        && EventSourcePreferences.shared.isEnabled("bluetooth"))
     _legacyMigrationState = State(
       initialValue: LegacyInstallMigrator.isAvailable ? .available : .unavailable)
   }
@@ -593,13 +593,14 @@ private struct OnboardingView: View {
     legacyMigrationState = .migrating
     do {
       let result = try LegacyInstallMigrator.migrate()
+      EventSourcePreferences.shared.reloadFromDefaults()
       // Startup may already have migrated this bundle before the user chose to import another
       // installation. Fold the just-imported legacy flags into the canonical list once more.
       ActivityEnablement.migrateLegacyPreferencesIfNeeded(force: true)
       selectedActivities = Set(
         ActivityCatalog.defaultOrder.filter { OnboardingPreferences.isActivityEnabled($0) })
       remindersEnabled = Defaults[.remindersEnabled]
-      bluetoothEventsEnabled = !Defaults[.disabledEventSources].contains("bluetooth")
+      bluetoothEventsEnabled = EventSourcePreferences.shared.isEnabled("bluetooth")
       legacyMigrationState = .migrated(result.summary)
     } catch {
       legacyMigrationState = .failed(error.localizedDescription)

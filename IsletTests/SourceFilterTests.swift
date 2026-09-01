@@ -1,3 +1,4 @@
+import Defaults
 import XCTest
 
 @testable import Islet
@@ -65,5 +66,33 @@ final class SourceFilterTests: XCTestCase {
       SourceFilter.rank(
         bundleID: "com.apple.Safari", mode: .prioritized,
         priorityList: ["com.spotify.client"]))
+  }
+
+  func testAudioOnlyExclusionHidesOnlyTheChosenDisplayIdentity() {
+    let excluded: Set = ["com.google.Chrome"]
+    XCTAssertFalse(
+      SourceFilter.acceptsAudioOnlySource(
+        "com.google.Chrome", excludedBundleIdentifiers: excluded))
+    XCTAssertTrue(
+      SourceFilter.acceptsAudioOnlySource(
+        "com.spotify.client", excludedBundleIdentifiers: excluded))
+  }
+
+  func testAudioOnlyExclusionMigrationCollapsesHelpersAndDropsInvalidEntries() {
+    XCTAssertEqual(
+      SourceFilter.migratedAudioOnlyExclusions([
+        "com.google.Chrome.helper.Renderer", "com.google.Chrome", "", "com.apple.PowerChime",
+      ]),
+      ["com.google.Chrome"])
+  }
+
+  func testAudioOnlyExclusionsRoundTripThroughDefaults() {
+    let saved = Defaults[.excludedAudioOnlySourceBundleIdentifiers]
+    defer { Defaults[.excludedAudioOnlySourceBundleIdentifiers] = saved }
+
+    Defaults[.excludedAudioOnlySourceBundleIdentifiers] = ["com.example.CallApp"]
+
+    XCTAssertEqual(
+      Defaults[.excludedAudioOnlySourceBundleIdentifiers], ["com.example.CallApp"])
   }
 }

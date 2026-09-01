@@ -174,9 +174,13 @@ enum SystemMetricsReader {
   static func diskFreeBytes() -> UInt64? {
     guard
       let values = try? URL(fileURLWithPath: "/").resourceValues(
-        forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
-      let available = values.volumeAvailableCapacityForImportantUsage, available > 0
+        forKeys: [.volumeAvailableCapacityForImportantUsageKey])
     else { return nil }
+    return validatedDiskFreeBytes(values.volumeAvailableCapacityForImportantUsage)
+  }
+
+  static func validatedDiskFreeBytes(_ available: Int64?) -> UInt64? {
+    guard let available, available >= 0 else { return nil }
     return UInt64(available)
   }
 
@@ -195,23 +199,24 @@ enum SystemMetricsReader {
 
   static func networkCounters() -> NetworkCounters? {
     guard let name = primaryInterfaceName() ?? fallbackInterfaceName() else { return nil }
-    var addresses: UnsafeMutablePointer<ifaddrs>?
-    guard getifaddrs(&addresses) == 0, let first = addresses else { return nil }
-    defer { freeifaddrs(addresses) }
-    var cursor: UnsafeMutablePointer<ifaddrs>? = first
-    while let node = cursor {
-      let entry = node.pointee
-      defer { cursor = entry.ifa_next }
-      guard entry.ifa_addr?.pointee.sa_family == UInt8(AF_LINK),
-        String(cString: entry.ifa_name) == name,
-        let data = entry.ifa_data
-      else { continue }
-      let stats = data.assumingMemoryBound(to: if_data.self).pointee
-      // ifi_ibytes / ifi_obytes are UInt32 and wrap. Widen here; difference at 32 bits later.
-      return NetworkCounters(
-        inBytes: UInt64(stats.ifi_ibytes), outBytes: UInt64(stats.ifi_obytes), interface: name)
-    }
-    return nil
+    return networkCounters(for: name)
+  }
+
+  /// `getifaddrs` exposes legacy 32-bit byte counters that can wrap within one low-energy sample.
+  /// The per-interface MIB carries `if_data64`, so rate deltas remain unambiguous at every cadence.
+  private static func networkCounters(for name: String) -> NetworkCounters? {
+    let index = name.withCString(if_nametoindex)
+    guard index != 0 else { return nil }
+    var mib = [
+      CTL_NET, PF_LINK, NETLINK_GENERIC, IFMIB_IFDATA, Int32(index), IFDATA_GENERAL,
+    ]
+    var statistics = ifmibdata()
+    var size = MemoryLayout<ifmibdata>.size
+    guard sysctl(&mib, UInt32(mib.count), &statistics, &size, nil, 0) == 0 else { return nil }
+    return NetworkCounters(
+      inBytes: statistics.ifmd_data.ifi_ibytes,
+      outBytes: statistics.ifmd_data.ifi_obytes,
+      interface: name)
   }
 
   /// Used only when SystemConfiguration has no primary interface (no route, or a captive setup):
@@ -220,17 +225,19 @@ enum SystemMetricsReader {
     var addresses: UnsafeMutablePointer<ifaddrs>?
     guard getifaddrs(&addresses) == 0, let first = addresses else { return nil }
     defer { freeifaddrs(addresses) }
-    var best: (name: String, bytes: UInt32)?
+    var best: (name: String, bytes: UInt64)?
     var cursor: UnsafeMutablePointer<ifaddrs>? = first
     while let node = cursor {
       let entry = node.pointee
       defer { cursor = entry.ifa_next }
       let name = String(cString: entry.ifa_name)
-      guard entry.ifa_addr?.pointee.sa_family == UInt8(AF_LINK), name.hasPrefix("en"),
-        entry.ifa_flags & UInt32(IFF_UP) != 0, entry.ifa_flags & UInt32(IFF_RUNNING) != 0,
-        let data = entry.ifa_data
+      guard entry.ifa_addr?.pointee.sa_family == UInt8(AF_LINK),
+        name.hasPrefix("en"),
+        entry.ifa_flags & UInt32(IFF_UP) != 0,
+        entry.ifa_flags & UInt32(IFF_RUNNING) != 0,
+        let counters = networkCounters(for: name)
       else { continue }
-      let bytes = data.assumingMemoryBound(to: if_data.self).pointee.ifi_ibytes
+      let bytes = counters.inBytes &+ counters.outBytes
       if let current = best {
         if bytes > current.bytes { best = (name, bytes) }
       } else {

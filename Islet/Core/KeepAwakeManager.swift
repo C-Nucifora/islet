@@ -151,20 +151,32 @@ final class KeepAwakeManager: ObservableObject {
     scheduler: DispatchKeepAwakeScheduler(), allowDisplaySleep: Defaults[.allowDisplaySleep],
     lowBatteryThreshold: Defaults[.keepAwakeLowBatteryThreshold],
     batteryStateProvider: { BatteryMonitor.readState() },
+    keepAwakeWithLidClosed: Defaults[.keepAwakeWithLidClosed],
+    powerProtectProvider: SystemPowerProtectProvider(),
     observeSystemChanges: true, observePreferenceChanges: true)
 
   @Published private(set) var isActive = false
   @Published private(set) var allowDisplaySleep: Bool
+  @Published private(set) var keepAwakeWithLidClosed: Bool
+  @Published private(set) var powerProtectInstalled: Bool
+  @Published private(set) var isInstallingPowerProtect = false
   @Published private(set) var duration: KeepAwakeDuration = .indefinitely
   @Published private(set) var remainingTime: TimeInterval?
   @Published private(set) var endsAt: Date?
   @Published private(set) var lastEndReason: KeepAwakeEndReason?
   @Published private(set) var lastError: String?
 
-  /// True when an IOKit assertion still belongs to this manager, including one whose release
+  /// True when a power override still belongs to this manager, including one whose release
   /// failed and is awaiting a bounded retry at the next lifecycle transition.
   var hasUnreleasedAssertions: Bool {
-    systemAssertionID != nil || displayAssertionID != nil
+    systemAssertionID != nil || displayAssertionID != nil || powerProtectEnabled
+  }
+
+  var needsAssertionRecovery: Bool {
+    guard hasUnreleasedAssertions else { return false }
+    guard isActive else { return true }
+    return allowDisplaySleep != effectivelyAllowsDisplaySleep
+      || powerProtectEnabled != keepAwakeWithLidClosed
   }
 
   /// The preference is the requested state. This value reports what the owned assertion state
@@ -175,10 +187,12 @@ final class KeepAwakeManager: ObservableObject {
   private let clock: KeepAwakeClock
   private let scheduler: KeepAwakeScheduling
   private let batteryStateProvider: () -> BatteryState?
+  private let powerProtectProvider: any PowerProtectProviding
   private var lowBatteryThreshold: Int
   private var latestBatteryState: BatteryState?
   private var systemAssertionID: UInt32?
   private var displayAssertionID: UInt32?
+  private var powerProtectEnabled = false
   private var monotonicDeadline: TimeInterval?
   private var scheduledTask: KeepAwakeScheduledTask?
   private var scheduleGeneration: UInt64 = 0
@@ -188,25 +202,32 @@ final class KeepAwakeManager: ObservableObject {
     assertionProvider: KeepAwakeAssertionProviding, clock: KeepAwakeClock,
     scheduler: KeepAwakeScheduling, allowDisplaySleep: Bool,
     lowBatteryThreshold: Int, batteryStateProvider: @escaping () -> BatteryState?,
+    keepAwakeWithLidClosed: Bool = false,
+    powerProtectProvider: any PowerProtectProviding = SystemPowerProtectProvider(),
     observeSystemChanges: Bool = false, observePreferenceChanges: Bool = false
   ) {
     self.assertionProvider = assertionProvider
     self.clock = clock
     self.scheduler = scheduler
     self.allowDisplaySleep = allowDisplaySleep
+    self.keepAwakeWithLidClosed = keepAwakeWithLidClosed
     self.lowBatteryThreshold = lowBatteryThreshold
     self.batteryStateProvider = batteryStateProvider
+    self.powerProtectProvider = powerProtectProvider
+    self.powerProtectInstalled = powerProtectProvider.isInstalled
 
     if observePreferenceChanges {
       Defaults.publisher(.allowDisplaySleep)
-        .sink { [weak self] change in
-          Task { @MainActor in self?.setAllowDisplaySleep(change.newValue) }
-        }
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] change in self?.setAllowDisplaySleep(change.newValue) }
         .store(in: &cancellables)
       Defaults.publisher(.keepAwakeLowBatteryThreshold)
-        .sink { [weak self] change in
-          Task { @MainActor in self?.setLowBatteryThreshold(change.newValue) }
-        }
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] change in self?.setLowBatteryThreshold(change.newValue) }
+        .store(in: &cancellables)
+      Defaults.publisher(.keepAwakeWithLidClosed)
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] change in self?.setKeepAwakeWithLidClosed(change.newValue) }
         .store(in: &cancellables)
     }
     if observeSystemChanges {
@@ -217,6 +238,7 @@ final class KeepAwakeManager: ObservableObject {
         .sink { [weak self] _ in Task { @MainActor in self?.systemTimeDidChange() } }
         .store(in: &cancellables)
     }
+    recoverStalePowerProtectState()
   }
 
   @discardableResult
@@ -253,6 +275,13 @@ final class KeepAwakeManager: ObservableObject {
       return false
     }
 
+    if keepAwakeWithLidClosed {
+      guard enablePowerProtect() else {
+        clearTimerState()
+        return false
+      }
+    }
+
     do {
       let systemID = try assertionProvider.create(
         .systemSleep, reason: "Islet keep-awake session")
@@ -274,6 +303,7 @@ final class KeepAwakeManager: ObservableObject {
         }
       }
     } catch {
+      disablePowerProtect()
       recordError(error.localizedDescription)
       clearTimerState()
       return false
@@ -286,7 +316,8 @@ final class KeepAwakeManager: ObservableObject {
   }
 
   func stop(reason: KeepAwakeEndReason = .manual) {
-    guard isActive || systemAssertionID != nil || displayAssertionID != nil else { return }
+    guard isActive || systemAssertionID != nil || displayAssertionID != nil || powerProtectEnabled
+    else { return }
     isActive = false
     clearTimerState()
 
@@ -298,6 +329,42 @@ final class KeepAwakeManager: ObservableObject {
 
     lastEndReason = reason
     NotificationCenter.default.post(name: .keepAwakeSessionDidChange, object: self)
+  }
+
+  func setKeepAwakeWithLidClosed(_ enabled: Bool) {
+    guard enabled != keepAwakeWithLidClosed else { return }
+    lastError = nil
+    keepAwakeWithLidClosed = enabled
+    guard isActive else { return }
+    if enabled {
+      _ = enablePowerProtect()
+    } else {
+      disablePowerProtect()
+    }
+  }
+
+  func refreshPowerProtectInstallation() {
+    powerProtectInstalled = powerProtectProvider.isInstalled
+  }
+
+  func installPowerProtect() async {
+    guard !isInstallingPowerProtect else { return }
+    isInstallingPowerProtect = true
+    lastError = nil
+    let provider = powerProtectProvider
+    do {
+      try await Task.detached(priority: .userInitiated) {
+        try provider.install()
+      }.value
+      powerProtectInstalled = provider.isInstalled
+      if isActive, keepAwakeWithLidClosed {
+        _ = enablePowerProtect()
+      }
+    } catch {
+      powerProtectInstalled = provider.isInstalled
+      recordError(error.localizedDescription)
+    }
+    isInstallingPowerProtect = false
   }
 
   func setAllowDisplaySleep(_ allow: Bool) {
@@ -328,6 +395,11 @@ final class KeepAwakeManager: ObservableObject {
     lastError = nil
     if isActive {
       reconcileDisplayAssertionWithPreference()
+      if keepAwakeWithLidClosed {
+        _ = enablePowerProtect()
+      } else {
+        disablePowerProtect()
+      }
     } else {
       guard hasUnreleasedAssertions else { return }
       retryOwnedAssertionReleases()
@@ -413,6 +485,46 @@ final class KeepAwakeManager: ObservableObject {
   private func retryOwnedAssertionReleases() {
     if displayAssertionID != nil { releaseDisplayAssertion() }
     if systemAssertionID != nil { releaseSystemAssertion() }
+    if powerProtectEnabled { disablePowerProtect() }
+  }
+
+  private func enablePowerProtect() -> Bool {
+    guard !powerProtectEnabled else { return true }
+    powerProtectInstalled = powerProtectProvider.isInstalled
+    guard powerProtectInstalled else {
+      recordError(PowerProtectError.notInstalled.localizedDescription)
+      return false
+    }
+    do {
+      try powerProtectProvider.enable()
+      powerProtectEnabled = true
+      return true
+    } catch {
+      recordError(error.localizedDescription)
+      return false
+    }
+  }
+
+  private func disablePowerProtect() {
+    guard powerProtectEnabled else { return }
+    do {
+      try powerProtectProvider.disable()
+      powerProtectEnabled = false
+    } catch {
+      recordError(error.localizedDescription)
+    }
+  }
+
+  private func recoverStalePowerProtectState() {
+    guard powerProtectInstalled else { return }
+    do {
+      try powerProtectProvider.disable()
+    } catch {
+      powerProtectEnabled = true
+      recordError(
+        "Power Protect could not restore sleep after the previous Islet session. \(error.localizedDescription)"
+      )
+    }
   }
 
   private func reconcileDisplayAssertionWithPreference() {

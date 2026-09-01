@@ -416,6 +416,7 @@ struct BatteryExpandedView: View {
         detail(
           "Cycles", metrics?.cycleCount.map(String.init), symbol: "arrow.triangle.2.circlepath")
         detail("Capacity", capacityValue, symbol: "battery.75percent")
+        telemetryDiagnostics
         ForEach(monitor.peripherals) { device in
           detail(device.name, "\(device.percent)%", symbol: device.icon)
         }
@@ -423,6 +424,34 @@ struct BatteryExpandedView: View {
     }
     .scrollIndicators(.hidden)
     .frame(height: 29)
+  }
+
+  @ViewBuilder private var telemetryDiagnostics: some View {
+    let unavailable = metrics?.unavailableTelemetry ?? []
+    if !unavailable.isEmpty {
+      Menu {
+        ForEach(unavailable, id: \.field) { diagnostic in
+          Label(
+            "\(diagnostic.field.label): \(diagnostic.status.diagnosticReason)",
+            systemImage: "exclamationmark.circle")
+        }
+      } label: {
+        HStack(spacing: 5) {
+          Image(systemName: "waveform.path.ecg")
+            .font(.system(size: 9)).appThemeForeground(.battery)
+          VStack(alignment: .leading, spacing: 0) {
+            Text("Diagnostics").font(.system(size: 10, weight: .semibold)).lineLimit(1)
+            Text("\(unavailable.count) unavailable")
+              .font(.system(size: 8)).foregroundStyle(.tertiary).lineLimit(1)
+          }
+        }
+      }
+      .accessibilityLabel("Battery diagnostics, \(unavailable.count) unavailable readings")
+      .help(
+        unavailable
+          .map { "\($0.field.label): \($0.status.diagnosticReason)" }
+          .joined(separator: "\n"))
+    }
   }
 
   @ViewBuilder private func detail(_ label: String, _ value: String?, symbol: String) -> some View {

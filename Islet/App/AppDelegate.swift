@@ -33,10 +33,12 @@ final class ActivityLifecycleController {
   func startObserving() {
     guard cancellables.isEmpty else { return }
     Defaults.publisher(.disabledActivities)
-      .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.reconcile() }
       .store(in: &cancellables)
     Defaults.publisher(.calendarEnabled)
-      .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.reconcile() }
       .store(in: &cancellables)
     NotificationCenter.default.publisher(for: .keepAwakeSessionDidChange)
       .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
@@ -65,7 +67,7 @@ final class ActivityLifecycleController {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-  private var launchAtLoginObserver: Defaults.Observation?
+  private var launchAtLoginObserver: AnyCancellable?
   private var activityLifecycleController: ActivityLifecycleController?
   private var audioDeviceLifecycleCancellable: AnyCancellable?
   /// Kept by the delegate for the entire app lifetime so notification responses still reach the
@@ -115,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       ActivityCenter.shared.register(AppState.t3Code)
       ActivityCenter.shared.register(AppState.pulse)
       ActivityCenter.shared.register(AppState.continuity)
+      await AppState.t3Code.loadConnectAccount()
       #if DEBUG
         let registeredIDs = Set(ActivityCenter.shared.activities.map(\.id))
         let missingIDs = Set(ActivityCatalog.defaultOrder).subtracting(registeredIDs)
@@ -131,9 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       }
       HUDController.shared.startObserving()
       LaunchAtLogin.sync()
-      launchAtLoginObserver = Defaults.observe(.launchAtLogin) { change in
-        Task { @MainActor in LaunchAtLogin.apply(change.newValue) }
-      }
+      launchAtLoginObserver = LaunchAtLogin.observe()
       OnboardingOpener.openIfNeeded()
     }
     Log.app.info("Islet launched")
@@ -159,6 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       AudioDeviceMonitor.shared.stop()
       HUDController.shared.stop()
       SystemEventBus.shared.stopAll()
+      EventSourcePreferences.shared.flush()
       EventMonitors.shared.stop()
       ScreenManager.shared.stop()
       activityLifecycleController?.stopObserving()
@@ -205,14 +207,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ])
     activityLifecycleController = controller
     controller.startObserving()
-    audioDeviceLifecycleCancellable = Defaults.publisher(.disabledEventSources)
+    audioDeviceLifecycleCancellable = EventSourcePreferences.shared.$disabledSourceIDs
       .sink { [weak self] _ in Task { @MainActor in self?.reconcileAudioDeviceLifecycle() } }
     reconcileAudioDeviceLifecycle()
   }
 
   @MainActor
   private func reconcileAudioDeviceLifecycle() {
-    if Defaults[.disabledEventSources].contains("audiodevice") {
+    if !EventSourcePreferences.shared.isEnabled("audiodevice") {
       AudioDeviceMonitor.shared.stop()
     } else {
       AudioDeviceMonitor.shared.start()

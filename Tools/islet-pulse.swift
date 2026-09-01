@@ -39,7 +39,7 @@ private final class PulseClient: @unchecked Sendable {
   private var expectedRequestID = ""
 
   init(port: NWEndpoint.Port) {
-    connection = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
+    connection = NWConnection(host: "localhost", port: port, using: .tcp)
   }
 
   func run(payload: Data, requestID: String) -> Int32 {

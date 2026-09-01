@@ -204,6 +204,10 @@ extension Defaults.Keys {
   static let mediaPriorityList = Key<[String]>(
     "mediaPriorityList",
     default: ["com.spotify.client", "com.apple.Music"])
+  /// Stable display bundle identifiers the user has hidden from the CoreAudio-only source strip.
+  /// This intentionally stores only explicit exclusions, never the full list of observed apps.
+  static let excludedAudioOnlySourceBundleIdentifiers = Key<[String]>(
+    "excludedAudioOnlySourceBundleIdentifiers", default: [])
   static let interactionMode = Key<InteractionMode>("interactionMode", default: .hover)
   static let hoverCollapseTimeout = Key<Double>("hoverCollapseTimeout", default: 0.5)
   static let hapticsEnabled = Key<Bool>("hapticsEnabled", default: true)
@@ -213,6 +217,8 @@ extension Defaults.Keys {
   static let energyMode = Key<EnergyMode>("energyMode", default: .automatic)
   /// Keep the Mac working while allowing its screen to follow the normal display-sleep timeout.
   static let allowDisplaySleep = Key<Bool>("allowDisplaySleep", default: true)
+  /// Uses the separately installed Power Protect helper to override closed-display sleep.
+  static let keepAwakeWithLidClosed = Key<Bool>("keepAwakeWithLidClosed", default: false)
   /// Zero disables battery protection. A 20% default avoids an unattended session draining the
   /// battery after macOS first reports its low-battery state.
   static let keepAwakeLowBatteryThreshold = Key<Int>(
@@ -231,6 +237,12 @@ extension Defaults.Keys {
   static let hiddenCalendarIDs = Key<[String]>("hiddenCalendarIDs", default: [])
   static let remindersEnabled = Key<Bool>("remindersEnabled", default: true)
   static let showOnAllDisplays = Key<Bool>("showOnAllDisplays", default: false)
+  /// The display's Quartz UUID. This remains set while the display is disconnected so Islet can
+  /// return to it on reconnect instead of turning a temporary fallback into a new preference.
+  static let preferredDisplayID = Key<String>("preferredDisplayID", default: "")
+  /// Last user-facing name for an unavailable preferred display. Identity always comes from the
+  /// UUID above; this value is presentation only.
+  static let preferredDisplayName = Key<String>("preferredDisplayName", default: "")
   static let hideInFullscreen = Key<Bool>("hideInFullscreen", default: false)
   static let launchAtLogin = Key<Bool>("launchAtLogin", default: false)
   static let activityOrder = Key<[String]>("activityOrder", default: ActivityCatalog.defaultOrder)
@@ -240,16 +252,31 @@ extension Defaults.Keys {
     ActivityEnablement.migrationVersionKey, default: 0)
   /// Retained only as input to the one-time activity enablement migration.
   static let legacyClipboardEnabled = Key<Bool>("clipboardEnabled", default: false)
+  static let clipboardExcludedBundleIdentifiers = Key<[String]>(
+    "clipboardExcludedBundleIdentifiers", default: [])
+  static let clipboardPausedFocusIdentifiers = Key<[String]>(
+    "clipboardPausedFocusIdentifiers", default: [])
+  static let clipboardClearHistoryOnPause = Key<Bool>(
+    "clipboardClearHistoryOnPause", default: true)
+  static let clipboardManuallyPaused = Key<Bool>("clipboardManuallyPaused", default: false)
+  static let clipboardPausedUntil = Key<Date?>("clipboardPausedUntil")
+  static let clipboardPausedLoginSession = Key<String?>("clipboardPausedLoginSession")
   static let legacyPortsEnabled = Key<Bool>("portsEnabled", default: true)
-  /// Event sources the user has switched off. Inferred sources start off because they can be late
-  /// or ambiguous; a user can explicitly enable the ones they find useful.
-  static let disabledEventSources = Key<[String]>(
-    "disabledEventSources", default: ["airdropOut", "airdropIn", "focus", "vpn"])
   /// Retained only as input to the one-time activity enablement migration.
   static let legacySystemEnabled = Key<Bool>("systemEnabled", default: true)
   /// Off: the System tab appears only while `SystemPresenceGate` is hot. On: it is always in the
   /// switcher, which is how you look at an idle machine's stats.
   static let systemAlwaysVisible = Key<Bool>("systemAlwaysVisible", default: false)
+  static let systemAutoPresentCPU = Key<Bool>("systemAutoPresentCPU", default: true)
+  static let systemAutoPresentThermal = Key<Bool>("systemAutoPresentThermal", default: true)
+  static let systemAutoPresentMemoryPressure = Key<Bool>(
+    "systemAutoPresentMemoryPressure", default: true)
+  static let systemAutoPresentLowDiskSpace = Key<Bool>(
+    "systemAutoPresentLowDiskSpace", default: true)
+  static let systemAutoPresentDiskThroughput = Key<Bool>(
+    "systemAutoPresentDiskThroughput", default: true)
+  static let systemAutoPresentNetworkThroughput = Key<Bool>(
+    "systemAutoPresentNetworkThroughput", default: true)
   /// Keyed by `SystemMetricKind.rawValue`, valued by `MetricDisplayStyle.rawValue`. Stored as
   /// strings so an unknown value from a future build resolves to the fallback instead of failing
   /// to decode the whole dictionary.
@@ -267,6 +294,10 @@ extension Defaults.Keys {
   /// available instead of silently hiding provider updates.
   static let pulseDeliveryProfile = Key<PulseDeliveryProfile>(
     "pulseDeliveryProfile", default: .everything)
+  /// Source names are normalized by `PulseCenter` before this map is written. Values stay raw
+  /// strings so a newer policy value cannot prevent older Islet versions from restoring the
+  /// policies they understand.
+  static let pulseSourcePolicies = Key<[String: String]>("pulseSourcePolicies", default: [:])
   static let t3RemoteEnvironments = Key<[T3EnvironmentProfile]>(
     "t3RemoteEnvironments", default: [])
   static let timerSessionData = Key<Data?>("timerSessionData")
