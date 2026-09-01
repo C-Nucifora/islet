@@ -1081,12 +1081,13 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
     let reschedule = try rescheduleCoordinator.rescheduleOutcome(
       rescheduleItem, to: requestedDate, hasTime: true
     ).get()
+    let requestedDateValue = try ReminderDateValue(
+      validating: RemindersLogic.dueComponents(for: requestedDate, hasTime: true))
+    let actualDateValue = try rescheduledActual.dueDateComponents.map(
+      ReminderDateValue.init(validating:))
 
-    XCTAssertEqual(
-      reschedule.draft.dueDate?.components,
-      RemindersLogic.dueComponents(for: requestedDate, hasTime: true))
-    XCTAssertEqual(
-      reschedule.draft.baseline?.dueDate?.components, rescheduledActual.dueDateComponents)
+    XCTAssertEqual(reschedule.draft.dueDate, requestedDateValue)
+    XCTAssertEqual(reschedule.draft.baseline?.dueDate, actualDateValue)
     XCTAssertEqual(reschedule.draft.normalizationMismatches.map(\.field), [.dueDate])
 
     let compatibilityRescheduleStore = Store()
@@ -1144,6 +1145,43 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
       ).get(),
       rescheduleItem)
     XCTAssertEqual(rescheduleStore.saveCount, 0)
+  }
+
+  func testNoOpRescheduleUsesSuppliedPresentationAcrossDefaultTimeZoneChange() throws {
+    let originalTimeZone = NSTimeZone.default
+    defer { NSTimeZone.default = originalTimeZone }
+    NSTimeZone.default = try XCTUnwrap(TimeZone(identifier: "Pacific/Honolulu"))
+
+    let store = Store()
+    _ = store.addExisting()
+    var record = try XCTUnwrap(store.records["existing"])
+    var floatingDueDate = DateComponents()
+    floatingDueDate.year = 2026
+    floatingDueDate.month = 9
+    floatingDueDate.day = 4
+    floatingDueDate.hour = 9
+    floatingDueDate.minute = 30
+    record.dueDateComponents = floatingDueDate
+    store.records[record.id] = record
+    let displayedItem = record.item
+    let displayedDate = try XCTUnwrap(displayedItem.dueDate)
+
+    NSTimeZone.default = try XCTUnwrap(TimeZone(identifier: "Pacific/Kiritimati"))
+    let coordinator = ReminderWriteCoordinator(store: store)
+    let canonicalDueDate = try XCTUnwrap(coordinator.writeDraft(for: displayedItem).get().dueDate)
+
+    let write = try coordinator.rescheduleOutcome(
+      displayedItem, to: displayedDate, hasTime: displayedItem.hasDueTime
+    ).get()
+
+    guard case .noChanges = write.outcome else {
+      return XCTFail("Expected no changes")
+    }
+    XCTAssertEqual(write.draft.dueDate, canonicalDueDate)
+    XCTAssertEqual(write.draft.dueDate?.components.timeZone, nil)
+    XCTAssertEqual(write.draft.dueDate?.components.day, 4)
+    XCTAssertEqual(write.draft.dueDate?.components.hour, 9)
+    XCTAssertEqual(store.saveCount, 0)
   }
 
   private func dateValue(day: Int, hour: Int? = nil) throws -> ReminderDateValue {

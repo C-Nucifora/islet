@@ -442,8 +442,7 @@ final class ReminderWriteCoordinator {
         throw ReminderWriteError.missingReminder
       }
       var draft = try coordinatorDraft(from: record)
-      let currentPresentation = record.item
-      if currentPresentation.dueDate != date || currentPresentation.hasDueTime != hasTime {
+      if item.dueDate != date || item.hasDueTime != hasTime {
         draft.dueDate = try ReminderDateValue(
           validating: RemindersLogic.dueComponents(for: date, hasTime: hasTime))
       }
