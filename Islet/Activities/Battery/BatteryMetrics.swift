@@ -1,5 +1,80 @@
 import Foundation
 
+/// The logical readings that make up the expanded battery diagnostics. A registry key can be
+/// absent because a Mac does not publish it, while a present key can still fail to produce a
+/// usable value in one sample. Keeping those states separate stops the UI from calling every
+/// blank value a hardware limitation.
+enum BatteryTelemetryField: String, CaseIterable, Hashable, Identifiable, Sendable {
+  case health
+  case temperature
+  case voltage
+  case current
+  case timeToFull
+  case timeToEmpty
+  case charger
+  case systemInput
+  case systemLoad
+  case batteryPower
+  case usbPowerOutput
+  case cpuPower
+
+  var id: String { rawValue }
+
+  var label: String {
+    switch self {
+    case .health: return "Battery health"
+    case .temperature: return "Temperature"
+    case .voltage: return "Voltage"
+    case .current: return "Current"
+    case .timeToFull: return "Time to full"
+    case .timeToEmpty: return "Time remaining"
+    case .charger: return "Charger details"
+    case .systemInput: return "System input"
+    case .systemLoad: return "System load"
+    case .batteryPower: return "Battery power"
+    case .usbPowerOutput: return "USB power output"
+    case .cpuPower: return "CPU power"
+    }
+  }
+}
+
+/// What the last read told us about one advanced battery value. `unsupported` is reserved for a
+/// key the service did not publish. A present but unusable value remains an unavailable sample so
+/// it is not mistaken for a hardware capability decision.
+enum BatteryTelemetryStatus: Equatable, Sendable {
+  case available
+  case unsupported
+  case unavailable(BatteryTelemetryUnavailableReason)
+
+  var diagnosticReason: String {
+    switch self {
+    case .available: return "Available"
+    case .unsupported: return "Not reported by this Mac"
+    case .unavailable(let reason): return reason.diagnosticReason
+    }
+  }
+}
+
+enum BatteryTelemetryUnavailableReason: Equatable, Sendable {
+  case unreadable
+  case calculating
+  case inactive
+  case stale
+  case noSample
+  case transient
+
+  var diagnosticReason: String {
+    switch self {
+    case .unreadable: return "Last value could not be read"
+    case .calculating: return "Still calculating"
+    case .inactive: return "Not active right now"
+    case .stale: return "Last sample is stale"
+    case .noSample: return "No sample yet"
+    case .transient: return "Temporarily unavailable"
+    }
+  }
+}
+
 /// One rung of the USB-C Power Delivery ladder the attached charger advertises
 /// (`AdapterDetails.UsbHvcMenu`), in volts and amps.
 struct PDProfile: Identifiable, Equatable, Sendable {
@@ -89,6 +164,41 @@ struct BatteryMetrics: Equatable, Sendable {
   var notChargingReason: UInt64?
 
   var lowPowerMode = false
+
+  /// The support and last-read state for the fields in the expanded diagnostics. The parser fills
+  /// every entry whenever it receives an AppleSmartBattery dictionary. Empty test fixtures and
+  /// manually-seeded previews may leave this empty rather than claiming an unperformed read.
+  var telemetryStatus: [BatteryTelemetryField: BatteryTelemetryStatus] = [:]
+
+  /// Fields that have produced a usable value during this monitor session. This survives a later
+  /// partial registry read so a transient omission is not presented as a hardware limitation.
+  var observedTelemetryFields: Set<BatteryTelemetryField> = []
+
+  mutating func reconcileTelemetryCapability(from previous: BatteryMetrics?) {
+    if let previous {
+      observedTelemetryFields.formUnion(previous.observedTelemetryFields)
+      observedTelemetryFields.formUnion(previous.availableTelemetryFields)
+    }
+    observedTelemetryFields.formUnion(availableTelemetryFields)
+    for field in observedTelemetryFields where telemetryStatus[field] == .unsupported {
+      telemetryStatus[field] = .unavailable(.transient)
+    }
+  }
+
+  private var availableTelemetryFields: Set<BatteryTelemetryField> {
+    Set(telemetryStatus.compactMap { field, status in status == .available ? field : nil })
+  }
+
+  func status(for field: BatteryTelemetryField) -> BatteryTelemetryStatus? {
+    telemetryStatus[field]
+  }
+
+  var unavailableTelemetry: [(field: BatteryTelemetryField, status: BatteryTelemetryStatus)] {
+    BatteryTelemetryField.allCases.compactMap { field in
+      guard let status = status(for: field), status != .available else { return nil }
+      return (field, status)
+    }
+  }
 
   /// True when at least one real reading landed. Low Power Mode is excluded — it is a system flag,
   /// not a battery reading, and on its own it should not make an empty panel appear.

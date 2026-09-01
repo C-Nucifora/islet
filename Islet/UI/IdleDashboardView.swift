@@ -164,37 +164,28 @@ struct IdleDashboardView: View {
       ) {
         Task { await reminders.recoverAccess() }
       }
-    } else if reminders.loadState == .loading {
-      ProgressView().controlSize(.small).accessibilityLabel("Loading reminders")
-    } else if case .failed(let message) = reminders.loadState {
-      HStack(spacing: 5) {
-        Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(2)
-        Button("Retry") { Task { await reminders.reload() } }
-          .buttonStyle(.link).font(.caption2)
-      }
-    } else if reminders.reminders.isEmpty {
-      if reminders.hasMoreReminders {
-        VStack(alignment: .leading, spacing: 5) {
-          emptyRow("No reminders due soon")
-          moreRemindersButton
-        }
-      } else {
-        emptyRow("All clear")
-      }
     } else {
+      let presentation = ReminderDashboardPresentation.make(
+        loadState: reminders.loadState,
+        reminderCount: reminders.reminders.count,
+        hasMoreReminders: reminders.hasMoreReminders,
+        hasCompletionUndo: reminders.completionUndo != nil)
+
       VStack(alignment: .leading, spacing: 6) {
-        HStack {
-          Spacer()
-          Button {
-            ReminderEditorWindow.shared.presentEditor(provider: reminders, item: nil)
-          } label: {
-            Label("New reminder", systemImage: "plus")
+        if presentation.actions.contains(.create) {
+          HStack {
+            Spacer()
+            Button {
+              ReminderEditorWindow.shared.presentEditor(provider: reminders, item: nil)
+            } label: {
+              Label("New reminder", systemImage: "plus")
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.plain)
+            .keyboardShortcut("n", modifiers: .command)
+            .accessibilityLabel("New reminder")
+            .disabled(reminders.availableLists.isEmpty)
           }
-          .labelStyle(.iconOnly)
-          .buttonStyle(.plain)
-          .keyboardShortcut("n", modifiers: .command)
-          .accessibilityLabel("New reminder")
-          .disabled(reminders.availableLists.isEmpty)
         }
         if let error = reminders.lastActionError {
           HStack(spacing: 5) {
@@ -203,7 +194,7 @@ struct IdleDashboardView: View {
               .buttonStyle(.link).font(.caption2)
           }
         }
-        if let undo = reminders.completionUndo {
+        if presentation.actions.contains(.undo), let undo = reminders.completionUndo {
           HStack(spacing: 5) {
             Text("Completed \(undo.title)").font(.caption2).lineLimit(1)
             Button("Undo") { reminders.undoLastCompletion() }
@@ -212,17 +203,21 @@ struct IdleDashboardView: View {
               .accessibilityLabel("Undo completing \(undo.title)")
           }
         }
-        if reminders.loadState == .loading {
+        switch presentation.content {
+        case .loading:
           ProgressView().controlSize(.small).accessibilityLabel("Loading reminders")
-        } else if case .failed(let message) = reminders.loadState {
+        case .failed(let message):
           HStack(spacing: 5) {
             Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(2)
             Button("Retry") { Task { await reminders.reload() } }
               .buttonStyle(.link).font(.caption2)
           }
-        } else if reminders.reminders.isEmpty {
-          emptyRow("All clear")
-        } else {
+        case .empty(let message, let showsMore):
+          emptyRow(message)
+          if showsMore {
+            moreRemindersButton
+          }
+        case .items:
           ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 6) {
               ForEach(reminders.reminders) { item in

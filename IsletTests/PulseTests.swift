@@ -285,6 +285,92 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testSourcePoliciesSurviveCenterRecreationBeforeTheFirstProviderItem() throws {
+    let suiteName = "PulseTests.source-policies.\(UUID().uuidString)"
+    let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defer { suite.removePersistentDomain(forName: suiteName) }
+    let deliveryProfileKey = Defaults.Key<PulseDeliveryProfile>(
+      "pulseDeliveryProfile", default: .everything, suite: suite)
+    let sourcePoliciesKey = Defaults.Key<[String: String]>(
+      "pulseSourcePolicies", default: [:], suite: suite)
+
+    let firstLaunch = PulseCenter(
+      deliveryProfileKey: deliveryProfileKey, sourcePoliciesKey: sourcePoliciesKey)
+    firstLaunch.setPolicy(.muted, for: "  Build  ")
+    firstLaunch.setPolicy(.revoked, for: "Agent")
+    XCTAssertEqual(Defaults[sourcePoliciesKey], ["agent": "revoked", "build": "muted"])
+
+    let relaunched = PulseCenter(
+      deliveryProfileKey: deliveryProfileKey, sourcePoliciesKey: sourcePoliciesKey)
+    let muted = PulsePayload(
+      id: "build", source: "BUILD", title: "Build", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    let revoked = PulsePayload(
+      id: "agent", source: "agent", title: "Agent", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+
+    XCTAssertEqual(relaunched.policy(for: "build"), .muted)
+    XCTAssertEqual(relaunched.policy(for: "AGENT"), .revoked)
+    XCTAssertTrue(relaunched.apply(command(.show, muted)).ok)
+    XCTAssertTrue(relaunched.items.isEmpty)
+    XCTAssertEqual(relaunched.history.first?.result, .suppressed)
+    XCTAssertFalse(relaunched.apply(command(.show, revoked)).ok)
+    XCTAssertEqual(relaunched.history.first?.result, .rejected)
+  }
+
+  @MainActor
+  func testSourcePolicyMigrationNormalizesEntriesAndDropsUnknownData() throws {
+    let suiteName = "PulseTests.source-policy-migration.\(UUID().uuidString)"
+    let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defer { suite.removePersistentDomain(forName: suiteName) }
+    let deliveryProfileKey = Defaults.Key<PulseDeliveryProfile>(
+      "pulseDeliveryProfile", default: .everything, suite: suite)
+    let sourcePoliciesKey = Defaults.Key<[String: String]>(
+      "pulseSourcePolicies", default: [:], suite: suite)
+    suite.set(
+      [
+        " Build ": "muted",
+        "build": "revoked",
+        "agent": "allowed",
+        "future": "blocked",
+        "   ": "muted",
+      ], forKey: sourcePoliciesKey.name)
+
+    let center = PulseCenter(
+      deliveryProfileKey: deliveryProfileKey, sourcePoliciesKey: sourcePoliciesKey)
+
+    XCTAssertEqual(center.sourcePolicies, ["build": .revoked])
+    XCTAssertEqual(Defaults[sourcePoliciesKey], ["build": "revoked"])
+  }
+
+  @MainActor
+  func testCorruptSourcePolicyStorageFallsBackToAllowingUpdates() throws {
+    let suiteName = "PulseTests.corrupt-source-policies.\(UUID().uuidString)"
+    let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defer { suite.removePersistentDomain(forName: suiteName) }
+    let deliveryProfileKey = Defaults.Key<PulseDeliveryProfile>(
+      "pulseDeliveryProfile", default: .everything, suite: suite)
+    let sourcePoliciesKey = Defaults.Key<[String: String]>(
+      "pulseSourcePolicies", default: [:], suite: suite)
+    suite.set("not a source-policy map", forKey: sourcePoliciesKey.name)
+
+    let center = PulseCenter(
+      deliveryProfileKey: deliveryProfileKey, sourcePoliciesKey: sourcePoliciesKey)
+    let payload = PulsePayload(
+      id: "build", source: "build", title: "Build", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+
+    XCTAssertEqual(center.sourcePolicies, [:])
+    XCTAssertEqual(Defaults[sourcePoliciesKey], [:])
+    XCTAssertEqual(suite.dictionary(forKey: sourcePoliciesKey.name)?.count, 0)
+    XCTAssertTrue(center.apply(command(.show, payload)).ok)
+    XCTAssertEqual(center.items.map(\.id), ["build"])
+  }
+
+  @MainActor
   func testSourcePolicyCanMuteRevealAndRevokeAProvider() throws {
     let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
@@ -443,6 +529,51 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testPulseBindsNumericIPv4AndIPv6LoopbackAndAdvertisesLocalhost() async throws {
+    var requestedPorts: [UInt16] = []
+    var requestedEndpoints: [NWEndpoint] = []
+    var listeners: [FakePulseListener] = []
+    let server = PulseServer(
+      listenerFactory: { parameters, port in
+        requestedPorts.append(port.rawValue)
+        if let endpoint = parameters.requiredLocalEndpoint { requestedEndpoints.append(endpoint) }
+        let listener = FakePulseListener(port: port)
+        listeners.append(listener)
+        return listener
+      },
+      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {})
+
+    server.start()
+
+    XCTAssertEqual(requestedPorts, [47_717, 47_717])
+    XCTAssertEqual(
+      requestedEndpoints,
+      [
+        .hostPort(host: "127.0.0.1", port: .any),
+        .hostPort(host: "::1", port: .any),
+      ])
+    XCTAssertFalse(
+      requestedEndpoints.contains(.hostPort(host: "localhost", port: .any)))
+    listeners[0].emit(.ready)
+    await Task.yield()
+    XCTAssertFalse(server.isRunning)
+    listeners[1].emit(.ready)
+    await Task.yield()
+
+    XCTAssertTrue(server.isRunning)
+    XCTAssertEqual(server.listeningAddress, "localhost:47717")
+    server.stop()
+  }
+
+  func testPulsePeerValidationAcceptsIPv4AndIPv6LoopbackButRejectsNonLoopback() {
+    let port = PulsePaths.defaultPort
+    XCTAssertTrue(PulseServer.isLoopbackPeer(.hostPort(host: "127.0.0.1", port: port)))
+    XCTAssertTrue(PulseServer.isLoopbackPeer(.hostPort(host: "::1", port: port)))
+    XCTAssertFalse(PulseServer.isLoopbackPeer(.hostPort(host: "192.168.1.2", port: port)))
+    XCTAssertFalse(PulseServer.isLoopbackPeer(.hostPort(host: "fe80::1", port: port)))
+  }
+
+  @MainActor
   func testOccupiedDefaultPortMovesToStableLoopbackFallbackAndPublishesIt() async throws {
     var requestedPorts: [UInt16] = []
     var requestedHosts: [NWEndpoint.Host] = []
@@ -463,21 +594,22 @@ final class PulseTests: XCTestCase {
       activePortRemover: {})
 
     server.start()
-    XCTAssertEqual(requestedPorts, [47_717])
+    XCTAssertEqual(requestedPorts, [47_717, 47_717])
     listeners[0].emit(.failed(.posix(.EADDRINUSE)))
     await Task.yield()
 
-    XCTAssertEqual(requestedPorts, [47_717, 47_718])
-    XCTAssertEqual(requestedHosts, ["127.0.0.1", "127.0.0.1"])
+    XCTAssertEqual(requestedPorts, [47_717, 47_717, 47_718, 47_718])
+    XCTAssertEqual(requestedHosts, ["127.0.0.1", "::1", "127.0.0.1", "::1"])
     XCTAssertFalse(server.isRunning)
     XCTAssertNil(server.activePort)
 
-    listeners[1].emit(.ready)
+    listeners[2].emit(.ready)
+    listeners[3].emit(.ready)
     await Task.yield()
 
     XCTAssertTrue(server.isRunning)
     XCTAssertEqual(server.activePort, 47_718)
-    XCTAssertEqual(server.listeningAddress, "127.0.0.1:47718")
+    XCTAssertEqual(server.listeningAddress, "localhost:47718")
     XCTAssertEqual(publishedPorts, [47_718])
     XCTAssertNil(server.lastError)
     XCTAssertNotNil(server.portRecoveryMessage)
@@ -514,6 +646,147 @@ final class PulseTests: XCTestCase {
       PulseServer.isAddressInUse(
         NSError(domain: NSPOSIXErrorDomain, code: Int(EADDRINUSE))))
     XCTAssertFalse(PulseServer.isAddressInUse(NWError.posix(.ECONNREFUSED)))
+  }
+
+  func testRecoverableListenerFailureClassificationExcludesPermanentErrors() {
+    XCTAssertTrue(PulseServer.isRecoverableListenerFailure(NWError.posix(.ETIMEDOUT)))
+    XCTAssertTrue(PulseServer.isRecoverableListenerFailure(NWError.posix(.ENETDOWN)))
+    XCTAssertFalse(PulseServer.isRecoverableListenerFailure(NWError.posix(.EACCES)))
+    XCTAssertFalse(PulseServer.isRecoverableListenerFailure(NWError.posix(.EADDRINUSE)))
+  }
+
+  func testRetryDelayUsesBoundedExponentialBackoff() {
+    XCTAssertEqual(PulseServer.retryDelay(for: 0), 0)
+    XCTAssertEqual(PulseServer.retryDelay(for: 1), 1)
+    XCTAssertEqual(PulseServer.retryDelay(for: 2), 2)
+    XCTAssertEqual(PulseServer.retryDelay(for: 6), 32)
+    XCTAssertEqual(PulseServer.retryDelay(for: 7), 60)
+    XCTAssertEqual(PulseServer.retryDelay(for: 100), 60)
+  }
+
+  @MainActor
+  func testRecoverableFailureRetriesAtScheduledTimeAndPublishesIt() async {
+    let scheduler = TestPulseRetryScheduler()
+    let now = Date(timeIntervalSince1970: 1_000)
+    var listeners: [FakePulseListener] = []
+    let server = PulseServer(
+      listenerFactory: { _, port in
+        let listener = FakePulseListener(port: port)
+        listeners.append(listener)
+        return listener
+      },
+      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {},
+      now: { now }, retryScheduler: scheduler.schedule)
+
+    server.start()
+    listeners[0].emit(.failed(.posix(.ETIMEDOUT)))
+    await Task.yield()
+
+    XCTAssertEqual(scheduler.delays, [1])
+    XCTAssertEqual(server.nextRetryAt, now.addingTimeInterval(1))
+    XCTAssertTrue(server.lastError?.contains("Retrying at") ?? false)
+    XCTAssertFalse(server.isRunning)
+
+    scheduler.fire(at: 0)
+    XCTAssertEqual(listeners.count, 4)
+    XCTAssertNil(server.nextRetryAt)
+    server.stop()
+  }
+
+  @MainActor
+  func testStoppingOrRestartingPulseMakesQueuedRetryCallbacksHarmless() async {
+    let scheduler = TestPulseRetryScheduler()
+    var listeners: [FakePulseListener] = []
+    let server = PulseServer(
+      listenerFactory: { _, port in
+        let listener = FakePulseListener(port: port)
+        listeners.append(listener)
+        return listener
+      },
+      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {},
+      retryScheduler: scheduler.schedule)
+
+    server.start()
+    listeners[0].emit(.failed(.posix(.ETIMEDOUT)))
+    await Task.yield()
+    server.stop()
+
+    XCTAssertTrue(scheduler.tasks[0].cancelled)
+    XCTAssertNil(server.nextRetryAt)
+    scheduler.fire(at: 0)
+    XCTAssertEqual(listeners.count, 2)
+
+    server.start()
+    XCTAssertEqual(listeners.count, 4)
+    scheduler.fire(at: 0)
+    XCTAssertEqual(listeners.count, 4)
+    server.stop()
+  }
+
+  @MainActor
+  func testRotatingTokenDuringBackoffRestartsPulseAndCancelsQueuedRetry() async throws {
+    let scheduler = TestPulseRetryScheduler()
+    var listeners: [FakePulseListener] = []
+    var storedToken = Self.testToken
+    let replacementToken = Data(repeating: 1, count: 32).base64EncodedString()
+    let server = PulseServer(
+      listenerFactory: { _, port in
+        let listener = FakePulseListener(port: port)
+        listeners.append(listener)
+        return listener
+      },
+      tokenLoader: { storedToken },
+      tokenRotator: {
+        storedToken = replacementToken
+        return replacementToken
+      },
+      activePortWriter: { _ in }, activePortRemover: {}, retryScheduler: scheduler.schedule)
+
+    server.start()
+    listeners[0].emit(.failed(.posix(.ETIMEDOUT)))
+    await Task.yield()
+    XCTAssertEqual(listeners.count, 2)
+    XCTAssertNotNil(server.nextRetryAt)
+
+    try server.rotateToken()
+
+    XCTAssertEqual(server.token, replacementToken)
+    XCTAssertEqual(listeners.count, 4)
+    XCTAssertTrue(scheduler.tasks[0].cancelled)
+    XCTAssertNil(server.nextRetryAt)
+    scheduler.fire(at: 0)
+    XCTAssertEqual(listeners.count, 4)
+    server.stop()
+  }
+
+  @MainActor
+  func testStableReadyPeriodResetsRetryBackoff() async {
+    let scheduler = TestPulseRetryScheduler()
+    var listeners: [FakePulseListener] = []
+    let server = PulseServer(
+      listenerFactory: { _, port in
+        let listener = FakePulseListener(port: port)
+        listeners.append(listener)
+        return listener
+      },
+      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {},
+      retryScheduler: scheduler.schedule)
+
+    server.start()
+    listeners[0].emit(.failed(.posix(.ETIMEDOUT)))
+    await Task.yield()
+    scheduler.fire(at: 0)
+    listeners[2].emit(.ready)
+    listeners[3].emit(.ready)
+    await Task.yield()
+
+    XCTAssertEqual(scheduler.delays, [1, PulseServer.retryStableReadyPeriod])
+    scheduler.fire(at: 1)
+    listeners[2].emit(.failed(.posix(.ETIMEDOUT)))
+    await Task.yield()
+
+    XCTAssertEqual(scheduler.delays.last, 1)
+    server.stop()
   }
 
   func testTerminalPipelineFailureStaysBehindAcceptedCommands() async {
@@ -577,7 +850,11 @@ final class PulseTests: XCTestCase {
   ) -> PulseCenter {
     let key = Defaults.Key<PulseDeliveryProfile>(
       "pulseDeliveryProfile", default: .everything, suite: deliveryProfileSuite)
-    return PulseCenter(symbolAvailability: symbolAvailability, deliveryProfileKey: key)
+    let sourcePoliciesKey = Defaults.Key<[String: String]>(
+      "pulseSourcePolicies", default: [:], suite: deliveryProfileSuite)
+    return PulseCenter(
+      symbolAvailability: symbolAvailability, deliveryProfileKey: key,
+      sourcePoliciesKey: sourcePoliciesKey)
   }
 
   private static let testToken = Data(repeating: 0, count: 32).base64EncodedString()
@@ -595,4 +872,32 @@ private final class FakePulseListener: PulseListening, @unchecked Sendable {
   func start(queue: DispatchQueue) {}
   func cancel() {}
   func emit(_ state: NWListener.State) { stateUpdateHandler?(state) }
+}
+
+@MainActor
+private final class TestPulseRetryScheduler {
+  final class Task: PulseRetryCancellable {
+    private(set) var cancelled = false
+    let action: @MainActor @Sendable () -> Void
+
+    init(action: @escaping @MainActor @Sendable () -> Void) {
+      self.action = action
+    }
+
+    func cancel() { cancelled = true }
+  }
+
+  private(set) var delays: [TimeInterval] = []
+  private(set) var tasks: [Task] = []
+
+  func schedule(
+    after delay: TimeInterval, action: @escaping @MainActor @Sendable () -> Void
+  ) -> any PulseRetryCancellable {
+    delays.append(delay)
+    let task = Task(action: action)
+    tasks.append(task)
+    return task
+  }
+
+  func fire(at index: Int) { tasks[index].action() }
 }

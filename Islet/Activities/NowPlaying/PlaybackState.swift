@@ -17,7 +17,19 @@ struct PlaybackState: Equatable {
   var shuffleMode = 0  // 0 = off
   var repeatMode = 0  // 0 = off, 1 = one, 2 = all
   var isAdvertisement = false
-  var supportsSkip15 = false  // podcast/audiobook ±15 s
+  /// The adapter reports these independently. A player may allow forward skipping while refusing
+  /// rewind, such as at the start of a streamed item.
+  var supportsSkipBackward15 = false
+  var supportsSkipForward15 = false
+  /// Compatibility shorthand for code that only needs to know whether either 15-second action is
+  /// available. Setting it applies to both directions, which is useful for synthetic test states.
+  var supportsSkip15: Bool {
+    get { supportsSkipBackward15 || supportsSkipForward15 }
+    set {
+      supportsSkipBackward15 = newValue
+      supportsSkipForward15 = newValue
+    }
+  }
   var parentBundleIdentifier = ""
 
   var isShuffleOn: Bool { shuffleMode != 0 }

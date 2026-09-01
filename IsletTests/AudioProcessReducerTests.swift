@@ -22,6 +22,10 @@ final class AudioProcessReducerTests: XCTestCase {
     XCTAssertTrue(reduce([Raw(bundleID: "", pid: 639, isPlayingOutput: true)]).isEmpty)
   }
 
+  func testWhitespaceBundleIdentifiersAreDropped() {
+    XCTAssertTrue(reduce([Raw(bundleID: "  ", pid: 639, isPlayingOutput: true)]).isEmpty)
+  }
+
   func testDenylistedProcessesAreDropped() {
     let out = reduce([
       Raw(bundleID: "systemsoundserverd", pid: 764, isPlayingOutput: true),
@@ -64,6 +68,17 @@ final class AudioProcessReducerTests: XCTestCase {
     ])
     XCTAssertEqual(out.map(\.displayBundleIdentifier), ["com.google.Chrome"])
     XCTAssertEqual(out[0].bundleIdentifier, "com.google.Chrome.helper")
+  }
+
+  func testHelperExclusionUsesTheParentDisplayIdentity() throws {
+    let helper = try XCTUnwrap(
+      reduce([Raw(bundleID: "com.google.Chrome.helper.Renderer", pid: 11407, isPlayingOutput: true)]
+      )
+      .first)
+    XCTAssertEqual(helper.displayBundleIdentifier, "com.google.Chrome")
+    XCTAssertFalse(
+      SourceFilter.acceptsAudioOnlySource(
+        helper.displayBundleIdentifier, excludedBundleIdentifiers: ["com.google.Chrome"]))
   }
 
   func testHelperAndParentBothPresentProduceOneRow() {

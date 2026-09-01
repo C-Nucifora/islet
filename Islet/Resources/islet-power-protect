@@ -1,0 +1,49 @@
+#!/bin/zsh
+
+set -eu
+
+readonly state_file="/var/db/islet-power-protect.previous"
+
+read_sleep_disabled() {
+  /usr/bin/pmset -g | /usr/bin/awk '$1 == "SleepDisabled" { print $2; exit }'
+}
+
+case "${1:-}" in
+  enable)
+    created_state=false
+    if [[ ! -f "$state_file" ]]; then
+      previous="$(read_sleep_disabled)"
+      if [[ "$previous" != "0" && "$previous" != "1" ]]; then
+        echo "Could not read the current SleepDisabled setting." >&2
+        exit 1
+      fi
+      umask 077
+      print -r -- "$previous" > "$state_file"
+      created_state=true
+    fi
+    if ! /usr/bin/pmset -a disablesleep 1; then
+      if [[ "$created_state" = true ]]; then
+        /bin/rm -f "$state_file"
+      fi
+      exit 1
+    fi
+    ;;
+  disable)
+    if [[ -f "$state_file" ]]; then
+      previous="$(<"$state_file")"
+      if [[ "$previous" != "0" && "$previous" != "1" ]]; then
+        echo "Power Protect saved an invalid prior setting." >&2
+        exit 1
+      fi
+      /usr/bin/pmset -a disablesleep "$previous"
+      /bin/rm -f "$state_file"
+    fi
+    ;;
+  status)
+    [[ -f "$state_file" ]]
+    ;;
+  *)
+    echo "Usage: islet-power-protect enable|disable|status" >&2
+    exit 64
+    ;;
+esac

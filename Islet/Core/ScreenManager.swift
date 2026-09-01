@@ -183,7 +183,7 @@ private final class PanelInstance {
 /// One notch panel per active screen, keyed by display UUID. Rebuilds on display changes;
 /// hides panels on screens showing a fullscreen app when that option is enabled.
 @MainActor
-final class ScreenManager {
+final class ScreenManager: ObservableObject {
   private struct PendingOpenedActivity {
     let id: String
     let allowingDisabledActivity: Bool
@@ -191,24 +191,46 @@ final class ScreenManager {
 
   static let shared = ScreenManager()
 
+  @Published private(set) var displayChoices: [DisplayChoice] = []
   private var instances: [String: PanelInstance] = [:]
   private var cancellables: Set<AnyCancellable> = []
   private var fullscreenTimer: AnyCancellable?
+  private var displayState = ScreenManagerDisplayState()
   private var fullscreenTransitionRefreshes: Set<AnyCancellable> = []
   private var fullscreenTransitionRevision = FullscreenTransitionRevision()
   private var pendingOpenedActivity: PendingOpenedActivity?
   private var isScreenAwake = true
   private var isSessionActive = true
+  private var lastActiveApplicationDisplayID: String?
   /// Last-known notch measurements per display, so a transient empty aux-area read can't downgrade
   /// a built-in screen to the 200pt fallback for the rest of the session.
   private var stickiness = NotchStickiness()
 
-  /// The view model on the screen under the mouse (for menu-bar-driven actions), else any.
+  /// The view model selected by the shared pointer, active app, preferred display and main-display
+  /// policy. Callers that perform more than one operation should use `performOnActionTarget` so a
+  /// concurrent display change cannot split one action across two panels.
   var viewModel: NotchViewModel? {
-    if let uuid = NSScreen.screenWithMouse?.displayUUID, let inst = instances[uuid] {
-      return inst.viewModel
+    resolveActionViewModel()
+  }
+
+  func performOnActionTarget(_ action: (NotchViewModel) -> Void) {
+    guard let viewModel = resolveActionViewModel() else { return }
+    action(viewModel)
+  }
+
+  /// Capture the active external app before opening an Islet-owned utility panel makes Islet the
+  /// frontmost process. The action resolver also refreshes this immediately before each action.
+  func captureActiveApplicationDisplay() {
+    guard let application = NSWorkspace.shared.frontmostApplication else { return }
+    captureActiveApplicationDisplay(application)
+  }
+
+  private func captureActiveApplicationDisplay(_ application: NSRunningApplication) {
+    guard application.processIdentifier != NSRunningApplication.current.processIdentifier else {
+      return
     }
-    return instances.values.first?.viewModel
+    lastActiveApplicationDisplayID = activeApplicationDisplayID(
+      processIdentifier: application.processIdentifier)
   }
 
   /// A completion is already visible when the session and screen are available and a visible
@@ -246,6 +268,7 @@ final class ScreenManager {
 
   func start() {
     guard cancellables.isEmpty else { return }
+    captureActiveApplicationDisplay()
     rebuild()
     NotificationCenter.default
       .publisher(for: NSApplication.didChangeScreenParametersNotification)
@@ -271,7 +294,12 @@ final class ScreenManager {
       .store(in: &cancellables)
     NSWorkspace.shared.notificationCenter
       .publisher(for: NSWorkspace.didActivateApplicationNotification)
-      .sink { [weak self] _ in
+      .sink { [weak self] notification in
+        if let application =
+          notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        {
+          self?.captureActiveApplicationDisplay(application)
+        }
         self?.reassertAll()
         self?.applyFullscreenVisibility()
       }
@@ -301,23 +329,29 @@ final class ScreenManager {
       .sink { [weak self] _ in self?.isSessionActive = true }
       .store(in: &cancellables)
     Defaults.publisher(.hideFromScreenRecording)
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] change in
-        Task { @MainActor in
-          if let instances = self?.instances.values {
-            for instance in instances {
-              instance.panel.sharingType = ScreenCaptureExclusionPolicy.current.sharingType(
-                exclusionRequested: change.newValue)
-            }
+        if let instances = self?.instances.values {
+          for instance in instances {
+            instance.panel.sharingType = ScreenCaptureExclusionPolicy.current.sharingType(
+              exclusionRequested: change.newValue)
           }
         }
       }
       .store(in: &cancellables)
     Defaults.publisher(.showOnAllDisplays)
       .dropFirst()
-      .sink { [weak self] _ in Task { @MainActor in self?.rebuild() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.rebuild() }
+      .store(in: &cancellables)
+    Defaults.publisher(.preferredDisplayID)
+      .dropFirst()
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.rebuild() }
       .store(in: &cancellables)
     Defaults.publisher(.hideInFullscreen)
-      .sink { [weak self] _ in Task { @MainActor in self?.updateFullscreenObserving() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.updateFullscreenObserving() }
       .store(in: &cancellables)
     updateFullscreenObserving()
   }
@@ -328,12 +362,97 @@ final class ScreenManager {
     cancellables.removeAll()
     for instance in instances.values { instance.stop() }
     instances.removeAll()
+    displayState.reset()
+    lastActiveApplicationDisplayID = nil
+  }
+
+  private func resolveActionViewModel() -> NotchViewModel? {
+    captureActiveApplicationDisplay()
+
+    // Re-resolve after one synchronous rebuild. This handles the debounce window after a display
+    // change or preference update without ever falling back to dictionary enumeration order.
+    for attempt in 0...1 {
+      let displays = DisplaySelection.snapshots()
+      let pointerID = NSScreen.screenWithMouse?.displayUUID.flatMap(DisplaySelection.stableID)
+      if let targetID = DisplaySelection.actionTargetID(
+        showOnAllDisplays: Defaults[.showOnAllDisplays],
+        storedPreference: Defaults[.preferredDisplayID],
+        displays: displays,
+        displayUnderPointerID: pointerID,
+        activeApplicationDisplayID: lastActiveApplicationDisplayID,
+        hostedPanelIDs: Set(instances.keys)),
+        let instance = instances[targetID]
+      {
+        return instance.viewModel
+      }
+      if attempt == 0 { rebuild() }
+    }
+    return nil
+  }
+
+  private func activeApplicationDisplayID(processIdentifier: pid_t) -> String? {
+    guard
+      let windowInfo = CGWindowListCopyWindowInfo(
+        [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+        as? [[String: Any]]
+    else { return nil }
+
+    let windows = windowInfo.compactMap { window -> ActiveApplicationWindowSnapshot? in
+      guard
+        let ownerPID = window[kCGWindowOwnerPID as String] as? pid_t,
+        let layer = window[kCGWindowLayer as String] as? Int,
+        let boundsDictionary = window[kCGWindowBounds as String] as? [String: Any],
+        let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary)
+      else { return nil }
+      return ActiveApplicationWindowSnapshot(
+        ownerProcessIdentifier: ownerPID, layer: layer, bounds: bounds)
+    }
+    let displays = NSScreen.screens.compactMap { screen -> ActionDisplayGeometry? in
+      guard
+        let displayID = screen.displayID,
+        let stableID = screen.displayUUID.flatMap(DisplaySelection.stableID),
+        CGDisplayIsOnline(displayID) != 0, CGDisplayIsActive(displayID) != 0,
+        CGDisplayIsAsleep(displayID) == 0
+      else { return nil }
+      return ActionDisplayGeometry(
+        stableID: stableID, bounds: CGDisplayBounds(displayID),
+        isMain: displayID == CGMainDisplayID())
+    }
+    return ActiveApplicationDisplayResolver.targetID(
+      processIdentifier: processIdentifier, windows: windows, displays: displays)
   }
 
   private func targetScreens() -> [NSScreen] {
-    if Defaults[.showOnAllDisplays] { return NSScreen.screens }
-    if let screen = NSScreen.builtin ?? NSScreen.main { return [screen] }
-    return []
+    let screens = NSScreen.screens
+    let displays = DisplaySelection.snapshots(from: screens)
+    displayChoices = DisplaySelection.choices(from: displays)
+
+    let storedPreference = Defaults[.preferredDisplayID]
+    let migratedPreference = DisplaySelection.migratedPreference(
+      storedPreference: storedPreference, displays: displays)
+    if let migratedPreference {
+      Defaults[.preferredDisplayID] = migratedPreference
+    }
+
+    let activePreference = migratedPreference ?? storedPreference
+    if let preferredID = DisplaySelection.resolvedPreferredID(
+      storedPreference: activePreference, displays: displays),
+      let choice = displayChoices.first(where: { $0.id == preferredID }),
+      Defaults[.preferredDisplayName] != choice.name
+    {
+      Defaults[.preferredDisplayName] = choice.name
+    }
+
+    let transition = displayState.reconcile(
+      showOnAllDisplays: Defaults[.showOnAllDisplays],
+      storedPreference: activePreference,
+      displays: displays)
+    let screensByID = Dictionary(
+      screens.compactMap { screen -> (String, NSScreen)? in
+        guard let id = screen.displayUUID.flatMap(DisplaySelection.stableID) else { return nil }
+        return (id, screen)
+      }, uniquingKeysWith: { first, _ in first })
+    return transition.panelIDs.compactMap { screensByID[$0] }
   }
 
   func rebuild() {

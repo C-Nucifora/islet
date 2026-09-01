@@ -61,7 +61,9 @@ counts for some build phases, so those runs show elapsed time without a percenta
 
 The reference tool reads a user-only token from
 `~/Library/Application Support/Islet/pulse-token` and sends one newline-delimited JSON command to
-TCP port `47717` on `127.0.0.1`. The server rejects messages over 64 KiB, invalid tokens, unsafe
+TCP port `47717` on `localhost`. Islet binds separate numeric loopback listeners for `127.0.0.1`
+and `::1`, so providers may use either address (or `localhost`) without exposing Pulse on a LAN
+interface. The server rejects messages over 64 KiB, invalid tokens, unsafe
 action URL schemes, more than three actions, and more than 100 simultaneous items.
 The listener accepts at most 16 concurrent clients, each socket is capped at 128 commands, and the
 shared token is capped at 512 accepted commands per rolling minute across reconnects. A

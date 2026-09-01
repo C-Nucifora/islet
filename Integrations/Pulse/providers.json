@@ -13,7 +13,7 @@
       "name": "Pulse CLI",
       "sources": ["cli"],
       "capabilities": ["events", "progress", "webActions"],
-      "setup": "Run Tools/islet-pulse.swift from this project."
+      "setup": "Run Tools/islet-pulse.swift from this project; it connects through localhost."
     },
     {
       "id": "github-actions",

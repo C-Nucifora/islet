@@ -33,10 +33,12 @@ final class ActivityLifecycleController {
   func startObserving() {
     guard cancellables.isEmpty else { return }
     Defaults.publisher(.disabledActivities)
-      .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.reconcile() }
       .store(in: &cancellables)
     Defaults.publisher(.calendarEnabled)
-      .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.reconcile() }
       .store(in: &cancellables)
     NotificationCenter.default.publisher(for: .keepAwakeSessionDidChange)
       .sink { [weak self] _ in Task { @MainActor in self?.reconcile() } }
@@ -65,9 +67,10 @@ final class ActivityLifecycleController {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-  private var launchAtLoginObserver: Defaults.Observation?
+  private var launchAtLoginObserver: AnyCancellable?
   private var activityLifecycleController: ActivityLifecycleController?
   private var audioDeviceLifecycleCancellable: AnyCancellable?
+  private let reminderCommandHotKey = ReminderCommandHotKey.shared
   /// Kept by the delegate for the entire app lifetime so notification responses still reach the
   /// timer when Islet has no normal application window.
   private let timerCompletionNotifications = TimerCompletionNotifications.shared
@@ -94,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       Log.app.info("Launched as a test host; skipping monitor startup")
       return
     }
+    reminderCommandHotKey.start()
     timerCompletionNotifications.start()
     Task { @MainActor in
       ActivityEnablement.migrateLegacyPreferencesIfNeeded()
@@ -115,6 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       ActivityCenter.shared.register(AppState.t3Code)
       ActivityCenter.shared.register(AppState.pulse)
       ActivityCenter.shared.register(AppState.continuity)
+      await AppState.t3Code.loadConnectAccount()
       #if DEBUG
         let registeredIDs = Set(ActivityCenter.shared.activities.map(\.id))
         let missingIDs = Set(ActivityCatalog.defaultOrder).subtracting(registeredIDs)
@@ -131,12 +136,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       }
       HUDController.shared.startObserving()
       LaunchAtLogin.sync()
-      launchAtLoginObserver = Defaults.observe(.launchAtLogin) { change in
-        Task { @MainActor in LaunchAtLogin.apply(change.newValue) }
-      }
+      launchAtLoginObserver = LaunchAtLogin.observe()
       OnboardingOpener.openIfNeeded()
     }
     Log.app.info("Islet launched")
+  }
+
+  func applicationDidBecomeActive(_ notification: Notification) {
+    guard !isRunningTests else { return }
+    reminderCommandHotKey.start()
   }
 
   func applicationWillTerminate(_ notification: Notification) {
@@ -144,6 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // AppKit invokes this delegate on the main thread. Media shutdown is intentionally synchronous:
     // otherwise the app can exit before the watcher's serial queue terminates its helper process.
     MainActor.assumeIsolated {
+      reminderCommandHotKey.stop()
       KeepAwakeManager.shared.stop(reason: .quit)
       AppState.nowPlaying.stop()
       AppState.battery.stop()
@@ -159,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       AudioDeviceMonitor.shared.stop()
       HUDController.shared.stop()
       SystemEventBus.shared.stopAll()
+      EventSourcePreferences.shared.flush()
       EventMonitors.shared.stop()
       ScreenManager.shared.stop()
       activityLifecycleController?.stopObserving()
@@ -205,14 +215,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ])
     activityLifecycleController = controller
     controller.startObserving()
-    audioDeviceLifecycleCancellable = Defaults.publisher(.disabledEventSources)
+    audioDeviceLifecycleCancellable = EventSourcePreferences.shared.$disabledSourceIDs
       .sink { [weak self] _ in Task { @MainActor in self?.reconcileAudioDeviceLifecycle() } }
     reconcileAudioDeviceLifecycle()
   }
 
   @MainActor
   private func reconcileAudioDeviceLifecycle() {
-    if Defaults[.disabledEventSources].contains("audiodevice") {
+    if !EventSourcePreferences.shared.isEnabled("audiodevice") {
       AudioDeviceMonitor.shared.stop()
     } else {
       AudioDeviceMonitor.shared.start()
