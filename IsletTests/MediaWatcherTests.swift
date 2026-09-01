@@ -255,6 +255,7 @@ final class MediaWatcherTests: XCTestCase {
     XCTAssertEqual(
       MediaWatcher.recoveryDecision(
         for: .nowPlaying(source, playback),
+        snapshotElapsedTime: playback.elapsed,
         activeBundleIdentifiers: ["company.thebrowser.Browser"],
         previous: nil),
       .accept(.nowPlaying(source, playback)))
@@ -267,6 +268,7 @@ final class MediaWatcherTests: XCTestCase {
     XCTAssertEqual(
       MediaWatcher.recoveryDecision(
         for: .nowPlaying(source, playback),
+        snapshotElapsedTime: playback.elapsed,
         activeBundleIdentifiers: ["company.thebrowser.Browser"],
         previous: nil),
       .awaitConfirmation(recoveryEvidence(source: source, state: playback)))
@@ -280,6 +282,7 @@ final class MediaWatcherTests: XCTestCase {
     XCTAssertEqual(
       MediaWatcher.recoveryDecision(
         for: .nowPlaying(source, second),
+        snapshotElapsedTime: second.elapsed,
         activeBundleIdentifiers: ["company.thebrowser.Browser"],
         previous: recoveryEvidence(source: source, state: first)),
       .awaitConfirmation(recoveryEvidence(source: source, state: second)))
@@ -292,6 +295,7 @@ final class MediaWatcherTests: XCTestCase {
 
     let decision = MediaWatcher.recoveryDecision(
       for: .nowPlaying(source, second),
+      snapshotElapsedTime: second.elapsed,
       activeBundleIdentifiers: ["company.thebrowser.Browser"],
       previous: recoveryEvidence(source: source, state: first))
 
@@ -303,6 +307,28 @@ final class MediaWatcherTests: XCTestCase {
     XCTAssertTrue(acceptedState.isPlaying)
   }
 
+  func testSparsePausedSnapshotCannotConfirmAgainstLaterPosition() {
+    let source = key("company.thebrowser.Browser", 15305)
+    let first = recoveryState(title: "Recovered video", elapsed: 0, isPlaying: false)
+    let second = recoveryState(title: "Recovered video", elapsed: 1, isPlaying: false)
+    let firstDecision = MediaWatcher.recoveryDecision(
+      for: .nowPlaying(source, first),
+      snapshotElapsedTime: nil,
+      activeBundleIdentifiers: ["company.thebrowser.Browser"],
+      previous: nil)
+    guard case .awaitConfirmation(let firstEvidence) = firstDecision else {
+      return XCTFail("expected sparse snapshot to await confirmation")
+    }
+
+    XCTAssertEqual(
+      MediaWatcher.recoveryDecision(
+        for: .nowPlaying(source, second),
+        snapshotElapsedTime: second.elapsed,
+        activeBundleIdentifiers: ["company.thebrowser.Browser"],
+        previous: firstEvidence),
+      .awaitConfirmation(recoveryEvidence(source: source, state: second)))
+  }
+
   func testChangedMediaIdentityReplacesPendingRecoveryEvidence() {
     let source = key("company.thebrowser.Browser", 15305)
     let first = recoveryState(title: "First video", elapsed: 40, isPlaying: false)
@@ -311,6 +337,7 @@ final class MediaWatcherTests: XCTestCase {
     XCTAssertEqual(
       MediaWatcher.recoveryDecision(
         for: .nowPlaying(source, second),
+        snapshotElapsedTime: second.elapsed,
         activeBundleIdentifiers: ["company.thebrowser.Browser"],
         previous: recoveryEvidence(source: source, state: first)),
       .awaitConfirmation(recoveryEvidence(source: source, state: second)))
@@ -323,6 +350,7 @@ final class MediaWatcherTests: XCTestCase {
     XCTAssertEqual(
       MediaWatcher.recoveryDecision(
         for: .nowPlaying(source, playback),
+        snapshotElapsedTime: playback.elapsed,
         activeBundleIdentifiers: ["com.apple.Music"],
         previous: nil),
       .reject)
@@ -378,7 +406,7 @@ final class MediaWatcherTests: XCTestCase {
     let collectedUpdates = LockedUpdates()
     let playbackNotConfirmed = expectation(description: "third recovery result is unconfirmed")
     let watcher = MediaWatcher(
-      initialSnapshotDelay: 1,
+      initialSnapshotDelay: 0.01,
       commandProvider: { kind in
         if case .snapshot = kind, recoveryActive.value { snapshotAttempts.increment() }
         return MediaWatcher.HelperCommand(
@@ -394,11 +422,16 @@ final class MediaWatcherTests: XCTestCase {
     }
     let updates = Task {
       for await update in watcher.updates {
-        collectedUpdates.append(update)
-        if case .idle = update {
+        if case .idle = update, !recoveryActive.value {
+          // The fixture forces a startup snapshot before this live record. Make the live idle
+          // update the recovery barrier so startup output cannot affect the recovery assertions.
+          try? FileManager.default.removeItem(at: stateFile)
           recoveryActive.set()
+          collectedUpdates.append(update)
           watcher.setPlaybackRecoverySources(["company.thebrowser.Browser"])
+          continue
         }
+        if recoveryActive.value { collectedUpdates.append(update) }
       }
     }
 
@@ -413,6 +446,16 @@ final class MediaWatcherTests: XCTestCase {
 
     watcher.stop()
     updates.cancel()
+  }
+
+  func testInvalidSnapshotExhaustionClearsPendingRecoveryEvidence() throws {
+    try assertRecoveryFailureClearsPendingEvidence(mode: "invalid")
+  }
+
+  func testTimeoutExhaustionClearsPendingRecoveryEvidence() throws {
+    try assertRecoveryFailureClearsPendingEvidence(
+      mode: "timeout",
+      snapshotTimeouts: .init(startup: 0.5, idle: 0.15, total: 1))
   }
 
   func testNonActiveRecoverySnapshotRetriesBeforeAcceptingTheActiveApp() throws {
@@ -650,6 +693,55 @@ final class MediaWatcherTests: XCTestCase {
       album: state.album,
       duration: state.duration,
       elapsed: state.elapsed)
+  }
+
+  private func assertRecoveryFailureClearsPendingEvidence(
+    mode: String,
+    snapshotTimeouts: MediaWatcher.SnapshotTimeouts = .production
+  ) throws {
+    let helper = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .appendingPathComponent("Fixtures/recovery-failure-helper.pl")
+    let stateFile = FileManager.default.temporaryDirectory
+      .appendingPathComponent("recovery-failure-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: stateFile) }
+
+    XCTAssertTrue(FileManager.default.fileExists(atPath: helper.path))
+    let idle = expectation(description: "stream reports idle")
+    let recoveryStopped = expectation(description: "recovery failure budget is exhausted")
+    let recoveryActive = LockedFlag()
+    let snapshotAttempts = LockedCounter()
+    let watcher = MediaWatcher(
+      snapshotTimeouts: snapshotTimeouts,
+      initialSnapshotDelay: 0.01,
+      commandProvider: { kind in
+        if case .snapshot = kind, recoveryActive.value { snapshotAttempts.increment() }
+        return MediaWatcher.HelperCommand(
+          executableURL: URL(fileURLWithPath: "/usr/bin/perl"),
+          arguments: [helper.path, kind.rawValue, stateFile.path, mode])
+      },
+      snapshotBackoff: { _ in 0.01 })
+    watcher.onStatus = { status in
+      if status.contains("recovery stopped") { recoveryStopped.fulfill() }
+    }
+    let updates = Task {
+      for await update in watcher.updates {
+        guard case .idle = update else { continue }
+        // Ignore the fixture's forced startup snapshot and begin counting from the first live
+        // idle record. By this point MediaWatcher has reaped any in-flight startup helper.
+        try? FileManager.default.removeItem(at: stateFile)
+        recoveryActive.set()
+        idle.fulfill()
+        watcher.setPlaybackRecoverySources(["company.thebrowser.Browser"])
+        return
+      }
+    }
+
+    watcher.start()
+    wait(for: [idle, recoveryStopped], timeout: 5, enforceOrder: true)
+    XCTAssertEqual(snapshotAttempts.value, 3)
+    XCTAssertNil(watcher.pendingRecoveryEvidence)
+    watcher.stop()
+    updates.cancel()
   }
 
   func testIgnoredExpandsToNothing() {
