@@ -745,6 +745,7 @@ final class MediaWatcher: @unchecked Sendable {
           scheduleRecoverySnapshot(after: delay)
         } else {
           recoveryEvidence = nil
+          onStatus?("Streaming (playback not confirmed)")
         }
       case .reject:
         recoveryEvidence = nil
