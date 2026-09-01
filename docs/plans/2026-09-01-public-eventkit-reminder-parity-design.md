@@ -62,11 +62,10 @@ The date editor converts through a supplied calendar and time zone. Tests use fi
 Alarms become plain values so mapping and validation can be tested without saving EventKit objects:
 
 ```swift
-enum ReminderAlarmValue: Equatable, Sendable, Identifiable {
-  case absolute(id: UUID, date: Date)
-  case relative(id: UUID, offset: TimeInterval)
+enum ReminderAlarmValue: Equatable, Sendable {
+  case absolute(date: Date)
+  case relative(offset: TimeInterval)
   case location(
-    id: UUID,
     title: String,
     latitude: Double?,
     longitude: Double?,
@@ -75,11 +74,13 @@ enum ReminderAlarmValue: Equatable, Sendable, Identifiable {
 }
 ```
 
+Semantic alarm values do not contain editor row IDs. The alarm editor wraps each value in a separate row model with a UUID. Re-reading the same `EKAlarm` must produce an equal value and an equal revision fingerprint.
+
 Location search uses public MapKit search. A selected result supplies title and coordinates. The user chooses arrival or departure and a radius. Islet does not need to capture the user's location to resolve a typed place.
 
 EventKit may reject alarms for a provider or truncate excess alarms. Islet stages the save without committing, verifies every changed alarm, commits, then re-fetches and checks again. A staged mismatch resets the EventKit store and keeps the editor open. A provider that normalizes data only after commit returns its actual saved value and an explicit error rather than a false success.
 
-Existing alarm types that the editor cannot represent are never removed. Alarm edits remove and replace only alarms Islet decoded faithfully. Older email, audio, malformed, unknown, and deprecated procedure alarms stay attached. The editor explains their presence and offers Open in Reminders.
+Existing alarm types that the editor cannot represent are never removed. Alarm edits remove and replace only alarms Islet decoded faithfully. Older email, audio, malformed, unknown, and deprecated procedure alarms stay attached. The store treats their original array positions as anchors. It fills the original editable slots from the user's edited values, drops unused editable slots, and appends extra editable alarms after the last original slot. The same deterministic merge applies to recurrence arrays. The editor explains opaque values and offers Open in Reminders.
 
 ### Recurrence values
 
@@ -97,7 +98,7 @@ A recurrence value mirrors the writable `EKRecurrenceRule` constructor:
 
 The draft stores an array because `EKCalendarItem.recurrenceRules` is an array. Common presets produce one simple rule. The custom editor exposes every selector supported by the public initializer.
 
-EventKit recurrence rules are immutable. Islet replaces only rules it can reproduce through the public initializer and preserves opaque rules, including rules with a first weekday that the public initializer cannot set. It rejects an ambiguous mixed edit and sends the user to Reminders.app. A recurring reminder must have a due date, and validation rejects a recurrence patch without one before EventKit save.
+EventKit recurrence rules are immutable. Islet reconstructs a candidate rule and compares every readable property. It replaces only rules it can reproduce through the public initializer and preserves opaque rules, including rules whose calendar identifier or first weekday differs from the reconstructed value. Nil and empty selector arrays have one canonical representation. Set positions require at least one selector that produces a result set. A recurring reminder must have a due date, and validation rejects a recurrence patch without one before EventKit save.
 
 ### Editable snapshot and patch
 
@@ -120,7 +121,7 @@ Creation uses a full `ReminderEditableFields` value rather than a patch.
 
 ### Revisions
 
-The revision fingerprint expands to include every public field Islet exposes, plus `lastModifiedDate`, list identifier, completion date, inherited calendar-item location and time zone, and fingerprints for every alarm and recurrence rule. `lastModifiedDate` remains the first broad signal. The value fingerprint protects accounts that return a missing or coarse modification date.
+The revision fingerprint expands to include every public field Islet exposes, plus `lastModifiedDate`, list identifier, completion date, inherited calendar-item location and time zone, and every readable property on every alarm and recurrence rule. Alarm fingerprints include raw type, absolute date, relative offset, structured-location title, coordinate, radius, proximity, email address, sound name, and any readable URL. Recurrence fingerprints include calendar identifier, frequency, interval, first weekday, every selector, and the full end. Editability is separate from fingerprinting. The implementation never uses `description` as revision data. `lastModifiedDate` remains the first broad signal. The value fingerprint protects accounts that return a missing or coarse modification date.
 
 An external change after the editor opens rejects the submission. Islet does not merge two writers silently. The editor stays open and offers Reload.
 
@@ -178,7 +179,23 @@ The list manager opens from the reminder column. It supports New List, Rename, C
 
 ## Provider flow
 
-On successful create or edit, the provider updates its visible value from the record returned by EventKit, then keeps observing `EKEventStoreChanged`. The store applies only fields marked as changed. On failure, the provider leaves the old dashboard item in place and keeps the editor open.
+The write API distinguishes an exact save from a provider-normalized commit:
+
+```swift
+struct ReminderNormalizationMismatch: Equatable, Sendable {
+  let field: ReminderField
+  let reason: String
+}
+
+enum ReminderWriteOutcome: Equatable, Sendable {
+  case saved(ReminderWriteRecord)
+  case committedWithNormalization(
+    actual: ReminderWriteRecord,
+    mismatches: [ReminderNormalizationMismatch])
+}
+```
+
+On `.saved`, the provider publishes the returned record and closes the editor. On `.committedWithNormalization`, the provider publishes the provider's actual committed record, keeps the requested field values in the editor, and shows every field-specific mismatch. It also rebases the draft's identifier, origin, baseline, and revision onto `actual`. A normalized create therefore becomes an edit of the committed reminder, and a retry patches that reminder at its new revision instead of creating a duplicate. Only a failure before commit leaves the old dashboard item unchanged. The store applies only fields marked as changed and keeps observing `EKEventStoreChanged` after either committed outcome.
 
 Creating a reminder selects the writable system default. If that list is absent or read-only, Islet selects the first writable list in the same stable order shown by the picker. Once the user chooses a list, a missing or read-only selection fails without falling back.
 
@@ -202,7 +219,7 @@ Raw EventKit text appears only as a final detail after Islet's actionable messag
 
 ## App Intent
 
-After the in-app writer is complete, Islet will add a basic Create Reminder App Intent for title, notes, due date, priority, and writable list. It calls the same coordinator and does not start a second EventKit implementation.
+After the in-app writer has passed provider and cross-client checks, Islet will add a basic Create Reminder App Intent for title, notes, due date, priority, and writable list. It calls the same coordinator and does not start a second EventKit implementation.
 
 The intent returns a clear permission or provider error. It does not try to represent the full advanced editor in Shortcuts parameters.
 
@@ -211,8 +228,12 @@ The intent returns a clear permission or provider error. It does not try to repr
 Automated tests cover:
 
 - date-only, timed, floating, explicit-zone, and daylight-saving round trips
+- invalid Gregorian dates, spring-forward gaps, fall-back overlaps, and Mac time-zone changes
 - alarm mapping, validation, unsupported-alarm preservation, and provider rejection
+- stable alarm fingerprints that ignore editor row identity
+- every readable opaque-alarm property participating in stale-write detection
 - simple and advanced recurrence mapping and end conditions
+- recurrence calendar identifiers, first weekdays, selector canonicalization, and multiple rules
 - required due dates for recurrence
 - field-level patches and explicit clearing
 - external edit rejection across every writable operation
@@ -220,6 +241,7 @@ Automated tests cover:
 - writable and immutable list behavior
 - keyboard-facing presentation decisions and error state
 - App Intent input normalization through its writer boundary
+- normalized-create and normalized-update retries against the committed identifier and revision
 
 Manual checks cover behavior EventKit cannot emulate in a unit test:
 
@@ -238,5 +260,6 @@ Unavailable account types are recorded as not tested. They are not reported as p
 1. Land PR #180 after its empty-state and undo repair.
 2. Add plain edit models, mapper coverage, field-level patches, core fields, and deletion.
 3. Add alarm, location search, and recurrence editors.
-4. Add plain-list management and the Create Reminder App Intent.
-5. Run cross-client checks, request Ned's review, and merge only after CI and review pass.
+4. Add plain-list management.
+5. Run provider and cross-client checks.
+6. Add the Create Reminder App Intent, rerun regression checks, request Ned's review, and merge only after CI and review pass.
