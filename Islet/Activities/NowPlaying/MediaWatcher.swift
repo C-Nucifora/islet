@@ -42,7 +42,7 @@ final class MediaWatcher: @unchecked Sendable {
     let artist: String
     let album: String
     let duration: TimeInterval
-    let elapsed: TimeInterval
+    let elapsed: TimeInterval?
 
     fileprivate func hasSameIdentity(as other: RecoveryEvidence) -> Bool {
       source == other.source && title == other.title && artist == other.artist
@@ -268,6 +268,10 @@ final class MediaWatcher: @unchecked Sendable {
   /// restart so support reports still contain the reason a private framework failed.
   var onDiagnostic: (@Sendable (String?) -> Void)?
 
+  var pendingRecoveryEvidence: RecoveryEvidence? {
+    onQueueSync { recoveryEvidence }
+  }
+
   // Created eagerly in init (not lazily by the consumer) so `continuation` is a `let` published
   // before any producer-queue work can read it. This avoids a cross-thread data race.
   let updates: AsyncStream<AdapterUpdate>
@@ -378,12 +382,11 @@ final class MediaWatcher: @unchecked Sendable {
     }
   }
 
-  private func onQueueSync(_ operation: () -> Void) {
+  private func onQueueSync<Result>(_ operation: () -> Result) -> Result {
     if DispatchQueue.getSpecific(key: queueKey) != nil {
-      operation()
-    } else {
-      queue.sync(execute: operation)
+      return operation()
     }
+    return queue.sync(execute: operation)
   }
 
   /// Detaches handlers and drops the current process/pipe. Must run on `queue`.
@@ -681,6 +684,7 @@ final class MediaWatcher: @unchecked Sendable {
     cleanupSnapshot(terminate: true)
     snapshotFailureCount += 1
     let willRetry = recoveryGeneration == nil || recoverySnapshotAttemptCount < 3
+    if recoveryGeneration != nil, !willRetry { recoveryEvidence = nil }
     let delay = snapshotBackoff(snapshotFailureCount)
     let reason = "snapshot \(timeout.rawValue) timeout"
     recordHelperFailure(kind: .snapshot, reason: reason, stderr: capturedStderr)
@@ -721,14 +725,16 @@ final class MediaWatcher: @unchecked Sendable {
         recoveryGeneration: recoveryGeneration)
       return
     }
-    guard let parsed = Self.parseInitialSnapshot(data: capture.data) else {
+    guard let parsedSnapshot = Self.parseInitialSnapshotDetails(data: capture.data) else {
       snapshotFailed(
         reason: "invalid output", stderr: stderr, recoveryGeneration: recoveryGeneration)
       return
     }
+    let parsed = parsedSnapshot.update
     if recoveryGeneration != nil {
       switch Self.recoveryDecision(
         for: parsed,
+        snapshotElapsedTime: parsedSnapshot.elapsedTime,
         activeBundleIdentifiers: playbackRecoveryBundleIdentifiers,
         previous: recoveryEvidence)
       {
@@ -763,9 +769,14 @@ final class MediaWatcher: @unchecked Sendable {
   }
 
   static func parseInitialSnapshot(data: Data) -> AdapterUpdate? {
+    parseInitialSnapshotDetails(data: data)?.update
+  }
+
+  private static func parseInitialSnapshotDetails(data: Data) -> AdapterParser.ParsedSnapshot? {
     guard let line = String(data: data, encoding: .utf8) else { return nil }
-    let parsed = AdapterParser.parseSnapshot(line: line)
-    return parsed == .ignored ? nil : parsed
+    guard let parsed = AdapterParser.parseSnapshotDetails(line: line), parsed.update != .ignored
+    else { return nil }
+    return parsed
   }
 
   /// Drains bytes already buffered by the kernel without waiting for EOF. A helper descendant can
@@ -832,6 +843,7 @@ final class MediaWatcher: @unchecked Sendable {
     guard shouldRetry else { return }
     snapshotFailureCount += 1
     let willRetry = recoveryGeneration == nil || recoverySnapshotAttemptCount < 3
+    if recoveryGeneration != nil, !willRetry { recoveryEvidence = nil }
     let delay = snapshotBackoff(snapshotFailureCount)
     recordHelperFailure(kind: .snapshot, reason: "snapshot \(reason)", stderr: stderr)
     let action = willRetry ? "retrying in \(Self.secondsLabel(delay))" : "recovery stopped"
@@ -940,6 +952,7 @@ final class MediaWatcher: @unchecked Sendable {
 
   static func recoveryDecision(
     for update: AdapterUpdate,
+    snapshotElapsedTime: TimeInterval?,
     activeBundleIdentifiers: Set<String>,
     previous: RecoveryEvidence?
   ) -> RecoveryDecision {
@@ -954,12 +967,14 @@ final class MediaWatcher: @unchecked Sendable {
       artist: state.artist,
       album: state.album,
       duration: state.duration,
-      elapsed: state.elapsed)
+      elapsed: snapshotElapsedTime)
     if let previous,
       current.hasSameIdentity(as: previous),
-      current.elapsed.isFinite,
-      previous.elapsed.isFinite,
-      current.elapsed - previous.elapsed >= recoveryElapsedAdvanceThreshold
+      let currentElapsed = current.elapsed,
+      let previousElapsed = previous.elapsed,
+      currentElapsed.isFinite,
+      previousElapsed.isFinite,
+      currentElapsed - previousElapsed >= recoveryElapsedAdvanceThreshold
     {
       var confirmedState = state
       confirmedState.isPlaying = true
