@@ -47,7 +47,7 @@ final class ReminderDashboardReconciliationTests: XCTestCase {
     XCTAssertFalse(reconciliation.requiresReload)
   }
 
-  func testPriorHasMoreIsRetainedWhenVisibleItemsDoNotCreateAVacancy() {
+  func testPriorHasMoreReloadsAfterReplacementEvenWhenVisibleCountStaysConstant() {
     let original = item("report", daysFromNow: 1)
     let renamed = ReminderItem(
       id: original.id, title: "Renamed report", dueDate: original.dueDate,
@@ -59,6 +59,20 @@ final class ReminderDashboardReconciliationTests: XCTestCase {
 
     XCTAssertEqual(reconciliation.reminders, [renamed])
     XCTAssertTrue(reconciliation.hasMoreReminders)
-    XCTAssertFalse(reconciliation.requiresReload)
+    XCTAssertTrue(reconciliation.requiresReload)
+  }
+
+  func testRankLoweringReplacementReloadsHiddenCandidateAtDisplayLimit() {
+    let visible = (1...8).map { item("r\($0)", daysFromNow: $0) }
+    let lowered = item("r1", daysFromNow: 10)
+
+    let reconciliation = ReminderDashboardReconciliation.make(
+      visibleReminders: visible, hasMoreReminders: true,
+      mutation: .replace(originalID: "r1", with: lowered), now: now)
+
+    XCTAssertEqual(
+      reconciliation.reminders.map(\.id), ["r2", "r3", "r4", "r5", "r6", "r7", "r8", "r1"])
+    XCTAssertTrue(reconciliation.hasMoreReminders)
+    XCTAssertTrue(reconciliation.requiresReload)
   }
 }
