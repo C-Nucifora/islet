@@ -26,6 +26,7 @@ final class RemindersProvider: ObservableObject {
   @Published private(set) var lastActionError: String?
   @Published private(set) var availableLists: [ReminderListItem] = []
   @Published private(set) var completionUndo: ReminderWriteCoordinator.CompletionUndo?
+  @Published private(set) var editorSession: ReminderEditorSession?
 
   var accessDenied: Bool { !authorization.canRead }
 
@@ -37,6 +38,7 @@ final class RemindersProvider: ObservableObject {
   private let storeChangeDebouncer = ReminderReloadDebouncer()
   private var reloadState = ReminderReloadState()
   private var undoExpiryTask: Task<Void, Never>?
+  private var pendingReconciliationTask: Task<Void, Never>?
 
   init(store: EKEventStore = EKEventStore(), writes: ReminderWriteCoordinator? = nil) {
     self.store = store
@@ -86,9 +88,12 @@ final class RemindersProvider: ObservableObject {
     reloadState.invalidate(clearOptimisticCompletions: true)
     undoExpiryTask?.cancel()
     undoExpiryTask = nil
+    pendingReconciliationTask?.cancel()
+    pendingReconciliationTask = nil
     reminders = []
     availableLists = []
     completionUndo = nil
+    if editorSession?.isPending != true { editorSession = nil }
     hasMoreReminders = false
     loadState = .idle
     lastActionError = nil
@@ -217,13 +222,195 @@ final class RemindersProvider: ObservableObject {
     availableLists = writes.lists()
     hasMoreReminders = result.hasMore
     loadState = .loaded
+    reconcilePendingEditorSessionAfterAcceptedReload()
   }
 
-  func openRemindersApp() {
+  @discardableResult
+  func openRemindersApp() -> Bool {
     guard
       let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.reminders")
-    else { return }
+    else { return false }
     NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+    return true
+  }
+
+  var hasPendingEditorSession: Bool { editorSession?.isPending == true }
+
+  @discardableResult
+  func beginEditorSession(for item: ReminderItem?) -> Bool {
+    if editorSession?.isPending == true { return true }
+
+    availableLists = writes.lists()
+    let coordinatorDraft: ReminderCoordinatorDraft
+    if let item {
+      switch writes.writeDraft(for: item) {
+      case .success(let draft):
+        coordinatorDraft = draft
+      case .failure(let error):
+        report(error, action: "open \(item.title) for editing")
+        return false
+      }
+    } else {
+      coordinatorDraft = ReminderCoordinatorDraft(
+        title: "",
+        listID: ReminderEditorPresentation.initialListID(
+          defaultID: writes.defaultListID(), lists: availableLists))
+    }
+
+    var calendar = Calendar(identifier: .gregorian)
+    let displayTimeZone = TimeZone.current
+    calendar.timeZone = displayTimeZone
+    editorSession = ReminderEditorSession(
+      draft: coordinatorDraft, calendar: calendar, displayTimeZone: displayTimeZone)
+    lastActionError = nil
+    return true
+  }
+
+  func updateEditorDraft(_ draft: ReminderCoordinatorDraft) {
+    guard var session = editorSession else { return }
+    session.draft = draft
+    editorSession = session
+  }
+
+  func reportEditorFieldError(_ message: ReminderEditorFieldMessage) {
+    guard var session = editorSession else { return }
+    session.fieldMessages.removeAll { $0.field == message.field }
+    session.fieldMessages.append(message)
+    editorSession = session
+  }
+
+  func cancelEditorSession() {
+    guard editorSession?.isPending != true else { return }
+    editorSession = nil
+  }
+
+  func editorWindowDidClose() {
+    cancelEditorSession()
+  }
+
+  func startNewEditorSession() {
+    if editorSession?.isPending == true { return }
+    _ = beginEditorSession(for: nil)
+  }
+
+  @discardableResult
+  func submitEditorSession() -> Bool {
+    guard var session = editorSession else { return false }
+    switch ReminderEditorPresentation.prepareForSubmission(session.draft) {
+    case .invalid(let draft, let messages):
+      session.draft = draft
+      session.fieldMessages = messages
+      session.generalMessage = messages.first?.message
+      editorSession = session
+      lastActionError = session.generalMessage
+      return false
+    case .valid(let draft):
+      session.draft = draft
+      session.fieldMessages = []
+      session.generalMessage = nil
+    }
+
+    let originalID = session.draft.reminderID
+    let result =
+      originalID == nil
+      ? writes.createOutcome(session.draft)
+      : writes.updateOutcome(session.draft)
+    switch result {
+    case .failure(let error):
+      session.generalMessage = error.localizedDescription
+      editorSession = session
+      report(error, action: originalID == nil ? "create reminder" : "update reminder")
+      availableLists = writes.lists()
+      return false
+    case .success(let write):
+      availableLists = writes.lists()
+      switch ReminderEditorPresentation.disposition(for: write) {
+      case .close:
+        switch write.outcome {
+        case .saved(let record):
+          if let originalID {
+            reconcileDashboard(.replace(originalID: originalID, with: record.item))
+          } else {
+            reconcileDashboard(.insert(record.item))
+          }
+        case .noChanges, .committedWithNormalization, .commitStatusUnknown:
+          break
+        }
+        editorSession = nil
+        lastActionError = nil
+        return true
+      case .keepOpen(let draft, let messages):
+        session.draft = draft
+        session.fieldMessages = messages
+        session.generalMessage =
+          draft.retryBlockedReason
+          ?? "Reminders saved different values. Review the highlighted fields."
+        editorSession = session
+        lastActionError = session.generalMessage
+        requestEditorReload()
+        return false
+      case .pending(let draft, let message):
+        session.draft = draft
+        session.fieldMessages = []
+        session.generalMessage = message
+        editorSession = session
+        lastActionError = message
+        requestEditorReload()
+        return false
+      }
+    }
+  }
+
+  func deletionPayload() -> ReminderEditorDeletionPayload? {
+    guard let session = editorSession,
+      ReminderEditorPresentation.canDelete(session.draft)
+    else {
+      return nil
+    }
+    return ReminderEditorDeletionPayload(sessionID: session.id, draft: session.draft)
+  }
+
+  func confirmDeletion(_ payload: ReminderEditorDeletionPayload) {
+    let name = payload.draft.baselineRecord?.title ?? payload.draft.title
+    let alert = NSAlert()
+    alert.messageText = "Delete \"\(name)\"?"
+    alert.informativeText = "This reminder will be removed from its Reminders list."
+    alert.alertStyle = .warning
+    configure(
+      alert, buttons: ReminderEditorAlertConfiguration.deleteButtons)
+    guard alert.runModal() == .alertSecondButtonReturn else { return }
+
+    switch writes.delete(payload.draft) {
+    case .success:
+      if editorSession?.id == payload.sessionID { editorSession = nil }
+      lastActionError = nil
+      availableLists = writes.lists()
+      requestEditorReload()
+    case .failure(let error):
+      if var session = editorSession, session.id == payload.sessionID {
+        session.generalMessage = error.localizedDescription
+        editorSession = session
+      }
+      report(error, action: "delete \(name)")
+      availableLists = writes.lists()
+    }
+  }
+
+  func confirmRemindersHandoffAndStopWaiting() {
+    guard editorSession?.isPending == true else { return }
+    let alert = NSAlert()
+    alert.messageText = "Stop waiting for this reminder?"
+    alert.informativeText =
+      "Islet will open Reminders and stop trying to confirm the pending commit."
+    alert.alertStyle = .warning
+    configure(
+      alert, buttons: ReminderEditorAlertConfiguration.stopWaitingButtons)
+    guard alert.runModal() == .alertSecondButtonReturn, openRemindersApp() else { return }
+    guard writes.abandonPendingCommitAfterRemindersHandoff() else { return }
+    pendingReconciliationTask?.cancel()
+    pendingReconciliationTask = nil
+    editorSession = nil
+    lastActionError = nil
   }
 
   /// Marks a reminder complete and offers one short, source-revision-bound undo.
@@ -363,6 +550,73 @@ final class RemindersProvider: ObservableObject {
       self?.writes.discardExpiredUndo()
       self?.completionUndo = nil
       self?.undoExpiryTask = nil
+    }
+  }
+
+  private func reconcilePendingEditorSessionAfterAcceptedReload() {
+    guard var session = editorSession,
+      let identifier = ReminderEditorPresentation.pendingLookupID(for: session.draft)
+    else {
+      return
+    }
+    let record = (store.calendarItem(withIdentifier: identifier) as? EKReminder).map {
+      ReminderEventKitCodec.record(from: $0)
+    }
+    guard
+      let authoritativeRecord = ReminderEditorPresentation.authoritativePendingRecord(
+        for: session.draft, acceptedReloadGeneration: true, record: record)
+    else {
+      return
+    }
+
+    switch writes.reconcilePendingCommit(with: authoritativeRecord) {
+    case .success(let resolvedDraft?):
+      pendingReconciliationTask = nil
+      session.draft = resolvedDraft
+      session.fieldMessages = resolvedDraft.normalizationMismatches.map {
+        ReminderEditorFieldMessage(field: $0.field, message: $0.reason)
+      }
+      session.generalMessage =
+        session.fieldMessages.isEmpty
+        ? nil : "Reminders saved different values. Review the highlighted fields."
+      editorSession = session
+      lastActionError = session.generalMessage
+    case .success(nil):
+      break
+    case .failure(let error):
+      session.generalMessage = error.localizedDescription
+      editorSession = session
+      report(error, action: "reconcile pending reminder")
+    }
+  }
+
+  private func requestEditorReload() {
+    pendingReconciliationTask?.cancel()
+    pendingReconciliationTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      await reload()
+      for delay in ReminderEditorPresentation.pendingRetryDelays {
+        guard editorSession?.isPending == true else {
+          pendingReconciliationTask = nil
+          return
+        }
+        do {
+          try await Task.sleep(for: delay)
+        } catch {
+          return
+        }
+        guard !Task.isCancelled else { return }
+        await reload()
+      }
+      pendingReconciliationTask = nil
+    }
+  }
+
+  private func configure(_ alert: NSAlert, buttons: [ReminderEditorAlertButton]) {
+    for configuration in buttons {
+      let button = alert.addButton(withTitle: configuration.title)
+      button.keyEquivalent = configuration.isDefault ? "\r" : ""
+      button.hasDestructiveAction = configuration.isDestructive
     }
   }
 
