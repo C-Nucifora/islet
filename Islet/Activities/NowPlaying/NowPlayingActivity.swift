@@ -347,7 +347,6 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
 
   /// Mirrors the table (and the audio monitor) into the published properties the views read.
   private func audioSourcesChanged(_ latest: [SourceID]) {
-    table.setActiveAudioSources(latest, now: Date())
     watcher.setPlaybackRecoverySources(Set(latest.map(\.displayBundleIdentifier)))
     publish(audioSources: latest)
     rescheduleExpiry()
