@@ -27,6 +27,7 @@ private struct Response: Decodable {
   let error: String?
   let errorCode: String?
   let requestID: String?
+  let retryAfter: Int?
 }
 
 /// Network callbacks run on a private serial queue. Completion is separately lock-protected so a
@@ -110,9 +111,11 @@ private final class PulseClient: @unchecked Sendable {
       var output = data
       output.append(0x0A)
       let prefix = response.errorCode.map { "[\($0)] " } ?? ""
+      let retry = response.retryAfter.map { " Retry-After: \($0) seconds." } ?? ""
       finish(
         response.ok ? 0 : 65,
-        error: response.ok ? nil : prefix + (response.error ?? "command rejected"), output: output)
+        error: response.ok ? nil : prefix + (response.error ?? "command rejected") + retry,
+        output: output)
     } catch {
       finish(65, error: "invalid response from Islet Pulse: \(error.localizedDescription)")
     }
