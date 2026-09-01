@@ -21,6 +21,23 @@ final class MediaWatcherTests: XCTestCase {
     }
   }
 
+  private final class LockedUpdates: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [AdapterUpdate] = []
+
+    func append(_ update: AdapterUpdate) {
+      lock.lock()
+      storage.append(update)
+      lock.unlock()
+    }
+
+    var value: [AdapterUpdate] {
+      lock.lock()
+      defer { lock.unlock() }
+      return storage
+    }
+  }
+
   func testBackoffDoublesAndCaps() {
     XCTAssertEqual(MediaWatcher.backoffDelay(failureCount: 1), 1)
     XCTAssertEqual(MediaWatcher.backoffDelay(failureCount: 2), 2)
@@ -214,6 +231,86 @@ final class MediaWatcherTests: XCTestCase {
         playbackRecoveryActive: true))
   }
 
+  func testPlayingRecoverySnapshotIsAcceptedImmediately() {
+    let source = key("company.thebrowser.Browser", 15305)
+    let playback = recoveryState(title: "Recovered video", elapsed: 40, isPlaying: true)
+
+    XCTAssertEqual(
+      MediaWatcher.recoveryDecision(
+        for: .nowPlaying(source, playback),
+        activeBundleIdentifiers: ["company.thebrowser.Browser"],
+        previous: nil),
+      .accept(.nowPlaying(source, playback)))
+  }
+
+  func testFirstPausedRecoverySnapshotWaitsForPositionConfirmation() {
+    let source = key("company.thebrowser.Browser", 15305)
+    let playback = recoveryState(title: "Recovered video", elapsed: 40, isPlaying: false)
+
+    XCTAssertEqual(
+      MediaWatcher.recoveryDecision(
+        for: .nowPlaying(source, playback),
+        activeBundleIdentifiers: ["company.thebrowser.Browser"],
+        previous: nil),
+      .awaitConfirmation(recoveryEvidence(source: source, state: playback)))
+  }
+
+  func testUnchangedPausedRecoverySnapshotRemainsUnconfirmed() {
+    let source = key("company.thebrowser.Browser", 15305)
+    let first = recoveryState(title: "Recovered video", elapsed: 40, isPlaying: false)
+    let second = recoveryState(title: "Recovered video", elapsed: 40, isPlaying: false)
+
+    XCTAssertEqual(
+      MediaWatcher.recoveryDecision(
+        for: .nowPlaying(source, second),
+        activeBundleIdentifiers: ["company.thebrowser.Browser"],
+        previous: recoveryEvidence(source: source, state: first)),
+      .awaitConfirmation(recoveryEvidence(source: source, state: second)))
+  }
+
+  func testAdvancingPausedRecoverySnapshotIsAcceptedAsPlaying() {
+    let source = key("company.thebrowser.Browser", 15305)
+    let first = recoveryState(title: "Recovered video", elapsed: 40, isPlaying: false)
+    let second = recoveryState(title: "Recovered video", elapsed: 41, isPlaying: false)
+
+    let decision = MediaWatcher.recoveryDecision(
+      for: .nowPlaying(source, second),
+      activeBundleIdentifiers: ["company.thebrowser.Browser"],
+      previous: recoveryEvidence(source: source, state: first))
+
+    guard case .accept(.nowPlaying(let acceptedSource, let acceptedState)) = decision else {
+      XCTFail("Expected the advancing snapshot to be accepted")
+      return
+    }
+    XCTAssertEqual(acceptedSource, source)
+    XCTAssertTrue(acceptedState.isPlaying)
+  }
+
+  func testChangedMediaIdentityReplacesPendingRecoveryEvidence() {
+    let source = key("company.thebrowser.Browser", 15305)
+    let first = recoveryState(title: "First video", elapsed: 40, isPlaying: false)
+    let second = recoveryState(title: "Second video", elapsed: 41, isPlaying: false)
+
+    XCTAssertEqual(
+      MediaWatcher.recoveryDecision(
+        for: .nowPlaying(source, second),
+        activeBundleIdentifiers: ["company.thebrowser.Browser"],
+        previous: recoveryEvidence(source: source, state: first)),
+      .awaitConfirmation(recoveryEvidence(source: source, state: second)))
+  }
+
+  func testInactiveBundleRecoverySnapshotIsRejected() {
+    let source = key("company.thebrowser.Browser", 15305)
+    let playback = recoveryState(title: "Recovered video", elapsed: 40, isPlaying: true)
+
+    XCTAssertEqual(
+      MediaWatcher.recoveryDecision(
+        for: .nowPlaying(source, playback),
+        activeBundleIdentifiers: ["com.apple.Music"],
+        previous: nil),
+      .reject)
+  }
+
   func testActiveAudioRecoversMetadataAfterTheStreamEmitsIdle() {
     let helper = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
       .appendingPathComponent("Fixtures/recovering-media-helper.pl")
@@ -248,6 +345,51 @@ final class MediaWatcherTests: XCTestCase {
     wait(for: [idle, recovered], timeout: 5, enforceOrder: true)
     watcher.stop()
     updates.cancel()
+  }
+
+  func testCachedPausedRecoveryExhaustsTheBudgetWithoutPublishingNowPlaying() throws {
+    let helper = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .appendingPathComponent("Fixtures/cached-paused-media-helper.pl")
+    let stateFile = FileManager.default.temporaryDirectory
+      .appendingPathComponent("cached-paused-recovery-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: stateFile) }
+
+    XCTAssertTrue(FileManager.default.fileExists(atPath: helper.path))
+    let snapshotAttempts = LockedCounter()
+    let collectedUpdates = LockedUpdates()
+    let watcher = MediaWatcher(
+      initialSnapshotDelay: 1,
+      commandProvider: { kind in
+        if case .snapshot = kind { snapshotAttempts.increment() }
+        return MediaWatcher.HelperCommand(
+          executableURL: URL(fileURLWithPath: "/usr/bin/perl"),
+          arguments: [helper.path, kind.rawValue, stateFile.path])
+      },
+      snapshotBackoff: { _ in 0.01 })
+    let updates = Task {
+      for await update in watcher.updates {
+        collectedUpdates.append(update)
+        if case .idle = update {
+          watcher.setPlaybackRecoverySources(["company.thebrowser.Browser"])
+        }
+      }
+    }
+    let thirdSnapshotExited = expectation(
+      for: NSPredicate { _, _ in
+        guard let contents = try? String(contentsOf: stateFile, encoding: .utf8) else {
+          return false
+        }
+        return contents.split(separator: "\n").count == 3
+      },
+      evaluatedWith: stateFile)
+
+    watcher.start()
+    wait(for: [thirdSnapshotExited], timeout: 5)
+    watcher.stop()
+    updates.cancel()
+
+    XCTAssertEqual(snapshotAttempts.value, 3)
+    XCTAssertEqual(collectedUpdates.value, [.idle])
   }
 
   func testNonActiveRecoverySnapshotRetriesBeforeAcceptingTheActiveApp() throws {
@@ -464,6 +606,27 @@ final class MediaWatcherTests: XCTestCase {
     s.title = title
     s.isPlaying = true
     return s
+  }
+
+  func recoveryState(title: String, elapsed: TimeInterval, isPlaying: Bool) -> PlaybackState {
+    var state = PlaybackState()
+    state.title = title
+    state.artist = "Sidemen"
+    state.album = "Videos"
+    state.duration = 120
+    state.elapsed = elapsed
+    state.isPlaying = isPlaying
+    return state
+  }
+
+  func recoveryEvidence(source: SourceID, state: PlaybackState) -> MediaWatcher.RecoveryEvidence {
+    MediaWatcher.RecoveryEvidence(
+      source: source,
+      title: state.title,
+      artist: state.artist,
+      album: state.album,
+      duration: state.duration,
+      elapsed: state.elapsed)
   }
 
   func testIgnoredExpandsToNothing() {
