@@ -9,46 +9,7 @@ struct ReminderListItem: Identifiable, Equatable, Sendable {
   let isWritable: Bool
 }
 
-struct ReminderDraft: Equatable, Sendable {
-  var title: String
-  var listID: String?
-  var dueDate: Date?
-  var hasDueTime: Bool
-  var priority: Int
-  var sourceRevision: ReminderWriteRecord.Revision? = nil
-
-  static let empty = ReminderDraft(
-    title: "", listID: nil, dueDate: nil, hasDueTime: false, priority: 0)
-}
-
-struct ReminderWriteRecord: Equatable, Sendable {
-  struct Revision: Equatable, Sendable {
-    let lastModified: Date?
-    let title: String
-    let notes: String?
-    let priority: Int
-    let dueDateComponents: DateComponents?
-    let listID: String
-    let isCompleted: Bool
-  }
-
-  let id: String
-  var title: String
-  var notes: String?
-  var priority: Int
-  var dueDateComponents: DateComponents?
-  var listID: String
-  var listTitle: String
-  var listColorHex: String?
-  var isCompleted: Bool
-  var lastModified: Date?
-
-  var revision: Revision {
-    Revision(
-      lastModified: lastModified, title: title, notes: notes, priority: priority,
-      dueDateComponents: dueDateComponents, listID: listID, isCompleted: isCompleted)
-  }
-
+extension ReminderWriteRecord {
   var item: ReminderItem {
     let hasDueTime =
       dueDateComponents?.hour != nil || dueDateComponents?.minute != nil
@@ -57,38 +18,6 @@ struct ReminderWriteRecord: Equatable, Sendable {
       id: id, title: title, dueDate: RemindersLogic.dueDate(from: dueDateComponents),
       hasDueTime: hasDueTime, priority: priority, listColorHex: listColorHex,
       listID: listID, listTitle: listTitle)
-  }
-}
-
-enum ReminderWriteError: LocalizedError, Equatable {
-  case permissionDenied
-  case missingList
-  case missingReminder
-  case changedElsewhere
-  case undoExpired
-  case noUndoAvailable
-  case emptyTitle
-  case eventKit(String)
-
-  var errorDescription: String? {
-    switch self {
-    case .permissionDenied:
-      "Reminders access is no longer available."
-    case .missingList:
-      "That reminder list is no longer available."
-    case .missingReminder:
-      "That reminder is no longer available."
-    case .changedElsewhere:
-      "That reminder changed in another app, so it was not overwritten."
-    case .undoExpired:
-      "The undo period has expired."
-    case .noUndoAvailable:
-      "There is no completion to undo."
-    case .emptyTitle:
-      "Enter a reminder title."
-    case .eventKit(let message):
-      message
-    }
   }
 }
 
