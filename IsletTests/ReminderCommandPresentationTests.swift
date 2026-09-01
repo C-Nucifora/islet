@@ -34,4 +34,37 @@ final class ReminderCommandPresentationTests: XCTestCase {
     XCTAssertNil(presentation.route(for: .move(toListID: "read-only")))
     XCTAssertNil(presentation.route(for: .undo))
   }
+
+  func testNoWritableListsRejectEveryWriteRoute() {
+    let item = ReminderItem(
+      id: "shared", title: "Shared reminder", dueDate: nil, priority: 0, listColorHex: nil,
+      listID: "read-only", listTitle: "Shared")
+    let presentation = ReminderCommandPresentation(
+      reminders: [item], selectedReminderID: item.id, writableListIDs: [],
+      hasCompletionUndo: true)
+
+    XCTAssertNil(presentation.route(for: .create))
+    XCTAssertNil(presentation.route(for: .complete))
+    XCTAssertNil(presentation.route(for: .undo))
+    XCTAssertNil(presentation.route(for: .edit))
+    XCTAssertNil(presentation.route(for: .snooze(.oneHour)))
+    XCTAssertNil(presentation.route(for: .customSnooze))
+    XCTAssertNil(presentation.route(for: .move(toListID: "read-only")))
+  }
+
+  func testReadOnlySelectionRejectsMutationsWhileCreateRemainsAvailable() {
+    let item = ReminderItem(
+      id: "shared", title: "Shared reminder", dueDate: nil, priority: 0, listColorHex: nil,
+      listID: "read-only", listTitle: "Shared")
+    let presentation = ReminderCommandPresentation(
+      reminders: [item], selectedReminderID: item.id, writableListIDs: ["inbox"],
+      hasCompletionUndo: false)
+
+    XCTAssertEqual(presentation.route(for: .create), .create)
+    XCTAssertNil(presentation.route(for: .complete))
+    XCTAssertNil(presentation.route(for: .edit))
+    XCTAssertNil(presentation.route(for: .snooze(.tomorrowMorning)))
+    XCTAssertNil(presentation.route(for: .customSnooze))
+    XCTAssertNil(presentation.route(for: .move(toListID: "inbox")))
+  }
 }

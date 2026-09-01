@@ -1,4 +1,5 @@
 import AppKit
+import Defaults
 import SwiftUI
 
 /// A regular key window for reminder writes. The notch stays non-activating, while this window
@@ -42,14 +43,21 @@ final class ReminderCommandsWindow: NSObject, NSWindowDelegate {
 
 private struct ReminderCommandsView: View {
   @ObservedObject var provider: RemindersProvider
+  @ObservedObject private var reminderCommandHotKey = ReminderCommandHotKey.shared
+  @Default(.remindersEnabled) private var remindersEnabled
   @State private var selectedReminderID: String?
   @State private var moveListID: String?
+
+  private var writableLists: [ReminderListItem] {
+    guard remindersEnabled, provider.authorization.canRead else { return [] }
+    return provider.availableLists.filter(\.isWritable)
+  }
 
   private var presentation: ReminderCommandPresentation {
     ReminderCommandPresentation(
       reminders: provider.reminders,
       selectedReminderID: selectedReminderID,
-      writableListIDs: Set(provider.availableLists.filter(\.isWritable).map(\.id)),
+      writableListIDs: Set(writableLists.map(\.id)),
       hasCompletionUndo: provider.completionUndo != nil)
   }
 
@@ -60,15 +68,33 @@ private struct ReminderCommandsView: View {
         Spacer()
         Button("New Reminder") { perform(.create) }
           .accessibilityHint("Opens a keyboard-accessible reminder editor")
+          .disabled(presentation.route(for: .create) == nil)
+      }
+      Text(
+        reminderCommandHotKey.isAvailable
+          ? "Global shortcut: ⌘⌥⇧R"
+          : "Global shortcut unavailable"
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
+
+      if let availabilityMessage {
+        Text(availabilityMessage)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        availabilityAction
       }
 
       if provider.completionUndo != nil {
         Button("Undo Last Completion") { perform(.undo) }
           .accessibilityHint("Restores the most recently completed reminder")
+          .disabled(presentation.route(for: .undo) == nil)
       }
 
       if provider.reminders.isEmpty {
-        Text("No reminders due soon").foregroundStyle(.secondary)
+        if availabilityMessage == nil {
+          Text("No reminders due soon").foregroundStyle(.secondary)
+        }
       } else {
         Picker("Reminder", selection: $selectedReminderID) {
           Text("Choose a reminder").tag(Optional<String>.none)
@@ -95,7 +121,7 @@ private struct ReminderCommandsView: View {
         HStack {
           Picker("Move to", selection: $moveListID) {
             Text("Choose a list").tag(Optional<String>.none)
-            ForEach(provider.availableLists.filter(\.isWritable)) { list in
+            ForEach(writableLists) { list in
               Text(list.title).tag(Optional(list.id))
             }
           }
@@ -118,6 +144,32 @@ private struct ReminderCommandsView: View {
     .frame(width: 400)
     .onAppear { selectFirstReminderIfNeeded() }
     .onChange(of: provider.reminders.map(\.id)) { _, _ in selectFirstReminderIfNeeded() }
+  }
+
+  private var availabilityMessage: String? {
+    if !remindersEnabled { return "Reminders are disabled in Islet Settings." }
+    if !provider.authorization.canRead {
+      return "Reminders access: \(provider.authorization.summary)."
+    }
+    if writableLists.isEmpty { return "No writable reminder lists are available." }
+    return nil
+  }
+
+  @ViewBuilder private var availabilityAction: some View {
+    if !remindersEnabled {
+      Button("Open Islet Settings") { SettingsOpener.open(destination: .activities) }
+    } else if provider.authorization == .notDetermined
+      || provider.authorization.requiresSettingsRecovery
+    {
+      Button(
+        provider.authorization == .notDetermined
+          ? "Allow Reminders Access" : "Open Reminders Settings"
+      ) {
+        Task { await provider.recoverAccess() }
+      }
+    } else if provider.authorization.canRead, writableLists.isEmpty {
+      Button("Open Reminders") { provider.openRemindersApp() }
+    }
   }
 
   private var moveIntent: ReminderCommandPresentation.Intent {
