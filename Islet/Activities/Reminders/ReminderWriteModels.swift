@@ -166,11 +166,17 @@ struct ReminderNormalizationMismatch: Equatable, Sendable {
   let reason: String
 }
 
+struct ReminderCommitReceipt: Equatable, Sendable {
+  let itemIdentifier: String?
+  let externalIdentifier: String?
+}
+
 enum ReminderWriteOutcome: Equatable, Sendable {
   case saved(ReminderWriteRecord)
   case committedWithNormalization(
     actual: ReminderWriteRecord,
     mismatches: [ReminderNormalizationMismatch])
+  case commitStatusUnknown(ReminderCommitReceipt)
 }
 
 struct ReminderDraft: Equatable, Sendable {

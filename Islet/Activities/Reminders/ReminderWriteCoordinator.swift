@@ -27,9 +27,14 @@ protocol ReminderWriteStore: AnyObject {
   func reminderLists() -> [ReminderListItem]
   func defaultListID() -> String?
   func record(withID id: String) -> ReminderWriteRecord?
-  func create(_ draft: ReminderDraft, inListWithID listID: String) throws -> ReminderWriteRecord
-  func save(_ record: ReminderWriteRecord, expectedRevision: ReminderWriteRecord.Revision) throws
-    -> ReminderWriteRecord
+  func create(_ fields: ReminderEditableFields) throws -> ReminderWriteOutcome
+  func save(
+    reminderID: String, patch: ReminderPatch,
+    expectedRevision: ReminderWriteRecord.Revision
+  ) throws -> ReminderWriteOutcome
+  func delete(
+    reminderID: String, expectedRevision: ReminderWriteRecord.Revision
+  ) throws
 }
 
 @MainActor
@@ -44,6 +49,7 @@ final class ReminderWriteCoordinator {
   private let store: any ReminderWriteStore
   private let undoDuration: TimeInterval
   private(set) var completionUndo: CompletionUndo?
+  private(set) var pendingCommitReceipt: ReminderCommitReceipt?
 
   init(store: any ReminderWriteStore, undoDuration: TimeInterval = 8) {
     self.store = store
@@ -83,6 +89,9 @@ final class ReminderWriteCoordinator {
   }
 
   func create(_ draft: ReminderDraft) -> Result<ReminderItem, ReminderWriteError> {
+    guard pendingCommitReceipt == nil else {
+      return .failure(pendingCommitError)
+    }
     do {
       try checkPermission()
       let title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -93,7 +102,17 @@ final class ReminderWriteCoordinator {
       var normalized = draft
       normalized.title = title
       if normalized.dueDate == nil { normalized.hasDueTime = false }
-      return .success(try store.create(normalized, inListWithID: listID).item)
+      let dueDate = try normalized.dueDate.map {
+        try ReminderDateValue(
+          validating: RemindersLogic.dueComponents(
+            for: $0, hasTime: normalized.hasDueTime))
+      }
+      let fields = try ReminderEditableFields(
+        validating: normalized.title, notes: nil, url: nil, listID: listID,
+        startDate: nil, dueDate: dueDate, priority: normalized.priority,
+        completion: ReminderCompletionValue(
+          validating: false, completionDate: nil))
+      return .success(try committedRecord(from: store.create(fields)).item)
     } catch {
       return .failure(map(error))
     }
@@ -103,6 +122,7 @@ final class ReminderWriteCoordinator {
     ReminderItem, ReminderWriteError
   > {
     do {
+      try checkNoPendingCommit()
       try checkPermission()
       let title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !title.isEmpty else { throw ReminderWriteError.emptyTitle }
@@ -124,7 +144,7 @@ final class ReminderWriteCoordinator {
       record.dueDateComponents = draft.dueDate.map {
         RemindersLogic.dueComponents(for: $0, hasTime: draft.hasDueTime)
       }
-      return .success(try store.save(record, expectedRevision: sourceRevision).item)
+      return .success(try save(record, expectedRevision: sourceRevision).item)
     } catch {
       return .failure(map(error))
     }
@@ -134,6 +154,7 @@ final class ReminderWriteCoordinator {
     ReminderItem, ReminderWriteError
   > {
     do {
+      try checkNoPendingCommit()
       try checkPermission()
       guard listIsWritable(listID) else { throw ReminderWriteError.missingList }
       guard var record = store.record(withID: item.id) else {
@@ -141,7 +162,7 @@ final class ReminderWriteCoordinator {
       }
       let revision = record.revision
       record.listID = listID
-      return .success(try store.save(record, expectedRevision: revision).item)
+      return .success(try save(record, expectedRevision: revision).item)
     } catch {
       return .failure(map(error))
     }
@@ -151,13 +172,14 @@ final class ReminderWriteCoordinator {
     ReminderItem, ReminderWriteError
   > {
     do {
+      try checkNoPendingCommit()
       try checkPermission()
       guard var record = store.record(withID: item.id) else {
         throw ReminderWriteError.missingReminder
       }
       let revision = record.revision
       record.dueDateComponents = RemindersLogic.dueComponents(for: date, hasTime: hasTime)
-      return .success(try store.save(record, expectedRevision: revision).item)
+      return .success(try save(record, expectedRevision: revision).item)
     } catch {
       return .failure(map(error))
     }
@@ -167,13 +189,15 @@ final class ReminderWriteCoordinator {
     CompletionUndo, ReminderWriteError
   > {
     do {
+      try checkNoPendingCommit()
       try checkPermission()
       guard var record = store.record(withID: item.id) else {
         throw ReminderWriteError.missingReminder
       }
       let revision = record.revision
       record.isCompleted = true
-      let saved = try store.save(record, expectedRevision: revision)
+      record.completionDate = now
+      let saved = try save(record, expectedRevision: revision)
       let undo = CompletionUndo(
         reminderID: saved.id, title: saved.title, completedRevision: saved.revision,
         expiresAt: now.addingTimeInterval(undoDuration))
@@ -185,6 +209,7 @@ final class ReminderWriteCoordinator {
   }
 
   func undoCompletion(now: Date = Date()) -> Result<ReminderItem, ReminderWriteError> {
+    guard pendingCommitReceipt == nil else { return .failure(pendingCommitError) }
     guard let undo = completionUndo else { return .failure(.noUndoAvailable) }
     completionUndo = nil
     guard now < undo.expiresAt else { return .failure(.undoExpired) }
@@ -198,7 +223,8 @@ final class ReminderWriteCoordinator {
       }
       let revision = record.revision
       record.isCompleted = false
-      return .success(try store.save(record, expectedRevision: revision).item)
+      record.completionDate = nil
+      return .success(try save(record, expectedRevision: revision).item)
     } catch {
       return .failure(map(error))
     }
@@ -212,101 +238,65 @@ final class ReminderWriteCoordinator {
     guard store.authorization.canRead else { throw ReminderWriteError.permissionDenied }
   }
 
+  private func checkNoPendingCommit() throws {
+    guard pendingCommitReceipt == nil else { throw pendingCommitError }
+  }
+
+  private var pendingCommitError: ReminderWriteError {
+    .eventKit(
+      "The previous reminder commit is still being confirmed. Reload reminders before trying again."
+    )
+  }
+
   private func listIsWritable(_ id: String) -> Bool {
     store.reminderLists().contains { $0.id == id && $0.isWritable }
+  }
+
+  private func save(
+    _ edited: ReminderWriteRecord, expectedRevision: ReminderWriteRecord.Revision
+  ) throws -> ReminderWriteRecord {
+    guard let current = store.record(withID: edited.id) else {
+      throw ReminderWriteError.missingReminder
+    }
+    let baseline = try editableFields(from: current)
+    let requested = try editableFields(from: edited)
+    return try committedRecord(
+      from: store.save(
+        reminderID: edited.id,
+        patch: ReminderPatch(from: baseline, to: requested),
+        expectedRevision: expectedRevision))
+  }
+
+  private func editableFields(from record: ReminderWriteRecord) throws
+    -> ReminderEditableFields
+  {
+    try ReminderEditableFields(
+      validating: record.title, notes: record.notes, url: record.url,
+      listID: record.listID,
+      startDate: try record.startDateComponents.map(ReminderDateValue.init(validating:)),
+      dueDate: try record.dueDateComponents.map(ReminderDateValue.init(validating:)),
+      priority: record.priority,
+      completion: ReminderCompletionValue(
+        validating: record.isCompleted, completionDate: record.completionDate))
+  }
+
+  private func committedRecord(from outcome: ReminderWriteOutcome) throws
+    -> ReminderWriteRecord
+  {
+    switch outcome {
+    case .saved(let record):
+      record
+    case .committedWithNormalization(let actual, _):
+      actual
+    case .commitStatusUnknown(let receipt):
+      pendingCommitReceipt = receipt
+      throw ReminderWriteError.eventKit(
+        "The reminder commit could not be confirmed. Reload reminders before trying again.")
+    }
   }
 
   private func map(_ error: Error) -> ReminderWriteError {
     if let error = error as? ReminderWriteError { return error }
     return .eventKit(error.localizedDescription)
-  }
-}
-
-@MainActor
-final class EventKitReminderWriteStore: ReminderWriteStore {
-  private let store: EKEventStore
-
-  init(store: EKEventStore) {
-    self.store = store
-  }
-
-  var authorization: EventKitPermissionState {
-    EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
-  }
-
-  func reminderLists() -> [ReminderListItem] {
-    let defaultID = store.defaultCalendarForNewReminders()?.calendarIdentifier
-    return store.calendars(for: .reminder)
-      .map {
-        ReminderListItem(
-          id: $0.calendarIdentifier, title: $0.title,
-          colorHex: ColorHex.string(from: $0.cgColor),
-          isDefault: $0.calendarIdentifier == defaultID,
-          isWritable: $0.allowsContentModifications)
-      }
-      .sorted {
-        if $0.isDefault != $1.isDefault { return $0.isDefault }
-        return $0.title.localizedStandardCompare($1.title) == .orderedAscending
-      }
-  }
-
-  func defaultListID() -> String? {
-    store.defaultCalendarForNewReminders()?.calendarIdentifier
-  }
-
-  func record(withID id: String) -> ReminderWriteRecord? {
-    guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder else { return nil }
-    return record(from: reminder)
-  }
-
-  func create(_ draft: ReminderDraft, inListWithID listID: String) throws -> ReminderWriteRecord {
-    guard let list = reminderList(withID: listID) else { throw ReminderWriteError.missingList }
-    let reminder = EKReminder(eventStore: store)
-    reminder.title = draft.title
-    reminder.calendar = list
-    reminder.priority = draft.priority
-    reminder.dueDateComponents = draft.dueDate.map {
-      RemindersLogic.dueComponents(for: $0, hasTime: draft.hasDueTime)
-    }
-    try store.save(reminder, commit: true)
-    return record(withID: reminder.calendarItemIdentifier) ?? record(from: reminder)
-  }
-
-  func save(_ record: ReminderWriteRecord, expectedRevision: ReminderWriteRecord.Revision) throws
-    -> ReminderWriteRecord
-  {
-    guard let reminder = store.calendarItem(withIdentifier: record.id) as? EKReminder else {
-      throw ReminderWriteError.missingReminder
-    }
-    guard self.record(from: reminder).revision == expectedRevision else {
-      throw ReminderWriteError.changedElsewhere
-    }
-    guard let list = reminderList(withID: record.listID) else {
-      throw ReminderWriteError.missingList
-    }
-    reminder.title = record.title
-    reminder.notes = record.notes
-    reminder.priority = record.priority
-    reminder.dueDateComponents = record.dueDateComponents
-    reminder.calendar = list
-    reminder.isCompleted = record.isCompleted
-    try store.save(reminder, commit: true)
-    return self.record(withID: reminder.calendarItemIdentifier) ?? self.record(from: reminder)
-  }
-
-  private func reminderList(withID id: String) -> EKCalendar? {
-    store.calendars(for: .reminder).first {
-      $0.calendarIdentifier == id && $0.allowsContentModifications
-    }
-  }
-
-  private func record(from reminder: EKReminder) -> ReminderWriteRecord {
-    ReminderWriteRecord(
-      id: reminder.calendarItemIdentifier, title: reminder.title ?? "Untitled",
-      notes: reminder.notes, priority: reminder.priority,
-      dueDateComponents: reminder.dueDateComponents,
-      listID: reminder.calendar.calendarIdentifier, listTitle: reminder.calendar.title,
-      listColorHex: ColorHex.string(from: reminder.calendar.cgColor),
-      isCompleted: reminder.isCompleted, lastModified: reminder.lastModifiedDate)
   }
 }
