@@ -104,6 +104,31 @@ enum ReminderEditorWindowRoute: Equatable, Sendable {
   case snooze
 }
 
+enum ReminderEditorPrimaryActionPlacement: Equatable, Sendable {
+  case fixedFooter
+}
+
+enum ReminderEditorHandoffCompletion: Equatable, Sendable {
+  case abandon
+  case retain(message: String)
+  case ignore
+}
+
+struct ReminderEditorRetention: Equatable, Sendable {
+  let session: ReminderEditorSession
+  let invalidatesReloadGeneration: Bool
+  let requestsReload: Bool
+}
+
+struct ReminderEditorPendingIdentity: Equatable, Sendable {
+  let sessionID: UUID
+  let receipt: ReminderCommitReceipt
+
+  func matches(sessionID: UUID?, draft: ReminderCoordinatorDraft?) -> Bool {
+    self.sessionID == sessionID && receipt == draft?.pendingCommitReceipt
+  }
+}
+
 enum ReminderEditorDraftValidation: Equatable, Sendable {
   case valid(ReminderCoordinatorDraft)
   case invalid(ReminderCoordinatorDraft, messages: [ReminderEditorFieldMessage])
@@ -117,6 +142,7 @@ enum ReminderEditorSubmissionDisposition: Equatable, Sendable {
 
 enum ReminderEditorPresentation {
   static let deleteUsesDefaultAction = false
+  static let primaryActionPlacement = ReminderEditorPrimaryActionPlacement.fixedFooter
   static let pendingRetryDelays: [Duration] = [
     .milliseconds(250), .milliseconds(750), .seconds(2), .seconds(4),
   ]
@@ -157,11 +183,36 @@ enum ReminderEditorPresentation {
     draft.reminderID != nil && draft.pendingCommitReceipt == nil
   }
 
+  static func isReadOnly(_ draft: ReminderCoordinatorDraft) -> Bool {
+    draft.pendingCommitReceipt != nil || draft.retryBlockedReason != nil
+  }
+
   static func windowRoute(
     currentDraft: ReminderCoordinatorDraft?, request: ReminderEditorWindowRequest
   ) -> ReminderEditorWindowRoute {
-    if currentDraft?.pendingCommitReceipt != nil { return .editor }
+    if currentDraft != nil { return .editor }
     return request == .snooze ? .snooze : .editor
+  }
+
+  static func windowTitle(for draft: ReminderCoordinatorDraft) -> String {
+    draft.reminderID == nil ? "New reminder" : "Edit reminder"
+  }
+
+  static func handoffCompletion(
+    expectedSessionID: UUID, expectedReceipt: ReminderCommitReceipt,
+    currentSessionID: UUID?, currentReceipt: ReminderCommitReceipt?,
+    currentSessionIsPending: Bool, openedRunningApplication: Bool, errorDescription: String?
+  ) -> ReminderEditorHandoffCompletion {
+    guard currentSessionID == expectedSessionID, currentReceipt == expectedReceipt,
+      currentSessionIsPending
+    else { return .ignore }
+    if let errorDescription {
+      return .retain(message: "Couldn’t open Reminders. \(errorDescription)")
+    }
+    guard openedRunningApplication else {
+      return .retain(message: "Couldn’t open Reminders. Try again or open Reminders manually.")
+    }
+    return .abandon
   }
 
   static func prepareForSubmission(
@@ -210,6 +261,49 @@ enum ReminderEditorPresentation {
           "Islet is waiting for Reminders to reload this commit. Add or Save is disabled until the reminder can be confirmed."
       )
     }
+  }
+
+  static func reviewMessage(
+    for draft: ReminderCoordinatorDraft, fieldMessages: [ReminderEditorFieldMessage]
+  ) -> String? {
+    if let retryBlockedReason = draft.retryBlockedReason { return retryBlockedReason }
+    guard !fieldMessages.isEmpty else { return nil }
+    return "Reminders saved different values. Review the highlighted fields."
+  }
+
+  static func retention(
+    for write: ReminderCoordinatorWrite, existingSession: ReminderEditorSession?,
+    newSessionID: UUID = UUID(), calendar: Calendar, displayTimeZone: TimeZone
+  ) -> ReminderEditorRetention? {
+    let draft: ReminderCoordinatorDraft
+    let fieldMessages: [ReminderEditorFieldMessage]
+    let invalidatesReloadGeneration: Bool
+
+    switch disposition(for: write) {
+    case .close:
+      return nil
+    case .keepOpen(let retainedDraft, let messages):
+      draft = retainedDraft
+      fieldMessages = messages
+      invalidatesReloadGeneration = false
+    case .pending(let retainedDraft, _):
+      draft = retainedDraft
+      fieldMessages = []
+      invalidatesReloadGeneration = true
+    }
+
+    let session = ReminderEditorSession(
+      id: existingSession?.id ?? newSessionID, draft: draft,
+      fieldMessages: fieldMessages,
+      generalMessage: {
+        if case .pending(_, let message) = disposition(for: write) { return message }
+        return reviewMessage(for: draft, fieldMessages: fieldMessages)
+      }(),
+      calendar: existingSession?.calendar ?? calendar,
+      displayTimeZone: existingSession?.displayTimeZone ?? displayTimeZone)
+    return ReminderEditorRetention(
+      session: session, invalidatesReloadGeneration: invalidatesReloadGeneration,
+      requestsReload: true)
   }
 
   static func initialListID(

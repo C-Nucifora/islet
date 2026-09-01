@@ -22,125 +22,135 @@ struct ReminderEditorView: View {
   let onFieldError: (ReminderEditorFieldMessage) -> Void
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 12) {
-        Text(heading).font(.headline)
-        TextField("Title", text: $draft.title)
-          .textFieldStyle(.roundedBorder)
-          .focused($focusedField, equals: .title)
-          .accessibilityLabel("Reminder title")
-        fieldMessages(for: .title)
-
-        Picker("List", selection: $draft.listID) {
-          ForEach(ReminderEditorPresentation.listOptions(lists: lists, selectedID: draft.listID)) {
-            option in
-            Text(option.title).tag(Optional(option.id))
-          }
-        }
-        .accessibilityHint("Choose the Reminders list")
-        fieldMessages(for: .list)
-
-        Toggle("Due date", isOn: hasDueDate)
-        if let dueDate = draft.dueDate {
-          DatePicker("Date", selection: dateBinding(for: .dueDate), displayedComponents: .date)
-            .environment(\.calendar, pickerCalendar(for: dueDate))
-            .environment(\.timeZone, effectiveTimeZone(for: dueDate))
-          Toggle("Include time", isOn: includesDueTime)
-          if hasClock(dueDate) {
-            DatePicker(
-              "Time", selection: dateBinding(for: .dueDate),
-              displayedComponents: .hourAndMinute
-            )
-            .environment(\.calendar, pickerCalendar(for: dueDate))
-            .environment(\.timeZone, effectiveTimeZone(for: dueDate))
-          }
-        }
-
-        Picker("Priority", selection: $draft.priority) {
-          Text("None").tag(0)
-          Text("High").tag(1)
-          Text("Medium").tag(5)
-          Text("Low").tag(9)
-        }
-        fieldMessages(for: .dueDate)
-        fieldMessages(for: .priority)
-
-        DisclosureGroup("Details", isExpanded: $detailsExpanded) {
-          VStack(alignment: .leading, spacing: 12) {
-            Text("Notes").font(.subheadline)
-            TextEditor(text: notes)
-              .frame(minHeight: 88)
-              .focused($focusedField, equals: .notes)
-              .accessibilityLabel("Reminder notes")
-              .accessibilityHint("Return adds a new line. Use the Save button to submit.")
-            fieldMessages(for: .notes)
-
-            TextField("URL", text: $draft.urlText)
+    VStack(spacing: 0) {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 12) {
+          Text(heading).font(.headline)
+          Group {
+            TextField("Title", text: $draft.title)
               .textFieldStyle(.roundedBorder)
-              .focused($focusedField, equals: .url)
-              .accessibilityLabel("Reminder URL")
-            fieldMessages(for: .url)
+              .focused($focusedField, equals: .title)
+              .accessibilityLabel("Reminder title")
+            fieldMessages(for: .title)
 
-            Toggle("Start date", isOn: hasStartDate)
-            if let startDate = draft.startDate {
-              DatePicker(
-                "Start date", selection: dateBinding(for: .startDate),
-                displayedComponents: .date
-              )
-              .environment(\.calendar, pickerCalendar(for: startDate))
-              .environment(\.timeZone, effectiveTimeZone(for: startDate))
-              Toggle("Include start time", isOn: includesStartTime)
-              if hasClock(startDate) {
+            Picker("List", selection: $draft.listID) {
+              ForEach(
+                ReminderEditorPresentation.listOptions(
+                  lists: lists, selectedID: draft.listID)
+              ) { option in
+                Text(option.title).tag(Optional(option.id))
+              }
+            }
+            .accessibilityHint("Choose the Reminders list")
+            fieldMessages(for: .list)
+
+            Toggle("Due date", isOn: hasDueDate)
+            if let dueDate = draft.dueDate {
+              DatePicker("Date", selection: dateBinding(for: .dueDate), displayedComponents: .date)
+                .environment(\.calendar, pickerCalendar(for: dueDate))
+                .environment(\.timeZone, effectiveTimeZone(for: dueDate))
+              Toggle("Include time", isOn: includesDueTime)
+              if hasClock(dueDate) {
                 DatePicker(
-                  "Start time", selection: dateBinding(for: .startDate),
+                  "Time", selection: dateBinding(for: .dueDate),
                   displayedComponents: .hourAndMinute
+                )
+                .environment(\.calendar, pickerCalendar(for: dueDate))
+                .environment(\.timeZone, effectiveTimeZone(for: dueDate))
+              }
+            }
+            fieldMessages(for: .dueDate)
+
+            Picker("Priority", selection: $draft.priority) {
+              Text("None").tag(0)
+              Text("High").tag(1)
+              Text("Medium").tag(5)
+              Text("Low").tag(9)
+            }
+            fieldMessages(for: .priority)
+          }
+          .disabled(isReadOnly)
+
+          DisclosureGroup("Details", isExpanded: $detailsExpanded) {
+            VStack(alignment: .leading, spacing: 12) {
+              Text("Notes").font(.subheadline)
+              TextEditor(text: notes)
+                .frame(minHeight: 88)
+                .focused($focusedField, equals: .notes)
+                .accessibilityLabel("Reminder notes")
+                .accessibilityHint("Return adds a new line. Use the Save button to submit.")
+              fieldMessages(for: .notes)
+
+              TextField("URL", text: $draft.urlText)
+                .textFieldStyle(.roundedBorder)
+                .focused($focusedField, equals: .url)
+                .accessibilityLabel("Reminder URL")
+              fieldMessages(for: .url)
+
+              Toggle("Start date", isOn: hasStartDate)
+              if let startDate = draft.startDate {
+                DatePicker(
+                  "Start date", selection: dateBinding(for: .startDate),
+                  displayedComponents: .date
                 )
                 .environment(\.calendar, pickerCalendar(for: startDate))
                 .environment(\.timeZone, effectiveTimeZone(for: startDate))
+                Toggle("Include start time", isOn: includesStartTime)
+                if hasClock(startDate) {
+                  DatePicker(
+                    "Start time", selection: dateBinding(for: .startDate),
+                    displayedComponents: .hourAndMinute
+                  )
+                  .environment(\.calendar, pickerCalendar(for: startDate))
+                  .environment(\.timeZone, effectiveTimeZone(for: startDate))
+                }
+                timeZonePicker("Start time zone", value: startDate, field: .startDate)
               }
-              timeZonePicker("Start time zone", value: startDate, field: .startDate)
+              fieldMessages(for: .startDate)
+
+              if let dueDate = draft.dueDate {
+                timeZonePicker("Due time zone", value: dueDate, field: .dueDate)
+              }
+
+              Toggle("Completed", isOn: completion)
+              if draft.isCompleted {
+                DatePicker("Completion date", selection: completionDate)
+                  .focused($focusedField, equals: .completionDate)
+                  .environment(\.calendar, calendar)
+                  .environment(\.timeZone, displayTimeZone)
+              }
+              fieldMessages(for: .completion)
             }
-            fieldMessages(for: .startDate)
-
-            if let dueDate = draft.dueDate {
-              timeZonePicker("Due time zone", value: dueDate, field: .dueDate)
-            }
-
-            Toggle("Completed", isOn: completion)
-            if draft.isCompleted {
-              DatePicker("Completion date", selection: completionDate)
-                .focused($focusedField, equals: .completionDate)
-                .environment(\.calendar, calendar)
-                .environment(\.timeZone, displayTimeZone)
-            }
-            fieldMessages(for: .completion)
+            .padding(.top, 8)
+            .disabled(isReadOnly)
           }
-          .padding(.top, 8)
-        }
 
-        if let generalMessage {
-          Text(generalMessage)
-            .font(.caption)
-            .foregroundStyle(.orange)
-            .accessibilityLabel("Reminder error: \(generalMessage)")
+          if let generalMessage {
+            Text(generalMessage)
+              .font(.caption)
+              .foregroundStyle(.orange)
+              .accessibilityLabel("Reminder error: \(generalMessage)")
+          }
         }
+        .padding(16)
+      }
 
-        HStack {
-          if ReminderEditorPresentation.offersOpenInReminders(for: draft) {
-            Button("Open in Reminders", action: onOpenReminders)
-          }
-          if draft.pendingCommitReceipt != nil {
-            Button("Open Reminders and Stop Waiting", action: onStopWaiting)
-          } else if ReminderEditorPresentation.canDelete(draft) {
-            Button("Delete", role: .destructive, action: onDelete)
-              .accessibilityHint("Opens a confirmation. Return does not delete.")
-          }
-          Spacer()
-          Button("Cancel", action: onCancel)
-            .keyboardShortcut(.cancelAction)
-          Button(submitTitle, action: onSubmit)
-            .disabled(!ReminderEditorPresentation.canSubmit(draft))
+      Divider()
+      HStack {
+        if ReminderEditorPresentation.offersOpenInReminders(for: draft) {
+          Button("Open in Reminders", action: onOpenReminders)
         }
+        if draft.pendingCommitReceipt != nil {
+          Button("Open Reminders and Stop Waiting", action: onStopWaiting)
+        } else if ReminderEditorPresentation.canDelete(draft) {
+          Button("Delete", role: .destructive, action: onDelete)
+            .accessibilityHint("Opens a confirmation. Return does not delete.")
+        }
+        Spacer()
+        Button("Cancel", action: onCancel)
+          .keyboardShortcut(.cancelAction)
+        Button(submitTitle, action: onSubmit)
+          .disabled(!ReminderEditorPresentation.canSubmit(draft))
       }
       .padding(16)
     }
@@ -163,6 +173,10 @@ struct ReminderEditorView: View {
         .keyboardShortcut("n", modifiers: .command)
         .hidden()
     }
+  }
+
+  private var isReadOnly: Bool {
+    ReminderEditorPresentation.isReadOnly(draft)
   }
 
   private var hasDueDate: Binding<Bool> {
@@ -381,7 +395,8 @@ struct ReminderCustomSnoozeView: View {
 
 private struct ReminderEditorWindowContent: View {
   @ObservedObject var provider: RemindersProvider
-  let close: () -> Void
+  let close: @MainActor @Sendable () -> Void
+  let updateWindowTitle: @MainActor (String) -> Void
 
   @ViewBuilder
   var body: some View {
@@ -390,7 +405,7 @@ private struct ReminderEditorWindowContent: View {
         draft: Binding(
           get: { provider.editorSession?.draft ?? session.draft },
           set: { provider.updateEditorDraft($0) }),
-        heading: session.draft.reminderID == nil ? "New reminder" : "Edit reminder",
+        heading: ReminderEditorPresentation.windowTitle(for: session.draft),
         submitTitle: session.draft.reminderID == nil ? "Add" : "Save",
         lists: provider.availableLists,
         fieldMessages: session.fieldMessages,
@@ -412,12 +427,17 @@ private struct ReminderEditorWindowContent: View {
         },
         onOpenReminders: { _ = provider.openRemindersApp() },
         onStopWaiting: {
-          provider.confirmRemindersHandoffAndStopWaiting()
-          if provider.editorSession == nil { close() }
+          provider.confirmRemindersHandoffAndStopWaiting(onAbandoned: close)
         },
         onFieldError: { provider.reportEditorFieldError($0) }
       )
       .id(session.id)
+      .onAppear {
+        updateWindowTitle(ReminderEditorPresentation.windowTitle(for: session.draft))
+      }
+      .onChange(of: session.draft.reminderID) { _, _ in
+        updateWindowTitle(ReminderEditorPresentation.windowTitle(for: session.draft))
+      }
     } else {
       EmptyView()
     }
@@ -454,13 +474,15 @@ final class ReminderEditorWindow: NSObject, NSWindowDelegate {
     guard provider.beginEditorSession(for: item) else { return }
     self.provider = provider
     present(
-      title: provider.editorSession?.draft.reminderID == nil ? "New reminder" : "Edit reminder",
+      title: provider.editorSession.map { ReminderEditorPresentation.windowTitle(for: $0.draft) }
+        ?? "New reminder",
       content: ReminderEditorWindowContent(
-        provider: provider, close: { [weak self] in self?.close() }))
+        provider: provider, close: { [weak self] in self?.close() },
+        updateWindowTitle: { [weak self] title in self?.window?.title = title }))
   }
 
   func presentSnooze(provider: RemindersProvider, item: ReminderItem) {
-    if provider.hasPendingEditorSession {
+    if provider.hasEditorSession {
       presentEditor(provider: provider, item: nil)
       return
     }

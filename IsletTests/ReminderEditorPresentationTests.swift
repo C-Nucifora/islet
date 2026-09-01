@@ -174,6 +174,155 @@ final class ReminderEditorPresentationTests: XCTestCase {
       ReminderEditorPresentation.windowRoute(currentDraft: pending, request: .snooze), .editor)
   }
 
+  func testAnyRetainedSessionReopensForDashboardNewEditAndSnooze() {
+    let retained = draft(id: "item-1")
+
+    XCTAssertEqual(
+      ReminderEditorPresentation.windowRoute(currentDraft: retained, request: .edit), .editor)
+    XCTAssertEqual(
+      ReminderEditorPresentation.windowRoute(currentDraft: retained, request: .new), .editor)
+    XCTAssertEqual(
+      ReminderEditorPresentation.windowRoute(currentDraft: retained, request: .snooze), .editor)
+    XCTAssertEqual(
+      ReminderEditorPresentation.windowRoute(currentDraft: nil, request: .snooze), .snooze)
+  }
+
+  func testPendingAndRetryBlockedDraftsAreReadOnly() {
+    var pending = draft(id: "item-1")
+    pending.pendingCommitReceipt = ReminderCommitReceipt(
+      itemIdentifier: "item-1", externalIdentifier: nil)
+    var blocked = draft(id: "item-1")
+    blocked.retryBlockedReason = "Open in Reminders."
+
+    XCTAssertTrue(ReminderEditorPresentation.isReadOnly(pending))
+    XCTAssertTrue(ReminderEditorPresentation.isReadOnly(blocked))
+    XCTAssertFalse(ReminderEditorPresentation.isReadOnly(draft(id: "item-1")))
+  }
+
+  func testQuickUnknownRetentionInvalidatesOlderReloads() {
+    let id = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+    var requested = draft(id: "item-1")
+    requested.pendingCommitReceipt = ReminderCommitReceipt(
+      itemIdentifier: "item-1", externalIdentifier: "external")
+    let write = ReminderCoordinatorWrite(
+      outcome: .commitStatusUnknown(requested.pendingCommitReceipt!), draft: requested)
+
+    let retention = ReminderEditorPresentation.retention(
+      for: write, existingSession: nil, newSessionID: id,
+      calendar: fixedCalendar(), displayTimeZone: utc)
+
+    XCTAssertEqual(retention?.session.id, id)
+    XCTAssertEqual(retention?.session.draft, requested)
+    XCTAssertTrue(retention?.invalidatesReloadGeneration == true)
+    XCTAssertTrue(retention?.requestsReload == true)
+  }
+
+  func testQuickNormalizedRetentionKeepsRequestedDraftAndMessages() {
+    let requested = draft(id: "item-1")
+    let write = ReminderCoordinatorWrite(
+      outcome: .committedWithNormalization(
+        actual: makeRecord(id: "item-1"),
+        mismatches: [
+          ReminderNormalizationMismatch(field: .title, reason: "title changed"),
+          ReminderNormalizationMismatch(field: .priority, reason: "priority changed"),
+        ]),
+      draft: requested)
+
+    let retention = ReminderEditorPresentation.retention(
+      for: write, existingSession: nil,
+      calendar: fixedCalendar(), displayTimeZone: utc)
+
+    XCTAssertEqual(retention?.session.draft, requested)
+    XCTAssertEqual(retention?.session.fieldMessages.map(\.field), [.title, .priority])
+    XCTAssertFalse(retention?.invalidatesReloadGeneration == true)
+    XCTAssertTrue(retention?.requestsReload == true)
+  }
+
+  func testResolvedRetryBlockedDraftUsesBlockReason() {
+    var resolved = draft(id: "item-1")
+    resolved.retryBlockedReason = "This provider value needs Reminders."
+    let message = ReminderEditorPresentation.reviewMessage(
+      for: resolved,
+      fieldMessages: [ReminderEditorFieldMessage(field: .title, message: "title changed")])
+
+    XCTAssertEqual(message, "This provider value needs Reminders.")
+  }
+
+  func testOlderReloadGenerationCannotResolveNewPendingSession() {
+    var state = ReminderReloadState()
+    let older = state.beginReload()
+    state.invalidate(clearOptimisticCompletions: false)
+
+    XCTAssertNil(state.finish([], generation: older))
+    let later = state.beginReload()
+    XCTAssertEqual(state.finish([], generation: later), [])
+  }
+
+  func testPendingReloadIdentityRequiresSameSessionAndReceipt() {
+    let sessionID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+    let otherSessionID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+    let receipt = ReminderCommitReceipt(itemIdentifier: "item-1", externalIdentifier: "external")
+    let identity = ReminderEditorPendingIdentity(sessionID: sessionID, receipt: receipt)
+    var pending = draft(id: "item-1")
+    pending.pendingCommitReceipt = receipt
+
+    XCTAssertTrue(identity.matches(sessionID: sessionID, draft: pending))
+    XCTAssertFalse(identity.matches(sessionID: otherSessionID, draft: pending))
+    pending.pendingCommitReceipt = ReminderCommitReceipt(
+      itemIdentifier: "item-1", externalIdentifier: "different")
+    XCTAssertFalse(identity.matches(sessionID: sessionID, draft: pending))
+    pending.pendingCommitReceipt = nil
+    XCTAssertFalse(identity.matches(sessionID: sessionID, draft: pending))
+  }
+
+  func testHandoffCompletionRequiresSamePendingSessionAndRunningApplication() {
+    let expected = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+    let other = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+    let expectedReceipt = ReminderCommitReceipt(
+      itemIdentifier: "item-1", externalIdentifier: "external")
+    let newerReceipt = ReminderCommitReceipt(
+      itemIdentifier: "item-1", externalIdentifier: "newer")
+
+    XCTAssertEqual(
+      ReminderEditorPresentation.handoffCompletion(
+        expectedSessionID: expected, expectedReceipt: expectedReceipt,
+        currentSessionID: expected, currentReceipt: expectedReceipt,
+        currentSessionIsPending: true, openedRunningApplication: true,
+        errorDescription: nil),
+      .abandon)
+    XCTAssertEqual(
+      ReminderEditorPresentation.handoffCompletion(
+        expectedSessionID: expected, expectedReceipt: expectedReceipt,
+        currentSessionID: other, currentReceipt: expectedReceipt,
+        currentSessionIsPending: true, openedRunningApplication: true,
+        errorDescription: nil),
+      .ignore)
+    XCTAssertEqual(
+      ReminderEditorPresentation.handoffCompletion(
+        expectedSessionID: expected, expectedReceipt: expectedReceipt,
+        currentSessionID: expected, currentReceipt: newerReceipt,
+        currentSessionIsPending: true, openedRunningApplication: true,
+        errorDescription: nil),
+      .ignore)
+    XCTAssertEqual(
+      ReminderEditorPresentation.handoffCompletion(
+        expectedSessionID: expected, expectedReceipt: expectedReceipt,
+        currentSessionID: expected, currentReceipt: expectedReceipt,
+        currentSessionIsPending: true, openedRunningApplication: false,
+        errorDescription: "Launch failed"),
+      .retain(message: "Couldn’t open Reminders. Launch failed"))
+  }
+
+  func testWindowTitleTracksNewAndCommittedDraftModes() {
+    XCTAssertEqual(ReminderEditorPresentation.windowTitle(for: draft(id: nil)), "New reminder")
+    XCTAssertEqual(
+      ReminderEditorPresentation.windowTitle(for: draft(id: "item-1")), "Edit reminder")
+  }
+
+  func testPrimaryActionUsesFixedFooter() {
+    XCTAssertEqual(ReminderEditorPresentation.primaryActionPlacement, .fixedFooter)
+  }
+
   func testDateOnlyToggleWorksForStartAndDueValues() throws {
     let start = try dateValue(year: 2026, month: 9, day: 14, hour: 8, minute: 10)
     let due = try dateValue(year: 2026, month: 9, day: 15, hour: 17, minute: 20)
@@ -474,6 +623,12 @@ final class ReminderEditorPresentationTests: XCTestCase {
       ReminderEditorPresentation.pendingRetryDelays,
       [.milliseconds(250), .milliseconds(750), .seconds(2), .seconds(4)])
     XCTAssertEqual(ReminderEditorPresentation.pendingRetryDelays.count, 4)
+  }
+
+  private func fixedCalendar() -> Calendar {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = utc
+    return calendar
   }
 
   private func list(id: String, title: String) -> ReminderListItem {
