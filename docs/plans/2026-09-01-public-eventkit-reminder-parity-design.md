@@ -187,15 +187,23 @@ struct ReminderNormalizationMismatch: Equatable, Sendable {
   let reason: String
 }
 
+struct ReminderCommitReceipt: Equatable, Sendable {
+  let itemIdentifier: String?
+  let externalIdentifier: String?
+}
+
 enum ReminderWriteOutcome: Equatable, Sendable {
   case saved(ReminderWriteRecord)
   case committedWithNormalization(
     actual: ReminderWriteRecord,
     mismatches: [ReminderNormalizationMismatch])
+  case commitStatusUnknown(ReminderCommitReceipt)
 }
 ```
 
-On `.saved`, the provider publishes the returned record and closes the editor. On `.committedWithNormalization`, the provider publishes the provider's actual committed record, keeps the requested field values in the editor, and shows every field-specific mismatch. It also rebases the draft's identifier, origin, baseline, and revision onto `actual`. A normalized create therefore becomes an edit of the committed reminder, and a retry patches that reminder at its new revision instead of creating a duplicate. Only a failure before commit leaves the old dashboard item unchanged. The store applies only fields marked as changed and keeps observing `EKEventStoreChanged` after either committed outcome.
+On `.saved`, the provider publishes the returned record and closes the editor. On `.committedWithNormalization`, the provider publishes the provider's actual committed record, keeps the requested field values in the editor, and shows every field-specific mismatch. It also rebases the draft's identifier, origin, baseline, and revision onto `actual`. A normalized create therefore becomes an edit of the committed reminder, and a retry patches that reminder at its new revision instead of creating a duplicate.
+
+EventKit can report commit success without making an authoritative record immediately readable. In that case the store returns `.commitStatusUnknown` with any nonempty item and external identifiers available from the staged object. It never fabricates a saved record from that object and never throws an ordinary retryable pre-commit error. The provider publishes no speculative dashboard item, keeps the editor open in a pending state, disables Add or Save, and reloads until it can resolve an actual record or the user hands off to Reminders.app. It does not match by title or external identifier because neither is unique enough. Only a thrown failure is known to have occurred before commit. The store applies only fields marked as changed and keeps observing `EKEventStoreChanged` after every non-failure outcome.
 
 Creating a reminder selects the writable system default. If that list is absent or read-only, Islet selects the first writable list in the same stable order shown by the picker. Once the user chooses a list, a missing or read-only selection fails without falling back.
 
@@ -214,6 +222,7 @@ User-facing errors distinguish:
 - invalid title, URL, dates, recurrence, alarm, or location radius
 - provider rejected an alarm, recurrence, list change, or deletion
 - unsupported alarm representation that requires Reminders.app
+- commit status unknown, requiring reload or Reminders.app before another write
 
 Raw EventKit text appears only as a final detail after Islet's actionable message.
 

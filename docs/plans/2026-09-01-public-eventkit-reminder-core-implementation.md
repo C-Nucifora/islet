@@ -119,11 +119,17 @@ struct ReminderNormalizationMismatch: Equatable, Sendable {
   let reason: String
 }
 
+struct ReminderCommitReceipt: Equatable, Sendable {
+  let itemIdentifier: String?
+  let externalIdentifier: String?
+}
+
 enum ReminderWriteOutcome: Equatable, Sendable {
   case saved(ReminderWriteRecord)
   case committedWithNormalization(
     actual: ReminderWriteRecord,
     mismatches: [ReminderNormalizationMismatch])
+  case commitStatusUnknown(ReminderCommitReceipt)
 }
 ```
 
@@ -241,6 +247,7 @@ git commit -m "Map public reminder fields safely"
 **Files:**
 - Create: `Islet/Activities/Reminders/EventKitReminderWriteStore.swift`
 - Create: `IsletTests/EventKitReminderWriteStoreTests.swift`
+- Modify: `Islet/Activities/Reminders/ReminderWriteModels.swift`
 - Modify: `Islet/Activities/Reminders/ReminderWriteCoordinator.swift`
 
 **Interfaces:**
@@ -260,6 +267,7 @@ func testDeleteChecksRevisionBeforeRemoving() throws
 func testDeleteDoesNotRemoveAfterExternalChange() throws
 func testNormalizedCreateReturnsTheCommittedIdentifier() throws
 func testNormalizedUpdateReportsEveryChangedFieldMismatch() throws
+func testUnreadablePostCommitCreateReturnsUnknownStatusWithoutRetrying() throws
 ```
 
 - [ ] **Step 2: Verify RED**
@@ -299,9 +307,9 @@ The production `save` and `delete` flow is:
 5. Apply the patch to the existing object.
 6. Stage a save with `commit: false`, read back every changed field, and reset the store if the staged object cannot represent the request.
 7. Commit, re-fetch, and compare every changed field again.
-8. Return `.saved` for an exact commit or `.committedWithNormalization(actual:mismatches:)` for a provider-normalized commit.
+8. Return `.saved` for an exact commit, `.committedWithNormalization(actual:mismatches:)` for a provider-normalized commit, or `.commitStatusUnknown` when the commit call returns but no authoritative post-commit record can be fetched.
 
-A normalized create returns the committed identifier. A retry targets that reminder and never creates a duplicate. A pre-commit mismatch resets the EventKit store and throws without changing the dashboard.
+A normalized create returns the committed identifier. A retry targets that reminder and never creates a duplicate. A pre-commit mismatch resets the EventKit store and throws without changing the dashboard. After a commit-status-unknown outcome, preserve any nonempty item and external identifiers as a receipt, publish no unverified record, and never issue a second create automatically. Do not match by title or external identifier. Later tasks keep the editor pending and disable retry until a reload resolves an authoritative record or the user hands off to Reminders.app.
 
 Keep all EventKit object access on the main actor. Remove the production store implementation from `ReminderWriteCoordinator.swift` after the new file compiles.
 
@@ -313,6 +321,7 @@ Type-check the focused store module and tests. Run a standalone fake-store probe
 
 ```bash
 git add Islet/Activities/Reminders/EventKitReminderWriteStore.swift \
+  Islet/Activities/Reminders/ReminderWriteModels.swift \
   Islet/Activities/Reminders/ReminderWriteCoordinator.swift \
   IsletTests/EventKitReminderWriteStoreTests.swift
 git commit -m "Apply reminder edits as field patches"
@@ -344,6 +353,7 @@ func testMissingSelectedListNeverFallsBack() throws
 func testMissingOrReadOnlySystemDefaultUsesFirstWritableList() throws
 func testNormalizedCreateRebasesOntoCommittedIdentifierAndRevision() throws
 func testNormalizedUpdateKeepsRequestedFieldsAndRebasesBaseline() throws
+func testUnknownCreateCommitRemainsPendingAndCannotRetryCreate() throws
 ```
 
 - [ ] **Step 2: Verify RED**
@@ -360,7 +370,7 @@ Completion uses `ReminderCompletionValue(isCompleted: true, completionDate: now)
 
 Add user-facing errors for invalid URL, invalid date components, missing completion date, and provider-rejected deletion. Keep raw EventKit text as the final detail after the actionable message.
 
-Propagate `ReminderWriteOutcome` to the provider. On `.committedWithNormalization`, keep the requested fields in the open draft, replace its identifier, baseline, and source revision with `actual`, and attach the field-specific mismatches. A second save patches the committed reminder.
+Propagate `ReminderWriteOutcome` to the provider. On `.committedWithNormalization`, keep the requested fields in the open draft, replace its identifier, baseline, and source revision with `actual`, and attach the field-specific mismatches. A second save patches the committed reminder. On `.commitStatusUnknown`, preserve the receipt as pending reconciliation and prevent the coordinator from issuing another create.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -399,6 +409,7 @@ func testInvalidURLKeepsEditorOpenWithFieldError()
 func testDateOnlyToggleRemovesClockWithoutChangingDate()
 func testFloatingZoneChoiceStoresNoTimeZone()
 func testProviderNormalizationKeepsEditorOpenWithFieldMessages()
+func testUnknownCommitKeepsEditorOpenAndDisablesRetry()
 ```
 
 - [ ] **Step 2: Verify RED**
@@ -418,6 +429,8 @@ Keep title, list, due date, optional time, priority, and Add or Save in the firs
 Wrap the form in `ScrollView`, use a minimum content width of 420 points, and give the window `.resizable` style. Keep initial title focus, Escape cancellation, Command-N creation, and VoiceOver labels. Return saves only when focus is not in notes.
 
 Existing reminders show Open in Reminders. Use the public Reminders application URL when an item-specific URL is unavailable; never invent a private deep link.
+
+An unknown commit status keeps the requested values visible, disables Add or Save, explains that Islet is waiting for Reminders to reload, and offers the same public Reminders.app handoff. It must not allow another create while pending.
 
 Delete opens an `NSAlert` that names the reminder. The destructive button is not the default button. On confirmed success, close the editor. On failure, keep it open and show the provider error.
 
@@ -448,7 +461,7 @@ git commit -m "Expose core reminder details safely"
 
 - [ ] **Step 1: Add failing reconciliation tests**
 
-Prove that a committed create or update uses the returned provider value, a deletion removes the visible item, and any mutation with hidden ranked reminders requests a reload.
+Prove that a committed create or update uses the returned provider value, an unknown commit publishes no speculative item and requests a reload, a deletion removes the visible item, and any mutation with hidden ranked reminders requests a reload.
 
 - [ ] **Step 2: Verify RED**
 
@@ -456,7 +469,7 @@ Run the pure reconciliation type-check and standalone probe. Expected: the delet
 
 - [ ] **Step 3: Wire committed outcomes**
 
-Publish only records returned after EventKit commit. Refresh lists after every write. Keep observing `EKEventStoreChanged`. On `.saved`, publish the returned record and close the editor. On `.committedWithNormalization`, publish `actual`, rebase the still-open editor, and show every mismatch. On delete success, reconcile `.remove(id)`; on failure, leave the item and editor untouched. If `hasMoreReminders` is true, request a reload after create, update, completion, undo, or deletion.
+Publish only records returned after EventKit commit. Refresh lists after every write. Keep observing `EKEventStoreChanged`. On `.saved`, publish the returned record and close the editor. On `.committedWithNormalization`, publish `actual`, rebase the still-open editor, and show every mismatch. On `.commitStatusUnknown`, publish nothing, request a reload, and keep the editor pending with retry disabled. On delete success, reconcile `.remove(id)`; on failure, leave the item and editor untouched. If `hasMoreReminders` is true, request a reload after create, update, completion, undo, or deletion.
 
 - [ ] **Step 4: Write the manual verification matrix**
 
