@@ -185,15 +185,56 @@ struct ReminderDraft: Equatable, Sendable {
     title: "", listID: nil, dueDate: nil, hasDueTime: false, priority: 0)
 }
 
+struct ReminderWeekdayRevision: Equatable, Sendable {
+  let dayOfTheWeekRawValue: Int
+  let weekNumber: Int
+}
+
+struct ReminderAlarmRevision: Equatable, Sendable {
+  let typeRawValue: Int
+  let absoluteDate: Date?
+  let relativeOffset: TimeInterval
+  let locationTitle: String?
+  let latitude: Double?
+  let longitude: Double?
+  let radius: Double?
+  let proximityRawValue: Int?
+  let emailAddress: String?
+  let soundName: String?
+  let url: URL?
+}
+
+struct ReminderRecurrenceRevision: Equatable, Sendable {
+  let calendarIdentifier: Calendar.Identifier?
+  let frequencyRawValue: Int
+  let interval: Int
+  let firstDayOfTheWeek: Int
+  let daysOfTheWeek: [ReminderWeekdayRevision]
+  let daysOfTheMonth: [Int]
+  let monthsOfTheYear: [Int]
+  let weeksOfTheYear: [Int]
+  let daysOfTheYear: [Int]
+  let setPositions: [Int]
+  let endDate: Date?
+  let occurrenceCount: Int?
+}
+
 struct ReminderWriteRecord: Equatable, Sendable {
   struct Revision: Equatable, Sendable {
-    let lastModified: Date?
+    let lastModifiedDate: Date?
     let title: String
     let notes: String?
-    let priority: Int
+    let url: URL?
+    let startDateComponents: DateComponents?
     let dueDateComponents: DateComponents?
-    let listID: String
+    let priority: Int
     let isCompleted: Bool
+    let completionDate: Date?
+    let location: String?
+    let timeZone: TimeZone?
+    let alarms: [ReminderAlarmRevision]
+    let recurrenceRules: [ReminderRecurrenceRevision]
+    let listID: String
   }
 
   let id: String
@@ -206,11 +247,21 @@ struct ReminderWriteRecord: Equatable, Sendable {
   var listColorHex: String?
   var isCompleted: Bool
   var lastModified: Date?
+  var url: URL? = nil
+  var startDateComponents: DateComponents? = nil
+  var completionDate: Date? = nil
+  var location: String? = nil
+  var timeZone: TimeZone? = nil
+  var alarmRevisions: [ReminderAlarmRevision] = []
+  var recurrenceRevisions: [ReminderRecurrenceRevision] = []
 
   var revision: Revision {
     Revision(
-      lastModified: lastModified, title: title, notes: notes, priority: priority,
-      dueDateComponents: dueDateComponents, listID: listID, isCompleted: isCompleted)
+      lastModifiedDate: lastModified, title: title, notes: notes, url: url,
+      startDateComponents: startDateComponents, dueDateComponents: dueDateComponents,
+      priority: priority, isCompleted: isCompleted, completionDate: completionDate,
+      location: location, timeZone: timeZone, alarms: alarmRevisions,
+      recurrenceRules: recurrenceRevisions, listID: listID)
   }
 }
 
