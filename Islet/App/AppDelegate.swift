@@ -70,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var launchAtLoginObserver: AnyCancellable?
   private var activityLifecycleController: ActivityLifecycleController?
   private var audioDeviceLifecycleCancellable: AnyCancellable?
+  private let reminderCommandHotKey = ReminderCommandHotKey.shared
   /// Kept by the delegate for the entire app lifetime so notification responses still reach the
   /// timer when Islet has no normal application window.
   private let timerCompletionNotifications = TimerCompletionNotifications.shared
@@ -96,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       Log.app.info("Launched as a test host; skipping monitor startup")
       return
     }
+    reminderCommandHotKey.start()
     timerCompletionNotifications.start()
     Task { @MainActor in
       ActivityEnablement.migrateLegacyPreferencesIfNeeded()
@@ -140,11 +142,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     Log.app.info("Islet launched")
   }
 
+  func applicationDidBecomeActive(_ notification: Notification) {
+    guard !isRunningTests else { return }
+    reminderCommandHotKey.start()
+  }
+
   func applicationWillTerminate(_ notification: Notification) {
     guard !isRunningTests else { return }
     // AppKit invokes this delegate on the main thread. Media shutdown is intentionally synchronous:
     // otherwise the app can exit before the watcher's serial queue terminates its helper process.
     MainActor.assumeIsolated {
+      reminderCommandHotKey.stop()
       KeepAwakeManager.shared.stop(reason: .quit)
       AppState.nowPlaying.stop()
       AppState.battery.stop()

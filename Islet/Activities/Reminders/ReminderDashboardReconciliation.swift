@@ -32,7 +32,14 @@ struct ReminderDashboardReconciliation {
     let selection = RemindersLogic.dashboardSelection(
       knownReminders, now: now, calendar: calendar, policy: policy)
     let reminders = RemindersLogic.display(selection.items, limit: policy.displayLimit)
-    let requiresReload = hasMoreReminders && reminders.count < visibleReminders.count
+    let requiresReload: Bool
+    switch mutation {
+    case .replace:
+      // The current dashboard does not retain the hidden candidate that may now outrank this item.
+      requiresReload = hasMoreReminders
+    case .insert, .remove:
+      requiresReload = hasMoreReminders && reminders.count < visibleReminders.count
+    }
     return ReminderDashboardReconciliation(
       reminders: reminders,
       hasMoreReminders: hasMoreReminders || selection.hasMore,
