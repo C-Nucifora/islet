@@ -76,11 +76,13 @@ providers may use either address (or `localhost`) without exposing Pulse on a LA
 server rejects messages over 64 KiB, invalid or revoked credentials, commands for another source,
 missing permissions, replays, unsafe
 action URL schemes, more than three actions, and more than 100 simultaneous items.
-The listener accepts at most 16 concurrent clients, each socket is capped at 128 commands, and the
-provider credential is capped at 512 accepted commands per rolling minute across reconnects. A
-rate-limited provider receives a structured `rateLimited` error and should retry with backoff. If
-capacity ordering would immediately evict the submitted item, the provider receives
-`capacityExceeded` instead of a false success.
+The listener accepts at most 16 concurrent clients, each socket is capped at 128 commands, and each
+provider credential is capped at 512 accepted commands per rolling minute across reconnects. Pulse
+also keeps a 2,048-command process-wide rolling-minute ceiling so a collection of providers cannot
+overload Islet. A rate-limited provider receives a structured `rateLimited` error with an integer
+`retryAfter` value in seconds. It is the protocol equivalent of HTTP's `Retry-After` header and
+lets the sender wait before reconnecting. If capacity ordering would immediately evict the submitted
+item, the provider receives `capacityExceeded` instead of a false success.
 When Pulse is disabled, Islet clears retained items and rejects every transport or Shortcuts update
 with `featureDisabled`.
 
