@@ -74,12 +74,17 @@ enum AppState {
 @main
 struct IsletApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+  @ObservedObject private var reminderCommandHotKey = ReminderCommandHotKey.shared
 
   var body: some Scene {
     Settings { EmptyView() }
       .commands {
         CommandMenu("Reminders") {
-          Button("Open Reminder Commands") {
+          Button(
+            reminderCommandHotKey.isAvailable
+              ? "Open Reminder Commands (global ⌘⌥⇧R)"
+              : "Open Reminder Commands (global shortcut unavailable)"
+          ) {
             ReminderCommandsWindow.shared.present(provider: RemindersProvider.shared)
           }
           .keyboardShortcut("r", modifiers: [.command, .shift])

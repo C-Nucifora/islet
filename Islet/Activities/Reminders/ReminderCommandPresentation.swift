@@ -39,11 +39,13 @@ struct ReminderCommandPresentation {
   func route(for intent: Intent) -> Route? {
     switch intent {
     case .create:
-      return .create
+      return writableListIDs.isEmpty ? nil : .create
     case .undo:
-      return hasCompletionUndo ? .undo : nil
+      return hasCompletionUndo && !writableListIDs.isEmpty ? .undo : nil
     case .complete, .edit, .snooze, .customSnooze, .move:
-      guard let selectedReminder else { return nil }
+      guard let selectedReminder, let sourceListID = selectedReminder.listID,
+        writableListIDs.contains(sourceListID)
+      else { return nil }
       switch intent {
       case .complete:
         return .complete(selectedReminder)
@@ -54,7 +56,7 @@ struct ReminderCommandPresentation {
       case .customSnooze:
         return .customSnooze(selectedReminder)
       case .move(let listID):
-        guard writableListIDs.contains(listID) else { return nil }
+        guard listID != sourceListID, writableListIDs.contains(listID) else { return nil }
         return .move(selectedReminder, toListID: listID)
       case .create, .undo:
         return nil
