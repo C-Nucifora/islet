@@ -77,5 +77,13 @@ struct IsletApp: App {
 
   var body: some Scene {
     Settings { EmptyView() }
+      .commands {
+        CommandMenu("Reminders") {
+          Button("Open Reminder Commands") {
+            ReminderCommandsWindow.shared.present(provider: RemindersProvider.shared)
+          }
+          .keyboardShortcut("r", modifiers: [.command, .shift])
+        }
+      }
   }
 }

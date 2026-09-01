@@ -225,7 +225,7 @@ final class RemindersProvider: ObservableObject {
     case .success(let undo):
       lastActionError = nil
       reloadState.markCompleted(item.id)
-      reminders.removeAll { $0.id == item.id }  // optimistic; store-change reload confirms
+      reconcileDashboard(.remove(item.id))
       completionUndo = undo
       scheduleUndoExpiry(undo)
     case .failure(let error):
@@ -238,7 +238,7 @@ final class RemindersProvider: ObservableObject {
     switch writes.create(draft) {
     case .success(let item):
       lastActionError = nil
-      reminders = RemindersLogic.display(reminders + [item])
+      reconcileDashboard(.insert(item))
       availableLists = writes.lists()
       return true
     case .failure(let error):
@@ -290,8 +290,7 @@ final class RemindersProvider: ObservableObject {
       completionUndo = nil
       lastActionError = nil
       reloadState.restoreCompleted(item.id)
-      reminders.removeAll { $0.id == item.id }
-      reminders = RemindersLogic.display(reminders + [item])
+      reconcileDashboard(.insert(item))
     case .failure(let error):
       completionUndo = nil
       report(error, action: "undo completion")
@@ -324,16 +323,23 @@ final class RemindersProvider: ObservableObject {
     switch result {
     case .success(let item):
       lastActionError = nil
-      if let index = reminders.firstIndex(where: { $0.id == original.id }) {
-        reminders[index] = item
-        reminders = RemindersLogic.display(reminders)
-      }
+      reconcileDashboard(.replace(originalID: original.id, with: item))
       availableLists = writes.lists()
       return true
     case .failure(let error):
       report(error, action: action)
       availableLists = writes.lists()
       return false
+    }
+  }
+
+  private func reconcileDashboard(_ mutation: ReminderDashboardReconciliation.Mutation) {
+    let reconciliation = ReminderDashboardReconciliation.make(
+      visibleReminders: reminders, hasMoreReminders: hasMoreReminders, mutation: mutation)
+    reminders = reconciliation.reminders
+    hasMoreReminders = reconciliation.hasMoreReminders
+    if reconciliation.requiresReload {
+      Task { await reload() }
     }
   }
 
