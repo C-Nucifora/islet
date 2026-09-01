@@ -4,7 +4,7 @@ import Defaults
 import EventKit
 import Foundation
 
-/// Loads and manages reminders through one EventKit store.
+/// Queries reminders through a store isolated from writer resets and authoritative readback.
 /// Only requests access once the feature is enabled, to avoid an unwanted permission prompt.
 @MainActor
 final class RemindersProvider: ObservableObject {
@@ -40,8 +40,15 @@ final class RemindersProvider: ObservableObject {
 
   init(store: EKEventStore = EKEventStore(), writes: ReminderWriteCoordinator? = nil) {
     self.store = store
-    self.writes =
-      writes ?? ReminderWriteCoordinator(store: EventKitReminderWriteStore(store: store))
+    if let writes {
+      self.writes = writes
+    } else {
+      let stores = ReminderEventKitStoreRoles(queryStore: store)
+      self.writes = ReminderWriteCoordinator(
+        store: EventKitReminderWriteStore(
+          store: stores.writeStore,
+          authoritativeReadbackStore: stores.authoritativeReadbackStore))
+    }
   }
 
   func start() {

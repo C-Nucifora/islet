@@ -22,41 +22,73 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
     func defaultListID() -> String? { lists.first(where: \.isDefault)?.id }
     func record(withID id: String) -> ReminderWriteRecord? { records[id] }
 
-    func create(_ draft: ReminderDraft, inListWithID listID: String) throws
-      -> ReminderWriteRecord
-    {
-      guard let list = lists.first(where: { $0.id == listID && $0.isWritable }) else {
+    func create(_ fields: ReminderEditableFields) throws -> ReminderWriteOutcome {
+      guard let list = lists.first(where: { $0.id == fields.listID && $0.isWritable }) else {
         throw ReminderWriteError.missingList
       }
       let id = "new-\(nextID)"
       nextID += 1
       let record = ReminderWriteRecord(
-        id: id, title: draft.title, notes: nil, priority: draft.priority,
-        dueDateComponents: draft.dueDate.map {
-          RemindersLogic.dueComponents(for: $0, hasTime: draft.hasDueTime, calendar: testCalendar)
-        },
+        id: id, title: fields.title, notes: fields.notes, priority: fields.priority,
+        dueDateComponents: fields.dueDate?.components,
         listID: list.id, listTitle: list.title, listColorHex: list.colorHex,
-        isCompleted: false, lastModified: Date(timeIntervalSince1970: TimeInterval(revision)))
+        isCompleted: fields.completion.isCompleted,
+        lastModified: Date(timeIntervalSince1970: TimeInterval(revision)), url: fields.url,
+        startDateComponents: fields.startDate?.components,
+        completionDate: fields.completion.completionDate)
       revision += 1
       records[id] = record
-      return record
+      return .saved(record)
     }
 
     func save(
-      _ record: ReminderWriteRecord, expectedRevision: ReminderWriteRecord.Revision
-    ) throws -> ReminderWriteRecord {
-      guard let current = records[record.id] else { throw ReminderWriteError.missingReminder }
+      reminderID: String, patch: ReminderPatch,
+      expectedRevision: ReminderWriteRecord.Revision
+    ) throws -> ReminderWriteOutcome {
+      guard let current = records[reminderID] else { throw ReminderWriteError.missingReminder }
       guard current.revision == expectedRevision else { throw ReminderWriteError.changedElsewhere }
-      guard let list = lists.first(where: { $0.id == record.listID && $0.isWritable }) else {
+
+      let requestedListID: String
+      switch patch.listID {
+      case .unchanged:
+        requestedListID = current.listID
+      case .value(let listID):
+        requestedListID = listID
+      }
+      guard let list = lists.first(where: { $0.id == requestedListID && $0.isWritable }) else {
         throw ReminderWriteError.missingList
       }
-      var saved = record
+
+      var saved = current
+      if case .value(let title) = patch.title { saved.title = title }
+      if case .value(let notes) = patch.notes { saved.notes = notes }
+      if case .value(let url) = patch.url { saved.url = url }
+      if case .value(let listID) = patch.listID { saved.listID = listID }
+      if case .value(let startDate) = patch.startDate {
+        saved.startDateComponents = startDate?.components
+      }
+      if case .value(let dueDate) = patch.dueDate {
+        saved.dueDateComponents = dueDate?.components
+      }
+      if case .value(let priority) = patch.priority { saved.priority = priority }
+      if case .value(let completion) = patch.completion {
+        saved.isCompleted = completion.isCompleted
+        saved.completionDate = completion.completionDate
+      }
       saved.listTitle = list.title
       saved.listColorHex = list.colorHex
       saved.lastModified = Date(timeIntervalSince1970: TimeInterval(revision))
       revision += 1
       records[saved.id] = saved
-      return saved
+      return .saved(saved)
+    }
+
+    func delete(
+      reminderID: String, expectedRevision: ReminderWriteRecord.Revision
+    ) throws {
+      guard let current = records[reminderID] else { throw ReminderWriteError.missingReminder }
+      guard current.revision == expectedRevision else { throw ReminderWriteError.changedElsewhere }
+      records.removeValue(forKey: reminderID)
     }
 
     func addExisting() -> ReminderItem {

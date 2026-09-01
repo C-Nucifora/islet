@@ -2,12 +2,36 @@ import EventKit
 import Foundation
 
 @MainActor
+struct ReminderEventKitStoreRoles {
+  let queryStore: EKEventStore
+  let writeStore: EKEventStore
+  let authoritativeReadbackStore: EKEventStore
+
+  init(
+    queryStore: EKEventStore = EKEventStore(),
+    writeStore: EKEventStore = EKEventStore(),
+    authoritativeReadbackStore: EKEventStore = EKEventStore()
+  ) {
+    self.queryStore = queryStore
+    self.writeStore = writeStore
+    self.authoritativeReadbackStore = authoritativeReadbackStore
+    precondition(areDistinct, "Reminder EventKit store roles must use distinct instances")
+  }
+
+  var areDistinct: Bool {
+    queryStore !== writeStore && queryStore !== authoritativeReadbackStore
+      && writeStore !== authoritativeReadbackStore
+  }
+}
+
+@MainActor
 protocol ReminderEventKitStoreBacking: AnyObject {
   var authorization: EventKitPermissionState { get }
   func reminderCalendars() -> [EKCalendar]
   func defaultReminderCalendar() -> EKCalendar?
   func writableReminderCalendar(withID id: String) -> EKCalendar?
   func reminder(withID id: String) -> EKReminder?
+  func authoritativeReminder(withID id: String) -> EKReminder?
   func makeReminder() -> EKReminder
   func refresh(_ reminder: EKReminder) -> Bool
   func stageSave(_ reminder: EKReminder) throws
@@ -18,10 +42,15 @@ protocol ReminderEventKitStoreBacking: AnyObject {
 
 @MainActor
 private final class LiveReminderEventKitStoreBacking: ReminderEventKitStoreBacking {
-  private let store: EKEventStore
+  private let writeStore: EKEventStore
+  private let authoritativeReadbackStore: EKEventStore
 
-  init(store: EKEventStore) {
-    self.store = store
+  init(store: EKEventStore, authoritativeReadbackStore: EKEventStore) {
+    precondition(
+      store !== authoritativeReadbackStore,
+      "Reminder write and authoritative-readback stores must be distinct")
+    writeStore = store
+    self.authoritativeReadbackStore = authoritativeReadbackStore
   }
 
   var authorization: EventKitPermissionState {
@@ -29,25 +58,29 @@ private final class LiveReminderEventKitStoreBacking: ReminderEventKitStoreBacki
   }
 
   func reminderCalendars() -> [EKCalendar] {
-    store.calendars(for: .reminder)
+    writeStore.calendars(for: .reminder)
   }
 
   func defaultReminderCalendar() -> EKCalendar? {
-    store.defaultCalendarForNewReminders()
+    writeStore.defaultCalendarForNewReminders()
   }
 
   func writableReminderCalendar(withID id: String) -> EKCalendar? {
-    store.calendars(for: .reminder).first {
+    writeStore.calendars(for: .reminder).first {
       $0.calendarIdentifier == id && $0.allowsContentModifications
     }
   }
 
   func reminder(withID id: String) -> EKReminder? {
-    store.calendarItem(withIdentifier: id) as? EKReminder
+    writeStore.calendarItem(withIdentifier: id) as? EKReminder
+  }
+
+  func authoritativeReminder(withID id: String) -> EKReminder? {
+    authoritativeReadbackStore.calendarItem(withIdentifier: id) as? EKReminder
   }
 
   func makeReminder() -> EKReminder {
-    EKReminder(eventStore: store)
+    EKReminder(eventStore: writeStore)
   }
 
   func refresh(_ reminder: EKReminder) -> Bool {
@@ -55,19 +88,19 @@ private final class LiveReminderEventKitStoreBacking: ReminderEventKitStoreBacki
   }
 
   func stageSave(_ reminder: EKReminder) throws {
-    try store.save(reminder, commit: false)
+    try writeStore.save(reminder, commit: false)
   }
 
   func commit() throws {
-    try store.commit()
+    try writeStore.commit()
   }
 
   func reset() {
-    store.reset()
+    writeStore.reset()
   }
 
   func remove(_ reminder: EKReminder) throws {
-    try store.remove(reminder, commit: true)
+    try writeStore.remove(reminder, commit: true)
   }
 }
 
@@ -77,8 +110,12 @@ final class EventKitReminderWriteStore: ReminderWriteStore {
   // between refresh, comparison, staging, and commit, so the post-commit read remains authoritative.
   private let backing: any ReminderEventKitStoreBacking
 
-  init(store: EKEventStore) {
-    backing = LiveReminderEventKitStoreBacking(store: store)
+  init(
+    store: EKEventStore,
+    authoritativeReadbackStore: EKEventStore = EKEventStore()
+  ) {
+    backing = LiveReminderEventKitStoreBacking(
+      store: store, authoritativeReadbackStore: authoritativeReadbackStore)
   }
 
   init(backing: any ReminderEventKitStoreBacking) {
@@ -208,7 +245,8 @@ final class EventKitReminderWriteStore: ReminderWriteStore {
 
     let receipt = Self.receipt(for: reminder)
     guard let itemIdentifier = receipt.itemIdentifier,
-      let committed = backing.reminder(withID: itemIdentifier),
+      let committed = backing.authoritativeReminder(withID: itemIdentifier),
+      committed !== reminder,
       backing.refresh(committed)
     else {
       return .commitStatusUnknown(receipt)

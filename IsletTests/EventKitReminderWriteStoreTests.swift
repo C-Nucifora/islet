@@ -6,6 +6,15 @@ import XCTest
 
 @MainActor
 final class EventKitReminderWriteStoreTests: XCTestCase {
+  func testProviderQueryWriterAndReadbackStoresAreDistinct() {
+    let roles = ReminderEventKitStoreRoles()
+
+    XCTAssertTrue(roles.areDistinct)
+    XCTAssertFalse(roles.queryStore === roles.writeStore)
+    XCTAssertFalse(roles.queryStore === roles.authoritativeReadbackStore)
+    XCTAssertFalse(roles.writeStore === roles.authoritativeReadbackStore)
+  }
+
   func testCreateUsesExactSelectedWritableList() throws {
     let backing = Backing()
     let inbox = backing.addWritableCalendar(title: "Inbox")
@@ -390,6 +399,23 @@ final class EventKitReminderWriteStoreTests: XCTestCase {
     XCTAssertEqual(backing.postCommitLookupCount, 1)
   }
 
+  func testAliasedPostCommitReminderReturnsUnknownStatusWithoutReset() throws {
+    let backing = Backing()
+    let calendar = backing.addWritableCalendar(title: "Inbox")
+    backing.aliasesAuthoritativeReminderToStaged = true
+    let store = EventKitReminderWriteStore(backing: backing)
+
+    let outcome = try store.create(fields(listID: calendar.calendarIdentifier))
+
+    guard case .commitStatusUnknown(let receipt) = outcome else {
+      return XCTFail("Expected unknown commit status, got \(outcome)")
+    }
+    let staged = try XCTUnwrap(backing.createdReminder)
+    XCTAssertEqual(receipt.itemIdentifier, normalized(staged.calendarItemIdentifier))
+    XCTAssertEqual(backing.postCommitLookupCount, 1)
+    XCTAssertEqual(backing.resetCount, 0)
+  }
+
   func testThrownCommitResetsPendingBatchAndReturnsUnknownStatus() throws {
     let backing = Backing()
     let calendar = backing.addWritableCalendar(title: "Inbox")
@@ -506,6 +532,7 @@ private final class Backing: ReminderEventKitStoreBacking {
   var onCommit: ((EKReminder) -> Void)?
   var exposesCreatedReminderAfterCommit = true
   var exposesPostCommitReminder = true
+  var aliasesAuthoritativeReminderToStaged = false
   var refreshResult = true
   var commitError: BackingError?
   var removeError: BackingError?
@@ -524,6 +551,7 @@ private final class Backing: ReminderEventKitStoreBacking {
   private var calendars: [EKCalendar] = []
   private var writableCalendars: [String: EKCalendar] = [:]
   private var reminders: [String: EKReminder] = [:]
+  private var authoritativeReminders: [String: EKReminder] = [:]
   private var stagedReminder: EKReminder?
 
   func reminderCalendars() -> [EKCalendar] { calendars }
@@ -535,9 +563,14 @@ private final class Backing: ReminderEventKitStoreBacking {
   }
 
   func reminder(withID id: String) -> EKReminder? {
-    if commitCount > 0 { postCommitLookupCount += 1 }
-    if commitCount > 0, !exposesPostCommitReminder { return nil }
     return reminders[id]
+  }
+
+  func authoritativeReminder(withID id: String) -> EKReminder? {
+    postCommitLookupCount += 1
+    guard exposesPostCommitReminder else { return nil }
+    if aliasesAuthoritativeReminderToStaged { return stagedReminder }
+    return authoritativeReminders[id]
   }
 
   func makeReminder() -> EKReminder {
@@ -568,7 +601,7 @@ private final class Backing: ReminderEventKitStoreBacking {
     let authoritative = copy(stagedReminder)
     onCommit?(authoritative)
     authoritativeReminder = authoritative
-    reminders[stagedReminder.calendarItemIdentifier] = authoritative
+    authoritativeReminders[stagedReminder.calendarItemIdentifier] = authoritative
   }
 
   func reset() {
