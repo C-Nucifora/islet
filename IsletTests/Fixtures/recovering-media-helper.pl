@@ -15,7 +15,7 @@ if ($kind eq "stream") {
 
 if ($kind eq "get") {
   print STDOUT '{"processIdentifier":15305,"bundleIdentifier":"company.thebrowser.Browser",'
-    . '"title":"Recovered video","artist":"Sidemen","playing":false,"playbackRate":0}'
+    . '"title":"Recovered video","artist":"Sidemen","playing":true,"playbackRate":1}'
     . "\n";
   exit 0;
 }
