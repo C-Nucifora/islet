@@ -166,6 +166,7 @@ final class ReminderEventKitCodecTests: XCTestCase {
       revision.recurrenceRules,
       [
         ReminderRecurrenceRevision(
+          calendarIdentifierRawValue: "gregorian",
           calendarIdentifier: .gregorian,
           frequencyRawValue: EKRecurrenceFrequency.yearly.rawValue, interval: 2,
           firstDayOfTheWeek: 2,
@@ -176,12 +177,24 @@ final class ReminderEventKitCodecTests: XCTestCase {
           daysOfTheMonth: [3], monthsOfTheYear: [4], weeksOfTheYear: [5],
           daysOfTheYear: [6], setPositions: [-1], endDate: nil, occurrenceCount: 3),
         ReminderRecurrenceRevision(
+          calendarIdentifierRawValue: "gregorian",
           calendarIdentifier: .gregorian,
           frequencyRawValue: EKRecurrenceFrequency.daily.rawValue, interval: 4,
           firstDayOfTheWeek: 0, daysOfTheWeek: [], daysOfTheMonth: [],
           monthsOfTheYear: [], weeksOfTheYear: [], daysOfTheYear: [], setPositions: [],
           endDate: endDate, occurrenceCount: nil),
       ])
+  }
+
+  func testRecurrenceCalendarIdentifierPreservesRecognizedAndOpaqueRawValues() {
+    let recognized = ReminderEventKitCodec.recurrenceCalendarIdentifier(from: "gregorian")
+    let opaque = ReminderEventKitCodec.recurrenceCalendarIdentifier(
+      from: "provider.example/custom-calendar")
+
+    XCTAssertEqual(recognized.rawValue, "gregorian")
+    XCTAssertEqual(recognized.typedValue, .gregorian)
+    XCTAssertEqual(opaque.rawValue, "provider.example/custom-calendar")
+    XCTAssertNil(opaque.typedValue)
   }
 
   func testApplyLeavesUnchangedFieldsAndOpaqueMetadataUntouched() throws {
@@ -263,6 +276,39 @@ final class ReminderEventKitCodecTests: XCTestCase {
         id == requested.calendarIdentifier ? requested : nil
       })
     XCTAssertTrue(fixture.reminder.calendar === requested)
+  }
+
+  func testApplyRejectsInvalidListBeforeMutatingAnyFieldOrOpaqueMetadata() throws {
+    let fixture = makeReminder()
+    configureEveryCoreField(on: fixture.reminder)
+    let alarm = EKAlarm(relativeOffset: -300)
+    let recurrence = EKRecurrenceRule(recurrenceWith: .weekly, interval: 2, end: nil)
+    fixture.reminder.alarms = [alarm]
+    fixture.reminder.recurrenceRules = [recurrence]
+    let original = ReminderEventKitCodec.record(from: fixture.reminder)
+    let baseline = try ReminderEventKitCodec.editableFields(from: fixture.reminder)
+    var edited = baseline
+    edited.title = "Changed title"
+    edited.notes = "Changed notes"
+    edited.url = URL(string: "https://example.com/changed")
+    edited.startDate = try ReminderDateValue(
+      validating: components(year: 2026, month: 10, day: 1))
+    edited.dueDate = nil
+    edited.priority = 9
+    edited.completion = try ReminderCompletionValue(validating: false, completionDate: nil)
+    edited.listID = "missing-list"
+
+    XCTAssertThrowsError(
+      try ReminderEventKitCodec.apply(
+        ReminderPatch(from: baseline, to: edited), to: fixture.reminder,
+        resolveList: { _ in nil })
+    ) { error in
+      XCTAssertEqual(error as? ReminderWriteError, .missingList)
+    }
+
+    XCTAssertEqual(ReminderEventKitCodec.record(from: fixture.reminder), original)
+    XCTAssertTrue(try XCTUnwrap(fixture.reminder.alarms?.first) === alarm)
+    XCTAssertTrue(try XCTUnwrap(fixture.reminder.recurrenceRules?.first) === recurrence)
   }
 
   private func configureEveryCoreField(on reminder: EKReminder) {

@@ -38,6 +38,19 @@ enum ReminderEventKitCodec {
     _ patch: ReminderPatch, to reminder: EKReminder,
     resolveList: (String) -> EKCalendar?
   ) throws {
+    switch patch.listID {
+    case .unchanged:
+      break
+    case .value(let listID):
+      guard let calendar = resolveList(listID),
+        calendar.calendarIdentifier == listID,
+        calendar.allowsContentModifications
+      else {
+        throw ReminderWriteError.missingList
+      }
+      reminder.calendar = calendar
+    }
+
     switch patch.title {
     case .unchanged:
       break
@@ -57,19 +70,6 @@ enum ReminderEventKitCodec {
       break
     case .value(let url):
       reminder.url = url
-    }
-
-    switch patch.listID {
-    case .unchanged:
-      break
-    case .value(let listID):
-      guard let calendar = resolveList(listID),
-        calendar.calendarIdentifier == listID,
-        calendar.allowsContentModifications
-      else {
-        throw ReminderWriteError.missingList
-      }
-      reminder.calendar = calendar
     }
 
     switch patch.startDate {
@@ -110,19 +110,20 @@ enum ReminderEventKitCodec {
       relativeOffset: alarm.relativeOffset, locationTitle: location?.title,
       latitude: coordinate?.latitude, longitude: coordinate?.longitude,
       radius: location?.radius, proximityRawValue: alarm.proximity.rawValue,
-      emailAddress: alarm.emailAddress, soundName: alarm.soundName,
-      url: alarm.value(forKey: "url") as? URL)
+      emailAddress: alarm.emailAddress, soundName: alarm.soundName, url: nil)
   }
 
   private static func recurrenceRevision(from rule: EKRecurrenceRule)
     -> ReminderRecurrenceRevision
   {
     let recurrenceEnd = rule.recurrenceEnd
+    let calendarIdentifier = recurrenceCalendarIdentifier(from: rule.calendarIdentifier)
     let occurrenceCount = recurrenceEnd.flatMap {
       $0.occurrenceCount == 0 ? nil : Int(exactly: $0.occurrenceCount)
     }
     return ReminderRecurrenceRevision(
-      calendarIdentifier: calendarIdentifier(from: rule.calendarIdentifier),
+      calendarIdentifierRawValue: calendarIdentifier.rawValue,
+      calendarIdentifier: calendarIdentifier.typedValue,
       frequencyRawValue: rule.frequency.rawValue, interval: rule.interval,
       firstDayOfTheWeek: rule.firstDayOfTheWeek,
       daysOfTheWeek: (rule.daysOfTheWeek ?? []).map {
@@ -139,6 +140,12 @@ enum ReminderEventKitCodec {
 
   private static func integers(from values: [NSNumber]?) -> [Int] {
     (values ?? []).map(\.intValue)
+  }
+
+  static func recurrenceCalendarIdentifier(from rawValue: String) -> (
+    rawValue: String, typedValue: Calendar.Identifier?
+  ) {
+    (rawValue, calendarIdentifier(from: rawValue))
   }
 
   private static func calendarIdentifier(from value: String) -> Calendar.Identifier? {

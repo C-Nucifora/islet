@@ -205,6 +205,7 @@ struct ReminderAlarmRevision: Equatable, Sendable {
 }
 
 struct ReminderRecurrenceRevision: Equatable, Sendable {
+  let calendarIdentifierRawValue: String
   let calendarIdentifier: Calendar.Identifier?
   let frequencyRawValue: Int
   let interval: Int
