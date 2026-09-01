@@ -21,6 +21,23 @@ final class MediaWatcherTests: XCTestCase {
     }
   }
 
+  private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = false
+
+    func set() {
+      lock.lock()
+      storage = true
+      lock.unlock()
+    }
+
+    var value: Bool {
+      lock.lock()
+      defer { lock.unlock() }
+      return storage
+    }
+  }
+
   private final class LockedUpdates: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [AdapterUpdate] = []
@@ -355,41 +372,47 @@ final class MediaWatcherTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: stateFile) }
 
     XCTAssertTrue(FileManager.default.fileExists(atPath: helper.path))
+    let recoveryActive = LockedFlag()
     let snapshotAttempts = LockedCounter()
+    let helperDiagnostics = LockedCounter()
     let collectedUpdates = LockedUpdates()
+    let playbackNotConfirmed = expectation(description: "third recovery result is unconfirmed")
     let watcher = MediaWatcher(
       initialSnapshotDelay: 1,
       commandProvider: { kind in
-        if case .snapshot = kind { snapshotAttempts.increment() }
+        if case .snapshot = kind, recoveryActive.value { snapshotAttempts.increment() }
         return MediaWatcher.HelperCommand(
           executableURL: URL(fileURLWithPath: "/usr/bin/perl"),
           arguments: [helper.path, kind.rawValue, stateFile.path])
       },
       snapshotBackoff: { _ in 0.01 })
+    watcher.onStatus = { status in
+      if status == "Streaming (playback not confirmed)" { playbackNotConfirmed.fulfill() }
+    }
+    watcher.onDiagnostic = { diagnostic in
+      if diagnostic != nil { helperDiagnostics.increment() }
+    }
     let updates = Task {
       for await update in watcher.updates {
         collectedUpdates.append(update)
         if case .idle = update {
+          recoveryActive.set()
           watcher.setPlaybackRecoverySources(["company.thebrowser.Browser"])
         }
       }
     }
-    let thirdSnapshotExited = expectation(
-      for: NSPredicate { _, _ in
-        guard let contents = try? String(contentsOf: stateFile, encoding: .utf8) else {
-          return false
-        }
-        return contents.split(separator: "\n").count == 3
-      },
-      evaluatedWith: stateFile)
 
     watcher.start()
-    wait(for: [thirdSnapshotExited], timeout: 5)
-    watcher.stop()
-    updates.cancel()
+    wait(for: [playbackNotConfirmed], timeout: 5)
 
     XCTAssertEqual(snapshotAttempts.value, 3)
     XCTAssertEqual(collectedUpdates.value, [.idle])
+    XCTAssertEqual(helperDiagnostics.value, 0)
+    let state = try String(contentsOf: stateFile, encoding: .utf8)
+    XCTAssertEqual(state.split(separator: "\n").count, 3)
+
+    watcher.stop()
+    updates.cancel()
   }
 
   func testNonActiveRecoverySnapshotRetriesBeforeAcceptingTheActiveApp() throws {
