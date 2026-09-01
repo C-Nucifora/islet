@@ -99,7 +99,9 @@ final class ReminderWriteModelsTests: XCTestCase {
     XCTAssertEqual(patch.startDate, .value(updatedStart))
     XCTAssertEqual(patch.dueDate, .unchanged)
     XCTAssertEqual(patch.priority, .value(1))
-    XCTAssertEqual(patch.completion, .value(try ReminderCompletionValue(validating: true, completionDate: completedAt)))
+    XCTAssertEqual(
+      patch.completion,
+      .value(try ReminderCompletionValue(validating: true, completionDate: completedAt)))
     XCTAssertFalse(patch.isEmpty)
   }
 
@@ -118,7 +120,8 @@ final class ReminderWriteModelsTests: XCTestCase {
 
   private func editableFields(priority: Int = 5) throws -> ReminderEditableFields {
     try ReminderEditableFields(
-      validating: "Send report", notes: "Attach the draft", url: URL(string: "https://example.com/report"),
+      validating: "Send report", notes: "Attach the draft",
+      url: URL(string: "https://example.com/report"),
       listID: "work", startDate: nil,
       dueDate: ReminderDateValue(validating: dateComponents(year: 2026, month: 3, day: 8)),
       priority: priority,

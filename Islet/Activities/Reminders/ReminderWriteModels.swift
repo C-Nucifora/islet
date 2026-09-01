@@ -36,7 +36,8 @@ struct ReminderDateValue: Equatable, Sendable {
 
   func date(in calendar: Calendar) throws -> Date {
     guard calendar.identifier == .gregorian,
-      let date = Self.resolvedDate(for: components, in: Self.conversionCalendar(calendar, for: components))
+      let date = Self.resolvedDate(
+        for: components, in: Self.conversionCalendar(calendar, for: components))
     else {
       throw ReminderWriteError.invalidDateComponents
     }
@@ -51,7 +52,9 @@ struct ReminderDateValue: Equatable, Sendable {
     return calendar
   }
 
-  private static func conversionCalendar(_ calendar: Calendar, for components: DateComponents) -> Calendar {
+  private static func conversionCalendar(_ calendar: Calendar, for components: DateComponents)
+    -> Calendar
+  {
     var calendar = calendar
     if let timeZone = components.timeZone {
       calendar.timeZone = timeZone
