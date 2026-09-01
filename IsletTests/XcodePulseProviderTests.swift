@@ -7,6 +7,9 @@ final class XcodePulseProviderTests: XCTestCase {
   private var xcodebuildURL: URL!
   private var pulseURL: URL!
   private var recordURL: URL!
+  private var lingeringWriterPIDURL: URL!
+  private var signalReadyURL: URL!
+  private var signalChildPIDURL: URL!
 
   override func setUpWithError() throws {
     temporaryDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -16,6 +19,9 @@ final class XcodePulseProviderTests: XCTestCase {
     xcodebuildURL = temporaryDirectory.appendingPathComponent("fake-xcodebuild")
     pulseURL = temporaryDirectory.appendingPathComponent("record-pulse")
     recordURL = temporaryDirectory.appendingPathComponent("pulse-record.txt")
+    lingeringWriterPIDURL = temporaryDirectory.appendingPathComponent("lingering-writer.pid")
+    signalReadyURL = temporaryDirectory.appendingPathComponent("signal-ready")
+    signalChildPIDURL = temporaryDirectory.appendingPathComponent("signal-child.pid")
     try Data().write(to: recordURL)
     try writeExecutable(
       at: xcodebuildURL,
@@ -64,9 +70,21 @@ final class XcodePulseProviderTests: XCTestCase {
           signalled)
             kill -TERM $$
             ;;
+          ignores-signals)
+            trap '' INT TERM
+            printf '%s\n' "$$" > "${SIGNAL_CHILD_PID_FILE:?}"
+            : > "${SIGNAL_READY_FILE:?}"
+            exec /bin/sleep 30
+            ;;
           delayed-cancel)
             printf '** BUILD CANCELLED ** %07000d\n' 0 >&2
             exit 65
+            ;;
+          lingering-writer)
+            printf '** BUILD SUCCEEDED **\n'
+            /bin/sleep 30 &
+            printf '%s\n' "$!" > "${LINGERING_WRITER_PID_FILE:?}"
+            exit 0
             ;;
         esac
         """)
@@ -168,6 +186,29 @@ final class XcodePulseProviderTests: XCTestCase {
     XCTAssertTrue(final.contains("<cancelled>"))
   }
 
+  func testSignalEscalatesWhenWrappedBuildDoesNotExit() throws {
+    let launched = try makeProviderProcess(
+      scenario: "ignores-signals",
+      providerArguments: ["--id", "ignores-signals", "--", "build"],
+      environmentOverrides: ["ISLET_XCODEBUILD_SIGNAL_GRACE_SECONDS": "0.25"])
+    let exited = exitWaiter(for: launched.process)
+    defer {
+      terminateIfRunning(launched.process, exited: exited)
+      XCTAssertTrue(
+        terminateRecordedProcess(at: signalChildPIDURL),
+        "signal-ignoring child did not terminate")
+    }
+
+    try launched.process.run()
+    XCTAssertTrue(waitForFile(at: signalReadyURL, timeout: 5), "fake build did not become ready")
+    kill(launched.process.processIdentifier, SIGTERM)
+    try waitForExit(launched.process, exited: exited, timeout: 3)
+
+    XCTAssertEqual(launched.process.terminationStatus, 137)
+    let final = try XCTUnwrap(pulseRecords().last)
+    XCTAssertTrue(final.contains("<cancelled>"), final)
+  }
+
   func testLaunchFailureReplacesTheRunningItemWithAnExpiringFailure() throws {
     try FileManager.default.removeItem(at: xcodebuildURL)
 
@@ -200,17 +241,55 @@ final class XcodePulseProviderTests: XCTestCase {
       providerArguments: ["--id", "delayed-cancel", "--", "build"])
     launched.process.standardOutput = providerOutput
     launched.process.standardError = providerOutput
+    let exited = exitWaiter(for: launched.process)
 
     try launched.process.run()
     try providerOutput.close()
     Thread.sleep(forTimeInterval: 0.8)
-    let mirroredData = capturedOutput.readDataToEndOfFile()
-    launched.process.waitUntilExit()
+    let capture = ThreadSafeDataCapture()
+    let readFinished = DispatchSemaphore(value: 0)
+    var readCompleted = false
+    DispatchQueue.global(qos: .utility).async {
+      capture.store(capturedOutput.readDataToEndOfFile())
+      readFinished.signal()
+    }
+    defer {
+      try? capturedOutput.close()
+      if !readCompleted {
+        _ = readFinished.wait(timeout: .now() + 1)
+      }
+    }
+    try waitForExit(launched.process, exited: exited, timeout: 10)
+    guard readFinished.wait(timeout: .now() + 2) == .success else {
+      try? capturedOutput.close()
+      _ = readFinished.wait(timeout: .now() + 1)
+      XCTFail("provider output capture did not reach EOF")
+      return
+    }
+    readCompleted = true
 
     XCTAssertEqual(launched.process.terminationStatus, 65)
-    XCTAssertTrue(String(decoding: mirroredData, as: UTF8.self).contains("** BUILD CANCELLED **"))
+    XCTAssertTrue(
+      String(decoding: capture.data, as: UTF8.self).contains("** BUILD CANCELLED **"))
     let final = try XCTUnwrap(pulseRecords().last)
     XCTAssertTrue(final.contains("<cancelled>"), final)
+  }
+
+  func testInheritedPipeWriterCannotKeepProviderAliveAfterBuildExit() throws {
+    let launched = try makeProviderProcess(
+      scenario: "lingering-writer",
+      providerArguments: ["--id", "lingering-writer", "--", "build"])
+    defer {
+      XCTAssertTrue(terminateLingeringWriter(), "lingering writer did not terminate")
+    }
+
+    try runToCompletion(launched.process, timeout: 6)
+
+    XCTAssertEqual(launched.process.terminationStatus, 0)
+    let output = try readToEnd(of: launched.output.fileHandleForReading, timeout: 2)
+    XCTAssertTrue(String(decoding: output, as: UTF8.self).contains("** BUILD SUCCEEDED **"))
+    let final = try XCTUnwrap(pulseRecords().last)
+    XCTAssertTrue(final.contains("<succeeded>"), final)
   }
 
   func testHungPulseReporterIsBoundedAndProgressIsCoalesced() throws {
@@ -222,19 +301,8 @@ final class XcodePulseProviderTests: XCTestCase {
         "MOCK_PULSE_SCENARIO": "hung",
       ])
 
-    let start = Date()
-    try launched.process.run()
-    let deadline = start.addingTimeInterval(4)
-    while launched.process.isRunning && Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    let completedInTime = !launched.process.isRunning
-    if !completedInTime {
-      kill(launched.process.processIdentifier, SIGKILL)
-    }
-    launched.process.waitUntilExit()
+    try runToCompletion(launched.process, timeout: 4)
 
-    XCTAssertTrue(completedInTime, "provider did not bound the hung Pulse reporter")
     XCTAssertEqual(launched.process.terminationStatus, 0)
     let records = try pulseRecords()
     XCTAssertEqual(records.count, 2, records.joined(separator: "\n"))
@@ -259,12 +327,16 @@ final class XcodePulseProviderTests: XCTestCase {
       scenario: "concurrent", providerArguments: ["--label", "First", "--", "build"])
     let second = try makeProviderProcess(
       scenario: "concurrent", providerArguments: ["--label", "Second", "--", "build"])
+    let firstExited = exitWaiter(for: first.process)
+    let secondExited = exitWaiter(for: second.process)
     try first.process.run()
+    defer { terminateIfRunning(first.process, exited: firstExited) }
     try second.process.run()
-    first.process.waitUntilExit()
-    second.process.waitUntilExit()
-    _ = first.output.fileHandleForReading.readDataToEndOfFile()
-    _ = second.output.fileHandleForReading.readDataToEndOfFile()
+    defer { terminateIfRunning(second.process, exited: secondExited) }
+    try waitForExit(first.process, exited: firstExited, timeout: 10)
+    try waitForExit(second.process, exited: secondExited, timeout: 10)
+    _ = try readToEnd(of: first.output.fileHandleForReading, timeout: 2)
+    _ = try readToEnd(of: second.output.fileHandleForReading, timeout: 2)
 
     XCTAssertEqual(first.process.terminationStatus, 0)
     XCTAssertEqual(second.process.terminationStatus, 0)
@@ -280,10 +352,65 @@ final class XcodePulseProviderTests: XCTestCase {
   ) {
     let launched = try makeProviderProcess(
       scenario: scenario, providerArguments: providerArguments)
-    try launched.process.run()
-    launched.process.waitUntilExit()
-    let data = launched.output.fileHandleForReading.readDataToEndOfFile()
+    try runToCompletion(launched.process, timeout: 10)
+    let data = try readToEnd(of: launched.output.fileHandleForReading, timeout: 2)
     return (launched.process.terminationStatus, String(decoding: data, as: UTF8.self))
+  }
+
+  private func runToCompletion(_ process: Process, timeout: TimeInterval) throws {
+    let exited = exitWaiter(for: process)
+    try process.run()
+    try waitForExit(process, exited: exited, timeout: timeout)
+  }
+
+  private func exitWaiter(for process: Process) -> DispatchSemaphore {
+    let exited = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in exited.signal() }
+    return exited
+  }
+
+  private func waitForExit(
+    _ process: Process, exited: DispatchSemaphore, timeout: TimeInterval
+  ) throws {
+    guard exited.wait(timeout: .now() + timeout) == .success else {
+      kill(process.processIdentifier, SIGKILL)
+      if exited.wait(timeout: .now() + 2) == .success {
+        process.waitUntilExit()
+      }
+      throw ProviderProcessError.timedOut(timeout)
+    }
+    process.waitUntilExit()
+  }
+
+  private func terminateIfRunning(_ process: Process, exited: DispatchSemaphore) {
+    guard process.isRunning else {
+      process.waitUntilExit()
+      return
+    }
+    kill(process.processIdentifier, SIGTERM)
+    if exited.wait(timeout: .now() + 1) == .success {
+      process.waitUntilExit()
+      return
+    }
+    kill(process.processIdentifier, SIGKILL)
+    if exited.wait(timeout: .now() + 1) == .success {
+      process.waitUntilExit()
+    }
+  }
+
+  private func readToEnd(of handle: FileHandle, timeout: TimeInterval) throws -> Data {
+    let capture = ThreadSafeDataCapture()
+    let finished = DispatchSemaphore(value: 0)
+    DispatchQueue.global(qos: .utility).async {
+      capture.store(handle.readDataToEndOfFile())
+      finished.signal()
+    }
+    guard finished.wait(timeout: .now() + timeout) == .success else {
+      try? handle.close()
+      _ = finished.wait(timeout: .now() + 1)
+      throw ProviderProcessError.outputTimedOut(timeout)
+    }
+    return capture.data
   }
 
   private func makeProviderProcess(
@@ -304,6 +431,9 @@ final class XcodePulseProviderTests: XCTestCase {
     environment["ISLET_PULSE_EXECUTABLE"] = pulseURL.path
     environment["PULSE_RECORD_FILE"] = recordURL.path
     environment["MOCK_XCODE_SCENARIO"] = scenario
+    environment["LINGERING_WRITER_PID_FILE"] = lingeringWriterPIDURL.path
+    environment["SIGNAL_READY_FILE"] = signalReadyURL.path
+    environment["SIGNAL_CHILD_PID_FILE"] = signalChildPIDURL.path
     for (key, value) in environmentOverrides { environment[key] = value }
     process.environment = environment
     let output = Pipe()
@@ -328,5 +458,67 @@ final class XcodePulseProviderTests: XCTestCase {
     try contents.write(to: url, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes(
       [.posixPermissions: NSNumber(value: Int16(0o700))], ofItemAtPath: url.path)
+  }
+
+  private func terminateLingeringWriter() -> Bool {
+    terminateRecordedProcess(at: lingeringWriterPIDURL)
+  }
+
+  private func terminateRecordedProcess(at pidURL: URL) -> Bool {
+    guard
+      let rawPID = try? String(contentsOf: pidURL, encoding: .utf8),
+      let pid = Int32(rawPID.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1
+    else { return true }
+    kill(pid, SIGTERM)
+    let deadline = Date().addingTimeInterval(1)
+    while kill(pid, 0) == 0 && Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.01)
+    }
+    if kill(pid, 0) != 0 { return true }
+    kill(pid, SIGKILL)
+    let killDeadline = Date().addingTimeInterval(1)
+    while kill(pid, 0) == 0 && Date() < killDeadline {
+      Thread.sleep(forTimeInterval: 0.01)
+    }
+    return kill(pid, 0) != 0
+  }
+
+  private func waitForFile(at url: URL, timeout: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !FileManager.default.fileExists(atPath: url.path) && Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.01)
+    }
+    return FileManager.default.fileExists(atPath: url.path)
+  }
+}
+
+private enum ProviderProcessError: LocalizedError {
+  case timedOut(TimeInterval)
+  case outputTimedOut(TimeInterval)
+
+  var errorDescription: String? {
+    switch self {
+    case .timedOut(let timeout):
+      "provider did not exit within \(timeout) seconds"
+    case .outputTimedOut(let timeout):
+      "provider output did not reach EOF within \(timeout) seconds"
+    }
+  }
+}
+
+private final class ThreadSafeDataCapture: @unchecked Sendable {
+  private let lock = NSLock()
+  private var stored = Data()
+
+  var data: Data {
+    lock.lock()
+    defer { lock.unlock() }
+    return stored
+  }
+
+  func store(_ data: Data) {
+    lock.lock()
+    stored = data
+    lock.unlock()
   }
 }
