@@ -17,6 +17,11 @@ struct ReminderCoordinatorDraft: Equatable, Sendable {
   var sourceRevision: ReminderWriteRecord.Revision?
   var normalizationMismatches: [ReminderNormalizationMismatch]
   var pendingCommitReceipt: ReminderCommitReceipt?
+  var retryBlockedReason: String?
+
+  var canRetry: Bool {
+    retryBlockedReason == nil && pendingCommitReceipt == nil
+  }
 
   init(
     reminderID: String? = nil, title: String, notes: String? = nil,
@@ -26,7 +31,8 @@ struct ReminderCoordinatorDraft: Equatable, Sendable {
     baselineRecord: ReminderWriteRecord? = nil,
     sourceRevision: ReminderWriteRecord.Revision? = nil,
     normalizationMismatches: [ReminderNormalizationMismatch] = [],
-    pendingCommitReceipt: ReminderCommitReceipt? = nil
+    pendingCommitReceipt: ReminderCommitReceipt? = nil,
+    retryBlockedReason: String? = nil
   ) {
     self.reminderID = reminderID
     self.title = title
@@ -43,6 +49,7 @@ struct ReminderCoordinatorDraft: Equatable, Sendable {
     self.sourceRevision = sourceRevision
     self.normalizationMismatches = normalizationMismatches
     self.pendingCommitReceipt = pendingCommitReceipt
+    self.retryBlockedReason = retryBlockedReason
   }
 }
 
@@ -75,6 +82,23 @@ extension ReminderWriteError {
     .eventKit(
       "The reminder could not be deleted. Check the reminder account, then try again. \(detail)"
     )
+  }
+
+  static var unsafeProviderValues: Self {
+    .eventKit(
+      "This reminder contains provider values that Islet cannot edit safely. Open it in Reminders to review or change it."
+    )
+  }
+
+  static var normalizedQuickWrite: Self {
+    .eventKit(
+      "The reminder provider saved different values. Reload the reminder before trying again."
+    )
+  }
+
+  static var committedDraftCannotCreate: Self {
+    .eventKit(
+      "This draft already belongs to a committed reminder. Save it instead of creating it again.")
   }
 }
 
@@ -172,11 +196,15 @@ final class ReminderWriteCoordinator {
     do {
       try checkNoPendingCommit()
       try checkPermission()
+      if draft.retryBlockedReason != nil { throw ReminderWriteError.unsafeProviderValues }
+      guard draft.reminderID == nil else {
+        throw ReminderWriteError.committedDraftCannotCreate
+      }
       let listID = try createListID(selectedID: draft.listID)
       let requested = try editableFields(from: draft, listID: listID)
       let outcome = try store.create(requested)
       return .success(
-        try coordinatorWrite(
+        coordinatorWrite(
           for: outcome, requested: submittedDraft(draft, fields: requested)))
     } catch {
       return .failure(map(error))
@@ -189,6 +217,7 @@ final class ReminderWriteCoordinator {
     do {
       try checkNoPendingCommit()
       try checkPermission()
+      if draft.retryBlockedReason != nil { throw ReminderWriteError.unsafeProviderValues }
       guard let reminderID = draft.reminderID else {
         throw ReminderWriteError.missingReminder
       }
@@ -215,7 +244,7 @@ final class ReminderWriteCoordinator {
       let outcome = try store.save(
         reminderID: reminderID, patch: patch, expectedRevision: sourceRevision)
       return .success(
-        try coordinatorWrite(
+        coordinatorWrite(
           for: outcome, requested: submittedDraft(draft, fields: requested)))
     } catch {
       return .failure(map(error))
@@ -265,6 +294,14 @@ final class ReminderWriteCoordinator {
     return true
   }
 
+  @discardableResult
+  func abandonPendingCommitAfterRemindersHandoff() -> Bool {
+    guard pendingCommitReceipt != nil || pendingDraft != nil else { return false }
+    pendingCommitReceipt = nil
+    pendingDraft = nil
+    return true
+  }
+
   func reconcilePendingCommit(
     with authoritativeRecord: ReminderWriteRecord?
   ) -> Result<ReminderCoordinatorDraft?, ReminderWriteError> {
@@ -279,12 +316,9 @@ final class ReminderWriteCoordinator {
       else {
         return .success(nil)
       }
-      if let sourceRevision = requested.sourceRevision, actual.revision == sourceRevision {
-        return .success(nil)
-      }
       let mismatches = try normalizationMismatches(
         requested: requested, actual: actual)
-      let resolved = try rebasedDraft(
+      let resolved = rebasedDraft(
         requested: requested, actual: actual, mismatches: mismatches)
       pendingCommitReceipt = nil
       pendingDraft = nil
@@ -371,16 +405,22 @@ final class ReminderWriteCoordinator {
   func move(_ item: ReminderItem, toListWithID listID: String) -> Result<
     ReminderItem, ReminderWriteError
   > {
+    compatibilityQuickResult(moveOutcome(item, toListWithID: listID))
+  }
+
+  func moveOutcome(
+    _ item: ReminderItem, toListWithID listID: String
+  ) -> Result<ReminderCoordinatorWrite, ReminderWriteError> {
     do {
       try checkNoPendingCommit()
       try checkPermission()
       guard listIsWritable(listID) else { throw ReminderWriteError.missingList }
-      guard var record = store.record(withID: item.id) else {
+      guard let record = store.record(withID: item.id) else {
         throw ReminderWriteError.missingReminder
       }
-      let revision = record.revision
-      record.listID = listID
-      return .success(try save(record, expectedRevision: revision).item)
+      var draft = try coordinatorDraft(from: record)
+      draft.listID = listID
+      return updateOutcome(draft)
     } catch {
       return .failure(map(error))
     }
@@ -389,15 +429,25 @@ final class ReminderWriteCoordinator {
   func reschedule(_ item: ReminderItem, to date: Date, hasTime: Bool) -> Result<
     ReminderItem, ReminderWriteError
   > {
+    compatibilityQuickResult(rescheduleOutcome(item, to: date, hasTime: hasTime))
+  }
+
+  func rescheduleOutcome(
+    _ item: ReminderItem, to date: Date, hasTime: Bool
+  ) -> Result<ReminderCoordinatorWrite, ReminderWriteError> {
     do {
       try checkNoPendingCommit()
       try checkPermission()
-      guard var record = store.record(withID: item.id) else {
+      guard let record = store.record(withID: item.id) else {
         throw ReminderWriteError.missingReminder
       }
-      let revision = record.revision
-      record.dueDateComponents = RemindersLogic.dueComponents(for: date, hasTime: hasTime)
-      return .success(try save(record, expectedRevision: revision).item)
+      var draft = try coordinatorDraft(from: record)
+      let currentPresentation = record.item
+      if currentPresentation.dueDate != date || currentPresentation.hasDueTime != hasTime {
+        draft.dueDate = try ReminderDateValue(
+          validating: RemindersLogic.dueComponents(for: date, hasTime: hasTime))
+      }
+      return updateOutcome(draft)
     } catch {
       return .failure(map(error))
     }
@@ -408,6 +458,9 @@ final class ReminderWriteCoordinator {
   > {
     switch completeOutcome(item, now: now) {
     case .success(let completion):
+      guard completion.write.draft.retryBlockedReason == nil else {
+        return .failure(.unsafeProviderValues)
+      }
       if let undo = completion.undo { return .success(undo) }
       switch completion.write.outcome {
       case .commitStatusUnknown:
@@ -445,16 +498,19 @@ final class ReminderWriteCoordinator {
       let outcome = try store.save(
         reminderID: record.id, patch: ReminderPatch(from: baseline, to: requested),
         expectedRevision: revision)
-      let write = try coordinatorWrite(for: outcome, requested: requestedDraft)
+      let write = coordinatorWrite(for: outcome, requested: requestedDraft)
       let undo: CompletionUndo?
       switch write.outcome {
       case .saved(let saved)
       where saved.isCompleted && saved.completionDate == now:
-        let completedFields = try editableFields(from: saved)
-        undo = CompletionUndo(
-          reminderID: saved.id, title: saved.title, completedRevision: saved.revision,
-          expiresAt: now.addingTimeInterval(undoDuration),
-          completedFields: completedFields, completedRecord: saved)
+        if write.draft.canRetry, let completedFields = try? editableFields(from: saved) {
+          undo = CompletionUndo(
+            reminderID: saved.id, title: saved.title, completedRevision: saved.revision,
+            expiresAt: now.addingTimeInterval(undoDuration),
+            completedFields: completedFields, completedRecord: saved)
+        } else {
+          undo = nil
+        }
       case .noChanges, .saved, .committedWithNormalization, .commitStatusUnknown:
         undo = nil
       }
@@ -468,6 +524,9 @@ final class ReminderWriteCoordinator {
   func undoCompletion(now: Date = Date()) -> Result<ReminderItem, ReminderWriteError> {
     switch undoCompletionOutcome(now: now) {
     case .success(let write):
+      guard write.draft.retryBlockedReason == nil else {
+        return .failure(.unsafeProviderValues)
+      }
       switch write.outcome {
       case .saved(let record):
         return .success(record.item)
@@ -505,7 +564,7 @@ final class ReminderWriteCoordinator {
       var requestedDraft = try coordinatorDraft(from: undo.completedRecord)
       requestedDraft.isCompleted = false
       requestedDraft.completionDate = nil
-      return .success(try coordinatorWrite(for: outcome, requested: requestedDraft))
+      return .success(coordinatorWrite(for: outcome, requested: requestedDraft))
     } catch {
       return .failure(map(error))
     }
@@ -531,25 +590,22 @@ final class ReminderWriteCoordinator {
     store.reminderLists().contains { $0.id == id && $0.isWritable }
   }
 
-  private func save(
-    _ edited: ReminderWriteRecord, expectedRevision: ReminderWriteRecord.Revision
-  ) throws -> ReminderWriteRecord {
-    guard let current = store.record(withID: edited.id) else {
-      throw ReminderWriteError.missingReminder
+  private func compatibilityQuickResult(
+    _ result: Result<ReminderCoordinatorWrite, ReminderWriteError>
+  ) -> Result<ReminderItem, ReminderWriteError> {
+    switch result {
+    case .success(let write):
+      switch write.outcome {
+      case .noChanges(let record), .saved(let record):
+        return .success(record.item)
+      case .committedWithNormalization:
+        return .failure(.normalizedQuickWrite)
+      case .commitStatusUnknown:
+        return .failure(.commitStatusUnknown)
+      }
+    case .failure(let error):
+      return .failure(error)
     }
-    let baseline = try editableFields(from: current)
-    let requested = try editableFields(from: edited)
-    let outcome = try store.save(
-      reminderID: edited.id,
-      patch: ReminderPatch(from: baseline, to: requested),
-      expectedRevision: expectedRevision)
-    let draft = submittedDraft(
-      try coordinatorDraft(from: current), fields: requested)
-    let write = try coordinatorWrite(for: outcome, requested: draft)
-    guard let record = record(from: write.outcome) else {
-      throw ReminderWriteError.commitStatusUnknown
-    }
-    return record
   }
 
   private func editableFields(from record: ReminderWriteRecord) throws
@@ -639,16 +695,20 @@ final class ReminderWriteCoordinator {
 
   private func coordinatorWrite(
     for outcome: ReminderWriteOutcome, requested: ReminderCoordinatorDraft
-  ) throws -> ReminderCoordinatorWrite {
+  ) -> ReminderCoordinatorWrite {
     switch outcome {
     case .saved(let actual):
       return ReminderCoordinatorWrite(
-        outcome: .saved(actual), draft: try coordinatorDraft(from: actual))
+        outcome: .saved(actual),
+        draft: knownCommitDraft(
+          requested: requested, actual: actual, mismatches: [],
+          preserveRequestedFields: false))
     case .committedWithNormalization(let actual, let mismatches):
       return ReminderCoordinatorWrite(
         outcome: .committedWithNormalization(actual: actual, mismatches: mismatches),
-        draft: try rebasedDraft(
-          requested: requested, actual: actual, mismatches: mismatches))
+        draft: knownCommitDraft(
+          requested: requested, actual: actual, mismatches: mismatches,
+          preserveRequestedFields: true))
     case .commitStatusUnknown(let receipt):
       var pending = requested
       pending.pendingCommitReceipt = receipt
@@ -663,14 +723,47 @@ final class ReminderWriteCoordinator {
   private func rebasedDraft(
     requested: ReminderCoordinatorDraft, actual: ReminderWriteRecord,
     mismatches: [ReminderNormalizationMismatch]
-  ) throws -> ReminderCoordinatorDraft {
+  ) -> ReminderCoordinatorDraft {
+    knownCommitDraft(
+      requested: requested, actual: actual, mismatches: mismatches,
+      preserveRequestedFields: true)
+  }
+
+  private func knownCommitDraft(
+    requested: ReminderCoordinatorDraft, actual: ReminderWriteRecord,
+    mismatches: [ReminderNormalizationMismatch], preserveRequestedFields: Bool
+  ) -> ReminderCoordinatorDraft {
+    guard let actualFields = try? editableFields(from: actual) else {
+      var blocked = requested
+      blocked.reminderID = actual.id
+      blocked.baseline = nil
+      blocked.baselineRecord = actual
+      blocked.sourceRevision = actual.revision
+      blocked.normalizationMismatches = mismatches
+      blocked.pendingCommitReceipt = nil
+      blocked.retryBlockedReason = ReminderWriteError.unsafeProviderValues.errorDescription
+      return blocked
+    }
+
+    if !preserveRequestedFields {
+      return ReminderCoordinatorDraft(
+        reminderID: actual.id, title: actualFields.title, notes: actualFields.notes,
+        urlText: actualFields.url?.absoluteString ?? "", listID: actualFields.listID,
+        startDate: actualFields.startDate, dueDate: actualFields.dueDate,
+        priority: actualFields.priority,
+        isCompleted: actualFields.completion.isCompleted,
+        completionDate: actualFields.completion.completionDate, baseline: actualFields,
+        baselineRecord: actual, sourceRevision: actual.revision)
+    }
+
     var rebased = requested
     rebased.reminderID = actual.id
-    rebased.baseline = try editableFields(from: actual)
+    rebased.baseline = actualFields
     rebased.baselineRecord = actual
     rebased.sourceRevision = actual.revision
     rebased.normalizationMismatches = mismatches
     rebased.pendingCommitReceipt = nil
+    rebased.retryBlockedReason = nil
     return rebased
   }
 
@@ -679,39 +772,69 @@ final class ReminderWriteCoordinator {
   ) throws -> [ReminderNormalizationMismatch] {
     guard let listID = draft.listID else { throw ReminderWriteError.missingList }
     let requested = try editableFields(from: draft, listID: listID)
-    let actualFields = try editableFields(from: actual)
+    let actualStartDate = decodedDate(actual.startDateComponents)
+    let actualDueDate = decodedDate(actual.dueDateComponents)
+    let actualCompletion = decodedCompletion(actual)
     let baseline = draft.baseline
     var mismatches: [ReminderNormalizationMismatch] = []
 
     appendNormalizationMismatch(
       field: .title, wasRequested: baseline == nil || baseline?.title != requested.title,
-      matches: actualFields.title == requested.title, to: &mismatches)
+      matches: actual.title == requested.title, to: &mismatches)
     appendNormalizationMismatch(
       field: .notes, wasRequested: baseline == nil || baseline?.notes != requested.notes,
-      matches: actualFields.notes == requested.notes, to: &mismatches)
+      matches: actual.notes == requested.notes, to: &mismatches)
     appendNormalizationMismatch(
       field: .url, wasRequested: baseline == nil || baseline?.url != requested.url,
-      matches: actualFields.url == requested.url, to: &mismatches)
+      matches: actual.url == requested.url, to: &mismatches)
     appendNormalizationMismatch(
       field: .list, wasRequested: baseline == nil || baseline?.listID != requested.listID,
-      matches: actualFields.listID == requested.listID, to: &mismatches)
+      matches: actual.listID == requested.listID, to: &mismatches)
     appendNormalizationMismatch(
       field: .startDate,
       wasRequested: baseline == nil || baseline?.startDate != requested.startDate,
-      matches: actualFields.startDate == requested.startDate, to: &mismatches)
+      matches: actualStartDate.isValid && actualStartDate.value == requested.startDate,
+      to: &mismatches)
     appendNormalizationMismatch(
       field: .dueDate,
       wasRequested: baseline == nil || baseline?.dueDate != requested.dueDate,
-      matches: actualFields.dueDate == requested.dueDate, to: &mismatches)
+      matches: actualDueDate.isValid && actualDueDate.value == requested.dueDate,
+      to: &mismatches)
     appendNormalizationMismatch(
       field: .priority,
       wasRequested: baseline == nil || baseline?.priority != requested.priority,
-      matches: actualFields.priority == requested.priority, to: &mismatches)
+      matches: actual.priority == requested.priority, to: &mismatches)
     appendNormalizationMismatch(
       field: .completion,
       wasRequested: baseline == nil || baseline?.completion != requested.completion,
-      matches: actualFields.completion == requested.completion, to: &mismatches)
+      matches: actualCompletion.isValid && actualCompletion.value == requested.completion,
+      to: &mismatches)
     return mismatches
+  }
+
+  private func decodedDate(
+    _ components: DateComponents?
+  ) -> (value: ReminderDateValue?, isValid: Bool) {
+    guard let components else { return (nil, true) }
+    do {
+      return (try ReminderDateValue(validating: components), true)
+    } catch {
+      return (nil, false)
+    }
+  }
+
+  private func decodedCompletion(
+    _ record: ReminderWriteRecord
+  ) -> (value: ReminderCompletionValue?, isValid: Bool) {
+    do {
+      return (
+        try ReminderCompletionValue(
+          validating: record.isCompleted, completionDate: record.completionDate),
+        true
+      )
+    } catch {
+      return (nil, false)
+    }
   }
 
   private func appendNormalizationMismatch(
@@ -723,15 +846,6 @@ final class ReminderWriteCoordinator {
       ReminderNormalizationMismatch(
         field: field,
         reason: "The reminder provider saved a different \(field.rawValue) value."))
-  }
-
-  private func record(from outcome: ReminderWriteOutcome) -> ReminderWriteRecord? {
-    switch outcome {
-    case .saved(let record), .committedWithNormalization(let record, _):
-      record
-    case .commitStatusUnknown:
-      nil
-    }
   }
 
   private func record(from outcome: ReminderCoordinatorOutcome) -> ReminderWriteRecord? {

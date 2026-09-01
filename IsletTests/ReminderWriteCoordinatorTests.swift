@@ -146,11 +146,11 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
 
     func record(
       id: String, title: String, notes: String?, url: URL?, listID: String,
-      lastModified: TimeInterval
+      lastModified: TimeInterval, priority: Int = 1
     ) -> ReminderWriteRecord {
       let list = lists.first(where: { $0.id == listID })!
       return ReminderWriteRecord(
-        id: id, title: title, notes: notes, priority: 1,
+        id: id, title: title, notes: notes, priority: priority,
         dueDateComponents: nil, listID: listID, listTitle: list.title,
         listColorHex: list.colorHex, isCompleted: false,
         lastModified: Date(timeIntervalSince1970: lastModified), url: url)
@@ -777,7 +777,7 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
 
     let actual = store.record(
       id: "maybe-created", title: "Provider title", notes: nil, url: nil,
-      listID: "inbox", lastModified: 120)
+      listID: "inbox", lastModified: 120, priority: 0)
     store.records[actual.id] = actual
     let reconciled = try XCTUnwrap(
       try coordinator.reconcilePendingCommit(with: actual).get())
@@ -870,6 +870,280 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
     XCTAssertEqual(
       coordinator.delete(draft).failure,
       .deletionRejected("Account rejected removal"))
+  }
+
+  func testSameRevisionAuthoritativeRecordResolvesPendingAndReportsNormalization() throws {
+    let store = Store()
+    let item = store.addExisting()
+    let coordinator = ReminderWriteCoordinator(store: store)
+    var requested = try coordinator.writeDraft(for: item).get()
+    requested.title = "Requested title"
+    store.saveOutcome = .commitStatusUnknown(
+      ReminderCommitReceipt(itemIdentifier: item.id, externalIdentifier: nil))
+    _ = try coordinator.updateOutcome(requested).get()
+    let unchangedActual = try XCTUnwrap(store.records[item.id])
+
+    let resolved = try XCTUnwrap(
+      try coordinator.reconcilePendingCommit(with: unchangedActual).get())
+
+    XCTAssertEqual(resolved.reminderID, item.id)
+    XCTAssertEqual(resolved.sourceRevision, unchangedActual.revision)
+    XCTAssertEqual(resolved.title, "Requested title")
+    XCTAssertEqual(resolved.baseline?.title, "File report")
+    XCTAssertEqual(resolved.normalizationMismatches.map(\.field), [.title])
+    XCTAssertNil(coordinator.pendingCommitReceipt)
+  }
+
+  func testKnownNormalizedCreateWithUnsupportedActualValuesIsNonRetryable() throws {
+    let invalidActuals: [(ReminderWriteRecord, ReminderField)] = [
+      (
+        Store().record(
+          id: "priority-actual", title: "Requested", notes: nil, url: nil,
+          listID: "inbox", lastModified: 201, priority: 2),
+        .priority
+      ),
+      (
+        {
+          let store = Store()
+          var record = store.record(
+            id: "date-actual", title: "Requested", notes: nil, url: nil,
+            listID: "inbox", lastModified: 202, priority: 0)
+          var invalid = DateComponents()
+          invalid.calendar = Calendar(identifier: .gregorian)
+          invalid.year = 2026
+          invalid.month = 2
+          invalid.day = 31
+          record.dueDateComponents = invalid
+          return record
+        }(),
+        .dueDate
+      ),
+      (
+        {
+          let store = Store()
+          var record = store.record(
+            id: "completion-actual", title: "Requested", notes: nil, url: nil,
+            listID: "inbox", lastModified: 203, priority: 0)
+          record.isCompleted = true
+          record.completionDate = nil
+          return record
+        }(),
+        .completion
+      ),
+    ]
+
+    for (actual, field) in invalidActuals {
+      let store = Store()
+      store.createOutcome = .committedWithNormalization(
+        actual: actual,
+        mismatches: [
+          ReminderNormalizationMismatch(field: field, reason: "Provider value")
+        ])
+      let coordinator = ReminderWriteCoordinator(store: store)
+      let requested = ReminderCoordinatorDraft(
+        title: "Requested", listID: "inbox", priority: 0)
+
+      let write = try coordinator.createOutcome(requested).get()
+
+      XCTAssertEqual(write.draft.reminderID, actual.id)
+      XCTAssertEqual(write.draft.sourceRevision, actual.revision)
+      XCTAssertNil(write.draft.baseline)
+      XCTAssertNotNil(write.draft.retryBlockedReason)
+      XCTAssertFalse(write.draft.canRetry)
+      XCTAssertEqual(write.draft.normalizationMismatches.map(\.field), [field])
+      XCTAssertNil(write.draft.pendingCommitReceipt)
+      XCTAssertNil(coordinator.pendingCommitReceipt)
+      XCTAssertEqual(coordinator.updateOutcome(write.draft).failure, .unsafeProviderValues)
+      XCTAssertEqual(coordinator.createOutcome(write.draft).failure, .unsafeProviderValues)
+      XCTAssertEqual(store.createCount, 1)
+      XCTAssertEqual(store.saveCount, 0)
+    }
+  }
+
+  func testKnownSavedUnsupportedActualPreservesKnownOutcomeAndIdentifier() throws {
+    let store = Store()
+    let actual = store.record(
+      id: "saved-invalid", title: "Requested", notes: nil, url: nil,
+      listID: "inbox", lastModified: 210, priority: 2)
+    store.createOutcome = .saved(actual)
+    let coordinator = ReminderWriteCoordinator(store: store)
+
+    let write = try coordinator.createOutcome(
+      ReminderCoordinatorDraft(title: "Requested", listID: "inbox")
+    ).get()
+
+    XCTAssertEqual(write.outcome, .saved(actual))
+    XCTAssertEqual(write.draft.reminderID, actual.id)
+    XCTAssertEqual(write.draft.sourceRevision, actual.revision)
+    XCTAssertFalse(write.draft.canRetry)
+    XCTAssertNotNil(write.draft.retryBlockedReason)
+    XCTAssertNil(coordinator.pendingCommitReceipt)
+    XCTAssertEqual(store.createCount, 1)
+  }
+
+  func testCompatibilityCompletionAndUndoBlockAfterKnownUnsafeActual() throws {
+    let completionStore = Store()
+    let completionItem = completionStore.addExisting()
+    let completionCoordinator = ReminderWriteCoordinator(store: completionStore)
+    let now = Date(timeIntervalSince1970: 240)
+    var unsafeCompleted = try XCTUnwrap(completionStore.records[completionItem.id])
+    unsafeCompleted.priority = 2
+    unsafeCompleted.isCompleted = true
+    unsafeCompleted.completionDate = now
+    unsafeCompleted.lastModified = Date(timeIntervalSince1970: 241)
+    completionStore.saveOutcome = .saved(unsafeCompleted)
+
+    XCTAssertEqual(
+      completionCoordinator.complete(completionItem, now: now).failure,
+      .unsafeProviderValues)
+    XCTAssertNil(completionCoordinator.pendingCommitReceipt)
+
+    let undoStore = Store()
+    let undoItem = undoStore.addExisting()
+    let undoCoordinator = ReminderWriteCoordinator(store: undoStore)
+    _ = try undoCoordinator.complete(undoItem, now: now).get()
+    var unsafeUndone = try XCTUnwrap(undoStore.records[undoItem.id])
+    unsafeUndone.priority = 2
+    unsafeUndone.isCompleted = false
+    unsafeUndone.completionDate = nil
+    unsafeUndone.lastModified = Date(timeIntervalSince1970: 242)
+    undoStore.saveOutcome = .saved(unsafeUndone)
+
+    XCTAssertEqual(
+      undoCoordinator.undoCompletion(now: now.addingTimeInterval(1)).failure,
+      .unsafeProviderValues)
+    XCTAssertNil(undoCoordinator.pendingCommitReceipt)
+  }
+
+  func testConfirmedRemindersHandoffCanClearKnownIdentifierPendingState() throws {
+    let store = Store()
+    let receipt = ReminderCommitReceipt(
+      itemIdentifier: "never-appears", externalIdentifier: "external")
+    store.createOutcome = .commitStatusUnknown(receipt)
+    let coordinator = ReminderWriteCoordinator(store: store)
+    let draft = ReminderCoordinatorDraft(title: "Unknown", listID: "inbox")
+    _ = try coordinator.createOutcome(draft).get()
+
+    XCTAssertFalse(coordinator.abandonPendingCommit())
+    XCTAssertTrue(coordinator.abandonPendingCommitAfterRemindersHandoff())
+    XCTAssertNil(coordinator.pendingCommitReceipt)
+    XCTAssertNil(coordinator.pendingDraft)
+
+    store.createOutcome = nil
+    _ = try coordinator.createOutcome(draft).get()
+    XCTAssertEqual(store.createCount, 2)
+  }
+
+  func testNormalizedMoveAndReschedulePreserveOutcomeDraftAndMismatches() throws {
+    let moveStore = Store()
+    let moveItem = moveStore.addExisting()
+    var movedActual = try XCTUnwrap(moveStore.records[moveItem.id])
+    movedActual.lastModified = Date(timeIntervalSince1970: 220)
+    moveStore.saveOutcome = .committedWithNormalization(
+      actual: movedActual,
+      mismatches: [ReminderNormalizationMismatch(field: .list, reason: "Move rejected")])
+    let moveCoordinator = ReminderWriteCoordinator(store: moveStore)
+
+    let move = try moveCoordinator.moveOutcome(moveItem, toListWithID: "work").get()
+
+    XCTAssertEqual(move.draft.listID, "work")
+    XCTAssertEqual(move.draft.baseline?.listID, "inbox")
+    XCTAssertEqual(move.draft.normalizationMismatches.map(\.field), [.list])
+
+    let compatibilityMoveStore = Store()
+    let compatibilityMoveItem = compatibilityMoveStore.addExisting()
+    var compatibilityMovedActual = try XCTUnwrap(
+      compatibilityMoveStore.records[compatibilityMoveItem.id])
+    compatibilityMovedActual.lastModified = Date(timeIntervalSince1970: 221)
+    compatibilityMoveStore.saveOutcome = .committedWithNormalization(
+      actual: compatibilityMovedActual,
+      mismatches: [ReminderNormalizationMismatch(field: .list, reason: "Move rejected")])
+    let compatibilityMoveCoordinator = ReminderWriteCoordinator(
+      store: compatibilityMoveStore)
+    XCTAssertEqual(
+      compatibilityMoveCoordinator.move(
+        compatibilityMoveItem, toListWithID: "work"
+      ).failure,
+      .normalizedQuickWrite)
+
+    let rescheduleStore = Store()
+    let rescheduleItem = rescheduleStore.addExisting()
+    let requestedDate = Date(timeIntervalSince1970: 1_788_523_800)
+    var rescheduledActual = try XCTUnwrap(rescheduleStore.records[rescheduleItem.id])
+    rescheduledActual.lastModified = Date(timeIntervalSince1970: 222)
+    rescheduleStore.saveOutcome = .committedWithNormalization(
+      actual: rescheduledActual,
+      mismatches: [
+        ReminderNormalizationMismatch(field: .dueDate, reason: "Date rejected")
+      ])
+    let rescheduleCoordinator = ReminderWriteCoordinator(store: rescheduleStore)
+
+    let reschedule = try rescheduleCoordinator.rescheduleOutcome(
+      rescheduleItem, to: requestedDate, hasTime: true
+    ).get()
+
+    XCTAssertEqual(
+      reschedule.draft.dueDate?.components,
+      RemindersLogic.dueComponents(for: requestedDate, hasTime: true))
+    XCTAssertEqual(
+      reschedule.draft.baseline?.dueDate?.components, rescheduledActual.dueDateComponents)
+    XCTAssertEqual(reschedule.draft.normalizationMismatches.map(\.field), [.dueDate])
+
+    let compatibilityRescheduleStore = Store()
+    let compatibilityRescheduleItem = compatibilityRescheduleStore.addExisting()
+    var compatibilityRescheduledActual = try XCTUnwrap(
+      compatibilityRescheduleStore.records[compatibilityRescheduleItem.id])
+    compatibilityRescheduledActual.lastModified = Date(timeIntervalSince1970: 223)
+    compatibilityRescheduleStore.saveOutcome = .committedWithNormalization(
+      actual: compatibilityRescheduledActual,
+      mismatches: [
+        ReminderNormalizationMismatch(field: .dueDate, reason: "Date rejected")
+      ])
+    let compatibilityRescheduleCoordinator = ReminderWriteCoordinator(
+      store: compatibilityRescheduleStore)
+    XCTAssertEqual(
+      compatibilityRescheduleCoordinator.reschedule(
+        compatibilityRescheduleItem, to: requestedDate, hasTime: true
+      ).failure,
+      .normalizedQuickWrite)
+  }
+
+  func testNoOpMoveAndRescheduleDoNotCallStoreSave() throws {
+    let moveStore = Store()
+    let moveItem = moveStore.addExisting()
+    let moveCoordinator = ReminderWriteCoordinator(store: moveStore)
+
+    let move = try moveCoordinator.moveOutcome(moveItem, toListWithID: "inbox").get()
+
+    guard case .noChanges = move.outcome else { return XCTFail("Expected no changes") }
+    XCTAssertEqual(moveStore.saveCount, 0)
+    XCTAssertNil(moveCoordinator.pendingCommitReceipt)
+    XCTAssertEqual(
+      try moveCoordinator.move(moveItem, toListWithID: "inbox").get(), moveItem)
+    XCTAssertEqual(moveStore.saveCount, 0)
+
+    let rescheduleStore = Store()
+    let rescheduleItem = rescheduleStore.addExisting()
+    let date = try XCTUnwrap(rescheduleItem.dueDate)
+    let rescheduleCoordinator = ReminderWriteCoordinator(store: rescheduleStore)
+    let canonicalDueDate = try rescheduleCoordinator.writeDraft(for: rescheduleItem).get().dueDate
+
+    let reschedule = try rescheduleCoordinator.rescheduleOutcome(
+      rescheduleItem, to: date, hasTime: rescheduleItem.hasDueTime
+    ).get()
+
+    guard case .noChanges = reschedule.outcome else {
+      return XCTFail("Expected no changes")
+    }
+    XCTAssertEqual(reschedule.draft.dueDate, canonicalDueDate)
+    XCTAssertEqual(rescheduleStore.saveCount, 0)
+    XCTAssertNil(rescheduleCoordinator.pendingCommitReceipt)
+    XCTAssertEqual(
+      try rescheduleCoordinator.reschedule(
+        rescheduleItem, to: date, hasTime: rescheduleItem.hasDueTime
+      ).get(),
+      rescheduleItem)
+    XCTAssertEqual(rescheduleStore.saveCount, 0)
   }
 
   private func dateValue(day: Int, hour: Int? = nil) throws -> ReminderDateValue {
