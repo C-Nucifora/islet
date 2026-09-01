@@ -8,6 +8,17 @@ die "usage: cached-paused-media-helper.pl KIND STATE_FILE\n"
 
 select((select(STDOUT), $| = 1)[0]);
 if ($kind eq "stream") {
+  # Force the startup snapshot to run before the first live record. Tests then use that live idle
+  # record as a barrier and prove startup output cannot contaminate recovery assertions.
+  my $startup_seen = 0;
+  for (1 .. 200) {
+    if (-e $state_file) {
+      $startup_seen = 1;
+      last;
+    }
+    select undef, undef, undef, 0.01;
+  }
+  die "startup snapshot did not run\n" unless $startup_seen;
   print STDOUT "{\"type\":\"data\",\"diff\":false,\"payload\":{}}\n";
   while (1) {
     select undef, undef, undef, 60;
