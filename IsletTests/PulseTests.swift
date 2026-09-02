@@ -228,7 +228,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testRevisionOrderingRejectsReorderedAndRetriedCommandsWithoutSideEffects() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     var payload = PulsePayload(
       id: "ordered", source: "build", title: "Revision 1", subtitle: nil, symbol: nil,
@@ -265,7 +265,7 @@ final class PulseTests: XCTestCase {
   func testDuplicateRevisionAfterExpiryRemainsAnIdempotentOrderingRejection() throws {
     let clock = TestPulseClock(now: Date(timeIntervalSince1970: 1_000))
     let scheduler = TestPulseDeadlineScheduler(clock: clock)
-    let center = PulseCenter(clock: clock, scheduler: scheduler)
+    let center = makeCenter(clock: clock, scheduler: scheduler)
     let payload = PulsePayload(
       id: "expiring-retry", source: "build", title: "Running", subtitle: nil, symbol: nil,
       accentHex: nil, progress: 0.5, state: .progress, priority: .normal,
@@ -287,7 +287,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testConcurrentRevisionArrivalConvergesOnTheHighestRevision() async throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 2_000)
 
     await withTaskGroup(of: Void.self) { group in
@@ -310,7 +310,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testLegacyStreamUsesArrivalOrderUntilItOptsIntoRevisions() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 3_000)
     var payload = PulsePayload(
       id: "legacy", source: "build", title: "First", subtitle: nil, symbol: nil,
@@ -331,7 +331,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testOrderedEndClosesGenerationUntilANewerShow() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 4_000)
     var payload = PulsePayload(
       id: "generation", source: "build", title: "Running", subtitle: nil, symbol: nil,
@@ -362,7 +362,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testOrderedEndBeforeShowLeavesATombstone() {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 5_000)
     let end = PulseCommand(
       token: "test", operation: .end, activity: nil, id: "queued", source: "build",
@@ -384,7 +384,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testOrderedEndRequiresSourceEvenWhenIdentityIsActive() {
-    let center = PulseCenter()
+    let center = makeCenter()
     let payload = PulsePayload(
       id: "active", source: "build", title: "Running", subtitle: nil, symbol: nil,
       accentHex: nil, progress: nil, state: .active, priority: .normal,
@@ -408,7 +408,7 @@ final class PulseTests: XCTestCase {
       id: "restart", source: "build", title: "Current", subtitle: nil, symbol: nil,
       accentHex: nil, progress: nil, state: .active, priority: .normal,
       expiresAt: nil, actions: nil)
-    let firstProcess = PulseCenter(
+    let firstProcess = makeCenter(
       clock: TestPulseClock(now: now), revisionStore: persistence.store)
     XCTAssertTrue(firstProcess.apply(command(.show, payload, revision: 100), now: now).ok)
     XCTAssertTrue(
@@ -419,7 +419,7 @@ final class PulseTests: XCTestCase {
       ).ok)
     firstProcess.flushRevisionPersistence()
 
-    let restartedProcess = PulseCenter(
+    let restartedProcess = makeCenter(
       clock: TestPulseClock(now: now), revisionStore: persistence.store)
     let delayed = restartedProcess.apply(command(.update, payload, revision: 102), now: now)
     XCTAssertFalse(delayed.ok)
@@ -434,13 +434,13 @@ final class PulseTests: XCTestCase {
     let end = PulseCommand(
       token: "test", operation: .end, activity: nil, id: "old-generation", source: "build",
       revision: 50)
-    let firstProcess = PulseCenter(
+    let firstProcess = makeCenter(
       clock: TestPulseClock(now: initialDate), revisionStore: persistence.store)
     XCTAssertTrue(firstProcess.apply(end, now: initialDate).ok)
     firstProcess.flushRevisionPersistence()
 
     let afterRetention = initialDate.addingTimeInterval(31 * 24 * 60 * 60)
-    let restartedProcess = PulseCenter(
+    let restartedProcess = makeCenter(
       clock: TestPulseClock(now: afterRetention), revisionStore: persistence.store)
     let payload = PulsePayload(
       id: "old-generation", source: "build", title: "Fresh baseline", subtitle: nil,
@@ -457,7 +457,7 @@ final class PulseTests: XCTestCase {
   @MainActor
   func testPersistedRevisionStateExcludesProviderPayloadAndToken() throws {
     let persistence = PulseRevisionPersistenceBox()
-    let center = PulseCenter(revisionStore: persistence.store)
+    let center = makeCenter(revisionStore: persistence.store)
     let payload = PulsePayload(
       id: "private-job", source: "build", title: "private title",
       subtitle: "private details", symbol: nil, accentHex: nil, progress: 0.4,
@@ -485,7 +485,7 @@ final class PulseTests: XCTestCase {
   func testRevisionPersistenceCoalescesABurstAndKeepsTheNewestRevision() {
     let persistence = PulseRevisionPersistenceBox()
     let now = Date(timeIntervalSince1970: 8_500)
-    let center = PulseCenter(
+    let center = makeCenter(
       clock: TestPulseClock(now: now), revisionStore: persistence.store,
       revisionPersistenceDelay: 60)
     let payload = PulsePayload(
@@ -501,7 +501,7 @@ final class PulseTests: XCTestCase {
     center.flushRevisionPersistence()
     XCTAssertEqual(persistence.writeCount, 1)
 
-    let restarted = PulseCenter(
+    let restarted = makeCenter(
       clock: TestPulseClock(now: now), revisionStore: persistence.store,
       revisionPersistenceDelay: 60)
     XCTAssertEqual(
@@ -512,7 +512,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testClearingItemsKeepsRevisionOrdering() {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 6_500)
     var payload = PulsePayload(
       id: "disabled", source: "build", title: "Before disable", subtitle: nil, symbol: nil,
@@ -534,7 +534,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testRevisionOrderingIsIndependentPerSourceNamespace() {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 7_000)
     let build = PulsePayload(
       id: "shared", source: "build", title: "Build", subtitle: nil, symbol: nil,
@@ -551,7 +551,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testRevisionTrackingCapacityKeepsExistingStreamsUsable() {
-    let center = PulseCenter()
+    let center = makeCenter()
     for index in 0..<PulseCenter.maximumRevisionRecords {
       let end = PulseCommand(
         token: "test", operation: .end, activity: nil, id: "item-\(index)",
@@ -571,7 +571,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testDirectCommandsRejectRevisionsAboveThePortableJSONLimit() {
-    let center = PulseCenter()
+    let center = makeCenter()
     let payload = PulsePayload(
       id: "too-large", source: "build", title: "Too large", subtitle: nil, symbol: nil,
       accentHex: nil, progress: nil, state: .active, priority: .normal,
@@ -1507,6 +1507,8 @@ final class PulseTests: XCTestCase {
     staleRetention: TimeInterval = PulseStalenessPolicy.defaultRetention,
     clock: (any PulseClock)? = nil,
     scheduler: (any PulseDeadlineScheduling)? = nil,
+    revisionStore: PulseRevisionPersistenceStore? = nil,
+    revisionPersistenceDelay: TimeInterval = PulseRevisionPersistenceWriter.defaultCoalescingDelay,
     symbolAvailability: @escaping (String) -> Bool? = PulseSymbolValidator.platformAvailability
   ) -> PulseCenter {
     let key = Defaults.Key<PulseDeliveryProfile>(
@@ -1515,8 +1517,9 @@ final class PulseTests: XCTestCase {
       "pulseSourcePolicies", default: [:], suite: deliveryProfileSuite)
     return PulseCenter(
       staleTimeout: staleTimeout, staleRetention: staleRetention, clock: clock,
-      scheduler: scheduler, symbolAvailability: symbolAvailability, deliveryProfileKey: key,
-      sourcePoliciesKey: sourcePoliciesKey)
+      scheduler: scheduler, revisionStore: revisionStore,
+      revisionPersistenceDelay: revisionPersistenceDelay, symbolAvailability: symbolAvailability,
+      deliveryProfileKey: key, sourcePoliciesKey: sourcePoliciesKey)
   }
 
   private static let testToken = Data(repeating: 0, count: 32).base64EncodedString()
