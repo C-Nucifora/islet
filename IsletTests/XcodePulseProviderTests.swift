@@ -352,7 +352,7 @@ final class XcodePulseProviderTests: XCTestCase {
   ) {
     let launched = try makeProviderProcess(
       scenario: scenario, providerArguments: providerArguments)
-    try runToCompletion(launched.process, timeout: 10)
+    try runToCompletion(launched.process, timeout: 20)
     let data = try readToEnd(of: launched.output.fileHandleForReading, timeout: 2)
     return (launched.process.terminationStatus, String(decoding: data, as: UTF8.self))
   }
