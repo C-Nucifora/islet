@@ -93,7 +93,7 @@ final class ContextualHomeTests: XCTestCase {
       occurrenceID: "timer-1", label: "Focus", endDate: now + 45, remaining: 45,
       isPaused: false, finished: false)
     let agent = T3AgentSnapshot(
-      environmentID: "mac", threadID: "thread", title: "Fix tests", project: "Islet",
+      logicalEnvironmentID: "mac", threadID: "thread", title: "Fix tests", project: "Islet",
       providerInstance: "Codex", model: "gpt", branch: "feature", phase: .needsInput,
       planStep: nil, completedPlanSteps: nil, totalPlanSteps: nil, updatedAt: now)
     let pulse = try PulseItem(
