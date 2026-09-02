@@ -117,6 +117,24 @@ struct IdleDashboardView: View {
           .font(.caption2.monospacedDigit())
           .foregroundStyle(.secondary)
           .accessibilityLabel("\(visibleItems.count) items need attention")
+        if remindersEnabled, reminders.authorization.canRead {
+          Button {
+            ReminderEditorWindow.shared.presentEditor(provider: reminders, item: nil)
+          } label: {
+            Image(systemName: "plus")
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("New reminder")
+          .accessibilityHint("Opens a keyboard-accessible reminder editor")
+          .disabled(reminderCommands.route(for: .create) == nil)
+          if reminders.completionUndo != nil {
+            Button("Undo") { reminders.undoLastCompletion() }
+              .buttonStyle(.link)
+              .font(.caption2)
+              .accessibilityLabel("Undo last reminder completion")
+              .disabled(reminderCommands.route(for: .undo) == nil)
+          }
+        }
         if !overflow.overflow.isEmpty {
           Button(showsAll ? "Show less" : "More (\(overflow.overflow.count))") {
             withAnimation(Motion.gated(.snappy)) { showsAll.toggle() }
@@ -168,6 +186,14 @@ struct IdleDashboardView: View {
       now: now)
     items += serviceIssues
     return HomeAttentionRanking.ranked(items, now: now)
+  }
+
+  private var reminderCommands: ReminderCommandPresentation {
+    ReminderCommandPresentation(
+      reminders: reminders.reminders,
+      selectedReminderID: nil,
+      writableListIDs: Set(reminders.availableLists.filter(\.isWritable).map(\.id)),
+      hasCompletionUndo: reminders.completionUndo != nil)
   }
 
   private var serviceIssues: [HomeAttentionItem] {
