@@ -271,36 +271,61 @@ private final class XcodeOutputParser: @unchecked Sendable {
 
 private final class XcodeOutputDrainer: @unchecked Sendable {
   private static let readSize = 16 * 1_024
+  private static let pollIntervalMilliseconds: Int32 = 100
 
   private let source: FileHandle
   private let destination: FileHandle
   private let parser: XcodeOutputParser
   private let outputLock: NSLock
   private let progressChanged: () -> Void
+  private let shouldStop: () -> Bool
 
   init(
     source: FileHandle,
     destination: FileHandle,
     parser: XcodeOutputParser,
     outputLock: NSLock,
-    progressChanged: @escaping () -> Void
+    progressChanged: @escaping () -> Void,
+    shouldStop: @escaping () -> Bool
   ) {
     self.source = source
     self.destination = destination
     self.parser = parser
     self.outputLock = outputLock
     self.progressChanged = progressChanged
+    self.shouldStop = shouldStop
   }
 
   func run() {
+    let descriptor = source.fileDescriptor
+    var pollDescriptor = pollfd(
+      fd: descriptor, events: Int16(POLLIN | POLLHUP | POLLERR), revents: 0)
+    var buffer = [UInt8](repeating: 0, count: Self.readSize)
     while true {
-      let data: Data
-      do {
-        guard let next = try source.read(upToCount: Self.readSize), !next.isEmpty else { break }
-        data = next
-      } catch {
+      pollDescriptor.revents = 0
+      let pollResult = Darwin.poll(&pollDescriptor, 1, Self.pollIntervalMilliseconds)
+      if pollResult < 0 {
+        if errno == EINTR { continue }
         break
       }
+      if pollResult == 0 {
+        if shouldStop() { break }
+        continue
+      }
+      if pollDescriptor.revents & Int16(POLLIN) == 0 {
+        if pollDescriptor.revents & Int16(POLLHUP | POLLERR | POLLNVAL) != 0 { break }
+        continue
+      }
+
+      let count = buffer.withUnsafeMutableBytes { bytes in
+        Darwin.read(descriptor, bytes.baseAddress, bytes.count)
+      }
+      if count < 0 {
+        if errno == EINTR { continue }
+        break
+      }
+      if count == 0 { break }
+      let data = Data(buffer.prefix(count))
       outputLock.lock()
       destination.write(data)
       outputLock.unlock()
@@ -481,6 +506,15 @@ do {
 
   let process = Process()
   let environment = ProcessInfo.processInfo.environment
+  let signalGraceInterval: TimeInterval
+  if let rawGraceInterval = environment["ISLET_XCODEBUILD_SIGNAL_GRACE_SECONDS"],
+    let configuredGraceInterval = TimeInterval(rawGraceInterval),
+    configuredGraceInterval.isFinite, configuredGraceInterval > 0
+  {
+    signalGraceInterval = min(60, max(0.05, configuredGraceInterval))
+  } else {
+    signalGraceInterval = 5
+  }
   if let override = environment["ISLET_XCODEBUILD_EXECUTABLE"], !override.isEmpty {
     process.executableURL = URL(fileURLWithPath: override)
     process.arguments = options.xcodebuildArguments
@@ -492,7 +526,18 @@ do {
   let stderrPipe = Pipe()
   process.standardOutput = stdoutPipe
   process.standardError = stderrPipe
+  let closeOutputPipeWriters = {
+    try? stdoutPipe.fileHandleForWriting.close()
+    try? stderrPipe.fileHandleForWriting.close()
+  }
   let outputLock = NSLock()
+  let processStateLock = NSLock()
+  var processExited = false
+  let shouldStopDraining = {
+    processStateLock.lock()
+    defer { processStateLock.unlock() }
+    return processExited
+  }
   let progressChanged = {
     let snapshot = currentSnapshot()
     publisher.publish(
@@ -505,10 +550,12 @@ do {
   let drainers = [
     XcodeOutputDrainer(
       source: stdoutPipe.fileHandleForReading, destination: FileHandle.standardOutput,
-      parser: stdoutParser, outputLock: outputLock, progressChanged: progressChanged),
+      parser: stdoutParser, outputLock: outputLock, progressChanged: progressChanged,
+      shouldStop: shouldStopDraining),
     XcodeOutputDrainer(
       source: stderrPipe.fileHandleForReading, destination: FileHandle.standardError,
-      parser: stderrParser, outputLock: outputLock, progressChanged: progressChanged),
+      parser: stderrParser, outputLock: outputLock, progressChanged: progressChanged,
+      shouldStop: shouldStopDraining),
   ]
   let readers = DispatchGroup()
 
@@ -519,22 +566,37 @@ do {
   let signalQueue = DispatchQueue(label: "dev.islet.xcode-pulse.signals")
   let interruptSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: signalQueue)
   let terminateSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: signalQueue)
+  var signalEscalationScheduled = false
+  let forwardSignal = { (forwardedSignal: Int32) in
+    signalLock.lock()
+    receivedSignal = forwardedSignal
+    signalLock.unlock()
+    guard process.isRunning else { return }
+    kill(process.processIdentifier, forwardedSignal)
+    signalLock.lock()
+    let shouldScheduleEscalation = !signalEscalationScheduled
+    signalEscalationScheduled = true
+    signalLock.unlock()
+    guard shouldScheduleEscalation else { return }
+    signalQueue.asyncAfter(deadline: .now() + signalGraceInterval) {
+      if process.isRunning {
+        kill(process.processIdentifier, SIGKILL)
+      }
+    }
+  }
   for source in [interruptSource, terminateSource] {
     source.setEventHandler {
       let forwardedSignal = source === interruptSource ? SIGINT : SIGTERM
-      signalLock.lock()
-      receivedSignal = forwardedSignal
-      signalLock.unlock()
-      if process.isRunning {
-        kill(process.processIdentifier, forwardedSignal)
-      }
+      forwardSignal(forwardedSignal)
     }
     source.resume()
   }
 
   do {
     try process.run()
+    closeOutputPipeWriters()
   } catch {
+    closeOutputPipeWriters()
     interruptSource.cancel()
     terminateSource.cancel()
     publisher.finish(
@@ -554,7 +616,9 @@ do {
   signalLock.lock()
   let pendingSignal = receivedSignal
   signalLock.unlock()
-  if let pendingSignal, process.isRunning { kill(process.processIdentifier, pendingSignal) }
+  if let pendingSignal {
+    signalQueue.sync { forwardSignal(pendingSignal) }
+  }
 
   let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
   timer.schedule(deadline: .now() + 5, repeating: 5)
@@ -571,10 +635,16 @@ do {
   timer.resume()
 
   process.waitUntilExit()
+  processStateLock.lock()
+  processExited = true
+  processStateLock.unlock()
   timer.cancel()
   interruptSource.cancel()
   terminateSource.cancel()
-  readers.wait()
+  if readers.wait(timeout: .now() + 2) == .timedOut {
+    stdoutParser.finish()
+    stderrParser.finish()
+  }
 
   let snapshot = currentSnapshot()
   signalLock.lock()
