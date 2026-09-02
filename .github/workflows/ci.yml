@@ -140,6 +140,7 @@ jobs:
             -disableAutomaticPackageResolution \
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO \
+            ISLET_UPDATE_PUBLIC_ED_KEY=11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo= \
             CODE_SIGN_IDENTITY=- \
             CODE_SIGN_STYLE=Manual \
             test | xcbeautify
@@ -150,6 +151,7 @@ jobs:
           framework="$app/Contents/Frameworks/MediaRemoteAdapter.framework/MediaRemoteAdapter"
           lipo "$app/Contents/MacOS/Islet" -verify_arch arm64
           lipo "$framework" -verify_arch arm64
+          ISLET_GENERATED_INFO_PLIST="$app/Contents/Info.plist" Scripts/test-update-tooling.sh
 
       - name: Run static analysis
         run: |
@@ -232,6 +234,7 @@ jobs:
             -disableAutomaticPackageResolution \
             ARCHS=x86_64 \
             ONLY_ACTIVE_ARCH=NO \
+            ISLET_UPDATE_PUBLIC_ED_KEY=11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo= \
             CODE_SIGN_IDENTITY=- \
             CODE_SIGN_STYLE=Manual \
             test | xcbeautify
@@ -242,3 +245,4 @@ jobs:
           framework="$app/Contents/Frameworks/MediaRemoteAdapter.framework/MediaRemoteAdapter"
           lipo "$app/Contents/MacOS/Islet" -verify_arch x86_64
           lipo "$framework" -verify_arch x86_64
+          ISLET_GENERATED_INFO_PLIST="$app/Contents/Info.plist" Scripts/test-update-tooling.sh
