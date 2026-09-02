@@ -21,12 +21,21 @@ enum PowerStatus {
     onAC: Bool, isCharging: Bool, fullyCharged: Bool,
     batteryWatts: Double?, notChargingReason: UInt64?
   ) -> String {
+    text(
+      onAC: onAC,
+      isCharging: isCharging,
+      fullyCharged: fullyCharged,
+      batteryDirection: BatteryFlowDirection.resolve(batteryWatts: batteryWatts),
+      notChargingReason: notChargingReason)
+  }
+
+  static func text(
+    onAC: Bool, isCharging: Bool, fullyCharged: Bool,
+    batteryDirection: BatteryFlowDirection, notChargingReason: UInt64?
+  ) -> String {
     if !onAC { return "On battery" }
-    // IOPS's `IsCharging` describes the requested charger state and can remain true while the
-    // pack is momentarily supplying the shortfall. Prefer the same signed live measurement used
-    // by the flow graph so the headline can never claim that a left-side battery ribbon is charge.
-    if let batteryWatts, batteryWatts < -0.05 { return "Adapter can't keep up" }
-    if isCharging { return "Charging" }
+    if batteryDirection == .supplementing { return "Adapter can't keep up" }
+    if batteryDirection == .charging || isCharging { return "Charging" }
     if fullyCharged { return "Charged" }
     // The reason bitfield is undocumented diagnostics, not prose — the view offers it in a
     // tooltip. Putting the hex in this line truncated it into "Not charging · 0x80000…".
@@ -87,6 +96,14 @@ enum PowerFormat {
     if let timeToFull { return ("Full in", time(minutes: timeToFull)) }
     if let timeToEmpty { return ("Left", time(minutes: timeToEmpty)) }
     return nil
+  }
+
+  static func remaining(
+    batteryDirection: BatteryFlowDirection, timeToFull: Int?, timeToEmpty: Int?
+  ) -> (label: String, value: String)? {
+    remaining(
+      timeToFull: batteryDirection == .charging ? timeToFull : nil,
+      timeToEmpty: timeToEmpty)
   }
 }
 

@@ -17,7 +17,7 @@ struct BatteryExpandedView: View {
       onAC: onAC,
       isCharging: state?.isCharging ?? false,
       fullyCharged: metrics?.fullyCharged ?? false,
-      batteryWatts: metrics?.batteryPowerWatts,
+      batteryDirection: flow.batteryDirection,
       notChargingReason: metrics?.notChargingReason)
   }
 
@@ -402,7 +402,9 @@ struct BatteryExpandedView: View {
 
   private var remaining: (label: String, value: String)? {
     PowerFormat.remaining(
-      timeToFull: metrics?.timeToFullMinutes, timeToEmpty: metrics?.timeToEmptyMinutes)
+      batteryDirection: flow.batteryDirection,
+      timeToFull: metrics?.timeToFullMinutes,
+      timeToEmpty: metrics?.timeToEmptyMinutes)
   }
 
   private var detailStrip: some View {
