@@ -323,6 +323,11 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       ]
     case .energy:
       ["Choose energy mode", "Follow macOS Low Power Mode", "Use Low Energy mode", "Use Live mode"]
+    case .contextRules:
+      [
+        "Create context rule", "Edit context rule", "Reorder context rules",
+        "Set a temporary context override",
+      ]
     case .activityOrder:
       ["Show, hide, or reorder activities"]
         + ActivityCatalog.orderable.map { "Configure \($0.name) activity" }
