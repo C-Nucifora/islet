@@ -67,8 +67,8 @@ sparkle_tools=DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin
 "$sparkle_tools/generate_keys" --account C-Nucifora-islet -p
 ```
 
-Replace `CONFIGURATION_REQUIRED` in `Config/Update.xcconfig` with the printed public key while
-retaining the surrounding quotes. Review and commit that public key. It is expected to be public.
+Replace `CONFIGURATION_REQUIRED` in `Config/Update.xcconfig` with the printed public key without
+adding quotes. Review and commit that public key. It is expected to be public.
 
 Export the private seed to a protected location outside the repository. Sparkle documents the
 exported file as equivalent to the password for its Keychain item, so limit its permissions and

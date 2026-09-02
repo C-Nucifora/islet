@@ -212,14 +212,26 @@ final class AppUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate 
   }
 
   func start() {
-    guard updaterController == nil, configuration != nil else { return }
+    guard updaterController == nil, let configuration else { return }
     let controller = SPUStandardUpdaterController(
       startingUpdater: false,
       updaterDelegate: self,
       userDriverDelegate: nil)
+    // Sparkle historically persisted URLs written through its deprecated setFeedURL API and
+    // gives that value priority over Info.plist. Remove it during migration; the delegate below
+    // also pins every check to the URL that passed AppUpdateConfiguration validation.
+    controller.updater.clearFeedURLFromUserDefaults()
+    guard controller.updater.feedURL == configuration.feedURL else {
+      state = .unavailable(AppUpdateConfigurationError.unexpectedFeedURL.localizedDescription)
+      return
+    }
     updaterController = controller
     controller.startUpdater()
     refresh()
+  }
+
+  func feedURLString(for updater: SPUUpdater) -> String? {
+    configuration?.feedURL.absoluteString
   }
 
   func checkForUpdates() {
