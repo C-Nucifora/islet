@@ -2,7 +2,7 @@ import XCTest
 
 @testable import Islet
 
-final class LaunchAtLoginTests: XCTestCase {
+final class LaunchAtLoginPolicyTests: XCTestCase {
   func testSyncPreservesAnEnabledOrPendingRegistration() {
     XCTAssertEqual(
       LaunchAtLoginPolicy.action(desiredEnabled: true, status: .enabled),
