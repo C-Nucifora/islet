@@ -40,6 +40,7 @@ protocol T3OAuthLoopbackListening: Sendable {
 
 actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
   nonisolated static let maximumHeaderBytes = 8 * 1_024
+  private nonisolated static let maximumConcurrentConnections = 8
   private nonisolated static let productionPort: UInt16 = 34_338
   private nonisolated static let loopbackHost = NWEndpoint.Host("127.0.0.1")
 
@@ -199,7 +200,8 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
   }
 
   private func accept(_ connection: NWConnection) {
-    guard ready, !completing, connections.isEmpty,
+    guard ready, !completing,
+      Self.canAcceptConnection(activeCount: connections.count),
       Self.isIPv4Loopback(connection.endpoint)
     else {
       connection.cancel()
@@ -342,6 +344,10 @@ actor T3OAuthLoopbackListener: T3OAuthLoopbackListening {
   nonisolated static func maximumReceiveLength(bufferedHeaderBytes: Int) -> Int? {
     guard bufferedHeaderBytes >= 0, bufferedHeaderBytes < maximumHeaderBytes else { return nil }
     return min(2_048, maximumHeaderBytes - bufferedHeaderBytes)
+  }
+
+  nonisolated static func canAcceptConnection(activeCount: Int) -> Bool {
+    activeCount >= 0 && activeCount < maximumConcurrentConnections
   }
 
   private func didSendResponse(
