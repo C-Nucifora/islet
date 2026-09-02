@@ -214,14 +214,14 @@ final class ContextRuleTests: XCTestCase {
       accentHex: nil, progress: 0.2, state: .progress, priority: .normal,
       expiresAt: nil, actions: nil)
     XCTAssertTrue(center.apply(command(.show, payload), now: now).ok)
-    XCTAssertEqual(center.items.map(\.id), ["build"])
+    XCTAssertEqual(center.items.map(\.providerIdentifier), ["build"])
 
     center.ruleDeliveryProfile = .paused
     XCTAssertTrue(center.items.isEmpty)
     XCTAssertEqual(center.retainedItemCount, 1)
 
     center.ruleDeliveryProfile = nil
-    XCTAssertEqual(center.items.map(\.id), ["build"])
+    XCTAssertEqual(center.items.map(\.providerIdentifier), ["build"])
   }
 
   private func rule(
