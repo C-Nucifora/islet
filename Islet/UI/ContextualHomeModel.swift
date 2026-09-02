@@ -392,6 +392,9 @@ enum HomeAttentionBuilder {
     } else if item.state == .needsAction {
       priority = .critical
       reason = "The provider needs your response"
+    } else if item.state == .stale {
+      priority = .high
+      reason = "The provider stopped reporting"
     } else {
       switch item.priority {
       case .critical:
@@ -430,6 +433,7 @@ enum HomeAttentionBuilder {
     case .succeeded: "Succeeded"
     case .failed: "Failed"
     case .cancelled: "Cancelled"
+    case .stale: "Stale"
     }
   }
 
