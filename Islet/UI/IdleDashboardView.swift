@@ -16,20 +16,80 @@ struct IdleDashboardView: View {
   @ObservedObject private var pulse = PulseCenter.shared
   @ObservedObject private var battery = AppState.battery
   @ObservedObject private var shelf = ShelfModel.shared
+  @ObservedObject private var keepAwake = KeepAwakeManager.shared
   @Default(.calendarEnabled) private var calendarEnabled
   @Default(.remindersEnabled) private var remindersEnabled
-  @Default(.t3CodeEnabled) private var t3CodeEnabled
-  @Default(.pulseEnabled) private var pulseEnabled
-  @Default(.batteryEnabled) private var batteryEnabled
+  @Default(.disabledActivities) private var disabledActivities
 
   @State private var showsAll = false
 
   var body: some View {
-    TimelineView(.periodic(from: .now, by: 10)) { context in
-      dashboard(now: context.date)
+    VStack(alignment: .leading, spacing: 8) {
+      keepAwakeControls
+      Divider().overlay(Color.white.opacity(0.12))
+      TimelineView(.periodic(from: .now, by: 10)) { context in
+        dashboard(now: context.date)
+      }
     }
     .foregroundStyle(.white)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  private var keepAwakeControls: some View {
+    HStack(spacing: 8) {
+      Image(systemName: keepAwake.isActive ? "cup.and.heat.waves.fill" : "cup.and.heat.waves")
+        .appThemeForeground(.interaction)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(keepAwake.isActive ? "Mac stays awake" : "Keep Mac awake")
+          .font(.caption.weight(.semibold))
+        if keepAwake.isActive {
+          Text(keepAwake.lastError ?? keepAwake.statusText)
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(keepAwake.lastError == nil ? Color.secondary : Color.orange)
+            .lineLimit(1)
+        } else if let error = keepAwake.lastError {
+          Text(error).font(.caption2).foregroundStyle(.orange).lineLimit(1)
+        }
+      }
+      Spacer(minLength: 4)
+      if keepAwake.isActive {
+        Menu {
+          Button("Indefinitely") { keepAwake.start(duration: .indefinitely) }
+          ForEach(Array(KeepAwakeDuration.presets.enumerated()), id: \.offset) { _, preset in
+            Button(preset.title) { keepAwake.start(duration: preset.duration) }
+          }
+        } label: {
+          Image(systemName: "timer")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("Change keep-awake duration")
+        .accessibilityHint("Replaces the current keep-awake timer")
+        Button("Stop") { keepAwake.stop(reason: .manual) }
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+          .accessibilityHint("Allows the Mac to idle-sleep again")
+      } else if keepAwake.hasUnreleasedAssertions {
+        Button("Retry") { keepAwake.retryUnreleasedAssertions() }
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+          .accessibilityLabel("Retry releasing keep-awake assertions")
+          .accessibilityHint("Tries again to let the Mac and display idle-sleep")
+      } else {
+        Menu("Start") {
+          Button("Indefinitely") { keepAwake.start(duration: .indefinitely) }
+          ForEach(Array(KeepAwakeDuration.presets.enumerated()), id: \.offset) { _, preset in
+            Button(preset.title) { keepAwake.start(duration: preset.duration) }
+          }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityLabel("Start keep-awake session")
+        .accessibilityHint("Choose how long the Mac should stay awake")
+      }
+    }
+    .accessibilityElement(children: .contain)
   }
 
   @ViewBuilder private func dashboard(now: Date) -> some View {

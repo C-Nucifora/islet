@@ -429,6 +429,7 @@ enum HomeAttentionBuilder {
     case .needsAction: "Needs action"
     case .succeeded: "Succeeded"
     case .failed: "Failed"
+    case .cancelled: "Cancelled"
     }
   }
 
