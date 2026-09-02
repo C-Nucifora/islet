@@ -35,8 +35,8 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
   }
 
   var searchTerms: String {
-      switch self {
-      case .general:
+    switch self {
+    case .general:
       "launch login displays fullscreen recording hover click haptics energy keep awake sleep battery updates version channel"
     case .activities:
       "tabs order battery calendar reminders clipboard ports audio hud timer shelf system media iphone continuity live activities"
@@ -324,6 +324,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "Launch Islet at login", "Run setup again", "Show Islet on every display",
         "Hide Islet while an app is fullscreen",
       ]
+    case .updates:
+      ["Automatically check for updates", "Check for Updates"]
     case .appearance:
       ["Choose theme", "Use coloured battery graph", "Use monochrome battery graph"]
     case .interaction:
@@ -855,8 +857,8 @@ struct SettingsView: View {
   }
 
   @ViewBuilder private var categoryView: some View {
-      switch selection ?? .general {
-      case .general:
+    switch selection ?? .general {
+    case .general:
       settingsLanding(pages: [
         .startupDisplays, .updates, .appearance, .interaction, .energy, .contextRules,
       ])
