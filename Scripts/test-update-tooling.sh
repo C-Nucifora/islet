@@ -96,8 +96,12 @@ if grep -Fq 'SUEnableAutomaticChecks:' project.yml; then
   exit 1
 fi
 grep -Eq \
-  '^ISLET_UPDATE_PUBLIC_ED_KEY = "(CONFIGURATION_REQUIRED|[A-Za-z0-9+/]{43}=)"$' \
+  '^ISLET_UPDATE_PUBLIC_ED_KEY = (CONFIGURATION_REQUIRED|[A-Za-z0-9+/]{43}=)$' \
   Config/Update.xcconfig
+
+if [[ -n "${ISLET_GENERATED_INFO_PLIST:-}" ]]; then
+  Scripts/validate-update-config.sh "$ISLET_GENERATED_INFO_PLIST"
+fi
 grep -Fq 'SPARKLE_ED25519_PRIVATE_KEY' .github/workflows/release.yml
 grep -Fq -- '--ed-key-file -' .github/workflows/release.yml
 grep -Fq -- '--draft' .github/workflows/release.yml
@@ -106,6 +110,8 @@ grep -Fq 'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6' \
   .github/workflows/release.yml
 grep -Fq 'release-manifest.json' .github/workflows/release.yml
 grep -Fq 'signedFeedFailureExpirationKey' Islet/Support/AppUpdateController.swift
+grep -Fq 'clearFeedURLFromUserDefaults()' Islet/Support/AppUpdateController.swift
+grep -Fq 'feedURLString(for updater: SPUUpdater)' Islet/Support/AppUpdateController.swift
 grep -Fq 'Curve25519.Signing.PrivateKey' .github/workflows/release.yml
 grep -Fq 'refs/tags/v*' .github/workflows/release.yml
 grep -Fq 'git cat-file -t "$GITHUB_REF_NAME"' .github/workflows/release.yml
