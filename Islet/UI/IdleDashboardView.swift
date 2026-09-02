@@ -290,7 +290,9 @@ struct IdleDashboardView: View {
 
   private func dismiss(_ item: HomeAttentionItem) {
     if item.source == .pulse {
-      pulse.dismiss(item.stableID)
+      guard let pulseItem = pulse.items.first(where: { $0.id.stableIdentifier == item.stableID })
+      else { return }
+      pulse.dismiss(pulseItem.id)
     } else if item.source == .timer, item.state == "Done" {
       timer.cancel()
     } else {

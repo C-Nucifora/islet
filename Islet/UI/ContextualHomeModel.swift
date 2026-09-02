@@ -417,9 +417,10 @@ enum HomeAttentionBuilder {
       }
       ?? HomeAttentionAction(
         title: "Open Pulse", symbol: "waveform.path.ecg", kind: .openActivity("pulse"))
+    let stableID = item.id.stableIdentifier
     return HomeAttentionItem(
-      id: "pulse:\(item.id):\(item.updatedAt.timeIntervalSinceReferenceDate)",
-      stableID: item.id, source: .pulse, title: item.title, detail: item.subtitle,
+      id: "pulse:\(stableID):\(item.updatedAt.timeIntervalSinceReferenceDate)",
+      stableID: stableID, source: .pulse, title: item.title, detail: item.subtitle,
       symbol: item.symbol, accentHex: item.accentHex, state: pulseStateTitle(item.state),
       priority: priority, rankingReason: reason, dueAt: nil, expiresAt: item.expiresAt,
       progress: item.progress, primaryAction: action, allowsDismiss: true, allowsSnooze: true)
