@@ -152,7 +152,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testAmbiguousEndRequiresSourceAndScopedEndIsIsolated() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     let first = PulsePayload(
       id: "shared", source: "build", title: "Build", subtitle: nil, symbol: nil,
@@ -193,7 +193,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testSourceNormalizationCollisionUpdatesOneNamespacedItem() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     let first = PulsePayload(
       id: "job", source: " Build ", title: "First", subtitle: nil, symbol: nil,
@@ -457,7 +457,7 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(Defaults[sourcePoliciesKey], [:])
     XCTAssertEqual(suite.dictionary(forKey: sourcePoliciesKey.name)?.count, 0)
     XCTAssertTrue(center.apply(command(.show, payload)).ok)
-    XCTAssertEqual(center.items.map(\.id), ["build"])
+    XCTAssertEqual(center.items.map(\.providerIdentifier), ["build"])
   }
 
   @MainActor
@@ -622,7 +622,7 @@ final class PulseTests: XCTestCase {
   func testExpiryRemovesOnlyTheMatchingNamespacedIdentifier() throws {
     let clock = TestPulseClock(now: Date(timeIntervalSince1970: 900))
     let scheduler = TestPulseDeadlineScheduler(clock: clock)
-    let center = PulseCenter(
+    let center = makeCenter(
       staleTimeout: 100, staleRetention: 20, clock: clock, scheduler: scheduler)
     let expiring = PulsePayload(
       id: "shared", source: "build", title: "Build", subtitle: nil, symbol: nil,
@@ -762,7 +762,7 @@ final class PulseTests: XCTestCase {
         expiresAt: nil, actions: nil)
 
       XCTAssertTrue(center.apply(command(.show, payload)).ok)
-      XCTAssertNil(center.items.first { $0.id == state.rawValue }?.staleAt)
+      XCTAssertNil(center.items.first { $0.providerIdentifier == state.rawValue }?.staleAt)
     }
     XCTAssertEqual(scheduler.pendingCount, 0)
     scheduler.advance(to: Date(timeIntervalSince1970: 10_000))
