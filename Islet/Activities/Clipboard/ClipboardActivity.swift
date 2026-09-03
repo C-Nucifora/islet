@@ -491,8 +491,9 @@ enum ClipboardPasteboardTransaction {
       guard let rollbackItems = makePasteboardItems(from: previous) else { return false }
       guard shouldWrite() else { return false }
 
-      pasteboard.clearContents()
+      let ownedChangeCount = pasteboard.clearContents()
       guard write() else {
+        guard pasteboard.changeCount == ownedChangeCount else { return false }
         pasteboard.clearContents()
         if !rollbackItems.isEmpty { _ = pasteboard.writeObjects(rollbackItems) }
         return false

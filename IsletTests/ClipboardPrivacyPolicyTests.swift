@@ -428,11 +428,27 @@ final class ClipboardPrivacyPolicyTests: XCTestCase {
     XCTAssertTrue(pasteboard.setString("keep me", forType: .string))
 
     let replaced = await ClipboardPasteboardTransaction.replace(on: pasteboard) {
-      _ = pasteboard.setString("replacement", forType: .string)
       return false
     }
     XCTAssertFalse(replaced)
     XCTAssertEqual(pasteboard.string(forType: .string), "keep me")
+  }
+
+  func testFailedWriteDoesNotOverwriteNewerPasteboardContents() async {
+    let name = NSPasteboard.Name("islet-tests-external-write-\(UUID().uuidString)")
+    let pasteboard = NSPasteboard(name: name)
+    let externalPasteboard = NSPasteboard(name: name)
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.setString("original", forType: .string))
+
+    let replaced = await ClipboardPasteboardTransaction.replace(on: pasteboard) {
+      externalPasteboard.clearContents()
+      XCTAssertTrue(externalPasteboard.setString("newer external value", forType: .string))
+      return false
+    }
+
+    XCTAssertFalse(replaced)
+    XCTAssertEqual(pasteboard.string(forType: .string), "newer external value")
   }
 
   func testClearWinsWhileCopyBackIsPreparingRollback() async throws {
