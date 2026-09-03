@@ -850,7 +850,7 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testCredentialRevocationCleanupRemovesOnlyItsBoundSourceItems() throws {
-    let center = PulseCenter()
+    let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
     let build = PulsePayload(
       id: "job", source: "build", title: "Build", subtitle: nil, symbol: nil,
@@ -1288,18 +1288,21 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testPulseBindsNumericIPv4AndIPv6LoopbackAndAdvertisesLocalhost() async throws {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-bind-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
     var requestedPorts: [UInt16] = []
     var requestedEndpoints: [NWEndpoint] = []
     var listeners: [FakePulseListener] = []
     let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: supportDirectory),
       listenerFactory: { parameters, port in
         requestedPorts.append(port.rawValue)
         if let endpoint = parameters.requiredLocalEndpoint { requestedEndpoints.append(endpoint) }
         let listener = FakePulseListener(port: port)
         listeners.append(listener)
         return listener
-      },
-      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {})
+      }, activePortWriter: { _ in }, activePortRemover: {})
 
     server.start()
 
@@ -1430,16 +1433,19 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testRecoverableFailureRetriesAtScheduledTimeAndPublishesIt() async {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-retry-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
     let scheduler = TestPulseRetryScheduler()
     let now = Date(timeIntervalSince1970: 1_000)
     var listeners: [FakePulseListener] = []
     let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: supportDirectory),
       listenerFactory: { _, port in
         let listener = FakePulseListener(port: port)
         listeners.append(listener)
         return listener
-      },
-      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {},
+      }, activePortWriter: { _ in }, activePortRemover: {},
       now: { now }, retryScheduler: scheduler.schedule)
 
     server.start()
@@ -1459,15 +1465,18 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testStoppingOrRestartingPulseMakesQueuedRetryCallbacksHarmless() async {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-restart-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
     let scheduler = TestPulseRetryScheduler()
     var listeners: [FakePulseListener] = []
     let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: supportDirectory),
       listenerFactory: { _, port in
         let listener = FakePulseListener(port: port)
         listeners.append(listener)
         return listener
-      },
-      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {},
+      }, activePortWriter: { _ in }, activePortRemover: {},
       retryScheduler: scheduler.schedule)
 
     server.start()
@@ -1488,23 +1497,23 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
-  func testRotatingTokenDuringBackoffRestartsPulseAndCancelsQueuedRetry() async throws {
+  func testRotatingCredentialDuringBackoffPreservesQueuedRetry() async throws {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-rotation-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
+    let credentialStore = PulseCredentialStore(supportDirectory: supportDirectory)
+    let credential = try credentialStore.createProvider(
+      name: "Build", source: "build", permissions: [.events])
     let scheduler = TestPulseRetryScheduler()
     var listeners: [FakePulseListener] = []
-    var storedToken = Self.testToken
-    let replacementToken = Data(repeating: 1, count: 32).base64EncodedString()
     let server = PulseServer(
+      credentialStore: credentialStore,
       listenerFactory: { _, port in
         let listener = FakePulseListener(port: port)
         listeners.append(listener)
         return listener
-      },
-      tokenLoader: { storedToken },
-      tokenRotator: {
-        storedToken = replacementToken
-        return replacementToken
-      },
-      activePortWriter: { _ in }, activePortRemover: {}, retryScheduler: scheduler.schedule)
+      }, activePortWriter: { _ in }, activePortRemover: {},
+      retryScheduler: scheduler.schedule)
 
     server.start()
     listeners[0].emit(.failed(.posix(.ETIMEDOUT)))
@@ -1512,28 +1521,31 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(listeners.count, 2)
     XCTAssertNotNil(server.nextRetryAt)
 
-    try server.rotateToken()
+    try server.rotateCredential(credential.id)
 
-    XCTAssertEqual(server.token, replacementToken)
-    XCTAssertEqual(listeners.count, 4)
-    XCTAssertTrue(scheduler.tasks[0].cancelled)
-    XCTAssertNil(server.nextRetryAt)
+    XCTAssertEqual(listeners.count, 2)
+    XCTAssertFalse(scheduler.tasks[0].cancelled)
+    XCTAssertNotNil(server.nextRetryAt)
     scheduler.fire(at: 0)
     XCTAssertEqual(listeners.count, 4)
+    XCTAssertNil(server.nextRetryAt)
     server.stop()
   }
 
   @MainActor
   func testStableReadyPeriodResetsRetryBackoff() async {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-stable-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
     let scheduler = TestPulseRetryScheduler()
     var listeners: [FakePulseListener] = []
     let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: supportDirectory),
       listenerFactory: { _, port in
         let listener = FakePulseListener(port: port)
         listeners.append(listener)
         return listener
-      },
-      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {},
+      }, activePortWriter: { _ in }, activePortRemover: {},
       retryScheduler: scheduler.schedule)
 
     server.start()
