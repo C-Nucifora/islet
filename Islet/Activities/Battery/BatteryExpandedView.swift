@@ -115,11 +115,11 @@ struct BatteryExpandedView: View {
   }
 
   private var refreshLabel: String {
-    guard let date = monitor.lastLiveRefresh else { return "Waiting" }
+    guard let date = monitor.lastLiveRefresh else { return String(localized: "Waiting") }
     let age = max(0, Int(Date().timeIntervalSince(date)))
-    if age < 5 { return "Updated now" }
-    if age < 60 { return "Updated \(age)s" }
-    return "Updated \(age / 60)m"
+    if age < 5 { return String(localized: "Updated now") }
+    if age < 60 { return String(localized: "Updated \(age)s") }
+    return String(localized: "Updated \(age / 60)m")
   }
 
   private var refreshExplanation: String {
@@ -136,9 +136,9 @@ struct BatteryExpandedView: View {
 
   private func refreshDescription(_ date: Date) -> String {
     let age = max(0, Int(Date().timeIntervalSince(date)))
-    if age < 5 { return "just now" }
-    if age < 60 { return "\(age) seconds ago" }
-    return "\(age / 60) minutes ago"
+    if age < 5 { return String(localized: "just now") }
+    if age < 60 { return String(localized: "\(age) seconds ago") }
+    return String(localized: "\(age / 60) minutes ago")
   }
 
   private func statusPill(_ label: String, symbol: String, active: Bool) -> some View {

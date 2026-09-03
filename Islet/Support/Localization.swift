@@ -103,13 +103,10 @@ enum Pseudolocalization {
     var result = ""
     var index = source.startIndex
     while index < source.endIndex {
-      if source[index] == "%" {
-        let remainder = source[index...]
-        if let match = remainder.firstMatch(of: /%(?:\d+\$)?(?:lld|ld|d|@|[0-9.]*f)/) {
-          result += match.output
-          index = match.range.upperBound
-          continue
-        }
+      if source[index] == "%", let end = formatSpecifierEnd(in: source, from: index) {
+        result += source[index..<end]
+        index = end
+        continue
       }
       let character = source[index]
       result.append(substitutions[character] ?? character)
@@ -117,5 +114,64 @@ enum Pseudolocalization {
     }
     let padding = String(repeating: "~", count: source.count / 3 + 2)
     return "［\(result) \(padding)］"
+  }
+
+  /// Returns the end of a Foundation/printf format specifier so pseudolocalization never mutates
+  /// argument syntax. This covers positional arguments, dynamic width/precision, length modifiers,
+  /// object placeholders and every integer or floating-point conversion accepted by NSString.
+  private static func formatSpecifierEnd(in source: String, from percent: String.Index)
+    -> String.Index?
+  {
+    var index = source.index(after: percent)
+    guard index < source.endIndex else { return nil }
+    if source[index] == "%" { return source.index(after: index) }
+
+    func consumeDigits(_ cursor: inout String.Index) {
+      while cursor < source.endIndex, source[cursor].isNumber {
+        cursor = source.index(after: cursor)
+      }
+    }
+
+    let positionalStart = index
+    consumeDigits(&index)
+    if index < source.endIndex, source[index] == "$" {
+      index = source.index(after: index)
+    } else {
+      index = positionalStart
+    }
+
+    while index < source.endIndex, "-+ #0'".contains(source[index]) {
+      index = source.index(after: index)
+    }
+
+    if index < source.endIndex, source[index] == "*" {
+      index = source.index(after: index)
+      consumeDigits(&index)
+      if index < source.endIndex, source[index] == "$" { index = source.index(after: index) }
+    } else {
+      consumeDigits(&index)
+    }
+
+    if index < source.endIndex, source[index] == "." {
+      index = source.index(after: index)
+      if index < source.endIndex, source[index] == "*" {
+        index = source.index(after: index)
+        consumeDigits(&index)
+        if index < source.endIndex, source[index] == "$" { index = source.index(after: index) }
+      } else {
+        consumeDigits(&index)
+      }
+    }
+
+    for modifier in ["hh", "ll", "h", "l", "L", "z", "j", "t", "q"] {
+      if source[index...].hasPrefix(modifier) {
+        index = source.index(index, offsetBy: modifier.count)
+        break
+      }
+    }
+    guard index < source.endIndex, "diouxXfFeEgGaAcCsSp@".contains(source[index]) else {
+      return nil
+    }
+    return source.index(after: index)
   }
 }

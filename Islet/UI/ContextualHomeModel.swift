@@ -11,13 +11,13 @@ enum HomeAttentionSource: String, CaseIterable, Sendable {
 
   var title: String {
     switch self {
-    case .calendar: "Calendar"
-    case .reminders: "Reminders"
-    case .timer: "Timer"
-    case .t3Code: "T3 Code"
-    case .pulse: "Pulse"
-    case .battery: "Battery"
-    case .transfer: "File transfer"
+    case .calendar: String(localized: "Calendar")
+    case .reminders: String(localized: "Reminders")
+    case .timer: String(localized: "Timer")
+    case .t3Code: String(localized: "T3 Code")
+    case .pulse: String(localized: "Pulse")
+    case .battery: String(localized: "Battery")
+    case .transfer: String(localized: "File transfer")
     }
   }
 
@@ -56,11 +56,11 @@ enum HomeAttentionPriority: Int, Comparable, Sendable {
 
   var title: String {
     switch self {
-    case .low: "Low"
-    case .normal: "Normal"
-    case .high: "High"
-    case .urgent: "Urgent"
-    case .critical: "Critical"
+    case .low: String(localized: "Low")
+    case .normal: String(localized: "Normal")
+    case .high: String(localized: "High")
+    case .urgent: String(localized: "Urgent")
+    case .critical: String(localized: "Critical")
     }
   }
 }
@@ -106,10 +106,12 @@ struct HomeAttentionItem: Identifiable, Equatable, Sendable {
   let allowsSnooze: Bool
 
   var voiceOverValue: String {
-    var parts = [state, "\(priority.title) priority", rankingReason]
-    if let primaryAction { parts.append("Action available: \(primaryAction.title)") }
-    if allowsDismiss { parts.append("Dismiss available") }
-    if allowsSnooze { parts.append("Snooze available") }
+    var parts = [state, String(localized: "\(priority.title) priority"), rankingReason]
+    if let primaryAction {
+      parts.append(String(localized: "Action available: \(primaryAction.title)"))
+    }
+    if allowsDismiss { parts.append(String(localized: "Dismiss available")) }
+    if allowsSnooze { parts.append(String(localized: "Snooze available")) }
     return parts.joined(separator: ". ")
   }
 }
@@ -135,28 +137,41 @@ enum HomeAttentionRanking {
   ) -> String {
     guard let next else { return item.rankingReason }
     if item.priority != next.priority {
-      return
-        "\(item.rankingReason). Ranked above \(next.source.title) because it has \(item.priority.title.lowercased()) priority."
+      return String(
+        localized:
+          "\(item.rankingReason). Ranked above \(next.source.title) because it has \(item.priority.title.lowercased()) priority."
+      )
     }
     if let itemDue = item.dueAt, let nextDue = next.dueAt, itemDue != nextDue {
-      return "\(item.rankingReason). Ranked above \(next.source.title) because it is due sooner."
+      return String(
+        localized:
+          "\(item.rankingReason). Ranked above \(next.source.title) because it is due sooner.")
     }
     if item.dueAt != nil, next.dueAt == nil {
-      return "\(item.rankingReason). Ranked above \(next.source.title) because it has a deadline."
+      return String(
+        localized:
+          "\(item.rankingReason). Ranked above \(next.source.title) because it has a deadline.")
     }
     if item.source.tieBreakRank != next.source.tieBreakRank {
-      return
-        "\(item.rankingReason). Equal-priority items use a stable source order, which places \(item.source.title) before \(next.source.title)."
+      return String(
+        localized:
+          "\(item.rankingReason). Equal-priority items use a stable source order, which places \(item.source.title) before \(next.source.title)."
+      )
     }
     if item.stableID != next.stableID {
-      return
-        "\(item.rankingReason). Equal-priority \(item.source.title) items use their stable item identifier."
+      return String(
+        localized:
+          "\(item.rankingReason). Equal-priority \(item.source.title) items use their stable item identifier."
+      )
     }
     if item.id != next.id {
-      return
-        "\(item.rankingReason). Equal-priority occurrences use their occurrence identifier as the final tie-break."
+      return String(
+        localized:
+          "\(item.rankingReason). Equal-priority occurrences use their occurrence identifier as the final tie-break."
+      )
     }
-    return "\(item.rankingReason). This item has the same ranking keys as the next item."
+    return String(
+      localized: "\(item.rankingReason). This item has the same ranking keys as the next item.")
   }
 
   private static func comesBefore(_ lhs: HomeAttentionItem, _ rhs: HomeAttentionItem) -> Bool {
@@ -255,7 +270,8 @@ enum HomeAttentionBuilder {
       id: "service:\(source.rawValue):\(id)", stableID: id, source: source, title: title,
       detail: detail, symbol: source == .calendar ? "calendar.badge.exclamationmark" : "checklist",
       accentHex: EventAccent.warning, state: state, priority: .high,
-      rankingReason: "This source cannot provide its Home items", dueAt: nil, expiresAt: nil,
+      rankingReason: String(localized: "This source cannot provide its Home items"), dueAt: nil,
+      expiresAt: nil,
       progress: nil, primaryAction: action, allowsDismiss: true, allowsSnooze: false)
   }
 
@@ -267,31 +283,35 @@ enum HomeAttentionBuilder {
     let reason: String
     if event.isAllDay {
       priority = .low
-      state = "All day"
-      reason = "The event is scheduled for today"
+      state = String(localized: "All day")
+      reason = String(localized: "The event is scheduled for today")
     } else if seconds <= 0 {
       priority = .urgent
-      state = "In progress"
-      reason = "The event is happening now"
+      state = String(localized: "In progress")
+      reason = String(localized: "The event is happening now")
     } else if seconds <= 15 * 60 {
       priority = .urgent
-      state = "Starts in \(CalendarLogic.countdownText(to: event.start, now: now))"
-      reason = "The event starts within 15 minutes"
+      state = String(
+        localized: "Starts in \(CalendarLogic.countdownText(to: event.start, now: now))")
+      reason = String(localized: "The event starts within 15 minutes")
     } else if seconds <= 60 * 60 {
       priority = .high
-      state = "Starts in \(CalendarLogic.countdownText(to: event.start, now: now))"
-      reason = "The event starts within an hour"
+      state = String(
+        localized: "Starts in \(CalendarLogic.countdownText(to: event.start, now: now))")
+      reason = String(localized: "The event starts within an hour")
     } else {
       priority = .normal
-      state = "Upcoming"
-      reason = "This is the next scheduled work"
+      state = String(localized: "Upcoming")
+      reason = String(localized: "This is the next scheduled work")
     }
     let action =
       event.joinURL.flatMap(CalendarMeetingLinkPolicy.candidate).map {
-        HomeAttentionAction(title: "Join", symbol: "video.fill", kind: .openMeetingLink($0))
+        HomeAttentionAction(
+          title: String(localized: "Join"), symbol: "video.fill", kind: .openMeetingLink($0))
       }
       ?? HomeAttentionAction(
-        title: "Open Calendar", symbol: "calendar", kind: .openActivity("calendar"))
+        title: String(localized: "Open Calendar"), symbol: "calendar",
+        kind: .openActivity("calendar"))
     return HomeAttentionItem(
       id: "calendar:\(event.id)", stableID: event.id, source: .calendar,
       title: event.title, detail: event.start.formatted(date: .omitted, time: .shortened),
@@ -304,18 +324,24 @@ enum HomeAttentionBuilder {
     let overdue = RemindersLogic.isOverdue(reminder, now: now)
     let dueToday = reminder.dueDate.map { Calendar.current.isDate($0, inSameDayAs: now) } ?? false
     let priority: HomeAttentionPriority = overdue ? .urgent : (dueToday ? .high : .normal)
-    let state = overdue ? "Overdue" : (dueToday ? "Due today" : "Incomplete")
+    let state =
+      overdue
+      ? String(localized: "Overdue")
+      : (dueToday ? String(localized: "Due today") : String(localized: "Incomplete"))
     let reason =
       overdue
-      ? "The reminder is overdue"
-      : (dueToday ? "The reminder is due today" : "The reminder is incomplete")
+      ? String(localized: "The reminder is overdue")
+      : (dueToday
+        ? String(localized: "The reminder is due today")
+        : String(localized: "The reminder is incomplete"))
     return HomeAttentionItem(
       id: "reminder:\(reminder.id)", stableID: reminder.id, source: .reminders,
       title: reminder.title, detail: nil, symbol: "checklist", accentHex: reminder.listColorHex,
       state: state, priority: priority, rankingReason: reason, dueAt: reminder.dueDate,
       expiresAt: nil, progress: nil,
       primaryAction: HomeAttentionAction(
-        title: "Complete", symbol: "checkmark", kind: .completeReminder(reminder.id)),
+        title: String(localized: "Complete"), symbol: "checkmark",
+        kind: .completeReminder(reminder.id)),
       allowsDismiss: true, allowsSnooze: true)
   }
 
@@ -325,26 +351,29 @@ enum HomeAttentionBuilder {
     let state: String
     if timer.finished {
       priority = .urgent
-      reason = "The timer finished"
-      state = "Done"
+      reason = String(localized: "The timer finished")
+      state = String(localized: "Done")
     } else if timer.remaining <= 60 {
       priority = .critical
-      reason = "The timer has less than one minute remaining"
-      state = timer.isPaused ? "Paused" : "Ends soon"
+      reason = String(localized: "The timer has less than one minute remaining")
+      state = timer.isPaused ? String(localized: "Paused") : String(localized: "Ends soon")
     } else if timer.remaining <= 5 * 60 {
       priority = .urgent
-      reason = "The timer has less than five minutes remaining"
-      state = timer.isPaused ? "Paused" : "Running"
+      reason = String(localized: "The timer has less than five minutes remaining")
+      state = timer.isPaused ? String(localized: "Paused") : String(localized: "Running")
     } else {
       priority = .high
-      reason = timer.isPaused ? "The timer is paused" : "A countdown is running"
-      state = timer.isPaused ? "Paused" : "Running"
+      reason =
+        timer.isPaused
+        ? String(localized: "The timer is paused") : String(localized: "A countdown is running")
+      state = timer.isPaused ? String(localized: "Paused") : String(localized: "Running")
     }
     let action =
       timer.finished
-      ? HomeAttentionAction(title: "Dismiss", symbol: "xmark", kind: .dismissTimer)
+      ? HomeAttentionAction(
+        title: String(localized: "Dismiss"), symbol: "xmark", kind: .dismissTimer)
       : HomeAttentionAction(
-        title: timer.isPaused ? "Resume" : "Pause",
+        title: timer.isPaused ? String(localized: "Resume") : String(localized: "Pause"),
         symbol: timer.isPaused ? "play.fill" : "pause.fill", kind: .toggleTimer)
     return HomeAttentionItem(
       id: "timer:\(timer.occurrenceID)", stableID: timer.occurrenceID, source: .timer,
@@ -360,19 +389,19 @@ enum HomeAttentionBuilder {
     switch agent.phase {
     case .needsInput, .needsApproval:
       priority = .critical
-      reason = "The agent needs your response"
+      reason = String(localized: "The agent needs your response")
     case .failed:
       priority = .critical
-      reason = "The agent failed"
+      reason = String(localized: "The agent failed")
     case .working:
       priority = .high
-      reason = "The agent is working"
+      reason = String(localized: "The agent is working")
     case .finished:
       priority = .normal
-      reason = "The agent finished recently"
+      reason = String(localized: "The agent finished recently")
     case .monitoring:
       priority = .low
-      reason = "The agent is monitoring"
+      reason = String(localized: "The agent is monitoring")
     }
     return HomeAttentionItem(
       id: "t3:\(agent.id):\(agent.phase.rawValue)", stableID: agent.id, source: .t3Code,
@@ -380,7 +409,8 @@ enum HomeAttentionBuilder {
       state: agent.phase.label, priority: priority, rankingReason: reason, dueAt: nil,
       expiresAt: nil, progress: nil,
       primaryAction: HomeAttentionAction(
-        title: "Open T3 Code", symbol: "terminal.fill", kind: .openActivity("t3Code")),
+        title: String(localized: "Open T3 Code"), symbol: "terminal.fill",
+        kind: .openActivity("t3Code")),
       allowsDismiss: true, allowsSnooze: true)
   }
 
@@ -389,27 +419,27 @@ enum HomeAttentionBuilder {
     let reason: String
     if item.state == .failed {
       priority = .critical
-      reason = "The provider reported a failure"
+      reason = String(localized: "The provider reported a failure")
     } else if item.state == .needsAction {
       priority = .critical
-      reason = "The provider needs your response"
+      reason = String(localized: "The provider needs your response")
     } else if item.state == .stale {
       priority = .high
-      reason = "The provider stopped reporting"
+      reason = String(localized: "The provider stopped reporting")
     } else {
       switch item.priority {
       case .critical:
         priority = .critical
-        reason = "The provider marked this critical"
+        reason = String(localized: "The provider marked this critical")
       case .high:
         priority = .high
-        reason = "The provider marked this high priority"
+        reason = String(localized: "The provider marked this high priority")
       case .normal:
         priority = .normal
-        reason = "The provider has an active update"
+        reason = String(localized: "The provider has an active update")
       case .low:
         priority = .low
-        reason = "The provider has a background update"
+        reason = String(localized: "The provider has a background update")
       }
     }
     let action =
@@ -419,7 +449,8 @@ enum HomeAttentionBuilder {
           kind: .openPulseAction(itemID: item.id, actionID: $0.id))
       }
       ?? HomeAttentionAction(
-        title: "Open Pulse", symbol: "waveform.path.ecg", kind: .openActivity("pulse"))
+        title: String(localized: "Open Pulse"), symbol: "waveform.path.ecg",
+        kind: .openActivity("pulse"))
     let stableID = item.id.stableIdentifier
     return HomeAttentionItem(
       id: "pulse:\(stableID):\(item.updatedAt.timeIntervalSinceReferenceDate)",
@@ -431,13 +462,13 @@ enum HomeAttentionBuilder {
 
   private static func pulseStateTitle(_ state: PulseState) -> String {
     switch state {
-    case .active: "Active"
-    case .progress: "In progress"
-    case .needsAction: "Needs action"
-    case .succeeded: "Succeeded"
-    case .failed: "Failed"
-    case .cancelled: "Cancelled"
-    case .stale: "Stale"
+    case .active: String(localized: "Active")
+    case .progress: String(localized: "In progress")
+    case .needsAction: String(localized: "Needs action")
+    case .succeeded: String(localized: "Succeeded")
+    case .failed: String(localized: "Failed")
+    case .cancelled: String(localized: "Cancelled")
+    case .stale: String(localized: "Stale")
     }
   }
 
@@ -446,13 +477,17 @@ enum HomeAttentionBuilder {
     let critical = state.percent <= 10
     return HomeAttentionItem(
       id: "battery:low:\(critical ? 10 : 20)", stableID: "internal", source: .battery,
-      title: "Low battery", detail: "\(state.percent)% remaining",
+      title: String(localized: "Low battery"),
+      detail: String(localized: "\(state.percent)% remaining"),
       symbol: BatteryActivity.batterySymbol(for: state.percent), accentHex: EventAccent.danger,
-      state: critical ? "Charge now" : "Running low", priority: critical ? .critical : .urgent,
-      rankingReason: critical ? "Battery is at or below 10%" : "Battery is at or below 20%",
+      state: critical ? String(localized: "Charge now") : String(localized: "Running low"),
+      priority: critical ? .critical : .urgent,
+      rankingReason: critical
+        ? String(localized: "Battery is at or below 10%")
+        : String(localized: "Battery is at or below 20%"),
       dueAt: nil, expiresAt: nil, progress: Double(state.percent) / 100,
       primaryAction: HomeAttentionAction(
-        title: "Open Battery", symbol: "battery.100percent.bolt",
+        title: String(localized: "Open Battery"), symbol: "battery.100percent.bolt",
         kind: .openActivity("battery")),
       allowsDismiss: true, allowsSnooze: true)
   }
@@ -460,12 +495,17 @@ enum HomeAttentionBuilder {
   private static func transferItem(count: Int) -> HomeAttentionItem {
     HomeAttentionItem(
       id: "transfer:shelf-import", stableID: "shelf-import", source: .transfer,
-      title: count == 1 ? "Adding one Shelf item" : "Adding \(count) Shelf items",
-      detail: nil, symbol: "arrow.down.doc", accentHex: nil, state: "Copying",
-      priority: .high, rankingReason: "A file transfer is still running", dueAt: nil,
+      title: count == 1
+        ? String(localized: "Adding one Shelf item")
+        : String(localized: "Adding \(count) Shelf items"),
+      detail: nil, symbol: "arrow.down.doc", accentHex: nil,
+      state: String(localized: "Copying"),
+      priority: .high, rankingReason: String(localized: "A file transfer is still running"),
+      dueAt: nil,
       expiresAt: nil, progress: nil,
       primaryAction: HomeAttentionAction(
-        title: "Open Shelf", symbol: "tray.full.fill", kind: .openActivity("shelf")),
+        title: String(localized: "Open Shelf"), symbol: "tray.full.fill",
+        kind: .openActivity("shelf")),
       allowsDismiss: false, allowsSnooze: false)
   }
 }

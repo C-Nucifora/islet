@@ -154,10 +154,10 @@ enum CommandPaletteResultKind: Int, CaseIterable, Sendable {
 
   var title: String {
     switch self {
-    case .action: "Actions"
-    case .activity: "Activities"
-    case .pulse: "Pulse"
-    case .setting: "Settings"
+    case .action: String(localized: "Actions")
+    case .activity: String(localized: "Activities")
+    case .pulse: String(localized: "Pulse")
+    case .setting: String(localized: "Settings")
     }
   }
 }
@@ -265,8 +265,9 @@ enum CommandPaletteCatalog {
   private static var activityResults: [CommandPaletteResult] {
     ActivityCatalog.orderable.map { activity in
       CommandPaletteResult(
-        id: "activity:\(activity.id)", title: "Open \(activity.name)",
-        detail: "Show the \(activity.name) activity in Islet", symbol: activity.icon,
+        id: "activity:\(activity.id)", title: String(localized: "Open \(activity.name)"),
+        detail: String(localized: "Show the \(activity.name) activity in Islet"),
+        symbol: activity.icon,
         kind: .activity, searchableContent: [activity.id, activity.name], opensIsletWindow: true,
         isAvailable: { ActivityCenter.shared.isAvailableInExpandedSwitcher(activity.id) },
         perform: { openActivity(activity.id) })
@@ -278,7 +279,8 @@ enum CommandPaletteCatalog {
       var results = [
         CommandPaletteResult(
           id: "pulse:\(item.source):\(item.id)", title: item.title,
-          detail: item.subtitle ?? "Pulse from \(item.source)", symbol: item.symbol,
+          detail: item.subtitle ?? String(localized: "Pulse from \(item.source)"),
+          symbol: item.symbol,
           kind: .pulse,
           searchableContent: [item.source, item.subtitle ?? "", item.state.rawValue],
           opensIsletWindow: true,
@@ -288,7 +290,8 @@ enum CommandPaletteCatalog {
       results += item.actions.map { action in
         CommandPaletteResult(
           id: "pulse-action:\(item.source):\(item.id):\(action.id)", title: action.title,
-          detail: "\(item.title) · \(item.source)", symbol: "arrow.up.right.square",
+          detail: String(localized: "\(item.title) · \(item.source)"),
+          symbol: "arrow.up.right.square",
           kind: .pulse, searchableContent: [item.title, item.subtitle ?? "", item.source],
           isAvailable: {
             PulseCenter.shared.items.contains { current in
@@ -306,7 +309,7 @@ enum CommandPaletteCatalog {
       page.paletteControls.enumerated().map { index, control in
         CommandPaletteResult(
           id: "setting:\(page.rawValue):\(index)", title: control,
-          detail: "Settings · \(page.title)", symbol: page.icon, kind: .setting,
+          detail: String(localized: "Settings · \(page.title)"), symbol: page.icon, kind: .setting,
           searchableContent: [page.title, page.subtitle], opensIsletWindow: true,
           isAvailable: { true },
           perform: { SettingsOpener.open(page: page) })
@@ -448,7 +451,7 @@ enum QuickActionsOpener {
       window.contentViewController = hosting
     } else {
       window = CommandPalettePanel(contentViewController: hosting)
-      window.title = "Islet Command Palette"
+      window.title = String(localized: "Islet Command Palette")
       window.styleMask = [.titled, .closable, .resizable, .utilityWindow]
       window.setContentSize(NSSize(width: 620, height: 520))
       window.contentMinSize = NSSize(width: 480, height: 340)

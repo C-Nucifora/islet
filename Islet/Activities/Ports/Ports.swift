@@ -179,14 +179,14 @@ enum PortsReader {
 
   private static func linkSpeedString(_ speed: Int) -> String {
     switch UInt64(bitPattern: Int64(speed)) {
-    case UInt64(kIOUSBLinkSpeedLow): "1.5 Mbps"
-    case UInt64(kIOUSBLinkSpeedFull): "12 Mbps"
-    case UInt64(kIOUSBLinkSpeedHigh): "480 Mbps"
-    case UInt64(kIOUSBLinkSpeed5Gbps): "5 Gbps"
-    case UInt64(kIOUSBLinkSpeed10Gbps): "10 Gbps"
-    case UInt64(kIOUSBLinkSpeed20Gbps): "20 Gbps"
-    case UInt64(kIOUSBLinkSpeed40Gbps): "40 Gbps"
-    case UInt64(kIOUSBLinkSpeed80Gbps): "80 Gbps"
+    case UInt64(kIOUSBLinkSpeedLow): String(localized: "1.5 Mbps")
+    case UInt64(kIOUSBLinkSpeedFull): String(localized: "12 Mbps")
+    case UInt64(kIOUSBLinkSpeedHigh): String(localized: "480 Mbps")
+    case UInt64(kIOUSBLinkSpeed5Gbps): String(localized: "5 Gbps")
+    case UInt64(kIOUSBLinkSpeed10Gbps): String(localized: "10 Gbps")
+    case UInt64(kIOUSBLinkSpeed20Gbps): String(localized: "20 Gbps")
+    case UInt64(kIOUSBLinkSpeed40Gbps): String(localized: "40 Gbps")
+    case UInt64(kIOUSBLinkSpeed80Gbps): String(localized: "80 Gbps")
     default: "Unknown (\(speed))"
     }
   }

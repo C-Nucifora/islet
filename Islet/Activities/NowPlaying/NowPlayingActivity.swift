@@ -505,7 +505,8 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     let subtitle = [state.artist, appName].filter { !$0.isEmpty }.joined(separator: " · ")
     var announcement =
       state.artist.isEmpty
-      ? "Now playing \(state.title)" : "Now playing \(state.title) by \(state.artist)"
+      ? String(localized: "Now playing \(state.title)")
+      : String(localized: "Now playing \(state.title) by \(state.artist)")
     if !appName.isEmpty, appName != state.sourceBundleIdentifier {
       announcement += " in \(appName)"
     }
@@ -530,7 +531,8 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
 
   var accessibilityPrimaryActionName: String? {
     guard let playback, !playback.isAdvertisement else { return nil }
-    return playback.isPlaying ? "Playback paused" : "Playback started"
+    return playback.isPlaying
+      ? String(localized: "Playback paused") : String(localized: "Playback started")
   }
 
   func performAccessibilityPrimaryAction() async -> Bool {

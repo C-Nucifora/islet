@@ -359,9 +359,9 @@ final class TimerActivity: NotchActivity, ObservableObject {
     )
 
   var accessibilityPrimaryActionName: String? {
-    if finished { return lastDuration == nil ? nil : "Timer repeated" }
-    if isRunning { return "Timer paused" }
-    if isPaused { return "Timer resumed" }
+    if finished { return lastDuration == nil ? nil : String(localized: "Timer repeated") }
+    if isRunning { return String(localized: "Timer paused") }
+    if isPaused { return String(localized: "Timer resumed") }
     return nil
   }
 
@@ -419,11 +419,18 @@ struct TimerCountdownText: View {
         .foregroundStyle(
           appTheme.color(for: TimerPresentation.tintRole(finished: activity.finished))
         )
-        .accessibilityLabel(activity.label.map { "\($0) timer" } ?? "Timer")
+        .accessibilityLabel(
+          activity.label.map { label in String(localized: "\(label) timer") }
+            ?? String(localized: "Timer")
+        )
         .accessibilityValue(
           activity.finished
-            ? "Done"
-            : "\(TimerFormat.accessible(activity.remainingNow)) remaining\(activity.isPaused ? ", paused" : "")"
+            ? String(localized: "Done")
+            : activity.isPaused
+              ? String(
+                localized:
+                  "\(TimerFormat.accessible(activity.remainingNow)) remaining, paused")
+              : String(localized: "\(TimerFormat.accessible(activity.remainingNow)) remaining")
         )
     }
   }
@@ -455,11 +462,18 @@ struct TimerExpandedView: View {
         }
         .frame(width: 96, height: 96)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(activity.label.map { "\($0) timer" } ?? "Timer")
+        .accessibilityLabel(
+          activity.label.map { label in String(localized: "\(label) timer") }
+            ?? String(localized: "Timer")
+        )
         .accessibilityValue(
           activity.finished
-            ? "Done"
-            : "\(TimerFormat.accessible(activity.remainingNow)) remaining\(activity.isPaused ? ", paused" : "")"
+            ? String(localized: "Done")
+            : activity.isPaused
+              ? String(
+                localized:
+                  "\(TimerFormat.accessible(activity.remainingNow)) remaining, paused")
+              : String(localized: "\(TimerFormat.accessible(activity.remainingNow)) remaining")
         )
       }
 

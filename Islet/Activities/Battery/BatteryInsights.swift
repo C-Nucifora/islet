@@ -79,18 +79,20 @@ enum BatteryInsightStatus: Equatable, Sendable {
   var shortText: String? {
     switch self {
     case .learningBaseline(let count):
-      return count == 0 ? "Learning normal battery use" : "Learning from \(count) battery samples"
+      return count == 0
+        ? String(localized: "Learning normal battery use")
+        : String(localized: "Learning from \(count) battery samples")
     case .normal: return nil
     case .unusualDrain(let current, let baseline):
       return String(format: "Unusual drain %.1f W, usually %.1f W", current, baseline)
     case .workloadSpike:
-      return "Brief workload spike; waiting before warning"
+      return String(localized: "Brief workload spike; waiting before warning")
     case .chargerDischarging(let watts):
       return String(format: "Charger shortfall; battery supplying %.1f W", watts)
     case .slowCharging(let watts):
       return String(format: "Charging slowly at %.1f W", watts)
     case .telemetryUnavailable(let reason):
-      return "Warning analysis unavailable: \(reason)"
+      return String(localized: "Warning analysis unavailable: \(reason)")
     }
   }
 }
@@ -101,12 +103,12 @@ struct BatteryCapacityTrend: Equatable, Sendable {
 
   var wording: String {
     if changeMAh <= -100 {
-      return "Reported capacity is \(-changeMAh) mAh lower over \(days) days"
+      return String(localized: "Reported capacity is \(-changeMAh) mAh lower over \(days) days")
     }
     if changeMAh >= 100 {
-      return "Reported capacity is \(changeMAh) mAh higher over \(days) days"
+      return String(localized: "Reported capacity is \(changeMAh) mAh higher over \(days) days")
     }
-    return "Reported capacity has varied by less than 100 mAh over \(days) days"
+    return String(localized: "Reported capacity has varied by less than 100 mAh over \(days) days")
   }
 
   var explanation: String {

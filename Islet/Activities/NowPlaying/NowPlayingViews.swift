@@ -398,8 +398,8 @@ struct ExpandedPlayerView: View {
 
   private func repeatAccessibilityValue(_ mode: Int) -> String {
     switch mode {
-    case 1: "Repeat one"
-    case 2: "Repeat all"
+    case 1: String(localized: "Repeat one")
+    case 2: String(localized: "Repeat all")
     default: "Off"
     }
   }

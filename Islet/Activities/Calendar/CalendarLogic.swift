@@ -61,12 +61,14 @@ enum CalendarCreationError: Error, Equatable, Sendable {
 
   var message: String {
     switch self {
-    case .permissionRequired: "Calendar access is required to add an event."
-    case .calendarUnavailable: "That calendar is no longer available for new events."
-    case .titleRequired: "Enter an event title."
-    case .invalidTimeRange: "The event must end after it starts."
-    case .invalidConferenceURL: "Enter a secure conference link, such as https://meet.example.com."
-    case .saveFailed(let detail): "The event could not be saved. \(detail)"
+    case .permissionRequired: String(localized: "Calendar access is required to add an event.")
+    case .calendarUnavailable:
+      String(localized: "That calendar is no longer available for new events.")
+    case .titleRequired: String(localized: "Enter an event title.")
+    case .invalidTimeRange: String(localized: "The event must end after it starts.")
+    case .invalidConferenceURL:
+      String(localized: "Enter a secure conference link, such as https://meet.example.com.")
+    case .saveFailed(let detail): String(localized: "The event could not be saved. \(detail)")
     }
   }
 }

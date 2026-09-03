@@ -1113,7 +1113,7 @@ struct SettingsView: View {
   }
 
   private var unavailablePreferredDisplayName: String {
-    preferredDisplayName.isEmpty ? "Preferred display" : preferredDisplayName
+    preferredDisplayName.isEmpty ? String(localized: "Preferred display") : preferredDisplayName
   }
 
   private var updatesForm: some View {
@@ -1282,7 +1282,9 @@ struct SettingsView: View {
       Section("Command palette") {
         LabeledContent("Global shortcut") {
           Button(
-            isRecordingShortcut ? "Press shortcut…" : commandPaletteShortcut?.displayName ?? "Off"
+            isRecordingShortcut
+              ? String(localized: "Press shortcut…")
+              : commandPaletteShortcut?.displayName ?? String(localized: "Off")
           ) {
             shortcutValidationMessage = nil
             isRecordingShortcut = true
@@ -1421,9 +1423,12 @@ struct SettingsView: View {
                   Text(bundleID).font(.caption.monospaced()).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text(excludedAudioOnlySourceBundleIDs.contains(bundleID) ? "Excluded" : "Included")
-                  .font(.caption)
-                  .foregroundStyle(.secondary)
+                Text(
+                  excludedAudioOnlySourceBundleIDs.contains(bundleID)
+                    ? String(localized: "Excluded") : String(localized: "Included")
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
               }
             }
           }
@@ -1832,7 +1837,10 @@ struct SettingsView: View {
               "Closed-display mode needs a one-time administrator-approved helper. It changes only the system SleepDisabled setting while an Islet session is active."
             )
             .font(.caption).foregroundStyle(.secondary)
-            Button(keepAwake.isInstallingPowerProtect ? "Installing..." : "Install Power Protect") {
+            Button(
+              keepAwake.isInstallingPowerProtect
+                ? String(localized: "Installing...") : String(localized: "Install Power Protect")
+            ) {
               Task { await keepAwake.installPowerProtect() }
             }
             .disabled(keepAwake.isInstallingPowerProtect)
@@ -2184,7 +2192,9 @@ struct SettingsView: View {
         LabeledContent("Retention period") {
           Picker("Retention period", selection: pulseHistoryRetentionBinding) {
             ForEach(PulseHistoryConfiguration.allowedRetentionDays, id: \.self) { days in
-              Text(days == 1 ? "1 day" : "\(days) days").tag(days)
+              Text(
+                days == 1 ? String(localized: "1 day") : String(localized: "\(days) days")
+              ).tag(days)
             }
           }
           .labelsHidden()
@@ -2391,12 +2401,12 @@ struct SettingsView: View {
 
   private var continuityStatusText: String {
     switch continuity.availability {
-    case .needsAccessibility: "Needs Accessibility"
-    case .controlCenterUnavailable: "Control Centre unavailable"
-    case .incompatibleSchema: "Unsupported AX layout"
-    case .systemDisabled: "Off in macOS"
-    case .waiting: "Waiting"
-    case .active: "Active"
+    case .needsAccessibility: String(localized: "Needs Accessibility")
+    case .controlCenterUnavailable: String(localized: "Control Centre unavailable")
+    case .incompatibleSchema: String(localized: "Unsupported AX layout")
+    case .systemDisabled: String(localized: "Off in macOS")
+    case .waiting: String(localized: "Waiting")
+    case .active: String(localized: "Active")
     }
   }
 
@@ -2410,7 +2420,7 @@ struct SettingsView: View {
   }
 
   private var continuityLastSuccessfulReadText: String {
-    guard let date = continuity.lastSuccessfulRead else { return "Never" }
+    guard let date = continuity.lastSuccessfulRead else { return String(localized: "Never") }
     return date.formatted(date: .abbreviated, time: .standard)
   }
 
@@ -2464,20 +2474,24 @@ struct SettingsView: View {
   }
 
   private var clipboardCaptureStatus: String {
-    guard isActivityEnabled("clipboard") else { return "Stopped with the activity" }
-    return clipboard.pauseReason?.summary ?? "Capturing new copies"
+    guard isActivityEnabled("clipboard") else {
+      return String(localized: "Stopped with the activity")
+    }
+    return clipboard.pauseReason?.summary ?? String(localized: "Capturing new copies")
   }
 
   private func addClipboardApplication(_ rawBundleIdentifier: String) {
     guard let bundleIdentifier = ClipboardIdentifierPolicy.bundleIdentifier(rawBundleIdentifier)
     else {
-      clipboardPrivacyError = "Enter a valid application bundle identifier up to 255 bytes."
+      clipboardPrivacyError = String(
+        localized: "Enter a valid application bundle identifier up to 255 bytes.")
       return
     }
     let updated = ClipboardIdentifierPolicy.bundleIdentifiers(
       clipboardExcludedBundleIdentifiers + [bundleIdentifier])
     guard updated.contains(bundleIdentifier) else {
-      clipboardPrivacyError = "The exclusion list is limited to 128 applications."
+      clipboardPrivacyError = String(
+        localized: "The exclusion list is limited to 128 applications.")
       return
     }
     clipboardExcludedBundleIdentifiers = updated
@@ -2491,11 +2505,12 @@ struct SettingsView: View {
     panel.allowsMultipleSelection = false
     panel.canChooseDirectories = false
     panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
-    panel.title = "Exclude an application from clipboard history"
-    panel.prompt = "Exclude"
+    panel.title = String(localized: "Exclude an application from clipboard history")
+    panel.prompt = String(localized: "Exclude")
     guard panel.runModal() == .OK, let url = panel.url else { return }
     guard let bundleIdentifier = Bundle(url: url)?.bundleIdentifier else {
-      clipboardPrivacyError = "That application does not declare a bundle identifier."
+      clipboardPrivacyError = String(
+        localized: "That application does not declare a bundle identifier.")
       return
     }
     addClipboardApplication(bundleIdentifier)
@@ -2503,13 +2518,14 @@ struct SettingsView: View {
 
   private func addClipboardFocus(_ rawIdentifier: String) {
     guard let identifier = ClipboardIdentifierPolicy.focusIdentifier(rawIdentifier) else {
-      clipboardPrivacyError = "Enter a valid Focus name or identifier up to 128 bytes."
+      clipboardPrivacyError = String(
+        localized: "Enter a valid Focus name or identifier up to 128 bytes.")
       return
     }
     let updated = ClipboardIdentifierPolicy.focusIdentifiers(
       clipboardPausedFocusIdentifiers + [identifier])
     guard updated.contains(identifier) else {
-      clipboardPrivacyError = "The Focus rule list is limited to 64 entries."
+      clipboardPrivacyError = String(localized: "The Focus rule list is limited to 64 entries.")
       return
     }
     clipboardPausedFocusIdentifiers = updated
@@ -2621,8 +2637,8 @@ struct SettingsView: View {
     panel.allowedContentTypes = [.json]
     panel.canCreateDirectories = true
     panel.nameFieldStringValue = "Islet Pulse History.json"
-    panel.title = "Export Pulse history"
-    panel.prompt = "Export"
+    panel.title = String(localized: "Export Pulse history")
+    panel.prompt = String(localized: "Export")
     guard panel.runModal() == .OK, let url = panel.url else { return }
 
     do {
@@ -3119,7 +3135,7 @@ private struct PulseCredentialRow: View {
         }
         Spacer()
         Label(
-          credential.isRevoked ? "Revoked" : "Active",
+          credential.isRevoked ? String(localized: "Revoked") : String(localized: "Active"),
           systemImage: credential.isRevoked ? "xmark.shield.fill" : "checkmark.shield.fill"
         )
         .font(.caption)

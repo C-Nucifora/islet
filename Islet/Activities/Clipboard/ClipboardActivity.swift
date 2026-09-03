@@ -1251,18 +1251,18 @@ struct ClipboardView: View {
       afterRemoving: item.id, from: model.items)
     model.remove(item)
     focusedItemID = replacementID
-    A11y.announce("Deleted clipboard item")
+    A11y.announce(String(localized: "Deleted clipboard item"))
   }
 
   private func copyLabel(for item: ClipboardItem) -> String {
     switch item.kind {
     case .text:
-      return "Copy text clipboard item"
+      return String(localized: "Copy text clipboard item")
     case .fileURLs:
-      let detail = item.detail ?? "files"
-      return "Copy \(detail) clipboard item"
+      let detail = item.detail ?? String(localized: "files")
+      return String(localized: "Copy \(detail) clipboard item")
     case .image:
-      return "Copy image clipboard item"
+      return String(localized: "Copy image clipboard item")
     }
   }
 }

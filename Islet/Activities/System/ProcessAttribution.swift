@@ -11,10 +11,10 @@ enum ProcessMetricKind: String, CaseIterable, Sendable {
 
   var displayName: String {
     switch self {
-    case .cpu: "CPU"
-    case .memory: "Memory"
-    case .disk: "Disk"
-    case .network: "Network"
+    case .cpu: String(localized: "CPU")
+    case .memory: String(localized: "Memory")
+    case .disk: String(localized: "Disk")
+    case .network: String(localized: "Network")
     }
   }
 }
@@ -332,7 +332,7 @@ enum ProcessUsageReader {
         decoding: buffer.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
     if let path { return URL(fileURLWithPath: path).lastPathComponent }
-    return "Process \(pid)"
+    return String(localized: "Process \(pid)")
   }
 
   private static func processPath(_ pid: pid_t) -> String? {

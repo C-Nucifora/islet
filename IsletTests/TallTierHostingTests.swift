@@ -164,14 +164,15 @@ final class TallTierHostingTests: XCTestCase {
     panel.orderFrontRegardless()
     defer { panel.close() }
     pump(until: { !(host.accessibilityChildren()?.isEmpty ?? true) })
-    let expectedLabel =
+    let expectedLabel = Pseudolocalization.expand(
       "System thermal pressure and battery sensor temperature are separate readings and do not map directly."
+    )
+    let accessibilityLabelSelector = NSSelectorFromString("accessibilityLabel")
     let labels = (host.accessibilityChildren() ?? []).compactMap { element -> String? in
-      if let view = element as? NSView { return view.accessibilityLabel() }
-      if let accessibilityElement = element as? NSAccessibilityElement {
-        return accessibilityElement.accessibilityLabel()
-      }
-      return nil
+      guard let object = element as? NSObject,
+        object.responds(to: accessibilityLabelSelector)
+      else { return nil }
+      return object.perform(accessibilityLabelSelector)?.takeUnretainedValue() as? String
     }
     XCTAssertTrue(labels.contains(expectedLabel), "Rendered accessibility labels: \(labels)")
     assertPseudolocalizedLayoutFits(

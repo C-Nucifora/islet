@@ -116,6 +116,14 @@ struct LocalizationTests {
     }
   }
 
+  @Test func pseudolocalizationPreservesCompletePrintfGrammar() {
+    let source = "Unsigned %u positional %2$08X precise %1$.*3$f object %@ escaped %%"
+    let expanded = Pseudolocalization.expand(source)
+    #expect(Self.formatArguments(in: expanded) == Self.formatArguments(in: source))
+    #expect(expanded.contains("%u"))
+    #expect(!expanded.contains("%û"))
+  }
+
   @Test func countStringsHaveEnglishPluralRules() throws {
     let strings = try #require(try Self.catalog()["strings"] as? [String: Any])
     let pluralKeys = [
@@ -140,7 +148,7 @@ struct LocalizationTests {
     let swiftFiles = try FileManager.default.subpathsOfDirectory(
       atPath: Self.repositoryRoot.appendingPathComponent("Islet").path
     ).filter { $0.hasSuffix(".swift") }
-    #expect(swiftFiles.count >= 132)
+    #expect(swiftFiles.count >= 172)
 
     let patterns = [
       #"String\(localized:\s*"([^"\\]*(?:\\.[^"\\]*)*)""#,
@@ -214,7 +222,8 @@ struct LocalizationTests {
   }
 
   private static func formatArguments(in value: String) -> [String] {
-    let pattern = #"%(?:\d+\$)?(?:lld|ld|d|@|[0-9.]*f)"#
+    let pattern =
+      #"%(?:\d+\$)?[-+ #0']*(?:(?:\*\d*\$?)|\d+)?(?:\.(?:(?:\*\d*\$?)|\d*))?(?:hh|ll|h|l|L|z|j|t|q)?[diouxXfFeEgGaAcCsSp@%]"#
     let regex = try! NSRegularExpression(pattern: pattern)
     let range = NSRange(value.startIndex..., in: value)
     return regex.matches(in: value, range: range).compactMap { match in

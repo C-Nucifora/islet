@@ -19,7 +19,8 @@ enum PowerProtectError: LocalizedError {
     case .notInstalled:
       "Install Power Protect, or keep Amphetamine Power Protect installed, before starting a closed-display session."
     case .commandFailed(let message):
-      message.isEmpty ? "Power Protect could not change the system sleep setting." : message
+      message.isEmpty
+        ? String(localized: "Power Protect could not change the system sleep setting.") : message
     }
   }
 }

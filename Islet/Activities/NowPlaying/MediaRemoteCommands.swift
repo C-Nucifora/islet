@@ -26,14 +26,14 @@ enum MediaCommand: Equatable, Sendable {
 
   var feedbackName: String {
     switch self {
-    case .toggleShuffle: "change shuffle"
-    case .skipBackward15: "skip back 15 seconds"
-    case .previous: "go to the previous track"
-    case .togglePlayPause: "change playback"
-    case .skipForward15: "skip forward 15 seconds"
-    case .next: "go to the next track"
-    case .cycleRepeat: "change repeat"
-    case .seek: "seek"
+    case .toggleShuffle: String(localized: "change shuffle")
+    case .skipBackward15: String(localized: "skip back 15 seconds")
+    case .previous: String(localized: "go to the previous track")
+    case .togglePlayPause: String(localized: "change playback")
+    case .skipForward15: String(localized: "skip forward 15 seconds")
+    case .next: String(localized: "go to the next track")
+    case .cycleRepeat: String(localized: "change repeat")
+    case .seek: String(localized: "seek")
     }
   }
 }
@@ -55,13 +55,13 @@ enum MediaControlFeedback {
     case .sent:
       return nil
     case .unconfirmed:
-      return "Couldn't confirm \(action): the player didn't report a result"
+      return String(localized: "Couldn't confirm \(action): the player didn't report a result")
     case .sourceNotControllable:
-      return "Can't \(action): this audio source has no media controls"
+      return String(localized: "Can't \(action): this audio source has no media controls")
     case .sourceTargetingUnavailable:
-      return "Can't \(action): Islet can't target this player safely"
+      return String(localized: "Can't \(action): Islet can't target this player safely")
     case .rejected:
-      return "Can't \(action): the player rejected it"
+      return String(localized: "Can't \(action): the player rejected it")
     }
   }
 
@@ -172,22 +172,23 @@ actor MediaCommandQueue {
 enum MediaControlPresentation {
   static func scopeLabel(appName: String, targeting: MediaCommandTargeting) -> String {
     switch targeting {
-    case .sourceScoped: "Controls \(appName)"
-    case .unavailable: "Controls unavailable for \(appName)"
+    case .sourceScoped: String(localized: "Controls \(appName)")
+    case .unavailable: String(localized: "Controls unavailable for \(appName)")
     }
   }
 
   static func help(action: String, appName: String, targeting: MediaCommandTargeting) -> String {
     switch targeting {
-    case .sourceScoped: "\(action) in \(appName)"
-    case .unavailable: "\(action) unavailable because Islet cannot target \(appName) safely"
+    case .sourceScoped: String(localized: "\(action) in \(appName)")
+    case .unavailable:
+      String(localized: "\(action) unavailable because Islet cannot target \(appName) safely")
     }
   }
 
   static func accessibilityLabel(action: String, targeting: MediaCommandTargeting) -> String {
     switch targeting {
     case .sourceScoped: action
-    case .unavailable: "\(action) unavailable"
+    case .unavailable: String(localized: "\(action) unavailable")
     }
   }
 }

@@ -39,7 +39,9 @@ struct T3ConnectionIndicatorView: View {
   }
 
   static func accessibilityLabel(for state: T3ConnectionState, isStale: Bool) -> String {
-    isStale ? "\(state.accessibilityLabel), showing the last update" : state.accessibilityLabel
+    isStale
+      ? String(localized: "\(state.accessibilityLabel), showing the last update")
+      : state.accessibilityLabel
   }
 
   private var color: Color {
@@ -116,77 +118,91 @@ struct T3ConnectAccountPresentation: Equatable {
     let canRetryCleanup: Bool
     switch state {
     case .signedOut:
-      statusText = "Not linked"
-      detailText = "Link an account to find T3 Code environments available through T3 Connect."
+      statusText = String(localized: "Not linked")
+      detailText = String(
+        localized: "Link an account to find T3 Code environments available through T3 Connect.")
       identity = nil
       lastSync = nil
       isBusy = false
-      actions = [.init(kind: .link, title: "Link T3 Connect account")]
+      actions = [.init(kind: .link, title: String(localized: "Link T3 Connect account"))]
       stateError = nil
       canRetryCleanup = true
     case .linking(let previous):
-      statusText = previous == nil ? "Linking account" : "Relinking account"
+      statusText =
+        previous == nil
+        ? String(localized: "Linking account") : String(localized: "Relinking account")
       detailText =
         previous == nil
-        ? "Waiting for browser…"
-        : "Waiting for browser… Your current account stays linked unless this attempt succeeds."
+        ? String(localized: "Waiting for browser…")
+        : String(
+          localized:
+            "Waiting for browser… Your current account stays linked unless this attempt succeeds.")
       identity = Self.normalizedIdentity(previous?.displayIdentity)
       lastSync = nil
       isBusy = true
-      actions = [.init(kind: .cancel, title: "Cancel")]
+      actions = [.init(kind: .cancel, title: String(localized: "Cancel"))]
       stateError = nil
       canRetryCleanup = false
     case .linked(let account, let sync):
-      statusText = "Linked"
+      statusText = String(localized: "Linked")
       detailText =
         !monitoringEnabled
-        ? "Monitoring is off. Your linked account remains saved."
+        ? String(localized: "Monitoring is off. Your linked account remains saved.")
         : !remotePollingActive
-          ? "Cloud polling is paused by Energy mode. Your linked account remains saved."
+          ? String(
+            localized: "Cloud polling is paused by Energy mode. Your linked account remains saved.")
           : sync == nil
-            ? "Waiting for the first environment sync."
-            : "T3 Connect is monitoring your available environments."
+            ? String(localized: "Waiting for the first environment sync.")
+            : String(localized: "T3 Connect is monitoring your available environments.")
       identity = Self.normalizedIdentity(account.displayIdentity)
       lastSync = sync
       isBusy = false
-      actions = [.init(kind: .signOut, title: "Sign out", isDestructive: true)]
+      actions = [
+        .init(kind: .signOut, title: String(localized: "Sign out"), isDestructive: true)
+      ]
       stateError = nil
       canRetryCleanup = false
     case .needsSignIn(let account, let error):
-      statusText = "Sign-in required"
+      statusText = String(localized: "Sign-in required")
       detailText =
         account == nil
-        ? "Remove the unreadable saved credentials before linking an account again."
-        : "Link the account again to restore T3 Connect access."
+        ? String(
+          localized: "Remove the unreadable saved credentials before linking an account again.")
+        : String(localized: "Link the account again to restore T3 Connect access.")
       identity = Self.normalizedIdentity(account?.displayIdentity)
       lastSync = nil
       isBusy = false
       actions =
         account == nil
         ? [
-          .init(kind: .retryLoad, title: "Try loading again"),
-          .init(kind: .signOut, title: "Clean up saved credentials", isDestructive: true),
+          .init(kind: .retryLoad, title: String(localized: "Try loading again")),
+          .init(
+            kind: .signOut, title: String(localized: "Clean up saved credentials"),
+            isDestructive: true),
         ]
         : [
-          .init(kind: .link, title: "Link again"),
-          .init(kind: .signOut, title: "Sign out", isDestructive: true),
+          .init(kind: .link, title: String(localized: "Link again")),
+          .init(kind: .signOut, title: String(localized: "Sign out"), isDestructive: true),
         ]
       stateError = error
       canRetryCleanup = false
     case .unavailable(let account, let error):
-      statusText = "T3 Connect unavailable"
+      statusText = String(localized: "T3 Connect unavailable")
       detailText =
         !monitoringEnabled
-        ? "Monitoring is off. Your linked account remains saved."
+        ? String(localized: "Monitoring is off. Your linked account remains saved.")
         : !remotePollingActive
-          ? "Cloud polling is paused by Energy mode. Your linked account remains saved."
-          : "Your last known environments stay visible while T3 Connect is unavailable."
+          ? String(
+            localized: "Cloud polling is paused by Energy mode. Your linked account remains saved.")
+          : String(
+            localized:
+              "Your last known environments stay visible while T3 Connect is unavailable.")
       identity = Self.normalizedIdentity(account.displayIdentity)
       lastSync = nil
       isBusy = false
       actions = [
-        .init(kind: .retry, title: "Retry"),
-        .init(kind: .signOut, title: "Sign out", isDestructive: true),
+        .init(kind: .retry, title: String(localized: "Retry")),
+        .init(kind: .signOut, title: String(localized: "Sign out"), isDestructive: true),
       ]
       stateError = error
       canRetryCleanup = false
@@ -201,7 +217,7 @@ struct T3ConnectAccountPresentation: Equatable {
     errorMessages = errors
 
     if cleanupError != nil {
-      actions = [.init(kind: .retryCleanup, title: "Retry cleanup")]
+      actions = [.init(kind: .retryCleanup, title: String(localized: "Retry cleanup"))]
     }
   }
 
@@ -230,16 +246,20 @@ struct T3EnvironmentRowPresentation: Equatable {
   let controls: [Control]
 
   var accessibilityLabel: String {
-    let freshness = isStale ? ", showing the last update" : ""
-    return "\(label), \(sourceText), \(stateAccessibilityText)\(freshness)"
+    return isStale
+      ? String(
+        localized:
+          "\(label), \(sourceText), \(stateAccessibilityText), showing the last update")
+      : String(localized: "\(label), \(sourceText), \(stateAccessibilityText)")
   }
 
   init(snapshot: T3EnvironmentSnapshot, remotePollingActive: Bool = true) {
     let isPaused = snapshot.source != .local && !remotePollingActive
     self.init(
       label: snapshot.label, source: snapshot.source,
-      stateText: isPaused ? "Paused" : snapshot.state.label, isPaused: isPaused,
-      stateAccessibilityText: isPaused ? "Paused" : snapshot.state.accessibilityLabel,
+      stateText: isPaused ? String(localized: "Paused") : snapshot.state.label, isPaused: isPaused,
+      stateAccessibilityText: isPaused
+        ? String(localized: "Paused") : snapshot.state.accessibilityLabel,
       isStale: snapshot.isStale)
   }
 
@@ -259,15 +279,15 @@ struct T3EnvironmentRowPresentation: Equatable {
     switch source {
     case .local:
       systemImage = "laptopcomputer"
-      sourceText = "This Mac"
+      sourceText = String(localized: "This Mac")
       controls = []
     case .connect:
       systemImage = "cloud.fill"
-      sourceText = "T3 Connect"
+      sourceText = String(localized: "T3 Connect")
       controls = []
     case .manual:
       systemImage = "network"
-      sourceText = "Manually paired"
+      sourceText = String(localized: "Manually paired")
       controls = [.enable, .remove]
     }
   }
@@ -285,12 +305,15 @@ struct T3EnvironmentRowPresentation: Equatable {
       label: manualLabel,
       source: .manual,
       stateText: !monitoringEnabled || !profileEnabled
-        ? "Off"
-        : isPaused ? "Paused" : (state?.label ?? "Connecting"),
+        ? String(localized: "Off")
+        : isPaused
+          ? String(localized: "Paused") : (state?.label ?? String(localized: "Connecting")),
       isPaused: isPaused,
       stateAccessibilityText: !monitoringEnabled || !profileEnabled
-        ? "Off"
-        : isPaused ? "Paused" : (state?.accessibilityLabel ?? "Connecting"),
+        ? String(localized: "Off")
+        : isPaused
+          ? String(localized: "Paused")
+          : (state?.accessibilityLabel ?? String(localized: "Connecting")),
       isStale: isStale)
   }
 }
@@ -700,10 +723,14 @@ struct T3SettingsSection: View {
             set: { pairingForm.pairingLink = $0 })
         )
         .focused($focusedField, equals: .pairingLink)
-        Button(pairingForm.isPairing ? "Pairing…" : "Add") { pair() }
-          .disabled(
-            pairingForm.pairingLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-              || pairingForm.isPairing || pairingIsBlockedRemoteHTTP)
+        Button(
+          pairingForm.isPairing ? String(localized: "Pairing…") : String(localized: "Add")
+        ) {
+          pair()
+        }
+        .disabled(
+          pairingForm.pairingLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || pairingForm.isPairing || pairingIsBlockedRemoteHTTP)
       }
       if pairingUsesPlainRemoteHTTP, pairingRemoteHTTPIsApproved {
         Toggle(

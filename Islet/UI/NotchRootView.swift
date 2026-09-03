@@ -333,7 +333,9 @@ private struct KeepAwakeCompactIcon: View {
       .font(.caption2)
       .foregroundStyle(releasePending ? Color.orange : appTheme.color(for: .interaction))
       .accessibilityLabel(
-        releasePending ? "Keep-awake assertion release pending" : "Keep awake active")
+        releasePending
+          ? String(localized: "Keep-awake assertion release pending")
+          : String(localized: "Keep awake active"))
   }
 }
 

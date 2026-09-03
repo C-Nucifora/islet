@@ -495,7 +495,8 @@ enum SettingsTransfer {
   ) throws -> T? where T.RawValue == String {
     guard let raw = values[key] else { return nil }
     guard let string = raw as? String, let value = T(rawValue: string) else {
-      throw SettingsTransferError.invalidValue(key: key, expected: "a supported name")
+      throw SettingsTransferError.invalidValue(
+        key: key, expected: String(localized: "a supported name"))
     }
     return value
   }
@@ -503,7 +504,8 @@ enum SettingsTransfer {
   private static func boolean(_ key: String, in values: [String: Any]) throws -> Bool? {
     guard let raw = values[key] else { return nil }
     guard CFGetTypeID(raw as CFTypeRef) == CFBooleanGetTypeID(), let value = raw as? Bool else {
-      throw SettingsTransferError.invalidValue(key: key, expected: "true or false")
+      throw SettingsTransferError.invalidValue(
+        key: key, expected: String(localized: "true or false"))
     }
     return value
   }
@@ -514,11 +516,13 @@ enum SettingsTransfer {
     guard let raw = values[key] else { return nil }
     guard CFGetTypeID(raw as CFTypeRef) != CFBooleanGetTypeID(), let number = raw as? NSNumber
     else {
-      throw SettingsTransferError.invalidValue(key: key, expected: "a number in \(range)")
+      throw SettingsTransferError.invalidValue(
+        key: key, expected: String(localized: "a number in \(String(describing: range))"))
     }
     let value = number.doubleValue
     guard value.isFinite, range.contains(value) else {
-      throw SettingsTransferError.invalidValue(key: key, expected: "a number in \(range)")
+      throw SettingsTransferError.invalidValue(
+        key: key, expected: String(localized: "a number in \(String(describing: range))"))
     }
     return value
   }
@@ -529,7 +533,9 @@ enum SettingsTransfer {
     guard let raw = values[key] else { return nil }
     guard let value = integer(raw), allowed.contains(value) else {
       throw SettingsTransferError.invalidValue(
-        key: key, expected: "one of \(allowed.sorted().map(String.init).joined(separator: ", "))")
+        key: key,
+        expected: String(
+          localized: "one of \(allowed.sorted().map(String.init).joined(separator: ", "))"))
     }
     return value
   }
@@ -549,7 +555,8 @@ enum SettingsTransfer {
   ) throws -> [String]? {
     guard let raw = values[key] else { return nil }
     guard let array = raw as? [Any], array.allSatisfy({ $0 is String }) else {
-      throw SettingsTransferError.invalidValue(key: key, expected: "an array of text values")
+      throw SettingsTransferError.invalidValue(
+        key: key, expected: String(localized: "an array of text values"))
     }
     let result = array.compactMap { $0 as? String }
     guard result.count <= maximumItems,
@@ -574,7 +581,8 @@ enum SettingsTransfer {
     guard let dictionary = raw as? [String: Any],
       dictionary.values.allSatisfy({ $0 is String })
     else {
-      throw SettingsTransferError.invalidValue(key: key, expected: "an object with text values")
+      throw SettingsTransferError.invalidValue(
+        key: key, expected: String(localized: "an object with text values"))
     }
     let result = dictionary.compactMapValues { $0 as? String }
     let metricKeys = Set(SystemMetricKind.allCases.map(\.rawValue))
@@ -582,7 +590,8 @@ enum SettingsTransfer {
     guard Set(result.keys).isSubset(of: metricKeys),
       result.values.allSatisfy(styleNames.contains)
     else {
-      throw SettingsTransferError.invalidValue(key: key, expected: "known metric and style names")
+      throw SettingsTransferError.invalidValue(
+        key: key, expected: String(localized: "known metric and style names"))
     }
     return result
   }
@@ -591,11 +600,14 @@ enum SettingsTransfer {
     from old: SettingsTransferSnapshot, to new: SettingsTransferSnapshot
   ) -> [SettingsTransferChange] {
     var changes: [SettingsTransferChange] = []
-    func add<T: Equatable>(_ key: String, _ title: String, _ old: T, _ new: T) {
+    func add<T: Equatable>(
+      _ key: String, _ title: LocalizedStringResource, _ old: T, _ new: T
+    ) {
       guard old != new else { return }
       changes.append(
         SettingsTransferChange(
-          key: key, title: title, oldValue: summary(old), newValue: summary(new)))
+          key: key, title: String(localized: title), oldValue: summary(old), newValue: summary(new))
+      )
     }
     add("activityOrder", "Activity order", old.activityOrder, new.activityOrder)
     add("appTheme", "Theme", old.appTheme.rawValue, new.appTheme.rawValue)
@@ -688,12 +700,13 @@ enum SettingsTransfer {
 
   private static func summary<T>(_ value: T) -> String {
     switch value {
-    case let value as Bool: value ? "On" : "Off"
+    case let value as Bool: value ? String(localized: "On") : String(localized: "Off")
     case let value as Double: value.formatted(.number.precision(.fractionLength(0...2)))
-    case let value as [String]: value.isEmpty ? "None" : value.joined(separator: ", ")
+    case let value as [String]:
+      value.isEmpty ? String(localized: "None") : value.joined(separator: ", ")
     case let value as [String: String]:
       value.isEmpty
-        ? "Default"
+        ? String(localized: "Default")
         : value.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: ", ")
     default: String(describing: value)
     }

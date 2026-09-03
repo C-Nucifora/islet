@@ -441,7 +441,7 @@ final class ShelfModel: ObservableObject {
     let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
     return await withManifestMutation {
       guard !name.isEmpty else {
-        lastError = "Workspace names can't be empty."
+        lastError = String(localized: "Workspace names can't be empty.")
         return nil
       }
       guard
@@ -449,7 +449,7 @@ final class ShelfModel: ObservableObject {
           $0.name.caseInsensitiveCompare(name) == .orderedSame
         })
       else {
-        lastError = "A workspace named \(name) already exists."
+        lastError = String(localized: "A workspace named \(name) already exists.")
         return nil
       }
       let stack = ShelfStack(id: UUID(), name: name, expiryRule: .never)
@@ -475,7 +475,7 @@ final class ShelfModel: ObservableObject {
         }),
         let index = manifest.stacks.firstIndex(where: { $0.id == stack.id })
       else {
-        lastError = "Workspace names must be unique and non-empty."
+        lastError = String(localized: "Workspace names must be unique and non-empty.")
         return false
       }
       let previous = manifest
@@ -995,7 +995,7 @@ final class ShelfModel: ObservableObject {
         return (nil, nil, nil)
       case .saveFailed:
         removeStagingItem(staging)
-        let error = "Couldn't save Shelf workspace data."
+        let error = String(localized: "Couldn't save Shelf workspace data.")
         setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
         return (nil, error, nil)
       }
@@ -1347,8 +1347,11 @@ final class ShelfModel: ObservableObject {
 
   func expirationText(for item: ShelfItem, now: Date = .now) -> String? {
     guard let expiry = item.expiresAt else { return nil }
-    if expiry <= now { return useCounts[item.id] == nil ? "Expired" : "Expires after use" }
-    return "Expires \(expiry.formatted(.relative(presentation: .named)))"
+    if expiry <= now {
+      return useCounts[item.id] == nil
+        ? String(localized: "Expired") : String(localized: "Expires after use")
+    }
+    return String(localized: "Expires \(expiry.formatted(.relative(presentation: .named)))")
   }
 
   func cleanupStorage() async {

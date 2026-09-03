@@ -176,6 +176,7 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(form.pairingLink, "")
     XCTAssertFalse(form.allowInsecureHTTP)
     XCTAssertEqual(form.statusMessage, "Added T3 Code machine.")
+    XCTAssertEqual(form.statusSucceeded, true)
   }
 
   func testPairingFormSuccessKeepsAReplacementLinkTypedWhilePairing() throws {
@@ -201,6 +202,7 @@ final class T3CodeTests: XCTestCase {
     XCTAssertTrue(form.allowInsecureHTTP)
     XCTAssertEqual(form.focusedField, .pairingLink)
     XCTAssertEqual(form.statusMessage, "T3 Code returned HTTP 503.")
+    XCTAssertEqual(form.statusSucceeded, false)
   }
 
   func testPairingFormFailureDoesNotFocusAReplacementLinkTypedWhilePairing() throws {
@@ -228,6 +230,7 @@ final class T3CodeTests: XCTestCase {
     XCTAssertTrue(form.isPairing)
     XCTAssertEqual(form.pairingLink, second.pairingLink)
     XCTAssertNil(form.statusMessage)
+    XCTAssertNil(form.statusSucceeded)
   }
 
   func testAgentDerivationIsProviderNeutralAndPrioritizesQuestions() throws {

@@ -1,11 +1,11 @@
 # Localization literal audit
 
-Issue #106 reviewed every Swift source under `Islet/`. The tree contained 131 app Swift files at
-the start of the work and 132 after adding `Support/Localization.swift`.
+Issue #106 reviewed every Swift source under `Islet/`. The integrated stack contains 172 app Swift
+files, including `Support/Localization.swift`.
 
 Visible labels, help, errors, confirmation copy, notifications and accessibility text now use
 SwiftUI's localization-aware literal initializers, `LocalizedStringResource`, or
-`String(localized:)`. `Localizable.xcstrings` is generated from the compiler's 133 stringsdata
+`String(localized:)`. `Localizable.xcstrings` is generated from the compiler's 173 stringsdata
 files, not from a sample of screens. The catalog has an `en-XA` pseudolocalization for every key.
 
 The remaining string literals outside the catalog are intentional:
@@ -39,4 +39,5 @@ inspection remains a manual QA limit; the automated pass does not claim to prove
 
 Run `Scripts/verify-localization-catalog.sh` after changing visible copy. It enables compiler string
 extraction in a temporary DerivedData directory, synchronizes a temporary catalog, and fails if a
-SwiftUI or explicit localization key appears without checked-in `en-XA` coverage.
+SwiftUI or explicit localization key lacks checked-in `en-XA` coverage or if an obsolete catalog
+entry is marked stale.

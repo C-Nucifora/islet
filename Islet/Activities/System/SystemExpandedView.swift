@@ -412,7 +412,7 @@ private struct ProcessAttributionView: View {
   private func formatted(_ value: Double, metric: ProcessMetricKind) -> String {
     switch metric {
     case .cpu:
-      return "\(Int((value * 100).rounded()))% CPU"
+      return String(localized: "\(Int((value * 100).rounded()))% CPU")
     case .memory:
       return Int64(value).formatted(
         .byteCount(style: .memory, allowedUnits: [.mb, .gb], spellsOutZero: false))
@@ -421,29 +421,33 @@ private struct ProcessAttributionView: View {
         .byteCount(style: .file, allowedUnits: [.kb, .mb, .gb], spellsOutZero: false))
       return "\(bytes)/s"
     case .network:
-      return "Unavailable"
+      return String(localized: "Unavailable")
     }
   }
 
   private func emptyMessage(_ snapshot: ProcessAttributionSnapshot) -> String {
     switch snapshot.availability {
     case .unsupported(let message): return message
-    case .noReadableProcesses: return "No process data was readable during this snapshot."
+    case .noReadableProcesses:
+      return String(localized: "No process data was readable during this snapshot.")
     case .partial:
-      return "No active process had a measurable value. Some process data was unavailable."
-    case .available: return "No active process had a measurable value in this one-second window."
+      return String(
+        localized: "No active process had a measurable value. Some process data was unavailable.")
+    case .available:
+      return String(
+        localized: "No active process had a measurable value in this one-second window.")
     }
   }
 
   private func availabilityHelp(_ availability: ProcessAttributionAvailability) -> String {
     switch availability {
     case .available:
-      return "Values are one-second estimates from macOS process counters."
+      return String(localized: "Values are one-second estimates from macOS process counters.")
     case .partial(let unreadable, let exited):
       return
         "Values are one-second estimates. \(unreadable) processes could not be read and \(exited) exited during the snapshot."
     case .noReadableProcesses:
-      return "macOS did not return readable process counters."
+      return String(localized: "macOS did not return readable process counters.")
     case .unsupported(let message):
       return message
     }
