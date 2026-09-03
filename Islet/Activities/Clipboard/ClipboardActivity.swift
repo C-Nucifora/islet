@@ -1107,9 +1107,9 @@ final class ClipboardActivity: NotchActivity, ObservableObject {
     model.items.first.map { "Copied \($0.preview)" }
   }
 
-  func performAccessibilityPrimaryAction() -> Bool {
+  func performAccessibilityPrimaryAction() async -> Bool {
     guard let item = model.items.first else { return false }
-    return model.copyBack(item)
+    return await model.copyBack(item)
   }
 
   func dismissAccessibilityTransient() -> Bool {
