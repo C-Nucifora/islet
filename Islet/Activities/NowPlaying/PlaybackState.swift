@@ -45,8 +45,8 @@ struct PlaybackState: Equatable {
   /// Explicit live metadata takes precedence over a finite duration. Some players expose a rolling
   /// duration for a live stream, but it is not a range users can seek within.
   var isLive = false
-  /// `nil` means the adapter did not report a capability. A valid finite duration is then the best
-  /// available evidence that the item can be scrubbed.
+  /// `nil` means the adapter did not report a capability. Seeking fails closed in that case; a
+  /// finite duration alone does not prove that a live window or protected stream is scrubbable.
   var supportsSeeking: Bool?
   var artwork: Data?
 
@@ -77,7 +77,7 @@ struct PlaybackState: Equatable {
 
   var seekability: PlaybackSeekability {
     if isLive { return .live }
-    guard supportsSeeking != false, duration.isFinite, duration > 0 else { return .unavailable }
+    guard supportsSeeking == true, duration.isFinite, duration > 0 else { return .unavailable }
     return .seekable
   }
 
