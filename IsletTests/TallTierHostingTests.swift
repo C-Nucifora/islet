@@ -114,7 +114,9 @@ final class TallTierHostingTests: XCTestCase {
 
   /// The whole island follows the production frame coordinator through base, tall and closed tiers.
   func testTallTierSelectionSurvivesRealHosting() {
+    ActivityCenter.shared.register(MorphActivity())
     let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
+    vm.selectActivity("morph-test")
     let (panel, instance) = host(vm)
     defer { instance.stop() }
 
