@@ -172,6 +172,41 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     connectCoordinator.refreshNow()
   }
 
+  func copyWorkspacePath(_ agent: T3AgentSnapshot) {
+    guard let path = T3SessionActionPolicy.safeWorkspacePath(agent.workspacePath) else { return }
+    Self.copy(path)
+  }
+
+  func revealWorkspace(_ agent: T3AgentSnapshot) {
+    guard agent.isLocal,
+      let path = T3SessionActionPolicy.safeWorkspacePath(agent.workspacePath)
+    else { return }
+    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+  }
+
+  func sessionAvailability(for agent: T3AgentSnapshot) -> T3SessionAvailability {
+    Self.sessionAvailability(for: agent, in: environments)
+  }
+
+  nonisolated static func sessionAvailability(
+    for agent: T3AgentSnapshot, in environments: [T3EnvironmentSnapshot]
+  ) -> T3SessionAvailability {
+    guard
+      let environment = environments.first(where: {
+        $0.agents.contains(where: { $0.id == agent.id })
+      })
+    else {
+      return .reconnect(reason: "This T3 Code machine is unavailable. Reconnect to refresh it.")
+    }
+    guard environment.state == .connected, !environment.isStale else {
+      return .reconnect(
+        reason:
+          "\(environment.label) is \(environment.state.label.lowercased()). Reconnect to refresh it."
+      )
+    }
+    return .available
+  }
+
   func addRemote(pairingLink: String, allowInsecureHTTP: Bool = false) async throws {
     let target = try T3PairingTarget.parse(
       pairingLink, allowInsecureRemoteHTTP: allowInsecureHTTP)
@@ -584,7 +619,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         baseURL: endpoint.baseURL.absoluteString)
     }
     let agents = T3AgentSnapshot.activeAgents(
-      in: shell, logicalEnvironmentID: descriptor.environmentId, now: now)
+      in: shell, logicalEnvironmentID: descriptor.environmentId,
+      isLocal: source == .local, now: now)
     let platform = [descriptor.platform?.os, descriptor.platform?.arch]
       .compactMap { $0 }.joined(separator: " · ")
     return T3EnvironmentSnapshot(
@@ -913,5 +949,10 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     EnergyPolicy(
       mode: ContextRuleCenter.shared.effectiveEnergyMode(baseline: Defaults[.energyMode]),
       systemLowPowerMode: lowPowerMode)
+  }
+
+  private static func copy(_ value: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(value, forType: .string)
   }
 }
