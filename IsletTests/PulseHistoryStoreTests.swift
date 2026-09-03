@@ -36,7 +36,8 @@ final class PulseHistoryStoreTests: XCTestCase {
       expiresAt: nil, actions: nil)
 
     XCTAssertTrue(first.apply(command(.show, payload), now: now).ok)
-    first.dismiss("private-item-id", now: now.addingTimeInterval(1))
+    first.dismiss(
+      try XCTUnwrap(first.items.first?.id), now: now.addingTimeInterval(1))
     first.flushHistoryPersistence()
 
     let restored = PulseCenter(
@@ -152,7 +153,7 @@ final class PulseHistoryStoreTests: XCTestCase {
     let data = try center.exportHistoryData(exportedAt: now)
     let text = try XCTUnwrap(String(data: data, encoding: .utf8))
     for forbidden in [
-      "private-item-id", "private-title", "private-subtitle", "private-action",
+      "private-title", "private-subtitle", "private-action",
       "private-link", "private-bearer-token", "#123456", "0.75",
     ] {
       XCTAssertFalse(text.contains(forbidden), "Export retained \(forbidden)")
@@ -164,7 +165,9 @@ final class PulseHistoryStoreTests: XCTestCase {
     let entries = try XCTUnwrap(document["entries"] as? [[String: Any]])
     XCTAssertEqual(entries.count, 1)
     XCTAssertEqual(
-      Set(entries[0].keys), ["date", "id", "operation", "priority", "result", "source", "state"])
+      Set(entries[0].keys),
+      ["date", "id", "operation", "priority", "providerIdentifier", "result", "source", "state"])
+    XCTAssertEqual(entries[0]["providerIdentifier"] as? String, "private-item-id")
   }
 
   @MainActor
@@ -324,8 +327,8 @@ final class PulseHistoryStoreTests: XCTestCase {
     id: UUID, date: Date, source: String?
   ) -> PulseHistoryEntry {
     PulseHistoryEntry(
-      id: id, date: date, operation: .show, source: source, state: .active,
-      priority: .normal, result: .shown)
+      id: id, date: date, operation: .show, source: source, providerIdentifier: nil,
+      state: .active, priority: .normal, result: .shown)
   }
 
   private func command(_ operation: PulseOperation, _ payload: PulsePayload) -> PulseCommand {
