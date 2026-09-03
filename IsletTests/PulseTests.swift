@@ -1705,7 +1705,7 @@ final class PulseTests: XCTestCase {
   func testNewTrustedChangedLoopbackAndCrossProviderDestinationsStayIsolated() throws {
     let directory = try pulseActionTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
-    let center = PulseCenter()
+    let center = makeCenter()
     let trustStore = PulseActionTrustStore(supportDirectory: directory)
     let firstProvider = try PulseProviderIdentity(credentialID: "provider-one", source: "build")
     let secondProvider = try PulseProviderIdentity(credentialID: "provider-two", source: "tests")
@@ -1878,7 +1878,7 @@ final class PulseTests: XCTestCase {
   func testActionAndProviderReplacementBetweenPromptAndConfirmationAreRejected() throws {
     let directory = try pulseActionTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
-    let center = PulseCenter()
+    let center = makeCenter()
     let trustStore = PulseActionTrustStore(supportDirectory: directory)
     let originalProvider = try PulseProviderIdentity(credentialID: "original", source: "build")
     let replacementProvider = try PulseProviderIdentity(
