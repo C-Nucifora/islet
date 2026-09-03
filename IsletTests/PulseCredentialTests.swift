@@ -180,6 +180,9 @@ final class PulseCredentialTests: XCTestCase {
       actionTrustStore: PulseActionTrustStore(supportDirectory: directory))
     let summary = try server.createProvider(
       name: "Build", source: "build", permissions: [.persistentActivities, .webActions])
+    let previousPolicy = center.policy(for: summary.source)
+    center.setPolicy(.allowed, for: summary.source)
+    defer { center.setPolicy(previousPolicy, for: summary.source) }
     let provider = try PulseProviderIdentity(credentialID: summary.id, source: summary.source)
     let payload = PulsePayload(
       id: "job", source: summary.source, title: "Old credential", subtitle: nil,
@@ -434,6 +437,7 @@ final class PulseCredentialTests: XCTestCase {
     XCTAssertEqual(thenClause["required"] as? [String], ["requestID"])
   }
 
+  @MainActor
   func testTrustCleanupFailureCannotKeepOrRestoreWebActionAuthorization() throws {
     let credentialDirectory = try temporaryDirectory()
     let trustDirectory = try temporaryDirectory()
