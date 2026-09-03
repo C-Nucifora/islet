@@ -15,8 +15,11 @@ That commit was the tip of upstream `master` when Islet added the framework on
 2026-07-22. The vendored loader at `Islet/Resources/mediaremote-adapter.pl`
 comes from that commit with the tracked, hashed
 `MediaRemoteAdapter-loader.patch` applied with patch fuzz disabled. The license
-file matches the pinned commit. A clean build with the pinned toolchain and
-loader patch reproduces the checked-in artifacts byte for byte.
+file matches the pinned commit. `MediaRemoteAdapter-capabilities.patch` adds the
+live-stream and seek-capability fields Islet consumes, sourcing them from
+MediaRemote's now-playing metadata and supported-command API. A clean build
+with the pinned toolchain and both patches reproduces the checked-in artifacts
+byte for byte.
 
 ## Rebuild and verify
 
@@ -36,9 +39,10 @@ cmp Vendor/MediaRemoteAdapter-LICENSE \
 ```
 
 The rebuild script downloads the exact source archive and CMake release listed
-in `MediaRemoteAdapter.provenance.json`, checks both SHA-256 values, checks the
-Xcode and SDK versions, and builds with the recorded generator and deployment
-target. It writes only to ignored build and download-cache directories.
+in `MediaRemoteAdapter.provenance.json`, checks both SHA-256 values and both
+patches, checks the Xcode and SDK versions, and builds with the recorded
+generator and deployment target. It writes only to ignored build and
+download-cache directories.
 
 The verifier checks the framework's full binary checksum, the checksum of each
 architecture slice, architectures, exported symbols, `Info.plist`, signature
