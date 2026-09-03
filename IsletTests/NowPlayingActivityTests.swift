@@ -156,6 +156,7 @@ final class NowPlayingActivityTests: XCTestCase {
   func testFiniteOnDemandMediaIsSeekable() {
     var state = PlaybackState()
     state.duration = 60
+    state.supportsSeeking = true
     XCTAssertEqual(state.seekability, .seekable)
   }
 
@@ -168,6 +169,7 @@ final class NowPlayingActivityTests: XCTestCase {
     first.elapsed = 30
     first.elapsedAt = start
     first.isPlaying = true
+    first.supportsSeeking = true
 
     var externalSeek = first
     externalSeek.elapsed = 10
@@ -188,6 +190,7 @@ final class NowPlayingActivityTests: XCTestCase {
     playing.elapsed = 30
     playing.elapsedAt = start
     playing.isPlaying = true
+    playing.supportsSeeking = true
 
     var table = MediaSourceTable()
     table.upsert(source, playing, now: start)
@@ -204,6 +207,7 @@ final class NowPlayingActivityTests: XCTestCase {
     playing.elapsed = 30
     playing.elapsedAt = start
     playing.isPlaying = true
+    playing.supportsSeeking = true
 
     var table = MediaSourceTable()
     table.upsert(source, playing, now: start)
@@ -226,6 +230,7 @@ final class NowPlayingActivityTests: XCTestCase {
     playing.elapsed = 30
     playing.elapsedAt = start
     playing.isPlaying = true
+    playing.supportsSeeking = true
 
     var table = MediaSourceTable()
     table.upsert(source, playing, now: start)
@@ -249,6 +254,7 @@ final class NowPlayingActivityTests: XCTestCase {
     first.title = "First"
     first.duration = 120
     first.elapsed = 30
+    first.supportsSeeking = true
 
     var table = MediaSourceTable()
     table.upsert(source, first, now: start)
