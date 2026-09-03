@@ -28,6 +28,29 @@ private final class ClipboardPollingSchedulerProbe: ClipboardPollingScheduling {
 }
 
 @MainActor
+private final class ClipboardPollingPrivacyStore: ClipboardPrivacyStoring {
+  var onChange: (() -> Void)?
+  private var configuration = ClipboardPrivacyConfiguration()
+
+  func load() -> ClipboardPrivacyConfiguration { configuration }
+  func save(_ configuration: ClipboardPrivacyConfiguration) {
+    self.configuration = configuration
+  }
+}
+
+@MainActor
+private final class ClipboardPollingContextMonitor: ClipboardContextMonitoring {
+  var context = ClipboardCaptureContext(
+    application: ClipboardApplicationIdentity(
+      bundleIdentifier: "com.example.clipboard-polling-tests", name: "Clipboard Polling Tests"))
+  var onChange: ((ClipboardCaptureContext) -> Void)?
+
+  func start() {}
+  func stop() {}
+  func refreshApplication() -> Bool { false }
+}
+
+@MainActor
 final class ClipboardPollingPolicyTests: XCTestCase {
   private let start = Date(timeIntervalSinceReferenceDate: 1_000)
 
@@ -121,7 +144,7 @@ final class ClipboardPollingPolicyTests: XCTestCase {
     let pasteboard = NSPasteboard(
       name: NSPasteboard.Name("islet-tests-poll-generation-\(UUID().uuidString)"))
     let scheduler = ClipboardPollingSchedulerProbe()
-    let model = ClipboardModel(pasteboard: pasteboard, pollingScheduler: scheduler)
+    let model = makeModel(pasteboard: pasteboard, scheduler: scheduler)
     model.start()
     XCTAssertEqual(scheduler.tasks.count, 1)
 
@@ -148,7 +171,7 @@ final class ClipboardPollingPolicyTests: XCTestCase {
     let pasteboard = NSPasteboard(
       name: NSPasteboard.Name("islet-tests-poll-foreground-\(UUID().uuidString)"))
     let scheduler = ClipboardPollingSchedulerProbe()
-    let model = ClipboardModel(pasteboard: pasteboard, pollingScheduler: scheduler)
+    let model = makeModel(pasteboard: pasteboard, scheduler: scheduler)
     model.start()
     XCTAssertEqual(scheduler.tasks.count, 1)
 
@@ -164,7 +187,7 @@ final class ClipboardPollingPolicyTests: XCTestCase {
     let pasteboard = NSPasteboard(
       name: NSPasteboard.Name("islet-tests-poll-clear-\(UUID().uuidString)"))
     let scheduler = ClipboardPollingSchedulerProbe()
-    let model = ClipboardModel(pasteboard: pasteboard, pollingScheduler: scheduler)
+    let model = makeModel(pasteboard: pasteboard, scheduler: scheduler)
     model.start()
     pasteboard.clearContents()
     XCTAssertTrue(pasteboard.setString("copied before clear", forType: .string))
@@ -185,5 +208,15 @@ final class ClipboardPollingPolicyTests: XCTestCase {
     XCTAssertTrue(model.items.isEmpty)
     XCTAssertEqual(scheduler.tasks.count, 3)
     model.stop()
+  }
+
+  private func makeModel(
+    pasteboard: NSPasteboard, scheduler: ClipboardPollingSchedulerProbe
+  ) -> ClipboardModel {
+    ClipboardModel(
+      pasteboard: pasteboard,
+      privacyStore: ClipboardPollingPrivacyStore(),
+      contextMonitor: ClipboardPollingContextMonitor(),
+      pollingScheduler: scheduler)
   }
 }
