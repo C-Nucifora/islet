@@ -365,7 +365,7 @@ struct T3CodeExpandedView: View {
             ForEach(expandedRows) { row in
               switch row {
               case .agent(let agent, let environmentLabel):
-                T3AgentRow(agent: agent, environmentLabel: environmentLabel)
+                T3AgentRow(agent: agent, environmentLabel: environmentLabel, activity: activity)
               case .environment(let environment):
                 environmentGroup(environment)
               }
@@ -467,6 +467,7 @@ struct T3CodeExpandedView: View {
 private struct T3AgentRow: View {
   let agent: T3AgentSnapshot
   let environmentLabel: String?
+  @ObservedObject var activity: T3CodeActivity
 
   var body: some View {
     HStack(spacing: 8) {
@@ -496,11 +497,32 @@ private struct T3AgentRow: View {
           }
           .font(.system(size: 9)).foregroundStyle(.secondary)
         }
+        if case .reconnect(let reason) = activity.sessionAvailability(for: agent) {
+          Text(reason).font(.system(size: 9)).foregroundStyle(.orange).lineLimit(2)
+        }
       }
       Spacer(minLength: 4)
-      Text(agent.phase.label)
-        .font(.system(size: 9, weight: .semibold)).foregroundStyle(phaseColor)
-        .lineLimit(1)
+      VStack(alignment: .trailing, spacing: 3) {
+        Text(agent.phase.label)
+          .font(.system(size: 9, weight: .semibold)).foregroundStyle(phaseColor)
+          .lineLimit(1)
+        if case .reconnect = activity.sessionAvailability(for: agent) {
+          Button("Reconnect") { activity.reconnect() }
+            .buttonStyle(.link).font(.system(size: 9, weight: .semibold))
+        }
+        if T3SessionActionPolicy.safeWorkspacePath(agent.workspacePath) != nil {
+          Menu {
+            Button("Copy workspace path") { activity.copyWorkspacePath(agent) }
+            if agent.isLocal {
+              Button("Reveal workspace") { activity.revealWorkspace(agent) }
+            }
+          } label: {
+            Image(systemName: "ellipsis.circle").font(.caption2)
+          }
+          .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+          .accessibilityLabel("More actions for \(agent.title)")
+        }
+      }
     }
     .padding(.vertical, 4).padding(.horizontal, 7)
     .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.06)))
