@@ -153,6 +153,8 @@ final class PulseCenter: ObservableObject {
     stalenessPolicy = PulseStalenessPolicy(
       timeout: staleTimeout, retention: staleRetention)
     self.symbolAvailability = symbolAvailability
+    self.historyStore = historyStore
+    self.historyConfiguration = historyConfiguration
     self.deliveryProfileKey = deliveryProfileKey
     self.sourcePoliciesKey = sourcePoliciesKey
     deliveryProfile = Defaults[deliveryProfileKey]
@@ -179,8 +181,6 @@ final class PulseCenter: ObservableObject {
     if !storageIsValid || storedPolicies != canonicalPolicies {
       Defaults[sourcePoliciesKey] = canonicalPolicies
     }
-    self.historyStore = historyStore
-    self.historyConfiguration = historyConfiguration
     guard let historyStore else { return }
     historyPersistenceWriter = PulseHistoryPersistenceWriter(
       store: historyStore, coalescingDelay: historyPersistenceDelay

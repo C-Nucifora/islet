@@ -46,8 +46,8 @@ enum PulseHistoryStoreError: LocalizedError, Equatable {
   }
 }
 
-/// Stores only `PulseHistoryEntry`. The wire payload, bearer token, item identifier, title,
-/// subtitle, action text, URLs, progress, accent, symbol, and error text never enter this type.
+/// Stores only `PulseHistoryEntry`. The wire payload, bearer token, title, subtitle, action text,
+/// URLs, progress, accent, symbol, and error text never enter this type.
 struct PulseHistoryStore: @unchecked Sendable {
   static let currentVersion = 2
   static let formatIdentifier = "dev.islet.pulse-history"
@@ -219,7 +219,7 @@ struct PulseHistoryStore: @unchecked Sendable {
     else { throw PulseHistoryStoreError.invalidDocument }
 
     let allowedEntryKeys: Set<String> = [
-      "date", "id", "operation", "priority", "result", "source", "state",
+      "date", "id", "operation", "priority", "providerIdentifier", "result", "source", "state",
     ]
     let requiredEntryKeys: Set<String> = ["date", "id", "operation", "result"]
     for rawEntry in rawEntries {
@@ -237,6 +237,11 @@ struct PulseHistoryStore: @unchecked Sendable {
       }
       if let source = entry.source {
         guard (try? PulseItem.normalizedSource(source)) == source else {
+          throw PulseHistoryStoreError.invalidDocument
+        }
+      }
+      if let providerIdentifier = entry.providerIdentifier {
+        guard (try? PulseItem.normalizedIdentifier(providerIdentifier)) == providerIdentifier else {
           throw PulseHistoryStoreError.invalidDocument
         }
       }
