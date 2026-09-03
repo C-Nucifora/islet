@@ -139,7 +139,7 @@ final class AdapterParserTests: XCTestCase {
     else { return XCTFail("expected nowPlaying") }
     XCTAssertFalse(state.isLive)
     XCTAssertNil(state.supportsSeeking)
-    XCTAssertEqual(state.seekability, .seekable)
+    XCTAssertEqual(state.seekability, .unavailable)
   }
 
   func testUnknownDurationAndCanonicalLiveValueOverrideDiffState() {
