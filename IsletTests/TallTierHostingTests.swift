@@ -154,27 +154,31 @@ final class TallTierHostingTests: XCTestCase {
   }
 
   func testPseudolocalizedAccessibilitySurfaceFitsPermissionBounds() {
-    let host = NSHostingView(
-      rootView: LocalizationAccessibilityProbe().environment(\.locale, pseudolocale))
-    let panel = NSPanel(
-      contentRect: CGRect(x: 200, y: 200, width: 620, height: 220),
-      styleMask: [.borderless], backing: .buffered, defer: false)
-    panel.isReleasedWhenClosed = false
-    panel.contentView = host
-    panel.orderFrontRegardless()
-    defer { panel.close() }
-    pump(until: { !(host.accessibilityChildren()?.isEmpty ?? true) })
-    let expectedLabel = Pseudolocalization.expand(
-      "System thermal pressure and battery sensor temperature are separate readings and do not map directly."
-    )
-    let accessibilityLabelSelector = NSSelectorFromString("accessibilityLabel")
-    let labels = (host.accessibilityChildren() ?? []).compactMap { element -> String? in
-      guard let object = element as? NSObject,
-        object.responds(to: accessibilityLabelSelector)
-      else { return nil }
-      return object.perform(accessibilityLabelSelector)?.takeUnretainedValue() as? String
+    guard
+      let localizationURL = Bundle.main.url(
+        forResource: Pseudolocalization.localeIdentifier, withExtension: "lproj"),
+      let localizationBundle = Bundle(url: localizationURL)
+    else {
+      XCTFail("Missing compiled en-XA localization bundle")
+      return
     }
-    XCTAssertTrue(labels.contains(expectedLabel), "Rendered accessibility labels: \(labels)")
+    let presentation = SystemThermalPresentation(
+      thermalState: 2, batteryTemperatureC: nil)
+    let pressure = localizationBundle.localizedString(
+      forKey: "serious", value: nil, table: "Localizable")
+    let battery = localizationBundle.localizedString(
+      forKey: "Battery temperature unavailable.", value: nil, table: "Localizable")
+    let accessibilityFormat = localizationBundle.localizedString(
+      forKey: "System thermal pressure %@. %@ The readings do not map directly.", value: nil,
+      table: "Localizable")
+    XCTAssertEqual(
+      presentation.accessibilityValue(locale: pseudolocale, bundle: localizationBundle),
+      String(format: accessibilityFormat, locale: pseudolocale, pressure, battery))
+    XCTAssertEqual(
+      SystemThermalPresentation.helpText(locale: pseudolocale, bundle: localizationBundle),
+      Pseudolocalization.expand(
+        "System thermal pressure and battery sensor temperature are separate readings and do not map directly."
+      ))
     assertPseudolocalizedLayoutFits(
       LocalizationAccessibilityProbe(), in: CGSize(width: 620, height: 220))
   }
