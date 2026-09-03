@@ -114,7 +114,7 @@ running.
 
 | Permission | Used for | Behavior without it |
 | --- | --- | --- |
-| Calendar | Today's agenda, countdowns, and meeting links | Calendar content stays empty. |
+| Calendar | Three-day agenda, countdowns, meeting links, and event editing | Calendar content stays empty and event actions are unavailable. |
 | Reminders | Reading incomplete reminders and completing or rescheduling them | Reminder content and actions are unavailable. |
 | Accessibility | Reading media-key events for the HUD and app names for iPhone Live Activities | Those two features stay limited or inactive. |
 | Location | Reading the current Wi-Fi network name | Wi-Fi events still appear without the network name. |
@@ -129,8 +129,9 @@ screenshots, recordings, and shared screens even when the setting is enabled.
 
 Several optional features use undocumented macOS interfaces:
 
-- Now Playing reads through the vendored MediaRemoteAdapter and sends media commands through the
-  private `MediaRemote.framework`.
+- Now Playing reads through the vendored MediaRemoteAdapter. Media commands use the private
+  `MediaRemote.framework` only when they can target the displayed source safely; otherwise the
+  controls fail closed.
 - Brightness control loads the private `DisplayServices.framework` at runtime.
 - Native fullscreen detection calls undocumented CoreGraphics WindowServer symbols, with a public
   window-list fallback.
@@ -153,13 +154,14 @@ update. The adapter's source, patch, binary provenance, and rebuild procedure ar
 Islet has no analytics or telemetry client. Its network code is limited to Pulse and T3 Code:
 
 - Pulse listens only on `127.0.0.1`, starting at TCP port `47717` and using a bounded fallback
-  range if that port is busy. Each request needs the user-only token stored at
-  `~/Library/Application Support/Islet/pulse-token`. See the
+  range if that port is busy. Each provider uses an owner-only credential under
+  `~/Library/Application Support/Islet/pulse-credentials`; upgrades retain the old `pulse-token`
+  as a restricted legacy provider. See the
   [Pulse integration guide](Integrations/Pulse/README.md) for protocol limits and examples.
 - T3 Code reads a current local runtime descriptor and verifies the owning process before using a
   loopback endpoint. Other Macs must be paired explicitly. Remote endpoints use HTTPS unless a
-  reviewed build and the user both approve one exact plain HTTP origin. Bearer tokens stay in the
-  default Keychain with `ThisDeviceOnly` protection.
+  reviewed build and the user both approve one exact plain HTTP origin. Credentials use isolated
+  per-environment Keychain records with `ThisDeviceOnly` protection.
 
 Islet does not operate a cloud service. Data leaves the Mac only through configured system
 services and explicit actions: paired T3 requests go to the selected endpoint, AirDrop sends Shelf
@@ -170,18 +172,20 @@ Local retention follows these rules:
 
 - Interface settings, activity order, paired T3 endpoint metadata, hidden calendar identifiers,
   and timer state use local Defaults. A stale timer session is discarded after 30 days.
-- Shelf drops are copies under `~/Library/Application Support/Islet/Shelf`. They persist until the
-  user removes them. The Shelf accepts at most 100 items and 2 GiB while reserving 1 GiB of free
-  disk space.
+- Shelf drops are copies under `~/Library/Application Support/Islet/Shelf`. Workspaces, duplicate
+  rules, and file metadata persist in its manifest. A workspace can retain files indefinitely or
+  expire them after one hour, one day, or one week; the default is indefinite. The Shelf accepts
+  at most 100 items and 2 GiB while reserving 1 GiB of free disk space.
 - Clipboard history stays in process memory, holds at most 20 items or 32 MiB, and clears when the
   activity stops, the user pauses it, or Islet quits. Filters reject concealed pasteboard entries
   and common credential formats, but callers should not treat the filter as a secret scanner.
 - Calendar and reminder records stay in memory. Completing or rescheduling a reminder writes that
   change back through EventKit.
-- Pulse active items and its payload-free history are memory-only and never survive quit. Items
-  leave when they end, expire, are dismissed, or Pulse stops; history can be cleared separately.
-  The history is capped at 200 entries and omits titles, subtitles, links, tokens, and error text.
-  The Pulse token itself persists with user-only file permissions until it is rotated.
+- Pulse active items are memory-only and leave when they end, expire, are dismissed, or Pulse
+  stops. Payload-free history is session-only by default; an opt-in setting persists it for 1, 7,
+  30, or 90 days with a 50, 100, 200, or 500-entry cap. The history omits titles, subtitles,
+  links, credentials, action text, progress, accents, symbols, and error text. Provider
+  credentials persist with user-only file permissions until they are rotated or revoked.
 - Live T3 agent snapshots and system metric samples stay in memory. T3 credentials persist only in
   Keychain.
 
