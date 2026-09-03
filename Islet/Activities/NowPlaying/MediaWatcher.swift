@@ -199,6 +199,8 @@ final class MediaWatcher: @unchecked Sendable {
 
   static let maximumSnapshotOutputBytes = 1_048_576
   static let maximumHelperStderrBytes = 16_384
+  private static let helperTerminationGrace: TimeInterval = 0.25
+  private static let helperKillGrace: TimeInterval = 1
 
   private let queue = DispatchQueue(label: "dev.islet.mediawatcher")
   private let queueKey = DispatchSpecificKey<Void>()
@@ -370,13 +372,13 @@ final class MediaWatcher: @unchecked Sendable {
     pipe = nil
     stderrPipe = nil
     stderr = nil
-    oldProcess?.terminationHandler = nil
     if let oldProcess {
       if terminateStream {
         terminateAndReap(oldProcess)
-      } else {
-        oldProcess.waitUntilExit()
       }
+      // A non-terminating cleanup runs from this handler, so the process has already exited.
+      // A terminating cleanup keeps the notification installed until the bounded reap completes.
+      if !oldProcess.isRunning { oldProcess.terminationHandler = nil }
     }
   }
 
@@ -396,13 +398,13 @@ final class MediaWatcher: @unchecked Sendable {
     snapshotStderrPipe = nil
     snapshotStderr = nil
     snapshotRecoveryGeneration = nil
-    oldSnapshot?.terminationHandler = nil
     if let oldSnapshot {
       if terminate {
         terminateAndReap(oldSnapshot)
-      } else {
-        oldSnapshot.waitUntilExit()
       }
+      // `snapshotFinished` is itself dispatched by this handler. Do not detach the notification
+      // before Foundation has observed the child exit: doing so can strand `waitUntilExit()`.
+      if !oldSnapshot.isRunning { oldSnapshot.terminationHandler = nil }
     }
     if let oldStderrPipe, let oldStderr {
       Self.drainAvailableData(from: oldStderrPipe.fileHandleForReading, into: oldStderr)
@@ -410,20 +412,41 @@ final class MediaWatcher: @unchecked Sendable {
   }
 
   private func terminateAndReap(_ process: Process) {
-    if process.isRunning {
-      process.terminate()
-      // `applicationWillTerminate` has only a short synchronous window. Give cooperative adapters
-      // a moment to exit, then guarantee that a wedged helper cannot be orphaned under launchd.
-      // Process termination must not depend on the injectable snapshot clock. A fixed clock is
-      // useful in deadline tests but would otherwise make this loop unbounded.
-      let deadline = ProcessInfo.processInfo.systemUptime + 0.25
-      while process.isRunning, ProcessInfo.processInfo.systemUptime < deadline {
-        Thread.sleep(forTimeInterval: 0.01)
-      }
-      if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+    guard process.isRunning else { return }
+
+    // Preserve the helper's existing cleanup callback and add a local completion signal. Waiting
+    // on that signal avoids Foundation's `waitUntilExit()` race when a termination handler is
+    // detached concurrently. Both waits are bounded so app shutdown and snapshot retry can never
+    // wedge the watcher queue.
+    let exited = DispatchSemaphore(value: 0)
+    let existingTerminationHandler = process.terminationHandler
+    process.terminationHandler = { terminatedProcess in
+      existingTerminationHandler?(terminatedProcess)
+      exited.signal()
     }
-    // Always wait, including after a cooperative SIGTERM. This is the explicit reap point.
-    process.waitUntilExit()
+
+    process.terminate()
+    if waitForExit(
+      process, signal: exited, timeout: Self.helperTerminationGrace)
+    {
+      return
+    }
+
+    if Darwin.kill(process.processIdentifier, SIGKILL) == -1, errno != ESRCH {
+      Log.media.error(
+        "Unable to kill MediaRemote helper pid \(process.processIdentifier): \(errno)")
+    }
+    guard !waitForExit(process, signal: exited, timeout: Self.helperKillGrace) else { return }
+    Log.media.error(
+      "MediaRemote helper pid \(process.processIdentifier) did not exit after SIGKILL")
+  }
+
+  private func waitForExit(
+    _ process: Process, signal: DispatchSemaphore, timeout: TimeInterval
+  ) -> Bool {
+    guard process.isRunning else { return true }
+    if signal.wait(timeout: .now() + timeout) == .success { return true }
+    return !process.isRunning
   }
 
   private func launch() {
