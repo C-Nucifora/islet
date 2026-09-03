@@ -569,8 +569,7 @@ final class ScreenManager: ObservableObject {
     let tabIDs = [ExpandedSelectionPolicy.homeID] + activities.map(\.id)
     let currentID = ExpandedSelectionPolicy.effectiveSelection(
       tabIDs: tabIDs, storedSelection: viewModel.selectedActivityID,
-      shelfPresentationActive: ShelfModel.shared.isDropPresentationActive
-        || ShelfModel.shared.presentationRequest != nil,
+      shelfPresentationActive: viewModel.isShelfDropTargeted,
       primaryActivityID: ActivityCenter.shared.primaryActivity?.id)
 
     if let selectedID = IslandKeyboardPolicy.selectedID(
@@ -592,11 +591,13 @@ final class ScreenManager: ObservableObject {
         return true
       }
       let announcement = activity.accessibilityPrimaryActionName
-      guard activity.performAccessibilityPrimaryAction() else {
-        A11y.announce("\(ActivityCatalog.name(for: currentID)) has no available primary action")
-        return true
+      Task { @MainActor in
+        guard await activity.performAccessibilityPrimaryAction() else {
+          A11y.announce("\(ActivityCatalog.name(for: currentID)) has no available primary action")
+          return
+        }
+        if let announcement { A11y.announce(announcement) }
       }
-      if let announcement { A11y.announce(announcement) }
       return true
     case .dismissTransient:
       if HUDController.shared.dismiss() {

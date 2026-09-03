@@ -8,7 +8,7 @@ import XCTest
 final class T3CodeTests: XCTestCase {
   func testAgentAccessibilityLabelIncludesEveryVisibleProgressField() {
     let agent = T3AgentSnapshot(
-      environmentID: "local", threadID: "thread", title: "Fix accessibility",
+      logicalEnvironmentID: "local", threadID: "thread", title: "Fix accessibility",
       project: "Islet", providerInstance: "provider", model: "model", branch: "fix/a11y",
       phase: .working, planStep: "Run tests", completedPlanSteps: 3, totalPlanSteps: 5,
       updatedAt: Date())

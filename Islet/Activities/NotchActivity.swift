@@ -27,7 +27,7 @@ protocol NotchActivity: AnyObject {
   var preferredExpandedHeight: CGFloat { get }
   /// The action invoked by Command-Return while this activity is selected.
   var accessibilityPrimaryActionName: String? { get }
-  @discardableResult func performAccessibilityPrimaryAction() -> Bool
+  @discardableResult func performAccessibilityPrimaryAction() async -> Bool
   /// Dismisses an error, completed item, or other temporary state without closing the island.
   @discardableResult func dismissAccessibilityTransient() -> Bool
 }
@@ -37,6 +37,6 @@ extension NotchActivity {
   var isAvailableWhenInactive: Bool { false }
   var preferredExpandedHeight: CGFloat { Metrics.expandedSize.height }
   var accessibilityPrimaryActionName: String? { nil }
-  func performAccessibilityPrimaryAction() -> Bool { false }
+  func performAccessibilityPrimaryAction() async -> Bool { false }
   func dismissAccessibilityTransient() -> Bool { false }
 }
