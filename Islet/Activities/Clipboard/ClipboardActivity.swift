@@ -376,8 +376,8 @@ final class ClipboardModel: ObservableObject {
   }
 
   func pollNow() {
-    guard pollingPolicy.nextDelay(for: pollingState) != nil else { return }
     refreshPrivacyState()
+    guard pollingPolicy.nextDelay(for: pollingState) != nil else { return }
     guard !contextMonitor.refreshApplication() else { return }
     let pb = pasteboard
     guard pb.changeCount != lastChange else {
@@ -476,6 +476,10 @@ final class ClipboardModel: ObservableObject {
       configuration.pausedUntil = nil
       configuration.pausedLoginSession = nil
     }
+    if paused {
+      pollingState.isPaused = true
+      cancelPollingTimer()
+    }
     if paused, configuration.clearHistoryOnPause { clear() }
     privacyStore.save(configuration)
     privacyConfigurationDidChange()
@@ -487,6 +491,8 @@ final class ClipboardModel: ObservableObject {
     configuration.manuallyPaused = false
     configuration.pausedUntil = now().addingTimeInterval(duration)
     configuration.pausedLoginSession = nil
+    pollingState.isPaused = true
+    cancelPollingTimer()
     if configuration.clearHistoryOnPause { clear() }
     privacyStore.save(configuration)
     privacyConfigurationDidChange()
@@ -499,6 +505,8 @@ final class ClipboardModel: ObservableObject {
     configuration.pausedLoginSession = loginSession()
     // If macOS cannot provide a login-session identity, fail closed with an ordinary manual pause.
     configuration.manuallyPaused = configuration.pausedLoginSession == nil
+    pollingState.isPaused = true
+    cancelPollingTimer()
     if configuration.clearHistoryOnPause { clear() }
     privacyStore.save(configuration)
     privacyConfigurationDidChange()
