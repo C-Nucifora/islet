@@ -422,10 +422,9 @@ enum PulseHistoryResult: String, Codable, Sendable {
   }
 }
 
-/// A bounded audit record. A validated provider-local identifier is retained so equal identifiers
-/// from different sources remain distinguishable. Titles, subtitles, action labels and URLs,
-/// tokens, unvalidated identifiers, and error text are never copied into history. Users may opt in
-/// to saving this record across launches.
+/// A bounded audit record. A validated provider-local identifier may be retained for session-only
+/// presentation, but persistence and export remove it. Titles, subtitles, action labels and URLs,
+/// tokens, unvalidated identifiers, and error text are never copied into history.
 struct PulseHistoryEntry: Codable, Identifiable, Equatable, Sendable {
   let id: UUID
   let date: Date
