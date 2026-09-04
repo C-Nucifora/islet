@@ -73,6 +73,20 @@ final class ContextRuleTests: XCTestCase {
         snapshot: ContextSnapshot(frontmostBundleIdentifier: "com.apple.keynote")))
   }
 
+  @MainActor
+  func testActiveDisplayRulesReceivePeriodicRefreshes() {
+    let displayRule = rule(
+      name: "External display",
+      trigger: ContextRuleTrigger(kind: .activeDisplay, text: "Studio Display"),
+      action: ContextRuleAction(pulseDelivery: .focused))
+
+    XCTAssertTrue(ContextRuleCenter.requiresPeriodicRefresh([displayRule]))
+
+    var disabledRule = displayRule
+    disabledRule.isEnabled = false
+    XCTAssertFalse(ContextRuleCenter.requiresPeriodicRefresh([disabledRule]))
+  }
+
   func testTimeRangeSupportsMidnightAndExcludesItsEnd() {
     XCTAssertTrue(ContextRuleEvaluator.contains(minute: 23 * 60, start: 22 * 60, end: 7 * 60))
     XCTAssertTrue(ContextRuleEvaluator.contains(minute: 6 * 60, start: 22 * 60, end: 7 * 60))
