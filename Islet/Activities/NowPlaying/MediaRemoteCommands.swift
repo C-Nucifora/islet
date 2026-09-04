@@ -296,5 +296,4 @@ final class MediaRemoteCommands: @unchecked Sendable {
         { seconds in implementation(seconds) }
       })
   }
-
 }

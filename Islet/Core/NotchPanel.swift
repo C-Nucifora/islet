@@ -3,11 +3,13 @@ import AppKit
 /// The panel itself owns file-drop registration. SwiftUI hit testing is disabled while collapsed
 /// so clicks reach the app underneath, which also prevents a SwiftUI `.onDrop` from being targeted.
 /// AppKit's window-level drag destination remains active in both collapsed and expanded states.
-final class NotchPanel: NSPanel, NSDraggingDestination {
+class NotchPanel: NSPanel, NSDraggingDestination {
   var acceptsFileDrops: (() -> Bool)?
   var fileDragTargetChanged: ((Bool) -> Void)?
   var fileURLsDropped: (([URL]) -> Bool)?
   private var isFileDragTargeted = false
+  private var acquiredKeyboardFocus = false
+  var keyboardCommandHandler: ((IslandKeyboardCommand) -> Bool)?
 
   init(frame: CGRect) {
     super.init(
@@ -28,8 +30,42 @@ final class NotchPanel: NSPanel, NSDraggingDestination {
     registerForDraggedTypes([.fileURL])
   }
 
-  override var canBecomeKey: Bool { false }
+  // A nonactivating panel can accept focus without bringing the accessory app to the foreground.
+  // The panel remains mouse-transparent while closed, so it only joins keyboard navigation after
+  // the user or VoiceOver enters the expanded island.
+  override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { false }
+
+  override func resignKey() {
+    acquiredKeyboardFocus = false
+    super.resignKey()
+  }
+
+  /// Takes key status only for an explicit keyboard or accessibility entry path. Pointer-driven
+  /// expansion must leave the foreground application's keyboard focus alone.
+  func requestKeyboardFocus() {
+    guard !isKeyWindow else { return }
+    makeKey()
+    acquiredKeyboardFocus = isKeyWindow
+  }
+
+  /// Releases key status only when `requestKeyboardFocus()` acquired it. VoiceOver or AppKit can
+  /// make the panel key independently, and collapsing the island must not undo that ownership.
+  func releaseKeyboardFocusIfAcquired() {
+    guard acquiredKeyboardFocus else { return }
+    if isKeyWindow { resignKey() }
+    acquiredKeyboardFocus = false
+  }
+
+  override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    if dispatchKeyboardCommand(event) { return true }
+    return super.performKeyEquivalent(with: event)
+  }
+
+  override func keyDown(with event: NSEvent) {
+    if dispatchKeyboardCommand(event) { return }
+    super.keyDown(with: event)
+  }
 
   /// AppKit is otherwise free to adjust the rect handed to `setFrame` — to keep a title bar on
   /// screen, to respect the menu bar, to fit a "usable" area. The island is positioned to the pixel
@@ -104,5 +140,20 @@ final class NotchPanel: NSPanel, NSDraggingDestination {
     guard targeted != isFileDragTargeted else { return }
     isFileDragTargeted = targeted
     fileDragTargetChanged?(targeted)
+  }
+
+  private func dispatchKeyboardCommand(_ event: NSEvent) -> Bool {
+    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    var mappedModifiers: IslandKeyboardModifiers = []
+    if modifiers.contains(.command) { mappedModifiers.insert(.command) }
+    if modifiers.contains(.control) { mappedModifiers.insert(.control) }
+    if modifiers.contains(.option) { mappedModifiers.insert(.option) }
+    if modifiers.contains(.shift) { mappedModifiers.insert(.shift) }
+    let isEditingText = firstResponder is NSTextView || firstResponder is NSTextField
+    let stroke = IslandKeyStroke(
+      key: event.charactersIgnoringModifiers ?? "", modifiers: mappedModifiers,
+      isEditingText: isEditingText)
+    guard let command = IslandKeyboardPolicy.command(for: stroke) else { return false }
+    return keyboardCommandHandler?(command) ?? false
   }
 }

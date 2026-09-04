@@ -189,7 +189,8 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     MediaRemoteCommands.shared.promote(source)
   }
 
-  func perform(_ command: MediaCommand, for source: SourceID) async {
+  @discardableResult
+  func perform(_ command: MediaCommand, for source: SourceID) async -> MediaCommandResult {
     mediaControlRequest &+= 1
     let request = mediaControlRequest
     // Do not leave an old failure beside a newer action while its command is still running.
@@ -206,13 +207,13 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
 
     // A later tap or source change owns the displayed feedback. The command queue still records
     // the older result above, but it must not overwrite the user's newer action.
-    guard request == mediaControlRequest else { return }
+    guard request == mediaControlRequest else { return result }
     lastMediaCommandResult = result
     guard let notice = MediaControlFeedback.message(for: command, result: result) else {
       mediaControlNoticeTask?.cancel()
       mediaControlNoticeTask = nil
       mediaControlNotice = nil
-      return
+      return result
     }
     mediaControlNotice = notice
     announce("Media control error: \(notice)")
@@ -223,6 +224,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
       self.mediaControlNotice = nil
       self.mediaControlNoticeTask = nil
     }
+    return result
   }
 
   /// A control stays disabled unless the player capability and a source-scoped transport are
@@ -525,4 +527,17 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   var compactLeading: AnyView { AnyView(CompactArtworkView(activity: self)) }
   var compactTrailing: AnyView { AnyView(CompactBarsView(activity: self)) }
   var expandedView: AnyView { AnyView(ExpandedPlayerView(activity: self)) }
+
+  var accessibilityPrimaryActionName: String? {
+    guard let playback, !playback.isAdvertisement else { return nil }
+    return playback.isPlaying ? "Playback paused" : "Playback started"
+  }
+
+  func performAccessibilityPrimaryAction() async -> Bool {
+    guard let playback, !playback.isAdvertisement, let primaryKey,
+      canPerform(.togglePlayPause, for: primaryKey)
+    else { return false }
+    if case .sent = await perform(.togglePlayPause, for: primaryKey) { return true }
+    return false
+  }
 }

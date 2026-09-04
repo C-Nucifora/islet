@@ -94,7 +94,7 @@ final class NowPlayingActivityTests: XCTestCase {
     await gate.waitUntilWaiting()
     await activity.perform(.previous, for: source)
     await gate.release()
-    await first.value
+    _ = await first.value
 
     XCTAssertEqual(activity.lastMediaCommandResult, .rejected(target: source))
     XCTAssertEqual(
@@ -117,7 +117,7 @@ final class NowPlayingActivityTests: XCTestCase {
     await gate.waitUntilWaiting()
     await activity.perform(.previous, for: source)
     await gate.release()
-    await first.value
+    _ = await first.value
 
     XCTAssertEqual(
       announcements.messages,

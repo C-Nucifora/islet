@@ -35,15 +35,14 @@ struct IsletQuickAction: Identifiable {
         id: "show", title: "Show Islet", detail: "Expand the notch panel",
         symbol: "waveform.path.ecg", keywords: "open expand island notch",
         opensIsletWindow: true, isAvailable: { true },
-        perform: { ScreenManager.shared.viewModel?.apply(.clickedNotch) }),
+        perform: { ScreenManager.shared.viewModel?.openForFocusedInteraction() }),
       .init(
         id: "shelf-open", title: "Open File Shelf", detail: "View files held in Islet",
         symbol: "tray.full.fill", keywords: "files drop drag tray open", opensIsletWindow: true,
         isAvailable: { ActivityCenter.shared.isAvailableInExpandedSwitcher("shelf") },
         perform: {
           ScreenManager.shared.performOnActionTarget { viewModel in
-            viewModel.selectActivity("shelf")
-            if !viewModel.state.isExpanded { viewModel.apply(.clickedNotch) }
+            viewModel.openForFocusedInteraction(activityID: "shelf")
           }
         }),
       .init(
@@ -303,8 +302,7 @@ enum CommandPaletteCatalog {
 
   private static func openActivity(_ id: String) {
     guard let viewModel = ScreenManager.shared.viewModel else { return }
-    viewModel.selectActivity(id)
-    if !viewModel.state.isExpanded { viewModel.apply(.clickedNotch) }
+    viewModel.openForFocusedInteraction(activityID: id)
   }
 }
 

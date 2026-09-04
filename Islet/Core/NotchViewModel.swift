@@ -75,6 +75,10 @@ final class NotchViewModel: ObservableObject {
   /// Drawn island width for the live tab count.
   @Published private(set) var expandedWidth: CGFloat = Metrics.expandedSize.width
   @Published private(set) var compactTargetRevision: UInt = 0
+  /// Incremented only by explicit keyboard or accessibility entry paths. Panel instances observe
+  /// this separately from presentation state so pointer and programmatic expansion never take key
+  /// status from the foreground application.
+  @Published private(set) var keyboardFocusRequestRevision: UInt = 0
   /// Home dismissal and snooze state belongs to the panel model, not the expanded view. The model
   /// survives tab changes and collapse/reopen cycles, while `IdleDashboardView` does not.
   @Published private(set) var homeAttentionDisposition = HomeAttentionDisposition()
@@ -165,6 +169,16 @@ final class NotchViewModel: ObservableObject {
     temporarilyPresentedActivityID = allowingDisabledActivity ? activityID : nil
     selectActivity(activityID)
     if !state.isExpanded { apply(.clickedNotch) }
+  }
+
+  /// Opens the island for a command-palette or accessibility interaction and asks its panel to
+  /// accept keyboard navigation. Ordinary pointer, drag, notification and programmatic opens use
+  /// `apply(_:)` or `open(activityID:)` and do not request focus.
+  func openForFocusedInteraction(activityID: String? = nil) {
+    if let activityID { selectActivity(activityID) }
+    if !state.isExpanded { apply(.clickedNotch) }
+    guard state.isExpanded else { return }
+    keyboardFocusRequestRevision &+= 1
   }
 
   func clearTemporaryPresentationIfUnavailable(availableActivityIDs: [String]) {
