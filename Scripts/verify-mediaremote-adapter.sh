@@ -48,6 +48,17 @@ verify_sha256 "$(read_manifest '.artifacts.capabilitiesPatchSHA256')" "$capabili
 verify_sha256 "$(read_manifest '.artifacts.licenseSHA256')" \
   "$repo_root/Vendor/MediaRemoteAdapter-LICENSE"
 
+for stream_capability_line in \
+  'diff --git a/src/adapter/stream.m b/src/adapter/stream.m' \
+  '+            liveData[kMRASupportsSeeking] = @(supportsSeeking);' \
+  '+      requestSupportedCommands();'; do
+  if ! /usr/bin/grep -Fqx "$stream_capability_line" "$capabilities_patch"; then
+    printf 'Expected seek-capability stream wiring in adapter patch: %s\n' \
+      "$stream_capability_line" >&2
+    exit 1
+  fi
+done
+
 binary_strings="$work_dir/MediaRemoteAdapter.strings"
 strings "$binary" > "$binary_strings"
 for capability in isLive supportsSeeking kMRMediaRemoteNowPlayingInfoIsAlwaysLive \
