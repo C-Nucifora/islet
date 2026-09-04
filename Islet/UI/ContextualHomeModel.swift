@@ -69,6 +69,7 @@ struct HomeAttentionAction: Equatable, Sendable {
   enum Kind: Equatable, Sendable {
     case openActivity(String)
     case openURL(URL)
+    case openPulseAction(itemID: PulseItem.ID, actionID: String)
     case openMeetingLink(CalendarMeetingLink)
     case completeReminder(String)
     case toggleTimer
@@ -413,7 +414,9 @@ enum HomeAttentionBuilder {
     }
     let action =
       item.actions.first.map {
-        HomeAttentionAction(title: $0.title, symbol: "arrow.up.right", kind: .openURL($0.url))
+        HomeAttentionAction(
+          title: $0.title, symbol: "arrow.up.right",
+          kind: .openPulseAction(itemID: item.id, actionID: $0.id))
       }
       ?? HomeAttentionAction(
         title: "Open Pulse", symbol: "waveform.path.ecg", kind: .openActivity("pulse"))
