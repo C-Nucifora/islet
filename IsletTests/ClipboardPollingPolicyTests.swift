@@ -7,10 +7,14 @@ import XCTest
 private final class ClipboardPollingSchedulerProbe: ClipboardPollingScheduling {
   @MainActor
   final class ScheduledTask: ClipboardPollingTask {
+    let delay: TimeInterval
     private let action: @MainActor () -> Void
     private(set) var isCancelled = false
 
-    init(action: @escaping @MainActor () -> Void) { self.action = action }
+    init(delay: TimeInterval, action: @escaping @MainActor () -> Void) {
+      self.delay = delay
+      self.action = action
+    }
 
     func cancel() { isCancelled = true }
     func fire() { action() }
@@ -21,7 +25,7 @@ private final class ClipboardPollingSchedulerProbe: ClipboardPollingScheduling {
   func schedule(
     after delay: TimeInterval, action: @escaping @MainActor () -> Void
   ) -> any ClipboardPollingTask {
-    let task = ScheduledTask(action: action)
+    let task = ScheduledTask(delay: delay, action: action)
     tasks.append(task)
     return task
   }
@@ -206,6 +210,35 @@ final class ClipboardPollingPolicyTests: XCTestCase {
 
     scheduler.tasks[1].fire()
     XCTAssertTrue(model.items.isEmpty)
+    XCTAssertEqual(scheduler.tasks.count, 3)
+    model.stop()
+  }
+
+  func testTimedPauseSchedulesItsOwnExpiryAndResumesWithoutManualPolling() {
+    let pasteboard = NSPasteboard(
+      name: NSPasteboard.Name("islet-tests-poll-timed-pause-\(UUID().uuidString)"))
+    let scheduler = ClipboardPollingSchedulerProbe()
+    let store = ClipboardPollingPrivacyStore()
+    let context = ClipboardPollingContextMonitor()
+    var now = start
+    let policy = ClipboardPollingPolicy(now: { now })
+    let model = ClipboardModel(
+      pasteboard: pasteboard, privacyStore: store, contextMonitor: context, now: { now },
+      pollingPolicy: policy, pollingScheduler: scheduler)
+    model.start()
+
+    model.pause(for: 5 * 60)
+
+    XCTAssertTrue(model.isPaused)
+    XCTAssertEqual(scheduler.tasks.count, 2)
+    XCTAssertTrue(scheduler.tasks[0].isCancelled)
+    XCTAssertEqual(scheduler.tasks[1].delay, 5 * 60)
+
+    now.addTimeInterval(5 * 60)
+    scheduler.tasks[1].fire()
+
+    XCTAssertFalse(model.isPaused)
+    XCTAssertNil(store.load().pausedUntil)
     XCTAssertEqual(scheduler.tasks.count, 3)
     model.stop()
   }
