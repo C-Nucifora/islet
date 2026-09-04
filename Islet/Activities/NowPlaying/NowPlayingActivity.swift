@@ -31,7 +31,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   @Published private(set) var adapterFailure: String?
   private(set) var activationDate: Date?
 
-  private var table = MediaSourceTable()
+  private(set) var table = MediaSourceTable()
   private var artworkPayloads: [SourceID: Data] = [:]
   private var artworkImages: [SourceID: NSImage] = [:]
   private var artworkDecodeTasks: [SourceID: Task<Void, Never>] = [:]
@@ -81,6 +81,35 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   /// A source hidden by the user's media filter must not leave behind an empty, selectable tab.
   var isActive: Bool { publishedPrimaryKey != nil }
 
+  func receive(_ update: AdapterUpdate, now: Date = Date()) {
+    switch update {
+    case .ignored:
+      return
+    case .idle:
+      table.removeAll()
+      activationDate = nil
+      expiryTask?.cancel()
+      expiryTask = nil
+      publish()
+    case .sourceGone(let key):
+      guard table.remove(key) else { return }
+      if table.isEmpty { activationDate = nil }
+      publish()
+      rescheduleExpiry()
+    case .nowPlaying(let key, let state):
+      let wasVisible = !table.isEmpty
+      let previous = table.states[key]
+      table.upsert(key, state, now: now)
+      if !wasVisible { activationDate = now }
+      if let previous, previous.title != state.title, !state.title.isEmpty {
+        let appName = resolvedApplicationName(for: key.displayBundleIdentifier)
+        SystemEventBus.shared.emit(Self.trackChangeEvent(for: state, appName: appName))
+      }
+      publish()
+      rescheduleExpiry()
+    }
+  }
+
   func start() {
     guard !isMonitoring else { return }
     isMonitoring = true
@@ -114,32 +143,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     streamTask = Task { [weak self] in
       guard let self else { return }
       for await update in self.watcher.updates {
-        switch update {
-        case .ignored:
-          continue
-        case .idle:
-          self.table.removeAll()
-          self.activationDate = nil
-          self.expiryTask?.cancel()
-          self.expiryTask = nil
-          self.publish()
-        case .sourceGone(let key):
-          guard self.table.remove(key) else { continue }
-          if self.table.isEmpty { self.activationDate = nil }
-          self.publish()
-          self.rescheduleExpiry()
-        case .nowPlaying(let key, let state):
-          let wasVisible = !self.table.isEmpty
-          let previous = self.table.states[key]
-          self.table.upsert(key, state, now: Date())
-          if !wasVisible { self.activationDate = Date() }
-          if let previous, previous.title != state.title, !state.title.isEmpty {
-            let appName = self.resolvedApplicationName(for: key.displayBundleIdentifier)
-            SystemEventBus.shared.emit(Self.trackChangeEvent(for: state, appName: appName))
-          }
-          self.publish()
-          self.rescheduleExpiry()
-        }
+        self.receive(update)
       }
     }
   }
@@ -346,8 +350,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   }
 
   /// Mirrors the table (and the audio monitor) into the published properties the views read.
-  private func audioSourcesChanged(_ latest: [SourceID]) {
-    table.setActiveAudioSources(latest, now: Date())
+  func audioSourcesChanged(_ latest: [SourceID]) {
     watcher.setPlaybackRecoverySources(Set(latest.map(\.displayBundleIdentifier)))
     publish(audioSources: latest)
     rescheduleExpiry()

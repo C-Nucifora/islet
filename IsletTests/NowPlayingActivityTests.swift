@@ -30,6 +30,30 @@ final class NowPlayingActivityTests: XCTestCase {
     XCTAssertEqual(state.currentElapsed, 0)
   }
 
+  func testMatchingCoreAudioChangesDoNotPromotePausedAdapterStateOrMoveDeadline() throws {
+    let activity = NowPlayingActivity()
+    let browser = SourceID(
+      bundleIdentifier: "company.thebrowser.Browser", pid: 100, parentBundleIdentifier: "")
+    let browserAudio = SourceID(
+      bundleIdentifier: "company.thebrowser.Browser.helper", pid: 101,
+      parentBundleIdentifier: "company.thebrowser.Browser")
+    var paused = PlaybackState()
+    paused.title = "Video"
+    paused.isPlaying = false
+    activity.receive(.nowPlaying(browser, paused), now: Date())
+    let deadline = try XCTUnwrap(activity.table.nextDeadline)
+
+    activity.audioSourcesChanged([browserAudio])
+
+    XCTAssertFalse(activity.sources[browser]?.isPlaying ?? true)
+    XCTAssertEqual(activity.table.nextDeadline, deadline)
+
+    activity.audioSourcesChanged([])
+
+    XCTAssertFalse(activity.sources[browser]?.isPlaying ?? true)
+    XCTAssertEqual(activity.table.nextDeadline, deadline)
+  }
+
   func testCommandFailurePublishesActionSpecificFeedback() async {
     let source = SourceID(
       bundleIdentifier: "com.example.Player", pid: 42, parentBundleIdentifier: "")

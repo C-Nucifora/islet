@@ -36,6 +36,26 @@ final class MediaWatcher: @unchecked Sendable {
     case total
   }
 
+  struct RecoveryEvidence: Equatable {
+    let source: SourceID
+    let title: String
+    let artist: String
+    let album: String
+    let duration: TimeInterval
+    let elapsed: TimeInterval?
+
+    fileprivate func hasSameIdentity(as other: RecoveryEvidence) -> Bool {
+      source == other.source && title == other.title && artist == other.artist
+        && album == other.album && duration == other.duration
+    }
+  }
+
+  enum RecoveryDecision: Equatable {
+    case accept(AdapterUpdate)
+    case awaitConfirmation(RecoveryEvidence)
+    case reject
+  }
+
   /// Monotonic snapshot deadline state. Keeping this independent of Dispatch makes boundary and
   /// precedence tests deterministic; the watcher only supplies the current uptime.
   struct SnapshotDeadlineTracker: Equatable, Sendable {
@@ -199,6 +219,9 @@ final class MediaWatcher: @unchecked Sendable {
 
   static let maximumSnapshotOutputBytes = 1_048_576
   static let maximumHelperStderrBytes = 16_384
+  private static let helperTerminationGrace: TimeInterval = 0.25
+  private static let helperKillGrace: TimeInterval = 1
+  private static let recoveryElapsedAdvanceThreshold: TimeInterval = 0.5
 
   private let queue = DispatchQueue(label: "dev.islet.mediawatcher")
   private let queueKey = DispatchSpecificKey<Void>()
@@ -228,6 +251,7 @@ final class MediaWatcher: @unchecked Sendable {
   /// Recovery launches spent for the current CoreAudio source set. This stays independent from
   /// snapshot failure diagnostics so repeated idle stream records cannot reopen the retry budget.
   private var recoverySnapshotAttemptCount = 0
+  private var recoveryEvidence: RecoveryEvidence?
   /// Diff base per source. The vendored adapter collapses concurrent players, so this holds at
   /// most one entry today. The shape is what the fork described in the design spec's
   /// "Upgrade path - fork the MediaRemote adapter for true per-source media" section needs.
@@ -243,6 +267,10 @@ final class MediaWatcher: @unchecked Sendable {
   /// The latest redacted helper failure for Copy Diagnostics. It persists across a successful
   /// restart so support reports still contain the reason a private framework failed.
   var onDiagnostic: (@Sendable (String?) -> Void)?
+
+  var pendingRecoveryEvidence: RecoveryEvidence? {
+    onQueueSync { recoveryEvidence }
+  }
 
   // Created eagerly in init (not lazily by the consumer) so `continuation` is a `let` published
   // before any producer-queue work can read it. This avoids a cross-thread data race.
@@ -325,6 +353,7 @@ final class MediaWatcher: @unchecked Sendable {
       failureCount = 0
       snapshotFailureCount = 0
       recoverySnapshotAttemptCount = 0
+      recoveryEvidence = nil
       onStatus?("Stopped")
       onDiagnostic?(nil)
     }
@@ -337,24 +366,27 @@ final class MediaWatcher: @unchecked Sendable {
       if bundleIdentifiers != playbackRecoveryBundleIdentifiers {
         snapshotFailureCount = 0
         recoverySnapshotAttemptCount = 0
+        recoveryEvidence = nil
       }
       playbackRecoveryBundleIdentifiers = bundleIdentifiers
       if !bundleIdentifiers.isEmpty {
         scheduleRecoverySnapshot()
-      } else if snapshotRecoveryGeneration != nil {
-        snapshotLaunchWorkItem?.cancel()
-        snapshotLaunchWorkItem = nil
-        cleanupSnapshot(terminate: true)
+      } else {
+        recoveryEvidence = nil
+        if snapshotRecoveryGeneration != nil {
+          snapshotLaunchWorkItem?.cancel()
+          snapshotLaunchWorkItem = nil
+          cleanupSnapshot(terminate: true)
+        }
       }
     }
   }
 
-  private func onQueueSync(_ operation: () -> Void) {
+  private func onQueueSync<Result>(_ operation: () -> Result) -> Result {
     if DispatchQueue.getSpecific(key: queueKey) != nil {
-      operation()
-    } else {
-      queue.sync(execute: operation)
+      return operation()
     }
+    return queue.sync(execute: operation)
   }
 
   /// Detaches handlers and drops the current process/pipe. Must run on `queue`.
@@ -370,13 +402,13 @@ final class MediaWatcher: @unchecked Sendable {
     pipe = nil
     stderrPipe = nil
     stderr = nil
-    oldProcess?.terminationHandler = nil
     if let oldProcess {
       if terminateStream {
         terminateAndReap(oldProcess)
-      } else {
-        oldProcess.waitUntilExit()
       }
+      // A non-terminating cleanup runs from this handler, so the process has already exited.
+      // A terminating cleanup keeps the notification installed until the bounded reap completes.
+      if !oldProcess.isRunning { oldProcess.terminationHandler = nil }
     }
   }
 
@@ -396,13 +428,13 @@ final class MediaWatcher: @unchecked Sendable {
     snapshotStderrPipe = nil
     snapshotStderr = nil
     snapshotRecoveryGeneration = nil
-    oldSnapshot?.terminationHandler = nil
     if let oldSnapshot {
       if terminate {
         terminateAndReap(oldSnapshot)
-      } else {
-        oldSnapshot.waitUntilExit()
       }
+      // `snapshotFinished` is itself dispatched by this handler. Do not detach the notification
+      // before Foundation has observed the child exit: doing so can strand `waitUntilExit()`.
+      if !oldSnapshot.isRunning { oldSnapshot.terminationHandler = nil }
     }
     if let oldStderrPipe, let oldStderr {
       Self.drainAvailableData(from: oldStderrPipe.fileHandleForReading, into: oldStderr)
@@ -410,20 +442,41 @@ final class MediaWatcher: @unchecked Sendable {
   }
 
   private func terminateAndReap(_ process: Process) {
-    if process.isRunning {
-      process.terminate()
-      // `applicationWillTerminate` has only a short synchronous window. Give cooperative adapters
-      // a moment to exit, then guarantee that a wedged helper cannot be orphaned under launchd.
-      // Process termination must not depend on the injectable snapshot clock. A fixed clock is
-      // useful in deadline tests but would otherwise make this loop unbounded.
-      let deadline = ProcessInfo.processInfo.systemUptime + 0.25
-      while process.isRunning, ProcessInfo.processInfo.systemUptime < deadline {
-        Thread.sleep(forTimeInterval: 0.01)
-      }
-      if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+    guard process.isRunning else { return }
+
+    // Preserve the helper's existing cleanup callback and add a local completion signal. Waiting
+    // on that signal avoids Foundation's `waitUntilExit()` race when a termination handler is
+    // detached concurrently. Both waits are bounded so app shutdown and snapshot retry can never
+    // wedge the watcher queue.
+    let exited = DispatchSemaphore(value: 0)
+    let existingTerminationHandler = process.terminationHandler
+    process.terminationHandler = { terminatedProcess in
+      existingTerminationHandler?(terminatedProcess)
+      exited.signal()
     }
-    // Always wait, including after a cooperative SIGTERM. This is the explicit reap point.
-    process.waitUntilExit()
+
+    process.terminate()
+    if waitForExit(
+      process, signal: exited, timeout: Self.helperTerminationGrace)
+    {
+      return
+    }
+
+    if Darwin.kill(process.processIdentifier, SIGKILL) == -1, errno != ESRCH {
+      Log.media.error(
+        "Unable to kill MediaRemote helper pid \(process.processIdentifier): \(errno)")
+    }
+    guard !waitForExit(process, signal: exited, timeout: Self.helperKillGrace) else { return }
+    Log.media.error(
+      "MediaRemote helper pid \(process.processIdentifier) did not exit after SIGKILL")
+  }
+
+  private func waitForExit(
+    _ process: Process, signal: DispatchSemaphore, timeout: TimeInterval
+  ) -> Bool {
+    guard process.isRunning else { return true }
+    if signal.wait(timeout: .now() + timeout) == .success { return true }
+    return !process.isRunning
   }
 
   private func launch() {
@@ -631,6 +684,7 @@ final class MediaWatcher: @unchecked Sendable {
     cleanupSnapshot(terminate: true)
     snapshotFailureCount += 1
     let willRetry = recoveryGeneration == nil || recoverySnapshotAttemptCount < 3
+    if recoveryGeneration != nil, !willRetry { recoveryEvidence = nil }
     let delay = snapshotBackoff(snapshotFailureCount)
     let reason = "snapshot \(timeout.rawValue) timeout"
     recordHelperFailure(kind: .snapshot, reason: reason, stderr: capturedStderr)
@@ -671,19 +725,41 @@ final class MediaWatcher: @unchecked Sendable {
         recoveryGeneration: recoveryGeneration)
       return
     }
-    guard let parsed = Self.parseInitialSnapshot(data: capture.data) else {
+    guard let parsedSnapshot = Self.parseInitialSnapshotDetails(data: capture.data) else {
       snapshotFailed(
         reason: "invalid output", stderr: stderr, recoveryGeneration: recoveryGeneration)
       return
     }
-    if recoveryGeneration != nil,
-      !Self.shouldAcceptRecoveredUpdate(
-        parsed, activeBundleIdentifiers: playbackRecoveryBundleIdentifiers)
-    {
-      snapshotFailed(
-        reason: "recovered source is not an active audio app",
-        stderr: stderr,
-        recoveryGeneration: recoveryGeneration)
+    let parsed = parsedSnapshot.update
+    if recoveryGeneration != nil {
+      switch Self.recoveryDecision(
+        for: parsed,
+        snapshotElapsedTime: parsedSnapshot.elapsedTime,
+        activeBundleIdentifiers: playbackRecoveryBundleIdentifiers,
+        previous: recoveryEvidence)
+      {
+      case .accept(let update):
+        recoveryEvidence = nil
+        snapshotFailureCount = 0
+        recoverySnapshotAttemptCount = 0
+        onStatus?("Streaming")
+        accept(update)
+      case .awaitConfirmation(let evidence):
+        recoveryEvidence = evidence
+        if recoverySnapshotAttemptCount < 3 {
+          let delay = snapshotBackoff(max(1, recoverySnapshotAttemptCount))
+          scheduleRecoverySnapshot(after: delay)
+        } else {
+          recoveryEvidence = nil
+          onStatus?("Streaming (playback not confirmed)")
+        }
+      case .reject:
+        recoveryEvidence = nil
+        snapshotFailed(
+          reason: "recovered source is not an active audio app",
+          stderr: stderr,
+          recoveryGeneration: recoveryGeneration)
+      }
       return
     }
     snapshotFailureCount = 0
@@ -693,9 +769,14 @@ final class MediaWatcher: @unchecked Sendable {
   }
 
   static func parseInitialSnapshot(data: Data) -> AdapterUpdate? {
+    parseInitialSnapshotDetails(data: data)?.update
+  }
+
+  private static func parseInitialSnapshotDetails(data: Data) -> AdapterParser.ParsedSnapshot? {
     guard let line = String(data: data, encoding: .utf8) else { return nil }
-    let parsed = AdapterParser.parseSnapshot(line: line)
-    return parsed == .ignored ? nil : parsed
+    guard let parsed = AdapterParser.parseSnapshotDetails(line: line), parsed.update != .ignored
+    else { return nil }
+    return parsed
   }
 
   /// Drains bytes already buffered by the kernel without waiting for EOF. A helper descendant can
@@ -762,6 +843,7 @@ final class MediaWatcher: @unchecked Sendable {
     guard shouldRetry else { return }
     snapshotFailureCount += 1
     let willRetry = recoveryGeneration == nil || recoverySnapshotAttemptCount < 3
+    if recoveryGeneration != nil, !willRetry { recoveryEvidence = nil }
     let delay = snapshotBackoff(snapshotFailureCount)
     recordHelperFailure(kind: .snapshot, reason: "snapshot \(reason)", stderr: stderr)
     let action = willRetry ? "retrying in \(Self.secondsLabel(delay))" : "recovery stopped"
@@ -831,6 +913,7 @@ final class MediaWatcher: @unchecked Sendable {
     let base = currentSource.flatMap { lastStates[$0] }
     let parsed = AdapterParser.parse(line: line, current: base)
     guard parsed != .ignored else { return }
+    recoveryEvidence = nil
     streamGeneration &+= 1
     streamHasEmittedRecord = true
     snapshotFailureCount = 0
@@ -865,6 +948,39 @@ final class MediaWatcher: @unchecked Sendable {
   ) -> Bool {
     guard case .nowPlaying(let source, _) = update else { return false }
     return activeBundleIdentifiers.contains(source.displayBundleIdentifier)
+  }
+
+  static func recoveryDecision(
+    for update: AdapterUpdate,
+    snapshotElapsedTime: TimeInterval?,
+    activeBundleIdentifiers: Set<String>,
+    previous: RecoveryEvidence?
+  ) -> RecoveryDecision {
+    guard case .nowPlaying(let source, let state) = update,
+      activeBundleIdentifiers.contains(source.displayBundleIdentifier)
+    else { return .reject }
+    if state.isPlaying { return .accept(update) }
+
+    let current = RecoveryEvidence(
+      source: source,
+      title: state.title,
+      artist: state.artist,
+      album: state.album,
+      duration: state.duration,
+      elapsed: snapshotElapsedTime)
+    if let previous,
+      current.hasSameIdentity(as: previous),
+      let currentElapsed = current.elapsed,
+      let previousElapsed = previous.elapsed,
+      currentElapsed.isFinite,
+      previousElapsed.isFinite,
+      currentElapsed - previousElapsed >= recoveryElapsedAdvanceThreshold
+    {
+      var confirmedState = state
+      confirmedState.isPlaying = true
+      return .accept(.nowPlaying(source, confirmedState))
+    }
+    return .awaitConfirmation(current)
   }
 
   private func accept(_ parsed: AdapterUpdate) {
