@@ -3,7 +3,7 @@ import AppKit
 /// The panel itself owns file-drop registration. SwiftUI hit testing is disabled while collapsed
 /// so clicks reach the app underneath, which also prevents a SwiftUI `.onDrop` from being targeted.
 /// AppKit's window-level drag destination remains active in both collapsed and expanded states.
-final class NotchPanel: NSPanel, NSDraggingDestination {
+class NotchPanel: NSPanel, NSDraggingDestination {
   var acceptsFileDrops: (() -> Bool)?
   var fileDragTargetChanged: ((Bool) -> Void)?
   var fileURLsDropped: (([URL]) -> Bool)?

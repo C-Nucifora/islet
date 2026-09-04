@@ -45,9 +45,31 @@ final class MotionTests: XCTestCase {
 }
 
 final class AccessibilityPolicyTests: XCTestCase {
+  private final class FocusTestPanel: NotchPanel {
+    private(set) var makeKeyCount = 0
+    private(set) var resignKeyCount = 0
+    private var reportsKeyWindow = false
+
+    override var isKeyWindow: Bool { reportsKeyWindow }
+
+    override func makeKey() {
+      makeKeyCount += 1
+      reportsKeyWindow = true
+    }
+
+    override func resignKey() {
+      resignKeyCount += 1
+      reportsKeyWindow = false
+    }
+
+    func simulateExternalFocus() {
+      reportsKeyWindow = true
+    }
+  }
+
   @MainActor
   func testPanelInstanceTakesFocusOnlyAfterAnExplicitRequestAndReleasesItOnCollapse() {
-    let panel = NotchPanel(frame: CGRect(x: 0, y: 0, width: 520, height: 190))
+    let panel = FocusTestPanel(frame: CGRect(x: 0, y: 0, width: 520, height: 190))
     defer { panel.close() }
     let geometry = NotchGeometry(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
@@ -59,27 +81,29 @@ final class AccessibilityPolicyTests: XCTestCase {
     XCTAssertTrue(panel.canBecomeKey)
     XCTAssertFalse(panel.canBecomeMain)
 
-    panel.orderFront(nil)
     viewModel.apply(.clickedNotch)
     instance.updateKeyboardFocus(isExpanded: viewModel.state.isExpanded)
     XCTAssertFalse(panel.isKeyWindow)
+    XCTAssertEqual(panel.makeKeyCount, 0)
     instance.requestKeyboardFocus()
     XCTAssertTrue(panel.isKeyWindow)
+    XCTAssertEqual(panel.makeKeyCount, 1)
     viewModel.apply(.clickedNotch)
     instance.updateKeyboardFocus(isExpanded: viewModel.state.isExpanded)
     XCTAssertFalse(panel.isKeyWindow)
+    XCTAssertEqual(panel.resignKeyCount, 1)
   }
 
   @MainActor
   func testPanelDoesNotReleaseFocusItDidNotAcquire() {
-    let panel = NotchPanel(frame: CGRect(x: 0, y: 0, width: 520, height: 190))
+    let panel = FocusTestPanel(frame: CGRect(x: 0, y: 0, width: 520, height: 190))
     defer { panel.close() }
 
-    panel.orderFront(nil)
-    panel.makeKey()
+    panel.simulateExternalFocus()
     XCTAssertTrue(panel.isKeyWindow)
     panel.releaseKeyboardFocusIfAcquired()
     XCTAssertTrue(panel.isKeyWindow)
+    XCTAssertEqual(panel.resignKeyCount, 0)
   }
 
   func testKeyboardCommandsUseStableShortcuts() {
