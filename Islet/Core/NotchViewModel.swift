@@ -9,19 +9,16 @@ final class NotchViewModel: ObservableObject {
   /// The expanded switcher's explicit choice. A nil value lets the view choose its normal default.
   @Published private(set) var selectedActivityID: String?
   @Published private(set) var temporarilyPresentedActivityID: String?
-  /// Screen-coordinate footprint the visible island should occupy right now. The AppKit panel is
-  /// permanently reserved at `reservedPanelFrame`; keeping this logical footprint separate lets
-  /// pointer passthrough and alignment follow only the pixels the island actually draws.
+  /// Screen-coordinate frame the panel should occupy right now. Growth is published before the
+  /// island animates into it. Shrinkage waits for that animation to finish.
   @Published private(set) var panelFrame: CGRect
-  /// The frame the reserved window really occupies, read back from AppKit after placement or
-  /// reassertion. Anything positioning drawn content on screen uses this because the compact
-  /// island is aligned within that larger transparent host.
+  /// The frame the window really occupies, read back after every AppKit frame transaction. This
+  /// exposes any placement divergence and keeps the renderer's clipping alignment measurable.
   @Published private(set) var actualPanelFrame: CGRect
   /// Height tier the currently selected tab asked for. Reported by `ExpandedContainerView`; drives
   /// the drawn island, hover region and click-inside test.
   @Published private(set) var expandedHeight: CGFloat = Metrics.expandedSize.height
-  /// Drawn island width for the live tab count. The expanded panel reserves the maximum supported
-  /// width up front, so changing this value animates only SwiftUI content and never resizes AppKit.
+  /// Drawn island width for the live tab count.
   @Published private(set) var expandedWidth: CGFloat = Metrics.expandedSize.width
   @Published private(set) var compactTargetRevision: UInt = 0
   /// Live 0...1 pressure against the hover barrier. The view turns this into elastic stretch.
@@ -49,6 +46,7 @@ final class NotchViewModel: ObservableObject {
   private var didPlayBarrierContactHaptic = false
   private var collapseTask: Task<Void, Never>?
   private var shrinkTask: Task<Void, Never>?
+  private var shrinkTaskRevision: UInt = 0
   private var cancellables: Set<AnyCancellable> = []
 
   init(
@@ -152,9 +150,10 @@ final class NotchViewModel: ObservableObject {
       minimumWidth: Metrics.expandedSize.width, maximumWidth: screenLimit)
   }
 
-  /// The one AppKit frame used for this panel's whole lifetime. SwiftUI animates the island inside
-  /// it; AppKit never resizes an NSHostingView while that view is updating constraints.
-  var reservedPanelFrame: CGRect {
+  /// Stable screen frame for the SwiftUI renderer. The AppKit window clips this renderer to
+  /// `panelFrame`, so the window-server footprint can adapt without changing NSHostingView's
+  /// proposed size during a display-cycle constraint pass.
+  var renderingFrame: CGRect {
     geometry.panelFrame(width: maximumExpandedWidth, height: Metrics.tallExpandedHeight)
   }
 
@@ -163,26 +162,30 @@ final class NotchViewModel: ObservableObject {
     geometry.expandedRect(width: expandedWidth, height: expandedHeight)
   }
 
-  /// The reserved window has transparent margins that must pass pointer events through. Expanded
-  /// content can straddle those margins as the pointer moves, so only that state needs the global
-  /// passthrough monitor. Collapsed content is always mouse-transparent and opens through the
-  /// separate global click or hover monitors.
+  /// Bounding box of the visible expanded shape. `expandedRect` is the body size used for layout;
+  /// the top corners flare outward by their radius and remain part of the interactive island.
+  var expandedInteractionRect: CGRect {
+    expandedRect.insetBy(dx: -Metrics.expandedRadii.top, dy: 0)
+  }
+
+  /// Expanded hosts retain small margins for their corner flare and shadow. A global movement
+  /// monitor keeps those transparent pixels from swallowing input intended for the menu bar.
   var needsPointerPassthroughMonitoring: Bool {
     state.isExpanded
   }
 
   /// The region that counts as "hovering" for the current state.
   private var hoverRegion: CGRect {
-    state.isExpanded ? expandedRect.union(geometry.hitRect) : geometry.hitRect
+    state.isExpanded ? expandedInteractionRect.union(geometry.hitRect) : geometry.hitRect
   }
 
-  /// The AppKit window is deliberately fixed at its maximum size. Only the rendered island inside
-  /// it should take mouse events; transparent margins behave like the menu bar or app beneath them.
+  /// Only the rendered island inside the host should take mouse events. The host still carries
+  /// room for corner flare and shadow, and those transparent margins must pass through.
   func shouldIgnorePanelMouseEvents(
     at location: CGPoint, allowingCompactFileDrag: Bool = false
   ) -> Bool {
     guard state.isExpanded || allowingCompactFileDrag else { return true }
-    let interactiveRect = state.isExpanded ? expandedRect : targetPanelFrame(for: state)
+    let interactiveRect = state.isExpanded ? expandedInteractionRect : targetPanelFrame(for: state)
     return !region(interactiveRect, contains: location)
   }
 
@@ -242,7 +245,7 @@ final class NotchViewModel: ObservableObject {
     lastMouseLocation = location
     if region(geometry.hitRect, contains: location) {
       apply(.clickedNotch)
-    } else if state.isExpanded, expandedRect.contains(location) {
+    } else if state.isExpanded, expandedInteractionRect.contains(location) {
       apply(.clickedInsideExpanded)
     } else if state.isExpanded {
       apply(.clickedOutside)
@@ -259,19 +262,17 @@ final class NotchViewModel: ObservableObject {
     updatePanelFrame(for: state)
   }
 
-  /// Records where AppKit actually put the reserved host window. Drawing offsets use it to keep
-  /// the visible island aligned with the hardware notch.
+  /// Records where AppKit actually put the clipped host window for diagnostics, passthrough
+  /// updates and renderer-alignment checks.
   func setActualPanelFrame(_ frame: CGRect) {
     guard frame != actualPanelFrame else { return }
     actualPanelFrame = frame
   }
 
   private func targetPanelFrame(for state: NotchState) -> CGRect {
-    // This is the visible footprint, not the reserved AppKit window. The expanded footprint uses
-    // the tallest and widest supported island; compact footprints follow their measured slots.
     switch state {
     case .expanded:
-      geometry.panelFrame(width: maximumExpandedWidth, height: Metrics.tallExpandedHeight)
+      geometry.panelFrame(width: expandedWidth, height: expandedHeight)
     case .peek where mode == .hover:
       geometry.collapsedPanelFrame(
         compactLeading: compactLeadingWidth, compactTrailing: compactTrailingWidth,
@@ -285,21 +286,34 @@ final class NotchViewModel: ObservableObject {
     }
   }
 
-  /// The selected tab's height tier, reported by `ExpandedContainerView`. Only the drawn island
-  /// and the hit region follow it — deliberately NOT the panel, which stays at the tallest tier
-  /// for the whole expanded state. See `targetPanelFrame` for the crash this avoids.
+  /// The selected tab's height tier, reported by `ExpandedContainerView`.
   func setExpandedHeight(_ height: CGFloat) {
     guard height != expandedHeight else { return }
+    let oldHeight = expandedHeight
+    if state.isExpanded, height > oldHeight {
+      updatePanelFrame(
+        toward: geometry.panelFrame(width: expandedWidth, height: height))
+    }
     withAnimation(Motion.gated(Motion.opening)) { expandedHeight = height }
+    if state.isExpanded, height < oldHeight {
+      updatePanelFrame(toward: targetPanelFrame(for: state), restartingShrinkDelay: true)
+    }
     reconcileHoverContainment()
   }
 
-  /// Sets the width requested by the current tab count. The panel already reserves
-  /// `maximumExpandedWidth`, so this changes only the drawn island and its hit region.
+  /// Sets the width requested by the current tab count.
   func setExpandedWidth(_ width: CGFloat) {
     let clamped = min(maximumExpandedWidth, max(Metrics.expandedSize.width, ceil(width)))
     guard clamped != expandedWidth else { return }
+    let oldWidth = expandedWidth
+    if state.isExpanded, clamped > oldWidth {
+      updatePanelFrame(
+        toward: geometry.panelFrame(width: clamped, height: expandedHeight))
+    }
     withAnimation(Motion.gated(Motion.opening)) { expandedWidth = clamped }
+    if state.isExpanded, clamped < oldWidth {
+      updatePanelFrame(toward: targetPanelFrame(for: state), restartingShrinkDelay: true)
+    }
     reconcileHoverContainment()
   }
 
@@ -316,22 +330,33 @@ final class NotchViewModel: ObservableObject {
     }
   }
 
-  /// Grows the logical visible footprint immediately, then lets it settle after the closing
-  /// animation. The AppKit host itself remains at `reservedPanelFrame` throughout.
   private func updatePanelFrame(for state: NotchState) {
-    let target = targetPanelFrame(for: state)
+    updatePanelFrame(toward: targetPanelFrame(for: state))
+  }
+
+  /// Grows before a matching content change can draw outside the window. Shrinks share one timer
+  /// and re-read the current target when it fires, so rapid tier and state changes cannot leave a
+  /// stale frame behind.
+  private func updatePanelFrame(toward target: CGRect, restartingShrinkDelay: Bool = false) {
     let grown = panelFrame.union(target)
     if grown != panelFrame { panelFrame = grown }
-    // A pending shrink is deliberately left running rather than restarted: hover dithering on the
-    // notch boundary, or a compact slot re-measuring, would otherwise push its deadline back
-    // forever and strand the panel at expanded size. It re-reads the target when it fires, so a
-    // single timer always settles on the current frame.
-    guard target != panelFrame, shrinkTask == nil else { return }
+    // Hover dithering and compact slot re-measurement do not restart a pending shrink, which stops
+    // them from pushing its deadline back forever. A real content-tier shrink restarts the delay so
+    // the outgoing animation is never clipped. Every timer re-reads the current target when it
+    // fires.
+    guard target != panelFrame else { return }
+    guard shrinkTask == nil || restartingShrinkDelay else { return }
+    shrinkTaskRevision &+= 1
+    let revision = shrinkTaskRevision
+    shrinkTask?.cancel()
     shrinkTask = Self.debounce(
       for: Motion.panelShrinkDelay,
-      cleanup: { [weak self] in self?.shrinkTask = nil },
+      cleanup: { [weak self] in
+        guard let self, self.shrinkTaskRevision == revision else { return }
+        self.shrinkTask = nil
+      },
       body: { [weak self] in
-        guard let self else { return }
+        guard let self, self.shrinkTaskRevision == revision else { return }
         let settled = self.targetPanelFrame(for: self.state)
         if settled != self.panelFrame { self.panelFrame = settled }
       })
@@ -339,7 +364,11 @@ final class NotchViewModel: ObservableObject {
 
   /// Cancels a pending shrink without scheduling a replacement. Exposed for tests: nothing in the
   /// app cancels it today, and the point of the test is that the gating handle survives a cancel.
-  func cancelPendingShrink() { shrinkTask?.cancel() }
+  func cancelPendingShrink() {
+    shrinkTaskRevision &+= 1
+    shrinkTask?.cancel()
+    shrinkTask = nil
+  }
 
   func apply(_ event: NotchEvent) {
     let next = NotchStateMachine.transition(
@@ -379,11 +408,8 @@ final class NotchViewModel: ObservableObject {
   /// Runs `body` after `delay`, cancelling any timer passed as `cancelling`. Omitting it schedules
   /// without disturbing what's already in flight.
   ///
-  /// `cleanup` runs on EVERY path, cancellation included. A handle that gates future scheduling —
-  /// `shrinkTask`, whose non-nil-ness blocks the next shrink — has to be released even when the
-  /// timer never fires, or the first cancel blocks that path for the rest of the process. Nilling
-  /// the handle here is safe against clobbering a newer one: no replacement can be scheduled while
-  /// the old handle is still non-nil.
+  /// `cleanup` runs on every path, cancellation included. Callers that can replace a task use a
+  /// revision check in their cleanup closure so an old cancellation cannot clear the new handle.
   private static func debounce(
     cancelling existing: Task<Void, Never>? = nil, for delay: Duration,
     cleanup: (@MainActor () -> Void)? = nil,
