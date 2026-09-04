@@ -5,8 +5,16 @@
       "id": "shortcuts",
       "name": "Shortcuts",
       "sources": ["shortcuts"],
-      "capabilities": ["events"],
-      "setup": "Add the Publish an Islet Pulse Event action."
+      "capabilities": ["events", "progress"],
+      "setup": "Import a starter shortcut or add an Islet action.",
+      "examples": [
+        {"name": "Transient event", "file": "https://github.com/C-Nucifora/islet/releases/latest/download/01-transient-event.shortcut"},
+        {"name": "Progress task", "file": "https://github.com/C-Nucifora/islet/releases/latest/download/02-progress-task.shortcut"},
+        {"name": "Failed task", "file": "https://github.com/C-Nucifora/islet/releases/latest/download/03-failed-task.shortcut"},
+        {"name": "Guarded completion", "file": "https://github.com/C-Nucifora/islet/releases/latest/download/04-guarded-completion.shortcut"},
+        {"name": "Focus profile", "file": "https://github.com/C-Nucifora/islet/releases/latest/download/05-focus-profile.shortcut"},
+        {"name": "Focus timer", "file": "https://github.com/C-Nucifora/islet/releases/latest/download/06-focus-timer.shortcut"}
+      ]
     },
     {
       "id": "cli",

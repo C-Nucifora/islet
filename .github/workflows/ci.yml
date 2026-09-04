@@ -98,6 +98,7 @@ jobs:
             Scripts/*.sh
           actionlint
           Scripts/test-update-tooling.sh
+          Scripts/validate-pulse-shortcuts.sh
 
       - name: Test out-of-process Pulse providers
         run: |

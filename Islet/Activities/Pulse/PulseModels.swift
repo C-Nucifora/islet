@@ -473,12 +473,30 @@ struct PulseProviderDescriptor: Identifiable, Equatable, Sendable {
   let sourceIDs: Set<String>
   let capabilities: Set<PulseCapability>
   let setupHint: String
+  let documentationLinks: [PulseProviderDocumentationLink]
+
+  init(
+    id: String, name: String, summary: String, symbol: String, sourceIDs: Set<String>,
+    capabilities: Set<PulseCapability>, setupHint: String,
+    documentationLinks: [PulseProviderDocumentationLink] = []
+  ) {
+    self.id = id
+    self.name = name
+    self.summary = summary
+    self.symbol = symbol
+    self.sourceIDs = sourceIDs
+    self.capabilities = capabilities
+    self.setupHint = setupHint
+    self.documentationLinks = documentationLinks
+  }
 
   static let gallery: [Self] = [
     .init(
       id: "shortcuts", name: "Shortcuts", summary: "Publish events without writing code.",
       symbol: "square.stack.3d.up.fill", sourceIDs: ["shortcuts"],
-      capabilities: [.events], setupHint: "Add the Publish an Islet Pulse Event action."),
+      capabilities: [.events, .progress],
+      setupHint: "Import a starter shortcut or add an Islet action.",
+      documentationLinks: PulseProviderDocumentationLink.shortcutStarterKit),
     .init(
       id: "cli", name: "Pulse CLI", summary: "Send progress and alerts from local scripts.",
       symbol: "terminal.fill", sourceIDs: ["cli"],
@@ -514,6 +532,27 @@ struct PulseProviderDescriptor: Identifiable, Equatable, Sendable {
       capabilities: [.events, .persistentActivities, .progress, .webActions],
       setupHint: "Use a stable source name from your local automation."),
   ]
+}
+
+struct PulseProviderDocumentationLink: Identifiable, Equatable, Sendable {
+  let title: String
+  let url: URL
+
+  var id: String { url.absoluteString }
+
+  static let shortcutStarterKit: [Self] = [
+    link("Transient event", "01-transient-event"),
+    link("Progress task", "02-progress-task"),
+    link("Failed task", "03-failed-task"),
+    link("Guarded completion", "04-guarded-completion"),
+    link("Focus profile", "05-focus-profile"),
+    link("Focus timer", "06-focus-timer"),
+  ]
+
+  private static func link(_ title: String, _ filename: String) -> Self {
+    let baseURL = "https://github.com/C-Nucifora/islet/releases/latest/download"
+    return Self(title: title, url: URL(string: "\(baseURL)/\(filename).shortcut")!)
+  }
 }
 
 enum PulseProviderHealth: Equatable, Sendable {

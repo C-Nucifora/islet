@@ -110,6 +110,9 @@ struct PublishPulseEventIntent: AppIntent {
   @Parameter(title: "Priority", default: .normal)
   var eventPriority: PulseIntentPriority
 
+  @Parameter(title: "State", default: .active)
+  var eventState: PulseIntentState
+
   @Parameter(title: "Seconds", default: 8, inclusiveRange: (2, 300))
   var seconds: Int
 
@@ -119,7 +122,7 @@ struct PublishPulseEventIntent: AppIntent {
     let id = suppliedID.flatMap { $0.isEmpty ? nil : $0 } ?? "intent-\(UUID().uuidString)"
     let payload = PulsePayload(
       id: id, source: "shortcuts", title: eventTitle, subtitle: details,
-      symbol: "sparkles", accentHex: "#64D2FF", progress: nil, state: .active,
+      symbol: "sparkles", accentHex: "#64D2FF", progress: nil, state: eventState.pulseValue,
       priority: eventPriority.pulseValue,
       expiresAt: Date().addingTimeInterval(TimeInterval(seconds)),
       actions: nil)
@@ -158,12 +161,20 @@ struct UpdatePulseProgressIntent: AppIntent {
   @Parameter(title: "Priority", default: .normal)
   var activityPriority: PulseIntentPriority
 
+  @Parameter(title: "State", default: .progress)
+  var activityState: PulseIntentState
+
+  @Parameter(title: "Expiry Seconds", default: 300, inclusiveRange: (30, 86_400))
+  var expirySeconds: Int
+
   @MainActor
   func perform() async throws -> some IntentResult & ProvidesDialog {
     let payload = PulsePayload(
       id: identifier, source: "shortcuts", title: activityTitle, subtitle: details,
-      symbol: "chart.bar.fill", accentHex: "#64D2FF", progress: progress, state: .progress,
-      priority: activityPriority.pulseValue, expiresAt: nil, actions: nil)
+      symbol: "chart.bar.fill", accentHex: "#64D2FF", progress: progress,
+      state: activityState.pulseValue,
+      priority: activityPriority.pulseValue,
+      expiresAt: Date().addingTimeInterval(TimeInterval(expirySeconds)), actions: nil)
     let response = PulseCenter.shared.applyIfEnabled(
       PulseCommand(token: "", operation: .update, activity: payload, id: nil))
     guard response.ok else { throw PulseIntentError.rejected(response.error ?? "Unknown error") }
@@ -207,6 +218,30 @@ enum PulseIntentPriority: String, AppEnum {
     case .normal: .normal
     case .high: .high
     case .critical: .critical
+    }
+  }
+}
+
+enum PulseIntentState: String, AppEnum {
+  case active
+  case progress
+  case needsAction
+  case succeeded
+  case failed
+
+  static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Pulse State")
+  static let caseDisplayRepresentations: [Self: DisplayRepresentation] = [
+    .active: "Active", .progress: "Progress", .needsAction: "Needs Action",
+    .succeeded: "Succeeded", .failed: "Failed",
+  ]
+
+  var pulseValue: PulseState {
+    switch self {
+    case .active: .active
+    case .progress: .progress
+    case .needsAction: .needsAction
+    case .succeeded: .succeeded
+    case .failed: .failed
     }
   }
 }
