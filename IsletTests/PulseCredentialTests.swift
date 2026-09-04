@@ -169,6 +169,34 @@ final class PulseCredentialTests: XCTestCase {
   }
 
   @MainActor
+  func testProviderNamesAreBoundedByUTF8BytesWithoutPartialCreation() throws {
+    let directory = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = PulseCredentialStore(supportDirectory: directory)
+    let oversizedName = "e" + String(repeating: "\u{0301}", count: 1_000)
+    XCTAssertEqual(oversizedName.count, 1)
+
+    XCTAssertThrowsError(
+      try store.createProvider(
+        name: oversizedName, source: "build", permissions: [.events])
+    ) { error in
+      XCTAssertEqual(error as? PulseCredentialError, .invalidName)
+    }
+    XCTAssertTrue(store.credentials.isEmpty)
+    XCTAssertEqual(
+      try FileManager.default.contentsOfDirectory(
+        at: store.credentialDirectory, includingPropertiesForKeys: nil), [])
+
+    let accepted = try store.createProvider(
+      name: String(repeating: "é", count: 40), source: "build", permissions: [.events])
+    XCTAssertEqual(accepted.name.utf8.count, PulseCredentialStore.maximumProviderNameBytes)
+
+    let reloaded = PulseCredentialStore(supportDirectory: directory)
+    try reloaded.prepare()
+    XCTAssertEqual(reloaded.credentials.map(\.id), [accepted.id])
+  }
+
+  @MainActor
   func testMetadataPersistsAgeLastUsePermissionsAndRevocationWithoutTokenMaterial() throws {
     let directory = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
