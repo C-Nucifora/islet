@@ -29,6 +29,19 @@ enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
 
   private static let readableIndigo = Color(red: 0.48, green: 0.44, blue: 1)
 
+  /// Settings uses the system window background instead of the island's black surface. Keep the
+  /// Mono palette adaptive there so controls never render white on a light background.
+  func settingsAccentColor(for colorScheme: ColorScheme) -> Color {
+    guard self == .mono else { return accentColor }
+    return colorScheme == .light ? .black : .white
+  }
+
+  /// Foreground content drawn on top of the Settings accent, such as navigation glyphs.
+  func settingsAccentForegroundColor(for colorScheme: ColorScheme) -> Color {
+    guard self == .mono else { return .white }
+    return colorScheme == .light ? .white : .black
+  }
+
   func powerFlowColor(for role: BatteryFlowRole) -> Color {
     switch (self, role) {
     case (.mono, _): .white

@@ -487,6 +487,8 @@ private struct SettingsTransferNotice: Identifiable {
 }
 
 struct SettingsView: View {
+  @Environment(\.colorScheme) private var colorScheme
+
   @ObservedObject private var calendar = AppState.calendar
   @ObservedObject private var reminders = RemindersProvider.shared
   @ObservedObject private var pulse = PulseCenter.shared
@@ -829,7 +831,7 @@ struct SettingsView: View {
       }
     }
     .frame(minWidth: 760, minHeight: 560)
-    .tint(appTheme.accentColor)
+    .tint(appTheme.settingsAccentColor(for: colorScheme))
     .environment(\.appTheme, appTheme)
     .onChange(of: searchText) { _, _ in
       if let current = selection, !filteredCategories.contains(current),
@@ -2777,6 +2779,7 @@ private struct SettingsImportPreviewSheet: View {
 }
 
 private struct AppThemePicker: View {
+  @Environment(\.colorScheme) private var colorScheme
   @Binding var selection: AppTheme
 
   var body: some View {
@@ -2792,14 +2795,15 @@ private struct AppThemePicker: View {
               .overlay {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                   .stroke(
-                    selection == theme ? theme.accentColor : Color.secondary.opacity(0.24),
+                    selection == theme
+                      ? theme.settingsAccentColor(for: colorScheme) : Color.secondary.opacity(0.24),
                     lineWidth: selection == theme ? 3 : 1)
               }
             HStack(spacing: 5) {
               Text(theme.title)
               if selection == theme {
                 Image(systemName: "checkmark.circle.fill")
-                  .foregroundStyle(theme.accentColor)
+                  .foregroundStyle(theme.settingsAccentColor(for: colorScheme))
               }
             }
             .font(.callout.weight(selection == theme ? .semibold : .regular))
@@ -2857,6 +2861,8 @@ private struct AppThemePreview: View {
 }
 
 private struct SettingsNavigationLink: View {
+  @Environment(\.appTheme) private var appTheme
+  @Environment(\.colorScheme) private var colorScheme
   let page: SettingsDetailPage
   let action: () -> Void
   @State private var isHovering = false
@@ -2866,7 +2872,7 @@ private struct SettingsNavigationLink: View {
       HStack(spacing: 13) {
         Image(systemName: page.icon)
           .font(.system(size: 17, weight: .semibold))
-          .foregroundStyle(.white)
+          .foregroundStyle(appTheme.settingsAccentForegroundColor(for: colorScheme))
           .frame(width: 34, height: 34)
           .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
