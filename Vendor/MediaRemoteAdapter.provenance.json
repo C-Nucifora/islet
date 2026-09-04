@@ -20,17 +20,17 @@
     "deploymentTarget": "26.0"
   },
   "artifacts": {
-    "binarySHA256": "2bbd0ca0193077b88229565fc721406a15b04f374c6d214f9dbcafd6bccf0a5e",
+    "binarySHA256": "342cda3b8593e1cb85f8344bc2b8e62ab17392eced3eed3d6401ff752db59a84",
     "slices": {
-      "arm64": "f553a53e133f81ad40bc3b485d004f1547a0cc3bf51f6123c2a96d5c09b64c0e",
-      "x86_64": "c192d1bfe1ebd9ba114babc9981c2993990c1200f1f6cc3062b3bec468acb33d"
+      "arm64": "d7032afed4b6f72a60ba86dad713c03b2d785e2d25cc32ec6b591483b4812b0e",
+      "x86_64": "f9559fec90eff2d637e994e09806c9b4c23f15ee48ed3d369d07a1dc8c372eb5"
     },
     "exportedSymbolsSHA256": "98d9253fef83ed614608586fbf43c449f4503d0691e5992cc0cfaedc3a445c3e",
     "infoPlistSHA256": "cf7c9699302a8ddacf24465443eb7a0153e1c347bf23c3c0895af41c85368af8",
     "codeResourcesSHA256": "5ddd46b76ea756abd4e084c1f21566a39b4ff890bd21dce9b6f11ace69563305",
     "loaderSHA256": "2fb428281a94a77ee9823b82b3d6cf352705307de92c2d0363b3c629b1a1f1ce",
     "loaderPatchSHA256": "7051e3e220885e221980df71887421b6d9f4b1dcd47ee4ea09d19b5c8aafa409",
-    "capabilitiesPatchSHA256": "96eb815e7dc83cb846f65104a8305e14afcde869949e58a615795b3bb567d600",
+    "capabilitiesPatchSHA256": "fdc21d21c2d3a0a491af148d5b59465a23b5a276c2fca8195643f5e9550bb067",
     "licenseSHA256": "a489c16a6be195584fa0b35e28fca54abc8492eb0cc05d851dd24f522f4900a2"
   }
 }
