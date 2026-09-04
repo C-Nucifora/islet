@@ -49,6 +49,59 @@ index 7a582ee..e1d37ba 100644
      dispatch_group_enter(group);
      g_mediaRemote.getNowPlayingInfo(g_serialdispatchQueue, ^(
                                          NSDictionary *information) {
+diff --git a/src/adapter/stream.m b/src/adapter/stream.m
+index bf8ece1..fdaf721 100644
+--- a/src/adapter/stream.m
++++ b/src/adapter/stream.m
+@@ -296,6 +296,30 @@ extern void adapter_stream() {
+           });
+     };
+
++    void (^requestSupportedCommands)() = ^{
++      if (g_mediaRemote.getSupportedCommands == nil ||
++          g_mediaRemote.commandInfoGetCommand == nil ||
++          g_mediaRemote.commandInfoGetEnabled == nil) {
++          [liveData removeObjectForKey:kMRASupportsSeeking];
++          handle();
++          return;
++      }
++      g_mediaRemote.getSupportedCommands(
++          g_serialdispatchQueue, ^(NSArray *commands) {
++            BOOL supportsSeeking = NO;
++            for (id commandInfo in commands) {
++                if (g_mediaRemote.commandInfoGetCommand(commandInfo) ==
++                        kMRSeekToPlaybackPosition &&
++                    g_mediaRemote.commandInfoGetEnabled(commandInfo)) {
++                    supportsSeeking = YES;
++                    break;
++                }
++            }
++            liveData[kMRASupportsSeeking] = @(supportsSeeking);
++            handle();
++          });
++    };
++
+     void (^requestNowPlayingInfo)() = ^{
+       g_mediaRemote.getNowPlayingInfo(g_serialdispatchQueue, ^(
+                                           NSDictionary *information) {
+@@ -323,6 +347,9 @@ extern void adapter_stream() {
+         if (liveData[kMRAPlaying] != nil) {
+             converted[kMRAPlaying] = liveData[kMRAPlaying];
+         }
++        if (liveData[kMRASupportsSeeking] != nil) {
++            converted[kMRASupportsSeeking] = liveData[kMRASupportsSeeking];
++        }
+         // Use the old artwork data, since often the MediaRemote framework
+         // unloads the artwork and then loads it again shortly after.
+         // Only do this when the items have the same identity.
+@@ -348,6 +375,7 @@ extern void adapter_stream() {
+       requestNowPlayingApplicationPID();
+       requestNowPlayingParentApplicationBundleIdentifier();
+       requestNowPlayingApplicationIsPlaying();
++      requestSupportedCommands();
+       requestNowPlayingInfo();
+     };
+
 diff --git a/src/adapter/keys.m b/src/adapter/keys.m
 index 3764cf6..23f1307 100644
 --- a/src/adapter/keys.m
