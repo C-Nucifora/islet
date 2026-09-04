@@ -36,6 +36,7 @@ final class SystemMetricsMonitor: ObservableObject {
   private var energyCancellable: AnyCancellable?
   private let now: () -> Date
   private let cpuPowerSamplingService: CPUPowerSamplingService
+  private var contextRuleCancellable: AnyCancellable?
 
   init(
     now: @escaping () -> Date = Date.init,
@@ -59,6 +60,9 @@ final class SystemMetricsMonitor: ObservableObject {
       .dropFirst()
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.energyPolicyDidChange() }
+    contextRuleCancellable = ContextRuleCenter.shared.resolutionChanges
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.energyPolicyDidChange() }
     restartTimer()
     tick()
   }
@@ -71,6 +75,7 @@ final class SystemMetricsMonitor: ObservableObject {
     timer = nil
     powerCancellable = nil
     energyCancellable = nil
+    contextRuleCancellable = nil
     previous = nil
     previousDate = nil
     isSampling = false
@@ -122,7 +127,7 @@ final class SystemMetricsMonitor: ObservableObject {
 
   private var energyPolicy: EnergyPolicy {
     EnergyPolicy(
-      mode: Defaults[.energyMode],
+      mode: ContextRuleCenter.shared.effectiveEnergyMode(baseline: Defaults[.energyMode]),
       systemLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
   }
 

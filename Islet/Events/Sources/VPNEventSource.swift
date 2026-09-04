@@ -218,6 +218,9 @@ final class VPNEventSource: SystemEventSource {
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.restartRecoveryTimer() }
       .store(in: &cancellables)
+    ContextRuleCenter.shared.resolutionChanges
+      .sink { [weak self] _ in self?.restartRecoveryTimer() }
+      .store(in: &cancellables)
     NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.restartRecoveryTimer() }
@@ -298,7 +301,7 @@ final class VPNEventSource: SystemEventSource {
 
   private func restartRecoveryTimer() {
     let policy = EnergyPolicy(
-      mode: Defaults[.energyMode],
+      mode: ContextRuleCenter.shared.effectiveEnergyMode(baseline: Defaults[.energyMode]),
       systemLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
     recoveryTimer = Timer.publish(
       every: cadence.interval(for: policy), on: .main, in: .common
