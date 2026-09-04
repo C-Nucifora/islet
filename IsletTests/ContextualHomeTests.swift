@@ -114,6 +114,30 @@ final class ContextualHomeTests: XCTestCase {
     XCTAssertEqual(HomeAttentionOverflow.split(items).overflow.count, 6)
   }
 
+  func testPulseHomeActionPreservesItemAndActionIdentityForTheSecurityGate() throws {
+    let action = PulseAction(
+      id: "inspect", title: "Inspect",
+      url: try XCTUnwrap(URL(string: "https://example.com/build")))
+    let pulse = try PulseItem(
+      payload: PulsePayload(
+        id: "build", source: "xcode", title: "Build failed", subtitle: nil,
+        symbol: nil, accentHex: nil, progress: nil, state: .failed, priority: .high,
+        expiresAt: now + 600, actions: [action]),
+      now: now)
+
+    let item = try XCTUnwrap(
+      HomeAttentionBuilder.items(
+        calendarEvents: [], reminders: [], timer: nil, t3Agents: [], pulseItems: [pulse],
+        battery: nil, pendingTransfers: 0, now: now
+      ).first)
+    guard case .openPulseAction(let itemID, let actionID) = item.primaryAction?.kind else {
+      return XCTFail("Expected a gated Pulse action")
+    }
+
+    XCTAssertEqual(itemID, pulse.id)
+    XCTAssertEqual(actionID, action.id)
+  }
+
   func testBuilderOmitsPersistentTimerAndShelfWorkWhenActivitiesAreDisabled() {
     let timer = HomeTimerSnapshot(
       occurrenceID: "timer-1", label: "Focus", endDate: now + 45, remaining: 45,
