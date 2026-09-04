@@ -549,6 +549,35 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(center.items.count, 2)
   }
 
+  func testRevisionIdentityLimitsUseUTF8Bytes() throws {
+    XCTAssertThrowsError(
+      try PulseItem.ID(
+        source: String(repeating: "é", count: 41), providerIdentifier: "item"))
+    XCTAssertThrowsError(
+      try PulseItem.ID(
+        source: "build",
+        providerIdentifier: String(repeating: "é", count: 65)))
+
+    XCTAssertNoThrow(
+      try PulseItem.ID(
+        source: String(repeating: "é", count: 40),
+        providerIdentifier: String(repeating: "é", count: 64)))
+  }
+
+  func testRevisionPersistenceReportsAnOversizedSnapshot() throws {
+    let persistence = PulseRevisionPersistenceBox()
+    let id = try PulseItem.ID(source: "build", providerIdentifier: "item")
+    let records = [
+      id: PulseRevisionRecord(
+        id: id, revision: 1, ended: false,
+        acceptedAt: Date(timeIntervalSince1970: 8_000))
+    ]
+
+    XCTAssertFalse(
+      PulseRevisionPersistence.save(records, to: persistence.store, maximumBytes: 1))
+    XCTAssertEqual(persistence.writeCount, 0)
+  }
+
   @MainActor
   func testRevisionTrackingCapacityKeepsExistingStreamsUsable() {
     let center = makeCenter()

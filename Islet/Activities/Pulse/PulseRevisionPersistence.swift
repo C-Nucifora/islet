@@ -93,12 +93,14 @@ enum PulseRevisionPersistence {
       records: restored, requiresRewrite: removedExpiredRecord)
   }
 
+  @discardableResult
   static func save(
-    _ records: [PulseItem.ID: PulseRevisionRecord], to store: PulseRevisionPersistenceStore
-  ) {
+    _ records: [PulseItem.ID: PulseRevisionRecord], to store: PulseRevisionPersistenceStore,
+    maximumBytes: Int = maximumDocumentBytes
+  ) -> Bool {
     guard !records.isEmpty else {
       store.writeData(nil)
-      return
+      return true
     }
     let orderedRecords = records.values.sorted {
       if $0.normalizedSource != $1.normalizedSource {
@@ -107,9 +109,10 @@ enum PulseRevisionPersistence {
       return $0.providerIdentifier < $1.providerIdentifier
     }
     guard let data = try? JSONEncoder().encode(PulseRevisionSnapshot(records: orderedRecords)),
-      data.count <= maximumDocumentBytes
-    else { return }
+      data.count <= maximumBytes
+    else { return false }
     store.writeData(data)
+    return true
   }
 
   static func isExpired(_ record: PulseRevisionRecord, now: Date) -> Bool {
@@ -153,7 +156,8 @@ final class PulseRevisionPersistenceWriter: @unchecked Sendable {
     queue.asyncAfter(deadline: .now() + coalescingDelay, execute: workItem)
   }
 
-  func flush() {
+  @discardableResult
+  func flush() -> Bool {
     lock.lock()
     scheduledWorkItem?.cancel()
     scheduledWorkItem = nil
@@ -162,9 +166,9 @@ final class PulseRevisionPersistenceWriter: @unchecked Sendable {
     pendingRecords = nil
     lock.unlock()
 
-    queue.sync {
-      guard let records else { return }
-      PulseRevisionPersistence.save(records, to: store)
+    return queue.sync {
+      guard let records else { return true }
+      return PulseRevisionPersistence.save(records, to: store)
     }
   }
 

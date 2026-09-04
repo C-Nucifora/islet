@@ -137,9 +137,8 @@ struct PulseItem: Equatable, Identifiable, Sendable {
     staleTimeout: TimeInterval = PulseStalenessPolicy.defaultTimeout,
     symbolAvailability: (String) -> Bool? = PulseSymbolValidator.platformAvailability
   ) throws {
-    providerIdentifier = try Self.clean(
-      payload.id, field: "id", limit: Self.maximumIdentifierLength)
-    source = try Self.clean(payload.source, field: "source", limit: 80)
+    providerIdentifier = try Self.normalizedIdentifier(payload.id)
+    source = try Self.normalizedSource(payload.source)
     id = try ID(source: source, providerIdentifier: providerIdentifier)
     title = try Self.clean(payload.title, field: "title", limit: 180)
     if let raw = payload.subtitle?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
@@ -181,8 +180,8 @@ struct PulseItem: Equatable, Identifiable, Sendable {
     let incomingActions = payload.actions ?? []
     guard incomingActions.count <= 3 else { throw PulseValidationError.tooManyActions }
     actions = try incomingActions.map { action in
-      let id = try Self.clean(
-        action.id, field: "action id", limit: Self.maximumIdentifierLength)
+      let id = try Self.cleanIdentity(
+        action.id, field: "action id", byteLimit: Self.maximumIdentifierLength)
       let title = try Self.clean(action.title, field: "action title", limit: 60)
       let urlString = action.url.absoluteString
       guard urlString.count <= Self.maximumActionURLLength else {
@@ -204,11 +203,11 @@ struct PulseItem: Equatable, Identifiable, Sendable {
   }
 
   static func normalizedIdentifier(_ value: String) throws -> String {
-    try clean(value, field: "id", limit: maximumIdentifierLength)
+    try cleanIdentity(value, field: "id", byteLimit: maximumIdentifierLength)
   }
 
   static func normalizedSource(_ value: String) throws -> String {
-    try clean(value, field: "source", limit: 80)
+    try cleanIdentity(value, field: "source", byteLimit: 80)
   }
 
   static func normalizedSourceKey(_ value: String) throws -> String {
@@ -219,6 +218,17 @@ struct PulseItem: Equatable, Identifiable, Sendable {
     let result = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !result.isEmpty else { throw PulseValidationError.empty(field) }
     guard result.count <= limit else { throw PulseValidationError.tooLong(field, limit) }
+    return result
+  }
+
+  private static func cleanIdentity(_ value: String, field: String, byteLimit: Int) throws
+    -> String
+  {
+    let result = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !result.isEmpty else { throw PulseValidationError.empty(field) }
+    guard result.utf8.count <= byteLimit else {
+      throw PulseValidationError.tooLongUTF8(field, byteLimit)
+    }
     return result
   }
 
@@ -285,6 +295,7 @@ enum PulseSymbolWarning: LocalizedError, Equatable, Sendable {
 enum PulseValidationError: LocalizedError, Equatable {
   case empty(String)
   case tooLong(String, Int)
+  case tooLongUTF8(String, Int)
   case invalidProgress
   case invalidAccentHex
   case expired
@@ -298,6 +309,7 @@ enum PulseValidationError: LocalizedError, Equatable {
     switch self {
     case .empty(let field): "\(field) must not be empty"
     case .tooLong(let field, let limit): "\(field) exceeds \(limit) characters"
+    case .tooLongUTF8(let field, let limit): "\(field) exceeds \(limit) UTF-8 bytes"
     case .invalidProgress: "progress must be a finite number from 0 through 1"
     case .invalidAccentHex: "accentHex must use #RRGGBB format"
     case .expired: "expiresAt is already in the past"
