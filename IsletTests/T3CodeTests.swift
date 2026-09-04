@@ -242,13 +242,36 @@ final class T3CodeTests: XCTestCase {
       """
     let shell = try JSONDecoder().decode(T3ShellSnapshot.self, from: Data(json.utf8))
     let agents = T3AgentSnapshot.activeAgents(
-      in: shell, logicalEnvironmentID: "machine",
+      in: shell, logicalEnvironmentID: "machine", isLocal: true,
       now: Date(timeIntervalSince1970: 1_788_000_000))
     XCTAssertEqual(agents.count, 1)
     XCTAssertEqual(agents[0].providerInstance, "Future Provider")
     XCTAssertEqual(agents[0].model, "future-1")
     XCTAssertEqual(agents[0].phase, .needsInput)
     XCTAssertEqual(agents[0].planStep, "Wire the API")
+    XCTAssertTrue(agents[0].isLocal)
+    XCTAssertEqual(agents[0].workspacePath, "/tmp/islet")
+  }
+
+  func testSessionActionsRejectUnsafePathsAndReconnectStaleAgents() {
+    XCTAssertNil(T3SessionActionPolicy.safeWorkspacePath("relative/private"))
+    XCTAssertNil(T3SessionActionPolicy.safeWorkspacePath(" /Users/test/private"))
+    XCTAssertNil(T3SessionActionPolicy.safeWorkspacePath("/Users/test/private\nnext"))
+    XCTAssertEqual(
+      T3SessionActionPolicy.safeWorkspacePath("/Users/test/Project Name"),
+      "/Users/test/Project Name")
+
+    let agent = Self.agent(
+      id: "approval", phase: .needsApproval,
+      updatedAt: Date(timeIntervalSince1970: 1_788_000_000))
+    let stale = T3EnvironmentSnapshot(
+      id: "remote|machine", logicalEnvironmentID: "machine", source: .manual,
+      label: "Office Mac", baseURL: "https://office.example", platform: nil,
+      serverVersion: nil, state: .reconnecting("No route"), agents: [agent], isStale: true)
+
+    XCTAssertEqual(
+      T3CodeActivity.sessionAvailability(for: agent, in: [stale]),
+      .reconnect(reason: "Office Mac is reconnecting. Reconnect to refresh it."))
   }
 
   func testAgentAttentionOrderCoversEveryPhase() {
