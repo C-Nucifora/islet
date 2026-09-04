@@ -39,6 +39,8 @@ final class PulseHistoryStoreTests: XCTestCase {
     first.dismiss(
       try XCTUnwrap(first.items.first?.id), now: now.addingTimeInterval(1))
     first.flushHistoryPersistence()
+    let savedHistory = try String(contentsOf: fixture.store.fileURL, encoding: .utf8)
+    XCTAssertFalse(savedHistory.contains("private-item-id"))
 
     let restored = PulseCenter(
       historyStore: fixture.store, historyConfiguration: configuration,
@@ -46,6 +48,7 @@ final class PulseHistoryStoreTests: XCTestCase {
     let status = try XCTUnwrap(restored.providerStatuses.first { $0.id == "cli" })
     XCTAssertEqual(status.health, .seen(now.addingTimeInterval(1)))
     XCTAssertEqual(restored.history.count, 2)
+    XCTAssertTrue(restored.history.allSatisfy { $0.providerIdentifier == nil })
   }
 
   func testRetentionExpiryAndEntryLimitAreAppliedDuringLoad() throws {
@@ -153,7 +156,7 @@ final class PulseHistoryStoreTests: XCTestCase {
     let data = try center.exportHistoryData(exportedAt: now)
     let text = try XCTUnwrap(String(data: data, encoding: .utf8))
     for forbidden in [
-      "private-title", "private-subtitle", "private-action",
+      "private-item-id", "private-title", "private-subtitle", "private-action",
       "private-link", "private-bearer-token", "#123456", "0.75",
     ] {
       XCTAssertFalse(text.contains(forbidden), "Export retained \(forbidden)")
@@ -166,8 +169,7 @@ final class PulseHistoryStoreTests: XCTestCase {
     XCTAssertEqual(entries.count, 1)
     XCTAssertEqual(
       Set(entries[0].keys),
-      ["date", "id", "operation", "priority", "providerIdentifier", "result", "source", "state"])
-    XCTAssertEqual(entries[0]["providerIdentifier"] as? String, "private-item-id")
+      ["date", "id", "operation", "priority", "result", "source", "state"])
   }
 
   @MainActor
