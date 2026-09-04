@@ -120,6 +120,35 @@ final class TallTierHostingTests: XCTestCase {
       host.bounds.size.height, supportedSize.height, accuracy: 0.5, file: file, line: line)
   }
 
+  /// SwiftUI creates its AppKit accessibility nodes lazily when an assistive client is active.
+  /// Enabling AppKit's application accessibility attribute makes the rendered tree available without
+  /// requiring VoiceOver to be running on the CI host.
+  private func renderedAccessibilityLabel<V: View>(
+    _ view: V, in supportedSize: CGSize, locale: Locale
+  ) -> String? {
+    let application = NSApplication.shared
+    let enhancedInterfaceKey = "accessibilityEnhancedUserInterface"
+    let previousEnhancedInterface = application.value(forKey: enhancedInterfaceKey)
+    application.setValue(true, forKey: enhancedInterfaceKey)
+    defer { application.setValue(previousEnhancedInterface, forKey: enhancedInterfaceKey) }
+
+    let panel = NSPanel(
+      contentRect: CGRect(origin: CGPoint(x: 200, y: 200), size: supportedSize),
+      styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    panel.isReleasedWhenClosed = false
+    let host = NSHostingView(rootView: view.environment(\.locale, locale))
+    panel.contentView = host
+    panel.orderFrontRegardless()
+    defer { panel.close() }
+
+    pump(until: { !(host.accessibilityChildren() ?? []).isEmpty })
+    host.layoutSubtreeIfNeeded()
+    guard let root = host.accessibilityChildren()?.first as? NSObject else { return nil }
+    let selector = NSSelectorFromString("accessibilityLabel")
+    guard root.responds(to: selector) else { return nil }
+    return root.perform(selector)?.takeUnretainedValue() as? String
+  }
+
   func testPseudolocalizedCompactEventUsesItsBoundedMarquee() {
     let event = SystemEvent(
       sourceID: "localization-qa", icon: "exclamationmark.triangle.fill",
@@ -174,11 +203,18 @@ final class TallTierHostingTests: XCTestCase {
     XCTAssertEqual(
       presentation.accessibilityValue(locale: pseudolocale, bundle: localizationBundle),
       String(format: accessibilityFormat, locale: pseudolocale, pressure, battery))
+    let expectedHelp = SystemThermalPresentation.helpText(
+      locale: pseudolocale, bundle: localizationBundle)
     XCTAssertEqual(
-      SystemThermalPresentation.helpText(locale: pseudolocale, bundle: localizationBundle),
+      expectedHelp,
       Pseudolocalization.expand(
         "System thermal pressure and battery sensor temperature are separate readings and do not map directly."
       ))
+    XCTAssertEqual(
+      renderedAccessibilityLabel(
+        LocalizationAccessibilityProbe(), in: CGSize(width: 620, height: 220),
+        locale: pseudolocale),
+      expectedHelp)
     assertPseudolocalizedLayoutFits(
       LocalizationAccessibilityProbe(), in: CGSize(width: 620, height: 220))
   }
