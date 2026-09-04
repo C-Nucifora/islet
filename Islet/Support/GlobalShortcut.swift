@@ -143,9 +143,17 @@ protocol GlobalShortcutRegistering: AnyObject {
   func unregister()
 }
 
+enum IsletGlobalHotKeyIdentity {
+  static let signature: OSType = 0x4953_4C54  // ISLT
+  static let commandPalette: UInt32 = 1
+  static let reminderCommands: UInt32 = 2
+
+  static func matches(_ hotKeyID: EventHotKeyID, identifier: UInt32) -> Bool {
+    hotKeyID.signature == signature && hotKeyID.id == identifier
+  }
+}
+
 final class CarbonGlobalShortcutRegistrar: GlobalShortcutRegistering, @unchecked Sendable {
-  private static let signature: OSType = 0x4953_4C54  // ISLT
-  private static let identifier: UInt32 = 1
   private var hotKey: EventHotKeyRef?
   private var eventHandler: EventHandlerRef?
   private var action: (@MainActor () -> Void)?
@@ -163,7 +171,9 @@ final class CarbonGlobalShortcutRegistrar: GlobalShortcutRegistering, @unchecked
       return installStatus
     }
 
-    let identifier = EventHotKeyID(signature: Self.signature, id: Self.identifier)
+    let identifier = EventHotKeyID(
+      signature: IsletGlobalHotKeyIdentity.signature,
+      id: IsletGlobalHotKeyIdentity.commandPalette)
     let status = RegisterEventHotKey(
       shortcut.keyCode, shortcut.carbonModifiers, identifier, GetApplicationEventTarget(), 0,
       &hotKey)
@@ -181,8 +191,18 @@ final class CarbonGlobalShortcutRegistrar: GlobalShortcutRegistering, @unchecked
 
   deinit { unregister() }
 
-  private static let callback: EventHandlerUPP = { _, _, userData in
-    guard let userData else { return OSStatus(eventNotHandledErr) }
+  private static let callback: EventHandlerUPP = { _, event, userData in
+    guard let event, let userData else { return OSStatus(eventNotHandledErr) }
+    var hotKeyID = EventHotKeyID()
+    guard
+      GetEventParameter(
+        event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
+        MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID) == noErr,
+      IsletGlobalHotKeyIdentity.matches(
+        hotKeyID, identifier: IsletGlobalHotKeyIdentity.commandPalette)
+    else {
+      return OSStatus(eventNotHandledErr)
+    }
     let registrar = Unmanaged<CarbonGlobalShortcutRegistrar>.fromOpaque(userData)
       .takeUnretainedValue()
     MainActor.assumeIsolated { registrar.action?() }
