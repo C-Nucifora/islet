@@ -95,7 +95,9 @@ struct PulseItem: Equatable, Identifiable, Sendable {
       self.providerIdentifier = try PulseItem.normalizedIdentifier(providerIdentifier)
     }
 
-    var stableIdentifier: String { "\(normalizedSource):\(providerIdentifier)" }
+    var stableIdentifier: String {
+      "\(normalizedSource.utf8.count):\(normalizedSource)\(providerIdentifier)"
+    }
   }
 
   static let maximumIdentifierLength = 128
