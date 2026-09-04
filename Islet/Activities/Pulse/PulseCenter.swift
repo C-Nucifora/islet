@@ -172,8 +172,9 @@ final class PulseCenter: ObservableObject {
   }
   var staleTimeout: TimeInterval { stalenessPolicy.timeout }
 
-  func flushRevisionPersistence() {
-    revisionWriter?.flush()
+  @discardableResult
+  func flushRevisionPersistence() -> Bool {
+    revisionWriter?.flush() ?? true
   }
 
   @discardableResult
