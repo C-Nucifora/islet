@@ -241,12 +241,7 @@ final class ContextRuleCenter: ObservableObject {
   }
 
   private func updatePolling() {
-    let pollingKinds: Set<ContextTriggerKind> = [
-      .focusMode, .fullscreenPresentation, .timeRange, .wifiNetwork,
-    ]
-    let needsPolling = rules.contains { rule in
-      rule.isEnabled && pollingKinds.contains(rule.trigger.kind)
-    }
+    let needsPolling = Self.requiresPeriodicRefresh(rules)
     guard running, needsPolling else {
       timer = nil
       return
@@ -254,6 +249,15 @@ final class ContextRuleCenter: ObservableObject {
     guard timer == nil else { return }
     timer = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
       .sink { [weak self] _ in self?.refresh() }
+  }
+
+  static func requiresPeriodicRefresh(_ rules: [ContextRule]) -> Bool {
+    let pollingKinds: Set<ContextTriggerKind> = [
+      .focusMode, .fullscreenPresentation, .timeRange, .activeDisplay, .wifiNetwork,
+    ]
+    return rules.contains { rule in
+      rule.isEnabled && pollingKinds.contains(rule.trigger.kind)
+    }
   }
 
   private func scheduleOverrideExpiry() {
