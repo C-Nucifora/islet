@@ -54,6 +54,7 @@ struct PulseAuthenticatedProvider: Equatable, Sendable {
 
 enum PulseCredentialError: LocalizedError, Equatable {
   case corruptRegistry
+  case registryTooLarge
   case duplicateSource
   case providerLimitReached
   case invalidName
@@ -70,9 +71,10 @@ enum PulseCredentialError: LocalizedError, Equatable {
   var errorDescription: String? {
     switch self {
     case .corruptRegistry: "The Pulse provider registry is unreadable. It was left unchanged."
+    case .registryTooLarge: "The Pulse provider registry exceeds its size limit."
     case .duplicateSource: "An active credential already owns this provider source."
     case .providerLimitReached: "Pulse already has the maximum number of provider credentials."
-    case .invalidName: "Provider name must contain 1 through 80 characters."
+    case .invalidName: "Provider name must contain 1 through 80 UTF-8 bytes."
     case .invalidSource: "Provider source must contain 1 through 80 characters."
     case .notFound: "Provider credential was not found."
     case .revoked: "Provider credential is revoked."
@@ -104,6 +106,7 @@ final class PulseCredentialStore: ObservableObject {
   static let maximumRememberedRequestIDs = 512
   static let maximumActiveProviders = 256
   static let maximumProviderRecords = 1_024
+  static let maximumProviderNameBytes = 80
   static let maximumRegistryBytes = 1_048_576
   static let maximumCredentialBytes = 4_096
   static let lastUsePersistenceInterval: TimeInterval = 60
@@ -168,7 +171,9 @@ final class PulseCredentialStore: ObservableObject {
     return try withRegistryLock {
       try reloadRegistryLocked()
       let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !name.isEmpty, name.count <= 80 else { throw PulseCredentialError.invalidName }
+      guard !name.isEmpty, name.utf8.count <= Self.maximumProviderNameBytes else {
+        throw PulseCredentialError.invalidName
+      }
       guard credentials.count < Self.maximumProviderRecords,
         credentials.lazy.filter({ !$0.isRevoked }).count < Self.maximumActiveProviders
       else { throw PulseCredentialError.providerLimitReached }
@@ -491,7 +496,11 @@ final class PulseCredentialStore: ObservableObject {
     let registry = Registry(
       version: Self.currentVersion,
       credentials: credentials.sorted { $0.createdAt < $1.createdAt })
-    try atomicWrite(try encoder.encode(registry), to: registryURL)
+    let data = try encoder.encode(registry)
+    guard data.count <= Self.maximumRegistryBytes else {
+      throw PulseCredentialError.registryTooLarge
+    }
+    try atomicWrite(data, to: registryURL)
     persistedLastUsedAt = Dictionary(
       uniqueKeysWithValues: credentials.compactMap { summary in
         summary.lastUsedAt.map { (summary.id, $0) }
@@ -594,7 +603,9 @@ final class PulseCredentialStore: ObservableObject {
     var activeSources: Set<String> = []
     for summary in stored {
       let name = summary.name.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !name.isEmpty, name.count <= 80, identifiers.insert(summary.id).inserted else {
+      guard !name.isEmpty, name.utf8.count <= Self.maximumProviderNameBytes,
+        identifiers.insert(summary.id).inserted
+      else {
         throw PulseCredentialError.corruptRegistry
       }
       let isLegacyID = summary.id == Self.legacyCredentialID
