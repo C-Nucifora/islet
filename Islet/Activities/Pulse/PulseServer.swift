@@ -89,6 +89,7 @@ final class PulseServer: ObservableObject {
   private let listenerFactory: ListenerFactory
   private let activePortWriter: (UInt16) throws -> Void
   private let activePortRemover: () -> Void
+  private let removeItemsForSource: (String) -> Void
   private let now: () -> Date
   private let retryScheduler: RetryScheduler
 
@@ -99,6 +100,9 @@ final class PulseServer: ObservableObject {
     },
     activePortWriter: ((UInt16) throws -> Void)? = nil,
     activePortRemover: (() -> Void)? = nil,
+    removeItemsForSource: @escaping (String) -> Void = {
+      PulseCenter.shared.removeItems(forSource: $0)
+    },
     now: @escaping () -> Date = Date.init,
     retryScheduler: @escaping RetryScheduler = { delay, action in
       PulseRetryTask(after: delay, action: action)
@@ -108,6 +112,7 @@ final class PulseServer: ObservableObject {
     self.listenerFactory = listenerFactory
     self.activePortWriter = activePortWriter ?? Self.writeActivePort
     self.activePortRemover = activePortRemover ?? Self.removeActivePort
+    self.removeItemsForSource = removeItemsForSource
     self.now = now
     self.retryScheduler = retryScheduler
   }
@@ -400,14 +405,16 @@ final class PulseServer: ObservableObject {
     if previous?.permissions.contains(.persistentActivities) == true,
       !permissions.contains(.persistentActivities), let source = previous?.source
     {
-      PulseCenter.shared.removeItems(forSource: source)
+      removeItemsForSource(source)
     }
     disconnectProvider(id)
   }
 
   func rotateCredential(_ id: String) throws {
+    let source = credentialStore.credentials.first { $0.id == id }?.source
     try credentialStore.rotate(id)
     rateLimiters.removeProvider(id)
+    if let source { removeItemsForSource(source) }
     disconnectProvider(id)
   }
 
@@ -416,7 +423,7 @@ final class PulseServer: ObservableObject {
     defer {
       if credentialStore.credentials.first(where: { $0.id == id })?.isRevoked == true {
         rateLimiters.removeProvider(id)
-        if let source { PulseCenter.shared.removeItems(forSource: source) }
+        if let source { removeItemsForSource(source) }
         disconnectProvider(id)
       }
     }
@@ -639,8 +646,8 @@ final class PulseServer: ObservableObject {
     case .replayedRequest: .replayedRequest
     case .sourceSpoofing: .sourceMismatch
     case .permissionDenied: .permissionDenied
-    case .unauthorized, .notFound, .unsafeCredentialFile, .corruptRegistry, .duplicateSource,
-      .providerLimitReached, .invalidName, .invalidSource:
+    case .unauthorized, .notFound, .unsafeCredentialFile, .corruptRegistry, .registryTooLarge,
+      .duplicateSource, .providerLimitReached, .invalidName, .invalidSource:
       .unauthorized
     }
   }
