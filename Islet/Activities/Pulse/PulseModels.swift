@@ -85,6 +85,16 @@ struct PulsePayload: Codable, Equatable, Sendable {
   var actions: [PulseAction]?
 }
 
+enum PulseRevision {
+  /// JSON integers above 2^53 - 1 are not represented exactly by every provider runtime.
+  static let maximum: UInt64 = 9_007_199_254_740_991
+
+  static func validate(_ value: UInt64?) throws {
+    guard let value else { return }
+    guard value <= maximum else { throw PulseValidationError.invalidRevision }
+  }
+}
+
 struct PulseItem: Equatable, Identifiable, Sendable {
   struct ID: Equatable, Hashable, Sendable {
     let normalizedSource: String
@@ -127,9 +137,8 @@ struct PulseItem: Equatable, Identifiable, Sendable {
     staleTimeout: TimeInterval = PulseStalenessPolicy.defaultTimeout,
     symbolAvailability: (String) -> Bool? = PulseSymbolValidator.platformAvailability
   ) throws {
-    providerIdentifier = try Self.clean(
-      payload.id, field: "id", limit: Self.maximumIdentifierLength)
-    source = try Self.clean(payload.source, field: "source", limit: 80)
+    providerIdentifier = try Self.normalizedIdentifier(payload.id)
+    source = try Self.normalizedSource(payload.source)
     id = try ID(source: source, providerIdentifier: providerIdentifier)
     title = try Self.clean(payload.title, field: "title", limit: 180)
     if let raw = payload.subtitle?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
@@ -171,8 +180,8 @@ struct PulseItem: Equatable, Identifiable, Sendable {
     let incomingActions = payload.actions ?? []
     guard incomingActions.count <= 3 else { throw PulseValidationError.tooManyActions }
     actions = try incomingActions.map { action in
-      let id = try Self.clean(
-        action.id, field: "action id", limit: Self.maximumIdentifierLength)
+      let id = try Self.cleanIdentity(
+        action.id, field: "action id", byteLimit: Self.maximumIdentifierLength)
       let title = try Self.clean(action.title, field: "action title", limit: 60)
       let urlString = action.url.absoluteString
       guard urlString.count <= Self.maximumActionURLLength else {
@@ -194,11 +203,11 @@ struct PulseItem: Equatable, Identifiable, Sendable {
   }
 
   static func normalizedIdentifier(_ value: String) throws -> String {
-    try clean(value, field: "id", limit: maximumIdentifierLength)
+    try cleanIdentity(value, field: "id", byteLimit: maximumIdentifierLength)
   }
 
   static func normalizedSource(_ value: String) throws -> String {
-    try clean(value, field: "source", limit: 80)
+    try cleanIdentity(value, field: "source", byteLimit: 80)
   }
 
   static func normalizedSourceKey(_ value: String) throws -> String {
@@ -209,6 +218,17 @@ struct PulseItem: Equatable, Identifiable, Sendable {
     let result = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !result.isEmpty else { throw PulseValidationError.empty(field) }
     guard result.count <= limit else { throw PulseValidationError.tooLong(field, limit) }
+    return result
+  }
+
+  private static func cleanIdentity(_ value: String, field: String, byteLimit: Int) throws
+    -> String
+  {
+    let result = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !result.isEmpty else { throw PulseValidationError.empty(field) }
+    guard result.utf8.count <= byteLimit else {
+      throw PulseValidationError.tooLongUTF8(field, byteLimit)
+    }
     return result
   }
 
@@ -275,6 +295,7 @@ enum PulseSymbolWarning: LocalizedError, Equatable, Sendable {
 enum PulseValidationError: LocalizedError, Equatable {
   case empty(String)
   case tooLong(String, Int)
+  case tooLongUTF8(String, Int)
   case invalidProgress
   case invalidAccentHex
   case expired
@@ -282,11 +303,13 @@ enum PulseValidationError: LocalizedError, Equatable {
   case tooManyActions
   case duplicateActionID
   case unsafeActionURL
+  case invalidRevision
 
   var errorDescription: String? {
     switch self {
     case .empty(let field): "\(field) must not be empty"
     case .tooLong(let field, let limit): "\(field) exceeds \(limit) characters"
+    case .tooLongUTF8(let field, let limit): "\(field) exceeds \(limit) UTF-8 bytes"
     case .invalidProgress: "progress must be a finite number from 0 through 1"
     case .invalidAccentHex: "accentHex must use #RRGGBB format"
     case .expired: "expiresAt is already in the past"
@@ -294,6 +317,7 @@ enum PulseValidationError: LocalizedError, Equatable {
     case .tooManyActions: "an activity may expose at most three actions"
     case .duplicateActionID: "action ids must be unique within an activity"
     case .unsafeActionURL: "action URLs must be http or https URLs without credentials"
+    case .invalidRevision: "revision must be an integer from 0 through \(PulseRevision.maximum)"
     }
   }
 }
@@ -522,6 +546,9 @@ struct PulseCommand: Codable, Sendable {
   /// to select the provider namespace. An unscoped end is rejected when more than one source owns
   /// the identifier.
   var source: String? = nil
+  /// Optional ordering value scoped to the normalized source and provider-local identifier.
+  /// Once a stream sends one, every later command for that identity must include a larger value.
+  var revision: UInt64? = nil
 }
 
 enum PulseErrorCode: String, Codable, Sendable {
@@ -537,6 +564,9 @@ enum PulseErrorCode: String, Codable, Sendable {
   case commandLimitExceeded
   case rateLimited
   case capacityExceeded
+  case staleRevision
+  case revisionRequired
+  case generationEnded
 }
 
 struct PulseResponse: Codable, Equatable, Sendable {
@@ -603,7 +633,7 @@ enum PulseWireValidationError: LocalizedError, Equatable {
 /// an error or diagnostic record.
 enum PulseWireValidator {
   private static let commandFields: Set<String> = [
-    "token", "operation", "activity", "id", "requestID", "source",
+    "token", "operation", "activity", "id", "requestID", "source", "revision",
   ]
   private static let activityFields: Set<String> = [
     "id", "source", "title", "subtitle", "symbol", "accentHex", "progress", "state",
@@ -621,6 +651,15 @@ enum PulseWireValidator {
         || requestID.count > PulseItem.maximumIdentifierLength
     {
       throw PulseWireValidationError.invalidField("command.requestID")
+    }
+    if let rawRevision = command["revision"] {
+      guard !(rawRevision is Bool), let revision = rawRevision as? NSNumber,
+        revision.doubleValue.isFinite,
+        revision.doubleValue.rounded(.towardZero) == revision.doubleValue,
+        revision.doubleValue >= 0, revision.doubleValue <= Double(PulseRevision.maximum)
+      else {
+        throw PulseWireValidationError.invalidField("command.revision")
+      }
     }
     if let rawActivity = command["activity"] {
       guard let activity = rawActivity as? [String: Any] else {

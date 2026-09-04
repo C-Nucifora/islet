@@ -227,6 +227,394 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testRevisionOrderingRejectsReorderedAndRetriedCommandsWithoutSideEffects() throws {
+    let center = makeCenter()
+    let now = Date(timeIntervalSince1970: 1_000)
+    var payload = PulsePayload(
+      id: "ordered", source: "build", title: "Revision 1", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: 0.1, state: .progress, priority: .normal,
+      expiresAt: nil, actions: nil)
+    XCTAssertTrue(center.apply(command(.show, payload, revision: 1), now: now).ok)
+
+    payload.title = "Revision 3"
+    payload.progress = 0.3
+    XCTAssertTrue(
+      center.apply(command(.update, payload, revision: 3), now: now.addingTimeInterval(3)).ok)
+    let accepted = try XCTUnwrap(center.items.first)
+    let historyCount = center.history.count
+
+    payload.title = "Delayed revision 2"
+    payload.progress = 0.2
+    let delayed = center.apply(
+      command(.update, payload, revision: 2), now: now.addingTimeInterval(4))
+    XCTAssertFalse(delayed.ok)
+    XCTAssertEqual(delayed.errorCode, .staleRevision)
+
+    payload.title = "Retried revision 3"
+    let firstRetry = center.apply(
+      command(.update, payload, revision: 3), now: now.addingTimeInterval(5))
+    let secondRetry = center.apply(
+      command(.update, payload, revision: 3), now: now.addingTimeInterval(6))
+    XCTAssertEqual(firstRetry, secondRetry)
+    XCTAssertEqual(firstRetry.errorCode, .staleRevision)
+    XCTAssertEqual(center.items.first, accepted)
+    XCTAssertEqual(center.history.count, historyCount)
+  }
+
+  @MainActor
+  func testDuplicateRevisionAfterExpiryRemainsAnIdempotentOrderingRejection() throws {
+    let clock = TestPulseClock(now: Date(timeIntervalSince1970: 1_000))
+    let scheduler = TestPulseDeadlineScheduler(clock: clock)
+    let center = makeCenter(clock: clock, scheduler: scheduler)
+    let payload = PulsePayload(
+      id: "expiring-retry", source: "build", title: "Running", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: 0.5, state: .progress, priority: .normal,
+      expiresAt: Date(timeIntervalSince1970: 1_005), actions: nil)
+    let command = command(.update, payload, revision: 7)
+    XCTAssertTrue(center.apply(command).ok)
+
+    scheduler.advance(to: Date(timeIntervalSince1970: 1_005))
+    XCTAssertTrue(center.items.isEmpty)
+    let history = center.history
+    scheduler.advance(to: Date(timeIntervalSince1970: 1_006))
+
+    let retry = center.apply(command)
+
+    XCTAssertFalse(retry.ok)
+    XCTAssertEqual(retry.errorCode, .staleRevision)
+    XCTAssertEqual(center.history, history)
+  }
+
+  @MainActor
+  func testConcurrentRevisionArrivalConvergesOnTheHighestRevision() async throws {
+    let center = makeCenter()
+    let now = Date(timeIntervalSince1970: 2_000)
+
+    await withTaskGroup(of: Void.self) { group in
+      for revision in 1...40 {
+        group.addTask { @MainActor in
+          let payload = PulsePayload(
+            id: "concurrent", source: "build", title: "Revision \(revision)", subtitle: nil,
+            symbol: nil, accentHex: nil, progress: Double(revision) / 40, state: .progress,
+            priority: .normal, expiresAt: nil, actions: nil)
+          _ = center.apply(
+            self.command(.update, payload, revision: UInt64(revision)), now: now)
+        }
+      }
+    }
+
+    let item = try XCTUnwrap(center.items.first)
+    XCTAssertEqual(item.title, "Revision 40")
+    XCTAssertEqual(item.progress, 1)
+  }
+
+  @MainActor
+  func testLegacyStreamUsesArrivalOrderUntilItOptsIntoRevisions() throws {
+    let center = makeCenter()
+    let now = Date(timeIntervalSince1970: 3_000)
+    var payload = PulsePayload(
+      id: "legacy", source: "build", title: "First", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    XCTAssertTrue(center.apply(command(.show, payload), now: now).ok)
+    payload.title = "Arrival order"
+    XCTAssertTrue(center.apply(command(.update, payload), now: now).ok)
+    XCTAssertEqual(center.items.first?.title, "Arrival order")
+
+    payload.title = "Ordered"
+    XCTAssertTrue(center.apply(command(.update, payload, revision: 8), now: now).ok)
+    payload.title = "Late legacy request"
+    let missingRevision = center.apply(command(.update, payload), now: now)
+    XCTAssertEqual(missingRevision.errorCode, .revisionRequired)
+    XCTAssertEqual(center.items.first?.title, "Ordered")
+  }
+
+  @MainActor
+  func testOrderedEndClosesGenerationUntilANewerShow() throws {
+    let center = makeCenter()
+    let now = Date(timeIntervalSince1970: 4_000)
+    var payload = PulsePayload(
+      id: "generation", source: "build", title: "Running", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: 0.5, state: .progress, priority: .normal,
+      expiresAt: nil, actions: nil)
+    XCTAssertTrue(center.apply(command(.show, payload, revision: 10), now: now).ok)
+    let end = PulseCommand(
+      token: "test", operation: .end, activity: nil, id: payload.id,
+      source: payload.source, revision: 11)
+    XCTAssertTrue(center.apply(end, now: now).ok)
+    XCTAssertTrue(center.items.isEmpty)
+
+    payload.title = "Delayed"
+    XCTAssertEqual(
+      center.apply(command(.update, payload, revision: 10), now: now).errorCode,
+      .staleRevision)
+    payload.title = "Accidental revival"
+    XCTAssertEqual(
+      center.apply(command(.update, payload, revision: 12), now: now).errorCode,
+      .generationEnded)
+    XCTAssertTrue(center.items.isEmpty)
+
+    payload.title = "New lifecycle"
+    XCTAssertTrue(center.apply(command(.show, payload, revision: 12), now: now).ok)
+    XCTAssertEqual(center.items.first?.title, "New lifecycle")
+    XCTAssertEqual(center.apply(end, now: now).errorCode, .staleRevision)
+  }
+
+  @MainActor
+  func testOrderedEndBeforeShowLeavesATombstone() {
+    let center = makeCenter()
+    let now = Date(timeIntervalSince1970: 5_000)
+    let end = PulseCommand(
+      token: "test", operation: .end, activity: nil, id: "queued", source: "build",
+      revision: 5)
+    XCTAssertTrue(center.apply(end, now: now).ok)
+
+    let payload = PulsePayload(
+      id: "queued", source: "build", title: "Old work", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    XCTAssertEqual(
+      center.apply(command(.show, payload, revision: 4), now: now).errorCode,
+      .staleRevision)
+    XCTAssertEqual(
+      center.apply(command(.update, payload, revision: 6), now: now).errorCode,
+      .generationEnded)
+    XCTAssertTrue(center.apply(command(.show, payload, revision: 6), now: now).ok)
+  }
+
+  @MainActor
+  func testOrderedEndRequiresSourceEvenWhenIdentityIsActive() {
+    let center = makeCenter()
+    let payload = PulsePayload(
+      id: "active", source: "build", title: "Running", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    XCTAssertTrue(center.apply(command(.show, payload, revision: 1)).ok)
+    let end = PulseCommand(
+      token: "test", operation: .end, activity: nil, id: "active", revision: 2)
+
+    let response = center.apply(end)
+
+    XCTAssertFalse(response.ok)
+    XCTAssertEqual(response.errorCode, .invalidCommand)
+    XCTAssertEqual(center.items.first?.title, "Running")
+  }
+
+  @MainActor
+  func testEndedGenerationCannotReviveAcrossRestart() {
+    let now = Date(timeIntervalSince1970: 6_000)
+    let persistence = PulseRevisionPersistenceBox()
+    let payload = PulsePayload(
+      id: "restart", source: "build", title: "Current", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    let firstProcess = makeCenter(
+      clock: TestPulseClock(now: now), revisionStore: persistence.store)
+    XCTAssertTrue(firstProcess.apply(command(.show, payload, revision: 100), now: now).ok)
+    XCTAssertTrue(
+      firstProcess.apply(
+        PulseCommand(
+          token: "test", operation: .end, activity: nil, id: payload.id,
+          source: payload.source, revision: 101), now: now
+      ).ok)
+    firstProcess.flushRevisionPersistence()
+
+    let restartedProcess = makeCenter(
+      clock: TestPulseClock(now: now), revisionStore: persistence.store)
+    let delayed = restartedProcess.apply(command(.update, payload, revision: 102), now: now)
+    XCTAssertFalse(delayed.ok)
+    XCTAssertEqual(delayed.errorCode, .generationEnded)
+    XCTAssertTrue(restartedProcess.items.isEmpty)
+  }
+
+  @MainActor
+  func testPersistedRevisionStateExpiresAfterThirtyDays() {
+    let persistence = PulseRevisionPersistenceBox()
+    let initialDate = Date(timeIntervalSince1970: 7_000)
+    let end = PulseCommand(
+      token: "test", operation: .end, activity: nil, id: "old-generation", source: "build",
+      revision: 50)
+    let firstProcess = makeCenter(
+      clock: TestPulseClock(now: initialDate), revisionStore: persistence.store)
+    XCTAssertTrue(firstProcess.apply(end, now: initialDate).ok)
+    firstProcess.flushRevisionPersistence()
+
+    let afterRetention = initialDate.addingTimeInterval(31 * 24 * 60 * 60)
+    let restartedProcess = makeCenter(
+      clock: TestPulseClock(now: afterRetention), revisionStore: persistence.store)
+    let payload = PulsePayload(
+      id: "old-generation", source: "build", title: "Fresh baseline", subtitle: nil,
+      symbol: nil, accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+
+    let response = restartedProcess.apply(
+      command(.update, payload, revision: 1), now: afterRetention)
+
+    XCTAssertTrue(response.ok)
+    XCTAssertEqual(restartedProcess.items.first?.title, "Fresh baseline")
+  }
+
+  @MainActor
+  func testPersistedRevisionStateExcludesProviderPayloadAndToken() throws {
+    let persistence = PulseRevisionPersistenceBox()
+    let center = makeCenter(revisionStore: persistence.store)
+    let payload = PulsePayload(
+      id: "private-job", source: "build", title: "private title",
+      subtitle: "private details", symbol: nil, accentHex: nil, progress: 0.4,
+      state: .progress, priority: .normal, expiresAt: nil,
+      actions: [
+        PulseAction(
+          title: "private action", url: URL(string: "https://example.com/private-path")!)
+      ])
+    let command = PulseCommand(
+      token: "private-token", operation: .show, activity: payload, id: nil, revision: 4)
+
+    XCTAssertTrue(center.apply(command, now: Date(timeIntervalSince1970: 8_000)).ok)
+    center.flushRevisionPersistence()
+
+    let data = try XCTUnwrap(persistence.data)
+    let storedText = String(decoding: data, as: UTF8.self)
+    XCTAssertFalse(storedText.contains("private title"))
+    XCTAssertFalse(storedText.contains("private details"))
+    XCTAssertFalse(storedText.contains("private action"))
+    XCTAssertFalse(storedText.contains("private-path"))
+    XCTAssertFalse(storedText.contains("private-token"))
+  }
+
+  @MainActor
+  func testRevisionPersistenceCoalescesABurstAndKeepsTheNewestRevision() {
+    let persistence = PulseRevisionPersistenceBox()
+    let now = Date(timeIntervalSince1970: 8_500)
+    let center = makeCenter(
+      clock: TestPulseClock(now: now), revisionStore: persistence.store,
+      revisionPersistenceDelay: 60)
+    let payload = PulsePayload(
+      id: "coalesced", source: "build", title: "Running", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+
+    for revision in 1...50 {
+      XCTAssertTrue(center.apply(command(.show, payload, revision: UInt64(revision)), now: now).ok)
+    }
+    XCTAssertEqual(persistence.writeCount, 0)
+
+    center.flushRevisionPersistence()
+    XCTAssertEqual(persistence.writeCount, 1)
+
+    let restarted = makeCenter(
+      clock: TestPulseClock(now: now), revisionStore: persistence.store,
+      revisionPersistenceDelay: 60)
+    XCTAssertEqual(
+      restarted.apply(command(.show, payload, revision: 49), now: now).errorCode,
+      .staleRevision)
+    XCTAssertTrue(restarted.apply(command(.show, payload, revision: 51), now: now).ok)
+  }
+
+  @MainActor
+  func testClearingItemsKeepsRevisionOrdering() {
+    let center = makeCenter()
+    let now = Date(timeIntervalSince1970: 6_500)
+    var payload = PulsePayload(
+      id: "disabled", source: "build", title: "Before disable", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    XCTAssertTrue(center.apply(command(.show, payload, revision: 5), now: now).ok)
+
+    center.removeAll(now: now)
+    XCTAssertTrue(center.items.isEmpty)
+    payload.title = "Delayed while restarting"
+    XCTAssertEqual(
+      center.apply(command(.update, payload, revision: 4), now: now).errorCode,
+      .staleRevision)
+
+    payload.title = "Provider reconnected"
+    XCTAssertTrue(center.apply(command(.update, payload, revision: 6), now: now).ok)
+    XCTAssertEqual(center.items.first?.title, "Provider reconnected")
+  }
+
+  @MainActor
+  func testRevisionOrderingIsIndependentPerSourceNamespace() {
+    let center = makeCenter()
+    let now = Date(timeIntervalSince1970: 7_000)
+    let build = PulsePayload(
+      id: "shared", source: "build", title: "Build", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    var agent = build
+    agent.source = "agent"
+    agent.title = "Agent"
+
+    XCTAssertTrue(center.apply(command(.show, build, revision: 20), now: now).ok)
+    XCTAssertTrue(center.apply(command(.show, agent, revision: 1), now: now).ok)
+    XCTAssertEqual(center.items.count, 2)
+  }
+
+  func testRevisionIdentityLimitsUseUTF8Bytes() throws {
+    XCTAssertThrowsError(
+      try PulseItem.ID(
+        source: String(repeating: "é", count: 41), providerIdentifier: "item"))
+    XCTAssertThrowsError(
+      try PulseItem.ID(
+        source: "build",
+        providerIdentifier: String(repeating: "é", count: 65)))
+
+    XCTAssertNoThrow(
+      try PulseItem.ID(
+        source: String(repeating: "é", count: 40),
+        providerIdentifier: String(repeating: "é", count: 64)))
+  }
+
+  func testRevisionPersistenceReportsAnOversizedSnapshot() throws {
+    let persistence = PulseRevisionPersistenceBox()
+    let id = try PulseItem.ID(source: "build", providerIdentifier: "item")
+    let records = [
+      id: PulseRevisionRecord(
+        id: id, revision: 1, ended: false,
+        acceptedAt: Date(timeIntervalSince1970: 8_000))
+    ]
+
+    XCTAssertFalse(
+      PulseRevisionPersistence.save(records, to: persistence.store, maximumBytes: 1))
+    XCTAssertEqual(persistence.writeCount, 0)
+  }
+
+  @MainActor
+  func testRevisionTrackingCapacityKeepsExistingStreamsUsable() {
+    let center = makeCenter()
+    for index in 0..<PulseCenter.maximumRevisionRecords {
+      let end = PulseCommand(
+        token: "test", operation: .end, activity: nil, id: "item-\(index)",
+        source: "build", revision: 0)
+      XCTAssertTrue(center.apply(end).ok)
+    }
+
+    let overflow = PulseCommand(
+      token: "test", operation: .end, activity: nil, id: "overflow", source: "build",
+      revision: 0)
+    XCTAssertEqual(center.apply(overflow).errorCode, .capacityExceeded)
+    let existing = PulseCommand(
+      token: "test", operation: .end, activity: nil, id: "item-0", source: "build",
+      revision: 1)
+    XCTAssertTrue(center.apply(existing).ok)
+  }
+
+  @MainActor
+  func testDirectCommandsRejectRevisionsAboveThePortableJSONLimit() {
+    let center = makeCenter()
+    let payload = PulsePayload(
+      id: "too-large", source: "build", title: "Too large", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+
+    let response = center.apply(
+      command(.show, payload, revision: PulseRevision.maximum + 1))
+
+    XCTAssertFalse(response.ok)
+    XCTAssertEqual(response.errorCode, .validationFailed)
+    XCTAssertTrue(center.items.isEmpty)
+  }
+
+  @MainActor
   func testProgressOutsideProtocolRangeIsRejected() {
     let center = makeCenter()
     let payload = PulsePayload(
@@ -577,6 +965,23 @@ final class PulseTests: XCTestCase {
       #"{"token":"token","operation":"show","activity":{"id":"id","source":"tests","title":"Title","actions":[{"id":"open","title":"Open","url":"https://example.com","script":"no"}]}}"#
         .utf8)
     XCTAssertThrowsError(try PulseWireValidator.validate(unknownAction))
+  }
+
+  func testWireValidatorAndDecoderEnforceSafeIntegerRevisions() throws {
+    let valid = Data(
+      #"{"token":"token","operation":"end","id":"id","source":"tests","revision":9007199254740991}"#
+        .utf8)
+    XCTAssertNoThrow(try PulseWireValidator.validate(valid))
+    XCTAssertEqual(
+      try PulseWireCodec.decoder().decode(PulseCommand.self, from: valid).revision,
+      PulseRevision.maximum)
+
+    for value in ["-1", "1.5", "true", "9007199254740992"] {
+      let invalid = Data(
+        "{\"token\":\"token\",\"operation\":\"end\",\"id\":\"id\",\"revision\":\(value)}"
+          .utf8)
+      XCTAssertThrowsError(try PulseWireValidator.validate(invalid))
+    }
   }
 
   func testWireDecoderAcceptsFractionalISO8601Expiry() throws {
@@ -1117,8 +1522,12 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(center.retainedItemCount, 0)
   }
 
-  private func command(_ operation: PulseOperation, _ payload: PulsePayload) -> PulseCommand {
-    PulseCommand(token: "test", operation: operation, activity: payload, id: nil)
+  private func command(
+    _ operation: PulseOperation, _ payload: PulsePayload, revision: UInt64? = nil
+  ) -> PulseCommand {
+    PulseCommand(
+      token: "test", operation: operation, activity: payload, id: nil,
+      revision: revision)
   }
 
   @MainActor
@@ -1127,6 +1536,8 @@ final class PulseTests: XCTestCase {
     staleRetention: TimeInterval = PulseStalenessPolicy.defaultRetention,
     clock: (any PulseClock)? = nil,
     scheduler: (any PulseDeadlineScheduling)? = nil,
+    revisionStore: PulseRevisionPersistenceStore? = nil,
+    revisionPersistenceDelay: TimeInterval = PulseRevisionPersistenceWriter.defaultCoalescingDelay,
     symbolAvailability: @escaping (String) -> Bool? = PulseSymbolValidator.platformAvailability
   ) -> PulseCenter {
     let key = Defaults.Key<PulseDeliveryProfile>(
@@ -1135,8 +1546,9 @@ final class PulseTests: XCTestCase {
       "pulseSourcePolicies", default: [:], suite: deliveryProfileSuite)
     return PulseCenter(
       staleTimeout: staleTimeout, staleRetention: staleRetention, clock: clock,
-      scheduler: scheduler, symbolAvailability: symbolAvailability, deliveryProfileKey: key,
-      sourcePoliciesKey: sourcePoliciesKey)
+      scheduler: scheduler, revisionStore: revisionStore,
+      revisionPersistenceDelay: revisionPersistenceDelay, symbolAvailability: symbolAvailability,
+      deliveryProfileKey: key, sourcePoliciesKey: sourcePoliciesKey)
   }
 
   private static let testToken = Data(repeating: 0, count: 32).base64EncodedString()
@@ -1229,5 +1641,35 @@ private final class TestPulseDeadlineScheduler: PulseDeadlineScheduling {
       let entry = entries.remove(at: index)
       entry.action()
     }
+  }
+}
+
+private final class PulseRevisionPersistenceBox: @unchecked Sendable {
+  private let lock = NSLock()
+  private var storedData: Data?
+  private var writes = 0
+
+  var data: Data? {
+    lock.lock()
+    defer { lock.unlock() }
+    return storedData
+  }
+
+  var writeCount: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return writes
+  }
+
+  var store: PulseRevisionPersistenceStore {
+    PulseRevisionPersistenceStore(
+      readData: { [weak self] in self?.data },
+      writeData: { [weak self] data in
+        guard let self else { return }
+        lock.lock()
+        storedData = data
+        writes += 1
+        lock.unlock()
+      })
   }
 }
