@@ -1544,6 +1544,7 @@ final class PulseTests: XCTestCase {
       name: "Build", source: "build", permissions: [.events])
     let scheduler = TestPulseRetryScheduler()
     var listeners: [FakePulseListener] = []
+    var removedSources: [String] = []
     let server = PulseServer(
       credentialStore: credentialStore,
       listenerFactory: { _, port in
@@ -1551,6 +1552,7 @@ final class PulseTests: XCTestCase {
         listeners.append(listener)
         return listener
       }, activePortWriter: { _ in }, activePortRemover: {},
+      removeItemsForSource: { removedSources.append($0) },
       retryScheduler: scheduler.schedule)
 
     server.start()
@@ -1562,6 +1564,7 @@ final class PulseTests: XCTestCase {
     try server.rotateCredential(credential.id)
 
     XCTAssertEqual(listeners.count, 2)
+    XCTAssertEqual(removedSources, ["build"])
     XCTAssertFalse(scheduler.tasks[0].cancelled)
     XCTAssertNotNil(server.nextRetryAt)
     scheduler.fire(at: 0)
