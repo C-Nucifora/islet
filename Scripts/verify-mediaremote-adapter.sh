@@ -11,6 +11,7 @@ binary="$framework/MediaRemoteAdapter"
 plist="$framework/Resources/Info.plist"
 code_resources="$framework/Versions/A/_CodeSignature/CodeResources"
 loader_patch="$repo_root/Vendor/MediaRemoteAdapter-loader.patch"
+capabilities_patch="$repo_root/Vendor/MediaRemoteAdapter-capabilities.patch"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/islet-mediaremote-verify.XXXXXX")
 trap 'rm -rf "$work_dir"' EXIT
 
@@ -43,8 +44,31 @@ verify_sha256 "$(read_manifest '.artifacts.codeResourcesSHA256')" "$code_resourc
 verify_sha256 "$(read_manifest '.artifacts.loaderSHA256')" \
   "$repo_root/Islet/Resources/mediaremote-adapter.pl"
 verify_sha256 "$(read_manifest '.artifacts.loaderPatchSHA256')" "$loader_patch"
+verify_sha256 "$(read_manifest '.artifacts.capabilitiesPatchSHA256')" "$capabilities_patch"
 verify_sha256 "$(read_manifest '.artifacts.licenseSHA256')" \
   "$repo_root/Vendor/MediaRemoteAdapter-LICENSE"
+
+for stream_capability_line in \
+  'diff --git a/src/adapter/stream.m b/src/adapter/stream.m' \
+  '+            liveData[kMRASupportsSeeking] = @(supportsSeeking);' \
+  '+      requestSupportedCommands();'; do
+  if ! /usr/bin/grep -Fqx "$stream_capability_line" "$capabilities_patch"; then
+    printf 'Expected seek-capability stream wiring in adapter patch: %s\n' \
+      "$stream_capability_line" >&2
+    exit 1
+  fi
+done
+
+binary_strings="$work_dir/MediaRemoteAdapter.strings"
+strings "$binary" > "$binary_strings"
+for capability in isLive supportsSeeking kMRMediaRemoteNowPlayingInfoIsAlwaysLive \
+  MRMediaRemoteGetSupportedCommands MRMediaRemoteCommandInfoGetCommand \
+  MRMediaRemoteCommandInfoGetEnabled; do
+  if ! /usr/bin/grep -Fqx "$capability" "$binary_strings"; then
+    printf 'Expected capability marker "%s" in adapter binary.\n' "$capability" >&2
+    exit 1
+  fi
+done
 
 while IFS= read -r architecture; do
   slice="$work_dir/MediaRemoteAdapter-$architecture"
