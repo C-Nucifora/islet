@@ -23,7 +23,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   /// Secondary sources drawn as chips under the hero. Adapter sources first, then CoreAudio ones,
   /// which carry no metadata at all — only "this app is producing audio".
   @Published private(set) var strip: [SourceID] = []
-  @Published private(set) var adapterStatus = "Starting…"
+  @Published private(set) var adapterStatus = String(localized: "Starting…")
   @Published private(set) var mediaControlNotice: String?
   /// The most recent command result. The view uses the accompanying notice only for failures,
   /// while this preserves the success or failure result for observers and tests.
@@ -172,7 +172,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     appIcons = [:]
     resolvedBundleIdentifiers = []
     activationDate = nil
-    adapterStatus = "Stopped"
+    adapterStatus = String(localized: "Stopped")
     mediaControlRequest &+= 1
     clearMediaControlFeedback()
     adapterFailure = nil
@@ -505,7 +505,8 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     let subtitle = [state.artist, appName].filter { !$0.isEmpty }.joined(separator: " · ")
     var announcement =
       state.artist.isEmpty
-      ? "Now playing \(state.title)" : "Now playing \(state.title) by \(state.artist)"
+      ? String(localized: "Now playing \(state.title)")
+      : String(localized: "Now playing \(state.title) by \(state.artist)")
     if !appName.isEmpty, appName != state.sourceBundleIdentifier {
       announcement += " in \(appName)"
     }
@@ -530,7 +531,8 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
 
   var accessibilityPrimaryActionName: String? {
     guard let playback, !playback.isAdvertisement else { return nil }
-    return playback.isPlaying ? "Playback paused" : "Playback started"
+    return playback.isPlaying
+      ? String(localized: "Playback paused") : String(localized: "Playback started")
   }
 
   func performAccessibilityPrimaryAction() async -> Bool {

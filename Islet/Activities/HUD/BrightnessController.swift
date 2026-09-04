@@ -52,9 +52,10 @@ struct ExternalBrightnessDisplayStatus: Equatable, Identifiable, Sendable {
 
     var summary: String {
       switch self {
-      case .disabled: "Disabled in Islet Settings"
-      case .probing: "Checking DDC support"
-      case .available(let level): "DDC available, \(Int((level * 100).rounded()))%"
+      case .disabled: String(localized: "Disabled in Islet Settings")
+      case .probing: String(localized: "Checking DDC support")
+      case .available(let level):
+        String(localized: "DDC available, \(Int((level * 100).rounded()))%")
       case .unavailable(let failure): failure.summary
       }
     }

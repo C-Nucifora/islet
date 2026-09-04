@@ -32,12 +32,14 @@ struct IsletQuickAction: Identifiable {
   static var all: [Self] {
     [
       .init(
-        id: "show", title: "Show Islet", detail: "Expand the notch panel",
+        id: "show", title: String(localized: "Show Islet"),
+        detail: String(localized: "Expand the notch panel"),
         symbol: "waveform.path.ecg", keywords: "open expand island notch",
         opensIsletWindow: true, isAvailable: { true },
         perform: { ScreenManager.shared.viewModel?.openForFocusedInteraction() }),
       .init(
-        id: "shelf-open", title: "Open File Shelf", detail: "View files held in Islet",
+        id: "shelf-open", title: String(localized: "Open File Shelf"),
+        detail: String(localized: "View files held in Islet"),
         symbol: "tray.full.fill", keywords: "files drop drag tray open", opensIsletWindow: true,
         isAvailable: { ActivityCenter.shared.isAvailableInExpandedSwitcher("shelf") },
         perform: {
@@ -46,85 +48,97 @@ struct IsletQuickAction: Identifiable {
           }
         }),
       .init(
-        id: "timer-5", title: "Start 5-minute timer", detail: "Set a five-minute countdown",
+        id: "timer-5", title: String(localized: "Start 5-minute timer"),
+        detail: String(localized: "Set a five-minute countdown"),
         symbol: "timer", keywords: "countdown short break", isAvailable: { true },
-        perform: { AppState.timer.start(5 * 60, label: "Timer") }),
+        perform: { AppState.timer.start(5 * 60, label: String(localized: "Timer")) }),
       .init(
-        id: "timer-25", title: "Start focus session", detail: "Start a 25-minute timer",
+        id: "timer-25", title: String(localized: "Start focus session"),
+        detail: String(localized: "Start a 25-minute timer"),
         symbol: "brain.head.profile", keywords: "pomodoro timer work", isAvailable: { true },
-        perform: { AppState.timer.start(25 * 60, label: "Focus") }),
+        perform: { AppState.timer.start(25 * 60, label: String(localized: "Focus")) }),
       .init(
-        id: "timer-cancel", title: "Cancel timer", detail: "Stop the current countdown",
+        id: "timer-cancel", title: String(localized: "Cancel timer"),
+        detail: String(localized: "Stop the current countdown"),
         symbol: "timer.square", keywords: "stop dismiss", isAvailable: { AppState.timer.isActive },
         perform: { AppState.timer.cancel() }),
       .init(
-        id: "timer-toggle", title: AppState.timer.isPaused ? "Resume timer" : "Pause timer",
+        id: "timer-toggle",
+        title: AppState.timer.isPaused
+          ? String(localized: "Resume timer") : String(localized: "Pause timer"),
         detail: AppState.timer.isPaused
-          ? "Continue the current countdown" : "Hold the current countdown",
+          ? String(localized: "Continue the current countdown")
+          : String(localized: "Hold the current countdown"),
         symbol: AppState.timer.isPaused ? "play.circle" : "pause.circle",
         keywords: "timer hold continue",
         isAvailable: { AppState.timer.isActive && !AppState.timer.finished },
         perform: { AppState.timer.togglePause() }),
       .init(
-        id: "timer-add-5", title: "Add 5 minutes", detail: "Extend the current countdown",
+        id: "timer-add-5", title: String(localized: "Add 5 minutes"),
+        detail: String(localized: "Extend the current countdown"),
         symbol: "plus.circle", keywords: "timer extend more",
         isAvailable: { AppState.timer.isActive && !AppState.timer.finished },
         perform: { AppState.timer.adjust(by: 5 * 60) }),
       .init(
-        id: "pulse-focus", title: "Focus Pulse",
-        detail: "Allow high-priority and actionable updates", symbol: "scope",
+        id: "pulse-focus", title: String(localized: "Focus Pulse"),
+        detail: String(localized: "Allow high-priority and actionable updates"), symbol: "scope",
         keywords: "filter rules profile notifications",
         isAvailable: { PulseCenter.shared.deliveryProfile != .focused },
         perform: { PulseCenter.shared.deliveryProfile = .focused }),
       .init(
-        id: "pulse-critical", title: "Critical Pulse only",
-        detail: "Allow only critical and failed provider updates",
+        id: "pulse-critical", title: String(localized: "Critical Pulse only"),
+        detail: String(localized: "Allow only critical and failed provider updates"),
         symbol: "exclamationmark.shield", keywords: "filter rules profile urgent",
         isAvailable: { PulseCenter.shared.deliveryProfile != .criticalOnly },
         perform: { PulseCenter.shared.deliveryProfile = .criticalOnly }),
       .init(
-        id: "pulse-pause", title: "Pause Pulse delivery",
-        detail: "Retain provider state without showing new items", symbol: "pause.circle",
+        id: "pulse-pause", title: String(localized: "Pause Pulse delivery"),
+        detail: String(localized: "Retain provider state without showing new items"),
+        symbol: "pause.circle",
         keywords: "filter rules profile mute notifications",
         isAvailable: { PulseCenter.shared.deliveryProfile != .paused },
         perform: { PulseCenter.shared.deliveryProfile = .paused }),
       .init(
-        id: "pulse-resume", title: "Show all Pulse updates",
-        detail: "Return to the Everything profile", symbol: "waveform.path.ecg",
+        id: "pulse-resume", title: String(localized: "Show all Pulse updates"),
+        detail: String(localized: "Return to the Everything profile"), symbol: "waveform.path.ecg",
         keywords: "resume unpause all rules",
         isAvailable: { PulseCenter.shared.deliveryProfile != .everything },
         perform: { PulseCenter.shared.deliveryProfile = .everything }),
       .init(
-        id: "pulse-clear", title: "Dismiss all Pulse items",
-        detail: "Clear visible, filtered, and muted provider state", symbol: "xmark.circle",
+        id: "pulse-clear", title: String(localized: "Dismiss all Pulse items"),
+        detail: String(localized: "Clear visible, filtered, and muted provider state"),
+        symbol: "xmark.circle",
         keywords: "end clear notifications",
         isAvailable: { PulseCenter.shared.retainedItemCount > 0 },
         perform: { PulseCenter.shared.removeAll() }),
       .init(
-        id: "pulse-settings", title: "Open Pulse providers",
-        detail: "Review providers, routing rules and session history",
+        id: "pulse-settings", title: String(localized: "Open Pulse providers"),
+        detail: String(localized: "Review providers, routing rules and session history"),
         symbol: "point.3.connected.trianglepath.dotted",
         keywords: "integration settings history sources token", opensIsletWindow: true,
         isAvailable: { true },
         perform: { SettingsOpener.open(destination: .pulse) }),
       .init(
-        id: "clipboard-pause", title: "Pause clipboard history",
-        detail: "Clear retained copies and stop capturing this session", symbol: "clipboard",
+        id: "clipboard-pause", title: String(localized: "Pause clipboard history"),
+        detail: String(localized: "Clear retained copies and stop capturing this session"),
+        symbol: "clipboard",
         keywords: "privacy secret stop clear", isAvailable: { !ClipboardModel.shared.isPaused },
         perform: { ClipboardModel.shared.setPaused(true) }),
       .init(
-        id: "clipboard-resume", title: "Resume clipboard history",
-        detail: "Capture new copies without backfilling missed items", symbol: "clipboard.fill",
+        id: "clipboard-resume", title: String(localized: "Resume clipboard history"),
+        detail: String(localized: "Capture new copies without backfilling missed items"),
+        symbol: "clipboard.fill",
         keywords: "privacy start capture",
         isAvailable: { ClipboardModel.shared.canResumeManualPause },
         perform: { ClipboardModel.shared.setPaused(false) }),
       .init(
-        id: "clipboard-clear", title: "Clear clipboard history",
-        detail: "Remove all copies retained by Islet", symbol: "trash",
+        id: "clipboard-clear", title: String(localized: "Clear clipboard history"),
+        detail: String(localized: "Remove all copies retained by Islet"), symbol: "trash",
         keywords: "privacy remove copies", isAvailable: { !ClipboardModel.shared.items.isEmpty },
         perform: { ClipboardModel.shared.clear() }),
       .init(
-        id: "settings", title: "Open Settings", detail: "Configure activities and integrations",
+        id: "settings", title: String(localized: "Open Settings"),
+        detail: String(localized: "Configure activities and integrations"),
         symbol: "gearshape", keywords: "preferences configuration", opensIsletWindow: true,
         isAvailable: { true },
         perform: { SettingsOpener.open(destination: .overview) }),
@@ -140,10 +154,10 @@ enum CommandPaletteResultKind: Int, CaseIterable, Sendable {
 
   var title: String {
     switch self {
-    case .action: "Actions"
-    case .activity: "Activities"
-    case .pulse: "Pulse"
-    case .setting: "Settings"
+    case .action: String(localized: "Actions")
+    case .activity: String(localized: "Activities")
+    case .pulse: String(localized: "Pulse")
+    case .setting: String(localized: "Settings")
     }
   }
 }
@@ -251,8 +265,9 @@ enum CommandPaletteCatalog {
   private static var activityResults: [CommandPaletteResult] {
     ActivityCatalog.orderable.map { activity in
       CommandPaletteResult(
-        id: "activity:\(activity.id)", title: "Open \(activity.name)",
-        detail: "Show the \(activity.name) activity in Islet", symbol: activity.icon,
+        id: "activity:\(activity.id)", title: String(localized: "Open \(activity.name)"),
+        detail: String(localized: "Show the \(activity.name) activity in Islet"),
+        symbol: activity.icon,
         kind: .activity, searchableContent: [activity.id, activity.name], opensIsletWindow: true,
         isAvailable: { ActivityCenter.shared.isAvailableInExpandedSwitcher(activity.id) },
         perform: { openActivity(activity.id) })
@@ -264,7 +279,8 @@ enum CommandPaletteCatalog {
       var results = [
         CommandPaletteResult(
           id: "pulse:\(item.source):\(item.id)", title: item.title,
-          detail: item.subtitle ?? "Pulse from \(item.source)", symbol: item.symbol,
+          detail: item.subtitle ?? String(localized: "Pulse from \(item.source)"),
+          symbol: item.symbol,
           kind: .pulse,
           searchableContent: [item.source, item.subtitle ?? "", item.state.rawValue],
           opensIsletWindow: true,
@@ -274,7 +290,8 @@ enum CommandPaletteCatalog {
       results += item.actions.map { action in
         CommandPaletteResult(
           id: "pulse-action:\(item.source):\(item.id):\(action.id)", title: action.title,
-          detail: "\(item.title) · \(item.source)", symbol: "arrow.up.right.square",
+          detail: String(localized: "\(item.title) · \(item.source)"),
+          symbol: "arrow.up.right.square",
           kind: .pulse, searchableContent: [item.title, item.subtitle ?? "", item.source],
           isAvailable: {
             PulseCenter.shared.items.contains { current in
@@ -292,7 +309,7 @@ enum CommandPaletteCatalog {
       page.paletteControls.enumerated().map { index, control in
         CommandPaletteResult(
           id: "setting:\(page.rawValue):\(index)", title: control,
-          detail: "Settings · \(page.title)", symbol: page.icon, kind: .setting,
+          detail: String(localized: "Settings · \(page.title)"), symbol: page.icon, kind: .setting,
           searchableContent: [page.title, page.subtitle], opensIsletWindow: true,
           isAvailable: { true },
           perform: { SettingsOpener.open(page: page) })
@@ -434,7 +451,7 @@ enum QuickActionsOpener {
       window.contentViewController = hosting
     } else {
       window = CommandPalettePanel(contentViewController: hosting)
-      window.title = "Islet Command Palette"
+      window.title = String(localized: "Islet Command Palette")
       window.styleMask = [.titled, .closable, .resizable, .utilityWindow]
       window.setContentSize(NSSize(width: 620, height: 520))
       window.contentMinSize = NSSize(width: 480, height: 340)

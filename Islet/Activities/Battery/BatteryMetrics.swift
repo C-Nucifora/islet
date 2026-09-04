@@ -22,18 +22,18 @@ enum BatteryTelemetryField: String, CaseIterable, Hashable, Identifiable, Sendab
 
   var label: String {
     switch self {
-    case .health: return "Battery health"
-    case .temperature: return "Temperature"
-    case .voltage: return "Voltage"
-    case .current: return "Current"
-    case .timeToFull: return "Time to full"
-    case .timeToEmpty: return "Time remaining"
-    case .charger: return "Charger details"
-    case .systemInput: return "System input"
-    case .systemLoad: return "System load"
-    case .batteryPower: return "Battery power"
-    case .usbPowerOutput: return "USB power output"
-    case .cpuPower: return "CPU power"
+    case .health: return String(localized: "Battery health")
+    case .temperature: return String(localized: "Temperature")
+    case .voltage: return String(localized: "Voltage")
+    case .current: return String(localized: "Current")
+    case .timeToFull: return String(localized: "Time to full")
+    case .timeToEmpty: return String(localized: "Time remaining")
+    case .charger: return String(localized: "Charger details")
+    case .systemInput: return String(localized: "System input")
+    case .systemLoad: return String(localized: "System load")
+    case .batteryPower: return String(localized: "Battery power")
+    case .usbPowerOutput: return String(localized: "USB power output")
+    case .cpuPower: return String(localized: "CPU power")
     }
   }
 }
@@ -48,8 +48,8 @@ enum BatteryTelemetryStatus: Equatable, Sendable {
 
   var diagnosticReason: String {
     switch self {
-    case .available: return "Available"
-    case .unsupported: return "Not reported by this Mac"
+    case .available: return String(localized: "Available")
+    case .unsupported: return String(localized: "Not reported by this Mac")
     case .unavailable(let reason): return reason.diagnosticReason
     }
   }
@@ -65,12 +65,12 @@ enum BatteryTelemetryUnavailableReason: Equatable, Sendable {
 
   var diagnosticReason: String {
     switch self {
-    case .unreadable: return "Last value could not be read"
-    case .calculating: return "Still calculating"
-    case .inactive: return "Not active right now"
-    case .stale: return "Last sample is stale"
-    case .noSample: return "No sample yet"
-    case .transient: return "Temporarily unavailable"
+    case .unreadable: return String(localized: "Last value could not be read")
+    case .calculating: return String(localized: "Still calculating")
+    case .inactive: return String(localized: "Not active right now")
+    case .stale: return String(localized: "Last sample is stale")
+    case .noSample: return String(localized: "No sample yet")
+    case .transient: return String(localized: "Temporarily unavailable")
     }
   }
 }

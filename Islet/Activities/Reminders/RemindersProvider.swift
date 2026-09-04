@@ -195,7 +195,7 @@ final class RemindersProvider: ObservableObject {
             || dueComponents?.second != nil
           return ReminderItem(
             id: reminder.calendarItemIdentifier,
-            title: reminder.title ?? "Untitled",
+            title: reminder.title ?? String(localized: "Untitled"),
             dueDate: RemindersLogic.dueDate(from: dueComponents),
             hasDueTime: hasDueTime,
             priority: reminder.priority,
@@ -233,7 +233,7 @@ final class RemindersProvider: ObservableObject {
       completionUndo = undo
       scheduleUndoExpiry(undo)
     case .failure(let error):
-      report(error, action: "complete \(item.title)")
+      report(error, action: String(localized: "complete \(item.title)"))
     }
   }
 
@@ -268,7 +268,7 @@ final class RemindersProvider: ObservableObject {
   func reschedule(_ item: ReminderItem, to date: Date, hasTime: Bool = true) -> Bool {
     apply(
       writes.reschedule(item, to: date, hasTime: hasTime), replacing: item,
-      action: "reschedule \(item.title)")
+      action: String(localized: "reschedule \(item.title)"))
   }
 
   /// User-facing quick snooze. Snoozes intentionally gain a clock time, even when the original
@@ -278,7 +278,7 @@ final class RemindersProvider: ObservableObject {
     _ item: ReminderItem, preset: RemindersLogic.SnoozePreset, now: Date = Date()
   ) -> Bool {
     guard let date = RemindersLogic.snoozeDate(preset, from: now) else {
-      lastActionError = "Couldn’t calculate a new due date."
+      lastActionError = String(localized: "Couldn’t calculate a new due date.")
       return false
     }
     return reschedule(item, to: date, hasTime: true)

@@ -12,7 +12,7 @@ import Foundation
 @MainActor
 final class WiFiEventSource: NSObject, SystemEventSource, CWEventDelegate {
   let id = "wifi"
-  let displayName = "Wi-Fi"
+  let displayName = String(localized: "Wi-Fi")
   let tier = SystemEventTier.extended
 
   private let client = CWWiFiClient.shared()
@@ -62,9 +62,9 @@ final class WiFiEventSource: NSObject, SystemEventSource, CWEventDelegate {
     if let ssid {
       SystemEventBus.shared.emit(
         SystemEvent(
-          sourceID: id, icon: "wifi", title: "Wi-Fi connected", subtitle: ssid,
+          sourceID: id, icon: "wifi", title: String(localized: "Wi-Fi connected"), subtitle: ssid,
           accentHex: EventAccent.positive, motion: .wifi,
-          announcement: "Connected to \(ssid)"))
+          announcement: String(localized: "Connected to \(ssid)")))
     } else if previous != nil || client.interface()?.powerOn() == true {
       // Name unavailable — either genuinely disconnected, or connected with Location refused.
       // A live BSSID tells the two apart.
@@ -73,11 +73,13 @@ final class WiFiEventSource: NSObject, SystemEventSource, CWEventDelegate {
         SystemEvent(
           sourceID: id,
           icon: connected ? "wifi" : "wifi.slash",
-          title: connected ? "Wi-Fi connected" : "Wi-Fi disconnected",
+          title: connected
+            ? String(localized: "Wi-Fi connected") : String(localized: "Wi-Fi disconnected"),
           accentHex: connected ? EventAccent.positive : EventAccent.neutral,
           motion: .wifi,
           urgency: .ambient,
-          announcement: connected ? "Wi-Fi connected" : "Wi-Fi disconnected"))
+          announcement: connected
+            ? String(localized: "Wi-Fi connected") : String(localized: "Wi-Fi disconnected")))
     }
   }
 
@@ -88,10 +90,10 @@ final class WiFiEventSource: NSObject, SystemEventSource, CWEventDelegate {
       SystemEvent(
         sourceID: id,
         icon: on ? "wifi" : "wifi.slash",
-        title: on ? "Wi-Fi on" : "Wi-Fi off",
+        title: on ? String(localized: "Wi-Fi on") : String(localized: "Wi-Fi off"),
         accentHex: on ? EventAccent.info : EventAccent.neutral,
         motion: .wifi,
         urgency: .ambient,
-        announcement: on ? "Wi-Fi on" : "Wi-Fi off"))
+        announcement: on ? String(localized: "Wi-Fi on") : String(localized: "Wi-Fi off")))
   }
 }

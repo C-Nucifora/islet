@@ -61,12 +61,14 @@ enum CalendarCreationError: Error, Equatable, Sendable {
 
   var message: String {
     switch self {
-    case .permissionRequired: "Calendar access is required to add an event."
-    case .calendarUnavailable: "That calendar is no longer available for new events."
-    case .titleRequired: "Enter an event title."
-    case .invalidTimeRange: "The event must end after it starts."
-    case .invalidConferenceURL: "Enter a secure conference link, such as https://meet.example.com."
-    case .saveFailed(let detail): "The event could not be saved. \(detail)"
+    case .permissionRequired: String(localized: "Calendar access is required to add an event.")
+    case .calendarUnavailable:
+      String(localized: "That calendar is no longer available for new events.")
+    case .titleRequired: String(localized: "Enter an event title.")
+    case .invalidTimeRange: String(localized: "The event must end after it starts.")
+    case .invalidConferenceURL:
+      String(localized: "Enter a secure conference link, such as https://meet.example.com.")
+    case .saveFailed(let detail): String(localized: "The event could not be saved. \(detail)")
     }
   }
 }
@@ -199,10 +201,10 @@ enum CalendarLogic {
   /// Short countdown label, e.g. "8m", "1h", or "now".
   static func countdownText(to start: Date, now: Date) -> String {
     let seconds = Int(start.timeIntervalSince(now))
-    if seconds <= 0 { return "now" }
+    if seconds <= 0 { return String(localized: "now") }
     let minutes = (seconds + 59) / 60
-    if minutes < 60 { return "\(minutes)m" }
+    if minutes < 60 { return String(localized: "\(LocalizedFormat.integer(minutes))m") }
     let hours = minutes / 60
-    return "\(hours)h"
+    return String(localized: "\(LocalizedFormat.integer(hours))h")
   }
 }

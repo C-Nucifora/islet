@@ -15,8 +15,9 @@ struct PortDevice: Identifiable, Equatable {
 
   /// A short port label derived from the location ID's controller nibble.
   var portLabel: String {
-    guard let locationID else { return "Port unavailable" }
-    return String(format: "Port %X", (locationID >> 24) & 0xFF)
+    guard let locationID else { return String(localized: "Port unavailable") }
+    let identifier = String((locationID >> 24) & 0xFF, radix: 16, uppercase: true)
+    return String(localized: "Port \(identifier)")
   }
 }
 
@@ -146,7 +147,7 @@ enum PortsReader {
 
     return PortDevice(
       id: id,
-      name: name ?? "USB Device",
+      name: name ?? String(localized: "USB Device"),
       vendor: entry.vendorName,
       speed: speedString(for: entry),
       locationID: entry.locationID)
@@ -178,41 +179,41 @@ enum PortsReader {
 
   private static func linkSpeedString(_ speed: Int) -> String {
     switch UInt64(bitPattern: Int64(speed)) {
-    case UInt64(kIOUSBLinkSpeedLow): "1.5 Mbps"
-    case UInt64(kIOUSBLinkSpeedFull): "12 Mbps"
-    case UInt64(kIOUSBLinkSpeedHigh): "480 Mbps"
-    case UInt64(kIOUSBLinkSpeed5Gbps): "5 Gbps"
-    case UInt64(kIOUSBLinkSpeed10Gbps): "10 Gbps"
-    case UInt64(kIOUSBLinkSpeed20Gbps): "20 Gbps"
-    case UInt64(kIOUSBLinkSpeed40Gbps): "40 Gbps"
-    case UInt64(kIOUSBLinkSpeed80Gbps): "80 Gbps"
+    case UInt64(kIOUSBLinkSpeedLow): String(localized: "1.5 Mbps")
+    case UInt64(kIOUSBLinkSpeedFull): String(localized: "12 Mbps")
+    case UInt64(kIOUSBLinkSpeedHigh): String(localized: "480 Mbps")
+    case UInt64(kIOUSBLinkSpeed5Gbps): String(localized: "5 Gbps")
+    case UInt64(kIOUSBLinkSpeed10Gbps): String(localized: "10 Gbps")
+    case UInt64(kIOUSBLinkSpeed20Gbps): String(localized: "20 Gbps")
+    case UInt64(kIOUSBLinkSpeed40Gbps): String(localized: "40 Gbps")
+    case UInt64(kIOUSBLinkSpeed80Gbps): String(localized: "80 Gbps")
     default: "Unknown (\(speed))"
     }
   }
 
   private static func usbSpeedString(_ speed: Int) -> String {
     switch speed {
-    case Int(kIOUSBHostConnectionSpeedNone.rawValue): "Unknown (\(speed))"
-    case Int(kIOUSBHostConnectionSpeedFull.rawValue): "12 Mbps"
-    case Int(kIOUSBHostConnectionSpeedLow.rawValue): "1.5 Mbps"
-    case Int(kIOUSBHostConnectionSpeedHigh.rawValue): "480 Mbps"
-    case Int(kIOUSBHostConnectionSpeedSuper.rawValue): "5 Gbps"
-    case Int(kIOUSBHostConnectionSpeedSuperPlus.rawValue): "10 Gbps"
-    case Int(kIOUSBHostConnectionSpeedSuperPlusBy2.rawValue): "20 Gbps"
-    case Int(kIOUSBHostConnectionSpeedOther.rawValue): "Unknown (\(speed))"
-    default: "Unknown (\(speed))"
+    case Int(kIOUSBHostConnectionSpeedNone.rawValue): String(localized: "Unknown (\(speed))")
+    case Int(kIOUSBHostConnectionSpeedFull.rawValue): String(localized: "12 Mbps")
+    case Int(kIOUSBHostConnectionSpeedLow.rawValue): String(localized: "1.5 Mbps")
+    case Int(kIOUSBHostConnectionSpeedHigh.rawValue): String(localized: "480 Mbps")
+    case Int(kIOUSBHostConnectionSpeedSuper.rawValue): String(localized: "5 Gbps")
+    case Int(kIOUSBHostConnectionSpeedSuperPlus.rawValue): String(localized: "10 Gbps")
+    case Int(kIOUSBHostConnectionSpeedSuperPlusBy2.rawValue): String(localized: "20 Gbps")
+    case Int(kIOUSBHostConnectionSpeedOther.rawValue): String(localized: "Unknown (\(speed))")
+    default: String(localized: "Unknown (\(speed))")
     }
   }
 
   private static func deviceSpeedString(_ speed: Int?) -> String? {
     switch speed {
-    case Int(kUSBDeviceSpeedLow): "1.5 Mbps"
-    case Int(kUSBDeviceSpeedFull): "12 Mbps"
-    case Int(kUSBDeviceSpeedHigh): "480 Mbps"
-    case Int(kUSBDeviceSpeedSuper): "5 Gbps"
-    case Int(kUSBDeviceSpeedSuperPlus): "10 Gbps"
-    case Int(kUSBDeviceSpeedSuperPlusBy2): "20 Gbps"
-    case let speed?: "Unknown (\(speed))"
+    case Int(kUSBDeviceSpeedLow): String(localized: "1.5 Mbps")
+    case Int(kUSBDeviceSpeedFull): String(localized: "12 Mbps")
+    case Int(kUSBDeviceSpeedHigh): String(localized: "480 Mbps")
+    case Int(kUSBDeviceSpeedSuper): String(localized: "5 Gbps")
+    case Int(kUSBDeviceSpeedSuperPlus): String(localized: "10 Gbps")
+    case Int(kUSBDeviceSpeedSuperPlusBy2): String(localized: "20 Gbps")
+    case let speed?: String(localized: "Unknown (\(speed))")
     default: nil
     }
   }

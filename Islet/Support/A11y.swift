@@ -128,6 +128,7 @@ enum ActivityAccessibilityText {
   }
 
   static func reminder(title: String, due: String?, overdue: Bool) -> String {
-    [title, overdue ? "overdue" : nil, due].compactMap { $0 }.joined(separator: ", ")
+    [title, overdue ? String(localized: "overdue") : nil, due]
+      .compactMap { $0 }.joined(separator: ", ")
   }
 }

@@ -153,8 +153,8 @@ private struct ReminderEditorWindowContent: View {
 
   var body: some View {
     ReminderEditorView(
-      heading: item == nil ? "New reminder" : "Edit reminder",
-      submitTitle: item == nil ? "Add" : "Save", draft: draft,
+      heading: item == nil ? String(localized: "New reminder") : String(localized: "Edit reminder"),
+      submitTitle: item == nil ? String(localized: "Add") : String(localized: "Save"), draft: draft,
       lists: provider.availableLists, errorMessage: provider.lastActionError,
       onCancel: close
     ) { draft in
@@ -198,7 +198,7 @@ final class ReminderEditorWindow: NSObject, NSWindowDelegate {
       draft = provider.defaultDraft()
     }
     present(
-      title: item == nil ? "New reminder" : "Edit reminder",
+      title: item == nil ? String(localized: "New reminder") : String(localized: "Edit reminder"),
       content: ReminderEditorWindowContent(
         provider: provider, item: item, draft: draft,
         close: { [weak self] in self?.close() }))

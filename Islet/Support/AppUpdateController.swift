@@ -8,7 +8,7 @@ enum AppUpdateChannel: String, Equatable, Sendable {
 
   var title: String {
     switch self {
-    case .stable: "Stable"
+    case .stable: String(localized: "Stable")
     }
   }
 }
@@ -29,12 +29,15 @@ enum AppUpdateConfigurationError: Error, Equatable, LocalizedError {
 
   var errorDescription: String? {
     switch self {
-    case .missingValue(let key): "The update setting \(key) is missing."
-    case .invalidFeedURL: "The update feed URL is invalid."
-    case .insecureFeedURL: "The update feed must use HTTPS without embedded credentials."
-    case .unexpectedFeedURL: "This build does not use Islet's stable update feed."
-    case .invalidPublicKey: "Update signing has not been configured in this build."
-    case .signedFeedRequired: "Signed update feeds are required."
+    case .missingValue(let key): String(localized: "The update setting \(key) is missing.")
+    case .invalidFeedURL: String(localized: "The update feed URL is invalid.")
+    case .insecureFeedURL:
+      String(localized: "The update feed must use HTTPS without embedded credentials.")
+    case .unexpectedFeedURL:
+      String(localized: "This build does not use Islet's stable update feed.")
+    case .invalidPublicKey:
+      String(localized: "Update signing has not been configured in this build.")
+    case .signedFeedRequired: String(localized: "Signed update feeds are required.")
     case .preExtractionVerificationRequired:
       "Update archives must be verified before extraction."
     case .signedFeedFailureMayExpire:
@@ -43,8 +46,9 @@ enum AppUpdateConfigurationError: Error, Equatable, LocalizedError {
       "Automatic update checks must remain an explicit user choice."
     case .automaticInstallationEnabled:
       "Automatic installation must be disabled by default."
-    case .releaseNotesRequired: "Update release notes must be shown."
-    case .unsupportedChannel(let channel): "The update channel \(channel) is unsupported."
+    case .releaseNotesRequired: String(localized: "Update release notes must be shown.")
+    case .unsupportedChannel(let channel):
+      String(localized: "The update channel \(channel) is unsupported.")
     }
   }
 }
@@ -157,16 +161,17 @@ enum AppUpdateState: Equatable, Sendable {
 
   var summary: String {
     switch self {
-    case .unavailable(let reason): "Unavailable: \(reason)"
-    case .ready: "Ready"
-    case .checking: "Checking…"
-    case .upToDate: "Up to date"
-    case .updateAvailable(let version): "Version \(version) is available"
-    case .downloading(let version): "Downloading version \(version)…"
-    case .preparing(let version): "Verifying version \(version)…"
-    case .readyToInstall(let version): "Version \(version) is ready to install"
-    case .installing(let version): "Installing version \(version)…"
-    case .failed(let message): "Update failed: \(message)"
+    case .unavailable(let reason): String(localized: "Unavailable: \(reason)")
+    case .ready: String(localized: "Ready")
+    case .checking: String(localized: "Checking…")
+    case .upToDate: String(localized: "Up to date")
+    case .updateAvailable(let version): String(localized: "Version \(version) is available")
+    case .downloading(let version): String(localized: "Downloading version \(version)…")
+    case .preparing(let version): String(localized: "Verifying version \(version)…")
+    case .readyToInstall(let version):
+      String(localized: "Version \(version) is ready to install")
+    case .installing(let version): String(localized: "Installing version \(version)…")
+    case .failed(let message): String(localized: "Update failed: \(message)")
     }
   }
 

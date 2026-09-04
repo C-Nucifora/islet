@@ -13,7 +13,7 @@ import Foundation
 @MainActor
 final class PeripheralEventSource: SystemEventSource {
   let id = "peripheral"
-  let displayName = "Peripheral batteries"
+  let displayName = String(localized: "Peripheral batteries")
   let tier = SystemEventTier.core
 
   private var detector = PeripheralBatteryAlertDetector()
@@ -97,12 +97,16 @@ final class PeripheralEventSource: SystemEventSource {
       emit(
         SystemEvent(
           sourceID: id, icon: p.icon,
-          title: critical ? "\(p.name) battery critical" : "\(p.name) battery low",
-          subtitle: "\(p.percent)%",
+          title: critical
+            ? String(localized: "\(p.name) battery critical")
+            : String(localized: "\(p.name) battery low"),
+          subtitle: LocalizedFormat.percent(Double(p.percent) / 100),
           accentHex: critical ? EventAccent.danger : EventAccent.warning,
           motion: .peripheralLow,
           urgency: .alert, duration: 3,
-          announcement: "\(p.name) battery at \(p.percent) percent"))
+          announcement: String(
+            localized:
+              "\(p.name) battery at \(LocalizedFormat.percent(Double(p.percent) / 100))")))
     }
   }
 }

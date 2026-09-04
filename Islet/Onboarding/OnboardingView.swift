@@ -12,12 +12,12 @@ struct LegacyInstallMigrationResult {
   let importedCredentialCount: Int
 
   var summary: String {
-    let settings =
-      importedPreferenceCount == 1 ? "1 setting" : "\(importedPreferenceCount) settings"
-    let credentials =
-      importedCredentialCount == 1
-      ? "1 saved T3 Code pairing" : "\(importedCredentialCount) saved T3 Code pairings"
-    return "Imported \(settings) and \(credentials)."
+    let settings = String(
+      localized: "\(importedPreferenceCount) setting", comment: "Imported preference count")
+    let credentials = String(
+      localized: "\(importedCredentialCount) saved T3 Code pairing",
+      comment: "Imported pairing count")
+    return String(localized: "Imported \(settings) and \(credentials).")
   }
 }
 
@@ -27,7 +27,9 @@ enum LegacyInstallMigrationError: LocalizedError {
   var errorDescription: String? {
     switch self {
     case .preferencesVerificationFailed:
-      "The imported settings could not be verified. The previous settings were left in place."
+      String(
+        localized:
+          "The imported settings could not be verified. The previous settings were left in place.")
     }
   }
 }
@@ -186,7 +188,7 @@ enum OnboardingOpener {
 
     let hosting = NSHostingController(rootView: OnboardingView())
     let onboardingWindow = NSWindow(contentViewController: hosting)
-    onboardingWindow.title = "Set up Islet"
+    onboardingWindow.title = String(localized: "Set up Islet")
     onboardingWindow.styleMask = [.titled, .closable]
     onboardingWindow.setContentSize(NSSize(width: 720, height: 560))
     onboardingWindow.isReleasedWhenClosed = false
@@ -211,11 +213,11 @@ private enum OnboardingPage: Int, CaseIterable {
 
   var title: String {
     switch self {
-    case .welcome: "Meet Islet"
-    case .interaction: "Open the notch"
-    case .activities: "Choose activities"
-    case .permissions: "Allow access"
-    case .ready: "Ready"
+    case .welcome: String(localized: "Meet Islet")
+    case .interaction: String(localized: "Open the notch")
+    case .activities: String(localized: "Choose activities")
+    case .permissions: String(localized: "Allow access")
+    case .ready: String(localized: "Ready")
     }
   }
 }
@@ -225,17 +227,17 @@ private struct OnboardingActivity: Identifiable {
   let detail: String
 
   static let all: [Self] = [
-    .init(id: "timer", detail: "Countdowns"),
-    .init(id: "nowPlaying", detail: "Media controls and active players"),
-    .init(id: "battery", detail: "Charge, power flow and peripherals"),
-    .init(id: "calendar", detail: "Next event and three-day agenda"),
-    .init(id: "shelf", detail: "Files for quick access or AirDrop"),
-    .init(id: "ports", detail: "Connected USB devices"),
-    .init(id: "system", detail: "CPU, GPU, memory and temperature"),
-    .init(id: "continuity", detail: "Apps with iPhone Live Activities"),
-    .init(id: "t3Code", detail: "Active agents on T3 Code machines"),
-    .init(id: "pulse", detail: "Updates from local scripts and tools"),
-    .init(id: "clipboard", detail: "In-memory copy history"),
+    .init(id: "timer", detail: String(localized: "Countdowns")),
+    .init(id: "nowPlaying", detail: String(localized: "Media controls and active players")),
+    .init(id: "battery", detail: String(localized: "Charge, power flow and peripherals")),
+    .init(id: "calendar", detail: String(localized: "Next event and three-day agenda")),
+    .init(id: "shelf", detail: String(localized: "Files for quick access or AirDrop")),
+    .init(id: "ports", detail: String(localized: "Connected USB devices")),
+    .init(id: "system", detail: String(localized: "CPU, GPU, memory and temperature")),
+    .init(id: "continuity", detail: String(localized: "Apps with iPhone Live Activities")),
+    .init(id: "t3Code", detail: String(localized: "Active agents on T3 Code machines")),
+    .init(id: "pulse", detail: String(localized: "Updates from local scripts and tools")),
+    .init(id: "clipboard", detail: String(localized: "In-memory copy history")),
   ]
 }
 
@@ -252,7 +254,7 @@ private enum LegacyMigrationState {
   }
 }
 
-private struct OnboardingView: View {
+struct OnboardingView: View {
   @Default(.appTheme) private var appTheme
   @Default(.interactionMode) private var interactionMode
   @Default(.hapticsEnabled) private var hapticsEnabled
@@ -362,7 +364,10 @@ private struct OnboardingView: View {
             .font(.caption).foregroundStyle(.secondary)
         }
         Spacer()
-        Button(legacyMigrationState.isMigrating ? "Importing…" : "Import") {
+        Button(
+          legacyMigrationState.isMigrating
+            ? String(localized: "Importing…") : String(localized: "Import")
+        ) {
           migrateLegacyInstall()
         }
         .disabled(legacyMigrationState.isMigrating)
@@ -457,9 +462,10 @@ private struct OnboardingView: View {
 
         if selectedActivities.contains("calendar") {
           permissionRow(
-            title: "Calendar", detail: "Shows three days, meeting links and event countdowns.",
+            title: String(localized: "Calendar"),
+            detail: String(localized: "Shows three days, meeting links and event countdowns."),
             status: calendar.authorization.summary,
-            actionTitle: calendar.authorization.canRead ? nil : "Allow"
+            actionTitle: calendar.authorization.canRead ? nil : String(localized: "Allow")
           ) {
             Task {
               await calendar.recoverAccess()
@@ -470,8 +476,8 @@ private struct OnboardingView: View {
 
         Toggle(isOn: $remindersEnabled) {
           permissionLabel(
-            title: "Reminders",
-            detail: "Shows and manages reminders from Home.",
+            title: String(localized: "Reminders"),
+            detail: String(localized: "Shows and manages reminders from Home."),
             status: reminders.authorization.summary)
         }
         .toggleStyle(.checkbox)
@@ -489,32 +495,44 @@ private struct OnboardingView: View {
 
         if selectedActivities.contains("continuity") {
           permissionRow(
-            title: "Accessibility",
+            title: String(localized: "Accessibility"),
             detail:
-              "Reads the app names macOS shows for iPhone Live Activities. Islet cannot read their contents.",
-            status: permissions.diagnostics.accessibilityGranted ? "Allowed" : "Not allowed",
-            actionTitle: permissions.diagnostics.accessibilityGranted ? nil : "Allow"
+              String(
+                localized:
+                  "Reads the app names macOS shows for iPhone Live Activities. Islet cannot read their contents."
+              ),
+            status: permissions.diagnostics.accessibilityGranted
+              ? String(localized: "Allowed") : String(localized: "Not allowed"),
+            actionTitle: permissions.diagnostics.accessibilityGranted
+              ? nil : String(localized: "Allow")
           ) {
             AccessibilityPermission.prompt()
           }
         }
 
         permissionRow(
-          title: "Wi-Fi network names",
+          title: String(localized: "Wi-Fi network names"),
           detail:
-            "Adds the network name to Wi-Fi connection alerts. The alert still works without access.",
+            String(
+              localized:
+                "Adds the network name to Wi-Fi connection alerts. The alert still works without access."
+            ),
           status: permissions.diagnostics.location.summary,
-          actionTitle: permissions.diagnostics.location == .notDetermined ? "Allow" : nil
+          actionTitle: permissions.diagnostics.location == .notDetermined
+            ? String(localized: "Allow") : nil
         ) {
           permissions.requestLocationAccess()
         }
 
         Toggle(isOn: $bluetoothEventsEnabled) {
           permissionLabel(
-            title: "Bluetooth alerts",
+            title: String(localized: "Bluetooth alerts"),
             detail:
-              "Shows when Bluetooth devices connect or disconnect. macOS may ask for access after setup.",
-            status: bluetoothEventsEnabled ? "On" : "Off")
+              String(
+                localized:
+                  "Shows when Bluetooth devices connect or disconnect. macOS may ask for access after setup."
+              ),
+            status: bluetoothEventsEnabled ? String(localized: "On") : String(localized: "Off"))
         }
         .toggleStyle(.checkbox)
         .padding(14)

@@ -18,11 +18,11 @@ enum HUDEventTapStatus: String, Equatable, Sendable {
 
   var summary: String {
     switch self {
-    case .disabled: "Disabled"
-    case .accessibilityRequired: "Accessibility permission required"
-    case .active: "Active"
-    case .creationFailed: "Event tap could not be created"
-    case .interrupted: "Event tap interrupted"
+    case .disabled: String(localized: "Disabled")
+    case .accessibilityRequired: String(localized: "Accessibility permission required")
+    case .active: String(localized: "Active")
+    case .creationFailed: String(localized: "Event tap could not be created")
+    case .interrupted: String(localized: "Event tap interrupted")
     }
   }
 }
@@ -286,11 +286,16 @@ final class HUDController: ObservableObject {
 
   private func failureDescription(for key: HUDKey) -> String {
     switch key {
-    case .mute: "The current output device has no writable mute control."
+    case .mute: String(localized: "The current output device has no writable mute control.")
     case .volumeUp, .volumeDown:
-      "The current output device has no writable volume control or rejected the change."
+      String(
+        localized:
+          "The current output device has no writable volume control or rejected the change.")
     case .brightnessUp, .brightnessDown:
-      "The display under the pointer has no software brightness control or rejected the change."
+      String(
+        localized:
+          "The display under the pointer has no software brightness control or rejected the change."
+      )
     }
   }
 
@@ -327,9 +332,10 @@ final class HUDController: ObservableObject {
 
   private func present(_ snapshot: HUDSnapshot) {
     hud = snapshot
-    let name = snapshot.kind == .volume ? "Volume" : "Brightness"
+    let name =
+      snapshot.kind == .volume ? String(localized: "Volume") : String(localized: "Brightness")
     let level = Int((snapshot.level * 100).rounded())
-    A11y.announce("\(name), \(level) percent")
+    A11y.announce(String(localized: "\(name), \(level) percent"))
     hideTask?.cancel()
     hideTask = Task { [weak self] in
       try? await Task.sleep(for: .milliseconds(1400))

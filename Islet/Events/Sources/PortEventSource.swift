@@ -9,7 +9,7 @@ import Foundation
 @MainActor
 final class PortEventSource: SystemEventSource {
   let id = "usb"
-  let displayName = "USB devices"
+  let displayName = String(localized: "USB devices")
   let tier = SystemEventTier.core
 
   private var cancellable: AnyCancellable?
@@ -39,15 +39,15 @@ final class PortEventSource: SystemEventSource {
           sourceID: id, icon: "cable.connector", title: device.name,
           subtitle: [device.vendor, device.speed].compactMap { $0 }.joined(separator: " · "),
           accentHex: EventAccent.info, motion: .usb,
-          announcement: "\(device.name) connected"))
+          announcement: String(localized: "\(device.name) connected")))
     }
     for device in diff.removed {
       SystemEventBus.shared.emit(
         SystemEvent(
           sourceID: id, icon: "cable.connector.slash", title: device.name,
-          subtitle: "Disconnected", accentHex: EventAccent.neutral, motion: .usb,
+          subtitle: String(localized: "Disconnected"), accentHex: EventAccent.neutral, motion: .usb,
           urgency: .ambient,
-          announcement: "\(device.name) disconnected"))
+          announcement: String(localized: "\(device.name) disconnected")))
     }
   }
 }

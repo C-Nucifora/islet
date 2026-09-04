@@ -4,6 +4,37 @@ import XCTest
 
 @testable import Islet
 
+private struct LocalizationAlertProbe: View {
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Label("Screenshot detection unavailable", systemImage: "exclamationmark.triangle.fill")
+        .font(.headline)
+      Text(
+        "Islet could not monitor the screenshot folder. Check Files and Folders access in Privacy & Security."
+      )
+      Button("Open Privacy Settings") {}
+    }
+    .padding(20)
+    .frame(width: Metrics.expandedSize.width)
+  }
+}
+
+private struct LocalizationAccessibilityProbe: View {
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("System thermal pressure serious.")
+      Text("Battery temperature unavailable.")
+      Text("The readings do not map directly.")
+      Button("Allow Accessibility access") {}
+    }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(
+      "System thermal pressure and battery sensor temperature are separate readings and do not map directly."
+    )
+    .padding(20)
+  }
+}
+
 /// Hosts the real views in a real panel with the window server, because that is where both
 /// "clicked a tall tab" crashes lived: an NSException thrown inside AppKit's display-cycle layout,
 /// which no pure-logic test can reach.
@@ -68,6 +99,124 @@ final class TallTierHostingTests: XCTestCase {
     XCTAssertEqual(
       container.hostingView.frame.origin.y + panel.frame.minY,
       viewModel.renderingFrame.minY, accuracy: 0.01, file: file, line: line)
+  }
+
+  private var pseudolocale: Locale { Locale(identifier: Pseudolocalization.localeIdentifier) }
+
+  private func assertPseudolocalizedLayoutFits<V: View>(
+    _ view: V, in supportedSize: CGSize, file: StaticString = #filePath, line: UInt = #line
+  ) {
+    let host = NSHostingView(rootView: view.environment(\.locale, pseudolocale))
+    let fittingSize = host.fittingSize
+    XCTAssertLessThanOrEqual(fittingSize.width, supportedSize.width + 0.5, file: file, line: line)
+    XCTAssertLessThanOrEqual(fittingSize.height, supportedSize.height + 0.5, file: file, line: line)
+
+    host.frame = CGRect(origin: .zero, size: supportedSize)
+    host.layoutSubtreeIfNeeded()
+    XCTAssertFalse(host.hasAmbiguousLayout, file: file, line: line)
+    XCTAssertEqual(
+      host.bounds.size.width, supportedSize.width, accuracy: 0.5, file: file, line: line)
+    XCTAssertEqual(
+      host.bounds.size.height, supportedSize.height, accuracy: 0.5, file: file, line: line)
+  }
+
+  /// SwiftUI creates its AppKit accessibility nodes lazily when an assistive client is active.
+  /// Enabling AppKit's application accessibility attribute makes the rendered tree available without
+  /// requiring VoiceOver to be running on the CI host.
+  private func renderedAccessibilityLabel<V: View>(
+    _ view: V, in supportedSize: CGSize, locale: Locale
+  ) -> String? {
+    let application = NSApplication.shared
+    let enhancedInterfaceKey = "accessibilityEnhancedUserInterface"
+    let previousEnhancedInterface = application.value(forKey: enhancedInterfaceKey)
+    application.setValue(true, forKey: enhancedInterfaceKey)
+    defer { application.setValue(previousEnhancedInterface, forKey: enhancedInterfaceKey) }
+
+    let panel = NSPanel(
+      contentRect: CGRect(origin: CGPoint(x: 200, y: 200), size: supportedSize),
+      styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    panel.isReleasedWhenClosed = false
+    let host = NSHostingView(rootView: view.environment(\.locale, locale))
+    panel.contentView = host
+    panel.orderFrontRegardless()
+    defer { panel.close() }
+
+    pump(until: { !(host.accessibilityChildren() ?? []).isEmpty })
+    host.layoutSubtreeIfNeeded()
+    guard let root = host.accessibilityChildren()?.first as? NSObject else { return nil }
+    let selector = NSSelectorFromString("accessibilityLabel")
+    guard root.responds(to: selector) else { return nil }
+    return root.perform(selector)?.takeUnretainedValue() as? String
+  }
+
+  func testPseudolocalizedCompactEventUsesItsBoundedMarquee() {
+    let event = SystemEvent(
+      sourceID: "localization-qa", icon: "exclamationmark.triangle.fill",
+      title: Pseudolocalization.expand("Screenshot detection unavailable"),
+      subtitle: Pseudolocalization.expand("Open Privacy Settings"))
+    assertPseudolocalizedLayoutFits(
+      EventTrailingView(event: event), in: CGSize(width: 120, height: 34))
+  }
+
+  func testPseudolocalizedTallPowerSurfaceFitsTheSupportedTier() {
+    let contentSize = CGSize(
+      width: Metrics.expandedSize.width - 28,
+      height: Metrics.tallExpandedHeight - 32 - 12)
+    let monitor = BatteryMonitor(
+      state: BatteryState(percent: 80, isCharging: true, onAC: true),
+      metrics: BatteryMetrics())
+    assertPseudolocalizedLayoutFits(
+      BatteryExpandedView(monitor: monitor), in: contentSize)
+  }
+
+  func testPseudolocalizedSettingsSurfaceFitsItsSupportedWindow() {
+    assertPseudolocalizedLayoutFits(SettingsView(), in: CGSize(width: 900, height: 650))
+  }
+
+  func testPseudolocalizedOnboardingSurfaceFitsItsFixedWindow() {
+    assertPseudolocalizedLayoutFits(OnboardingView(), in: CGSize(width: 720, height: 560))
+  }
+
+  func testPseudolocalizedAlertAndErrorSurfaceFitsExpandedBounds() {
+    assertPseudolocalizedLayoutFits(
+      LocalizationAlertProbe(), in: CGSize(width: Metrics.expandedSize.width, height: 190))
+  }
+
+  func testPseudolocalizedAccessibilitySurfaceFitsPermissionBounds() {
+    guard
+      let localizationURL = Bundle.main.url(
+        forResource: Pseudolocalization.localeIdentifier, withExtension: "lproj"),
+      let localizationBundle = Bundle(url: localizationURL)
+    else {
+      XCTFail("Missing compiled en-XA localization bundle")
+      return
+    }
+    let presentation = SystemThermalPresentation(
+      thermalState: 2, batteryTemperatureC: nil)
+    let pressure = localizationBundle.localizedString(
+      forKey: "serious", value: nil, table: "Localizable")
+    let battery = localizationBundle.localizedString(
+      forKey: "Battery temperature unavailable.", value: nil, table: "Localizable")
+    let accessibilityFormat = localizationBundle.localizedString(
+      forKey: "System thermal pressure %@. %@ The readings do not map directly.", value: nil,
+      table: "Localizable")
+    XCTAssertEqual(
+      presentation.accessibilityValue(locale: pseudolocale, bundle: localizationBundle),
+      String(format: accessibilityFormat, locale: pseudolocale, pressure, battery))
+    let expectedHelp = SystemThermalPresentation.helpText(
+      locale: pseudolocale, bundle: localizationBundle)
+    XCTAssertEqual(
+      expectedHelp,
+      Pseudolocalization.expand(
+        "System thermal pressure and battery sensor temperature are separate readings and do not map directly."
+      ))
+    XCTAssertEqual(
+      renderedAccessibilityLabel(
+        LocalizationAccessibilityProbe(), in: CGSize(width: 620, height: 220),
+        locale: pseudolocale),
+      expectedHelp)
+    assertPseudolocalizedLayoutFits(
+      LocalizationAccessibilityProbe(), in: CGSize(width: 620, height: 220))
   }
 
   func testCompactHUDSlotKeepsUnderlyingActivityAsAWidthFloor() {

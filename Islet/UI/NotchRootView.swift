@@ -333,7 +333,9 @@ private struct KeepAwakeCompactIcon: View {
       .font(.caption2)
       .foregroundStyle(releasePending ? Color.orange : appTheme.color(for: .interaction))
       .accessibilityLabel(
-        releasePending ? "Keep-awake assertion release pending" : "Keep awake active")
+        releasePending
+          ? String(localized: "Keep-awake assertion release pending")
+          : String(localized: "Keep awake active"))
   }
 }
 
@@ -351,7 +353,9 @@ private struct ExpandedHUDOverlay: View {
     .overlay(Capsule().stroke(.white.opacity(0.14), lineWidth: 1))
     .shadow(color: .black.opacity(0.5), radius: 8, y: 3)
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel(snapshot.kind == .volume ? "Volume" : "Brightness")
+    .accessibilityLabel(
+      snapshot.kind == .volume ? String(localized: "Volume") : String(localized: "Brightness")
+    )
     .accessibilityValue("\(Int((snapshot.level * 100).rounded())) percent")
   }
 }

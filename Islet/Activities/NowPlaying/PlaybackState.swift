@@ -8,8 +8,8 @@ enum PlaybackSeekability: Equatable {
   var title: String {
     switch self {
     case .seekable: ""
-    case .live: "Live"
-    case .unavailable: "Seeking unavailable"
+    case .live: String(localized: "Live")
+    case .unavailable: String(localized: "Seeking unavailable")
     }
   }
 
@@ -24,8 +24,8 @@ enum PlaybackSeekability: Equatable {
   var accessibilityLabel: String {
     switch self {
     case .seekable: ""
-    case .live: "Live media. Seeking is unavailable."
-    case .unavailable: "Playback position is unavailable."
+    case .live: String(localized: "Live media. Seeking is unavailable.")
+    case .unavailable: String(localized: "Playback position is unavailable.")
     }
   }
 }

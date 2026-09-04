@@ -413,8 +413,8 @@ final class KeepAwakeManager: ObservableObject {
   }
 
   var statusText: String {
-    guard isActive else { return "Off" }
-    guard let remainingTime else { return "Indefinitely" }
+    guard isActive else { return String(localized: "Off") }
+    guard let remainingTime else { return String(localized: "Indefinitely") }
     let seconds = max(0, Int(remainingTime.rounded(.up)))
     let hours = seconds / 3_600
     let minutes = (seconds % 3_600) / 60

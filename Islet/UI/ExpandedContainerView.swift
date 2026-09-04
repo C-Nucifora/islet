@@ -192,8 +192,13 @@ struct ExpandedContainerView: View {
         .foregroundStyle(selected ? appTheme.accentColor : .secondary)
     }
     .buttonStyle(.plain)
-    .accessibilityLabel(tab.id == Self.homeTab ? "Home" : ActivityCatalog.name(for: tab.id))
-    .accessibilityValue(selected ? "Selected" : "Not selected")
+    .accessibilityLabel(
+      tab.id == Self.homeTab
+        ? String(localized: "Home") : ActivityCatalog.name(for: tab.id)
+    )
+    .accessibilityValue(
+      selected ? String(localized: "Selected") : String(localized: "Not selected")
+    )
     .accessibilityAddTraits(selected ? .isSelected : [])
     .accessibilitySortPriority(100)
   }
@@ -214,7 +219,8 @@ struct ExpandedContainerView: View {
     .accessibilityElement(children: .contain)
     .accessibilityLabel(
       effectiveSelection == Self.homeTab
-        ? "Home" : "\(ActivityCatalog.name(for: effectiveSelection)) activity"
+        ? String(localized: "Home")
+        : String(localized: "\(ActivityCatalog.name(for: effectiveSelection)) activity")
     )
     .accessibilitySortPriority(10)
   }

@@ -108,12 +108,14 @@ enum ClipboardPauseReason: Equatable {
 
   var summary: String {
     switch self {
-    case .manual: "Paused until you resume"
-    case .timed(let date): "Paused until \(date.formatted(date: .omitted, time: .shortened))"
-    case .untilNextLogin: "Paused until the next login"
-    case .excludedApplication(let application): "Paused while \(application.name) is active"
-    case .focusMode(let identifier): "Paused for Focus: \(identifier)"
-    case .unidentifiedApplication: "Paused because the active app is unknown"
+    case .manual: String(localized: "Paused until you resume")
+    case .timed(let date):
+      String(localized: "Paused until \(date.formatted(date: .omitted, time: .shortened))")
+    case .untilNextLogin: String(localized: "Paused until the next login")
+    case .excludedApplication(let application):
+      String(localized: "Paused while \(application.name) is active")
+    case .focusMode(let identifier): String(localized: "Paused for Focus: \(identifier)")
+    case .unidentifiedApplication: String(localized: "Paused because the active app is unknown")
     }
   }
 }

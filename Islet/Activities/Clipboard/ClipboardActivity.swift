@@ -32,14 +32,14 @@ struct ClipboardItem: Identifiable, Equatable {
   var preview: String {
     switch kind {
     case .text(let s): s.trimmingCharacters(in: .whitespacesAndNewlines)
-    case .fileURLs(let urls): urls.first?.lastPathComponent ?? "Files"
-    case .image: "Image"
+    case .fileURLs(let urls): urls.first?.lastPathComponent ?? String(localized: "Files")
+    case .image: String(localized: "Image")
     }
   }
 
   var detail: String? {
     guard case .fileURLs(let urls) = kind else { return nil }
-    return "\(urls.count) \(urls.count == 1 ? "file" : "files")"
+    return LocalizedText.fileCount(urls.count)
   }
 
   var retainedByteCount: Int {
@@ -783,7 +783,7 @@ final class ClipboardModel: ObservableObject {
     }
     guard generation == historyGeneration else { return false }
     guard succeeded else {
-      lastWriteError = "Couldn’t restore that clipboard item."
+      lastWriteError = String(localized: "Couldn’t restore that clipboard item.")
       return false
     }
     lastWriteError = nil
@@ -1159,8 +1159,15 @@ struct ClipboardView: View {
           Image(systemName: model.isPaused ? "play.fill" : "pause.fill")
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-        .help("Clipboard privacy pause")
-        .accessibilityLabel("Clipboard privacy pause")
+        .help(
+          model.isPaused
+            ? String(localized: "Resume clipboard history")
+            : String(localized: "Pause and clear clipboard history")
+        )
+        .accessibilityLabel(
+          model.isPaused
+            ? String(localized: "Resume clipboard history")
+            : String(localized: "Pause and clear clipboard history"))
         if !model.items.isEmpty {
           Button {
             model.clear()
@@ -1244,18 +1251,18 @@ struct ClipboardView: View {
       afterRemoving: item.id, from: model.items)
     model.remove(item)
     focusedItemID = replacementID
-    A11y.announce("Deleted clipboard item")
+    A11y.announce(String(localized: "Deleted clipboard item"))
   }
 
   private func copyLabel(for item: ClipboardItem) -> String {
     switch item.kind {
     case .text:
-      return "Copy text clipboard item"
+      return String(localized: "Copy text clipboard item")
     case .fileURLs:
-      let detail = item.detail ?? "files"
-      return "Copy \(detail) clipboard item"
+      let detail = item.detail ?? String(localized: "files")
+      return String(localized: "Copy \(detail) clipboard item")
     case .image:
-      return "Copy image clipboard item"
+      return String(localized: "Copy image clipboard item")
     }
   }
 }

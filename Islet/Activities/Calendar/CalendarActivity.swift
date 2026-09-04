@@ -335,7 +335,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
     return store.events(matching: predicate).map { event in
       AgendaEvent(
         id: "\(event.calendarItemIdentifier)|\(event.startDate.timeIntervalSinceReferenceDate)",
-        title: event.title ?? "Untitled",
+        title: event.title ?? String(localized: "Untitled"),
         start: event.startDate, end: event.endDate, isAllDay: event.isAllDay,
         calendarColorHex: ColorHex.string(from: event.calendar?.cgColor),
         joinURL: joinURL(from: event), location: normalizedLocation(from: event))
@@ -530,8 +530,8 @@ struct CalendarAgendaView: View {
   }
 
   private func dayTitle(_ date: Date) -> String {
-    if Calendar.current.isDateInToday(date) { return "Today" }
-    if Calendar.current.isDateInTomorrow(date) { return "Tomorrow" }
+    if Calendar.current.isDateInToday(date) { return String(localized: "Today") }
+    if Calendar.current.isDateInTomorrow(date) { return String(localized: "Tomorrow") }
     return date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
   }
 }
@@ -541,9 +541,13 @@ private struct CalendarAgendaEventRow: View {
 
   var body: some View {
     HStack(alignment: .top, spacing: 8) {
-      Text(event.isAllDay ? "All day" : event.start.formatted(.dateTime.hour().minute()))
-        .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-        .lineLimit(1).frame(width: 58, alignment: .leading)
+      Text(
+        event.isAllDay
+          ? String(localized: "All day")
+          : event.start.formatted(.dateTime.hour().minute())
+      )
+      .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+      .lineLimit(1).frame(width: 58, alignment: .leading)
       Capsule()
         .fill(Color(isletHex: event.calendarColorHex) ?? .secondary)
         .frame(width: 3, height: 17)
@@ -672,7 +676,7 @@ private final class CalendarEventEditor: NSObject, NSWindowDelegate {
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 430, height: 430),
       styleMask: [.titled, .closable], backing: .buffered, defer: false)
-    window.title = "Add calendar event"
+    window.title = String(localized: "Add calendar event")
     window.isReleasedWhenClosed = false
     window.level = .floating
     window.delegate = self
@@ -733,8 +737,10 @@ private struct CalendarMeetingLinkConfirmationModifier: ViewModifier {
   }
 
   private var confirmationTitle: String {
-    guard let host = link.trust.destinationHost else { return "Open meeting link?" }
-    return "Open \(host)?"
+    guard let host = link.trust.destinationHost else {
+      return String(localized: "Open meeting link?")
+    }
+    return String(localized: "Open \(host)?")
   }
 }
 

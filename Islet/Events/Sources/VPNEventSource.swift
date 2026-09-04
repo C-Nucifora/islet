@@ -180,7 +180,7 @@ private final class TunnelDynamicStoreMonitor: TunnelNetworkChangeMonitoring {
 @MainActor
 final class VPNEventSource: SystemEventSource {
   let id = "vpn"
-  let displayName = "Network tunnel"
+  let displayName = String(localized: "Network tunnel")
   let tier = SystemEventTier.heuristic
 
   private let interfaceReader: () -> [String]
@@ -316,11 +316,13 @@ final class VPNEventSource: SystemEventSource {
       SystemEvent(
         sourceID: id,
         icon: up ? "lock.shield.fill" : "lock.shield",
-        title: up ? "Network tunnel up" : "Network tunnel down",
+        title: up
+          ? String(localized: "Network tunnel up") : String(localized: "Network tunnel down"),
         subtitle: (up ? change.added : change.removed).first,
         accentHex: up ? EventAccent.info : EventAccent.neutral,
         motion: .vpn,
         urgency: .ambient,
-        announcement: up ? "Network tunnel up" : "Network tunnel down"))
+        announcement: up
+          ? String(localized: "Network tunnel up") : String(localized: "Network tunnel down")))
   }
 }
