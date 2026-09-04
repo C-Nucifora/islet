@@ -150,6 +150,15 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(center.history.first?.providerIdentifier, "shared")
   }
 
+  func testStableIdentifierDoesNotAliasDelimiterCharacters() throws {
+    let sourceContainsDelimiter = try PulseItem.ID(source: "a:b", providerIdentifier: "c")
+    let identifierContainsDelimiter = try PulseItem.ID(source: "a", providerIdentifier: "b:c")
+
+    XCTAssertNotEqual(
+      sourceContainsDelimiter.stableIdentifier,
+      identifierContainsDelimiter.stableIdentifier)
+  }
+
   @MainActor
   func testAmbiguousEndRequiresSourceAndScopedEndIsIsolated() throws {
     let center = makeCenter()
