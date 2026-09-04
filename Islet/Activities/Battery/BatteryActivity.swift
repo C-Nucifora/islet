@@ -7,7 +7,10 @@ final class BatteryActivity: NotchActivity, ObservableObject {
   let id = "battery"
   let priority = ActivityPriority.ambient
   private(set) var activationDate: Date?
-  private let monitor = BatteryMonitor()
+  private let monitor: BatteryMonitor
+  private let managesMonitorLifecycle: Bool
+  private let insightClock: any BatteryInsightClock
+  private var insightAnalyzer: BatteryInsightAnalyzer
   private var eventHistory = BatteryEventHistory()
   private var cancellables: Set<AnyCancellable> = []
   private var isMonitoring = false
@@ -20,26 +23,95 @@ final class BatteryActivity: NotchActivity, ObservableObject {
   // screen vanish the moment you unplugged — which is exactly when you want to read it.
   var isActive: Bool { true }
 
+  init(
+    insightClock: any BatteryInsightClock = SystemBatteryInsightClock(),
+    monitor: BatteryMonitor = BatteryMonitor(), managesMonitorLifecycle: Bool = true
+  ) {
+    self.insightClock = insightClock
+    self.monitor = monitor
+    self.managesMonitorLifecycle = managesMonitorLifecycle
+    insightAnalyzer = BatteryInsightAnalyzer(
+      baseline: Defaults[.batteryDrainBaseline],
+      capacityHistory: Defaults[.batteryCapacityHistory],
+      lastAlertDates: Defaults[.batteryInsightLastAlertDates],
+      clock: insightClock)
+  }
+
   func start() {
     guard !isMonitoring else { return }
     isMonitoring = true
-    monitor.start()
+    insightAnalyzer = persistedInsightAnalyzer()
+    // Subscribe before starting IOKit work so even an unusually fast first refresh cannot land in
+    // the gap between monitor startup and observer installation.
     monitor.$state.combineLatest(monitor.$hasFreshState)
       .receive(on: DispatchQueue.main)
       .sink { [weak self] state, hasFreshState in
         self?.handle(state, hasFreshState: hasFreshState)
       }
       .store(in: &cancellables)
+    monitor.$lastLiveRefresh
+      .compactMap { $0 }
+      .sink { [weak self] _ in self?.handleCompletedRefresh() }
+      .store(in: &cancellables)
+    if managesMonitorLifecycle { monitor.start() }
   }
 
   func stop() {
     guard isMonitoring else { return }
     isMonitoring = false
-    monitor.stop()
+    if managesMonitorLifecycle { monitor.stop() }
     cancellables.removeAll()
     eventHistory.reset()
     activationDate = nil
     KeepAwakeManager.shared.clearBatteryState()
+    objectWillChange.send()
+  }
+
+  func resetLearnedBatteryData() {
+    Defaults[.batteryDrainBaseline] = []
+    Defaults[.batteryCapacityHistory] = []
+    Defaults[.batteryInsightLastAlertDates] = [:]
+    insightAnalyzer.reset()
+    monitor.updateInsights(BatteryInsightSnapshot())
+    objectWillChange.send()
+  }
+
+  var batteryInsightSummary: BatteryInsightSnapshot {
+    isMonitoring ? monitor.insightSnapshot : insightAnalyzer.learnedDataSnapshot
+  }
+
+  private func persistedInsightAnalyzer() -> BatteryInsightAnalyzer {
+    BatteryInsightAnalyzer(
+      baseline: Defaults[.batteryDrainBaseline],
+      capacityHistory: Defaults[.batteryCapacityHistory],
+      lastAlertDates: Defaults[.batteryInsightLastAlertDates],
+      clock: insightClock)
+  }
+
+  private func handleCompletedRefresh() {
+    guard let state = monitor.state, let metrics = monitor.metrics else { return }
+    let previousBaseline = insightAnalyzer.baseline
+    let previousCapacity = insightAnalyzer.capacityHistory
+    let previousAlerts = insightAnalyzer.lastAlertDates
+    let update = insightAnalyzer.ingest(
+      BatteryInsightSample(state: state, metrics: metrics),
+      policy: BatteryInsightPolicy(
+        unusualDrainEnabled: Defaults[.unusualBatteryDrainWarnings],
+        chargerWarningsEnabled: Defaults[.chargerCapacityWarnings]))
+    monitor.updateInsights(update.snapshot)
+    if insightAnalyzer.baseline != previousBaseline {
+      Defaults[.batteryDrainBaseline] = insightAnalyzer.baseline
+    }
+    if insightAnalyzer.capacityHistory != previousCapacity {
+      Defaults[.batteryCapacityHistory] = insightAnalyzer.capacityHistory
+    }
+    if insightAnalyzer.lastAlertDates != previousAlerts {
+      Defaults[.batteryInsightLastAlertDates] = insightAnalyzer.lastAlertDates
+    }
+    guard ActivityEnablement.isEnabled("battery") else { return }
+    for alert in update.alerts {
+      SystemEventBus.shared.emit(Self.event(for: alert))
+    }
     objectWillChange.send()
   }
 
@@ -80,6 +152,32 @@ final class BatteryActivity: NotchActivity, ObservableObject {
         sourceID: "battery", icon: "checkmark.circle.fill", title: "Charged",
         subtitle: "\(percent)%", accentHex: EventAccent.positive, motion: .chargeComplete,
         announcement: "Battery fully charged")
+    }
+  }
+
+  static func event(for alert: BatteryInsightAlert) -> SystemEvent {
+    switch alert {
+    case .unusualDrain(let current, let baseline):
+      SystemEvent(
+        sourceID: "battery", icon: "bolt.trianglebadge.exclamationmark.fill",
+        title: "Unusual battery drain",
+        subtitle: String(format: "%.1f W now · %.1f W usual", current, baseline),
+        accentHex: EventAccent.warning, motion: .peripheralLow, urgency: .alert, duration: 3,
+        announcement: String(
+          format: "Unusual battery drain, %.1f watts now, usually %.1f watts", current, baseline))
+    case .chargerDischarging(let watts):
+      SystemEvent(
+        sourceID: "battery", icon: "powerplug.portrait.fill", title: "Charger can't keep up",
+        subtitle: String(format: "Battery supplying %.1f W", watts),
+        accentHex: EventAccent.danger, motion: .peripheralLow, urgency: .alert, duration: 3,
+        announcement: String(
+          format: "Charger cannot meet demand, battery supplying %.1f watts", watts))
+    case .slowCharging(let watts):
+      SystemEvent(
+        sourceID: "battery", icon: "battery.25percent", title: "Charging slowly",
+        subtitle: String(format: "%.1f W into battery", watts),
+        accentHex: EventAccent.warning, motion: .generic, urgency: .alert, duration: 3,
+        announcement: String(format: "Battery charging slowly at %.1f watts", watts))
     }
   }
 
