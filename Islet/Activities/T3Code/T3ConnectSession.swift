@@ -92,13 +92,12 @@ actor T3ConnectSession {
     while true {
       try requireCurrent(capturedGeneration)
       if let refreshTask {
-        onRefreshTaskReused()
         if refreshTask.cancellationRequested {
           try await waitForRefreshTaskTermination(refreshTask)
           try requireCurrent(capturedGeneration)
           continue
         }
-        let refreshed = try await waitForRefreshTask(refreshTask)
+        let refreshed = try await waitForRefreshTask(refreshTask, notifyReuse: true)
         try requireCurrent(capturedGeneration)
         return refreshed
       }
@@ -169,10 +168,13 @@ actor T3ConnectSession {
     return candidate
   }
 
-  private func waitForRefreshTask(_ pending: PendingRefreshTask) async throws -> T3OAuthRecord {
+  private func waitForRefreshTask(
+    _ pending: PendingRefreshTask, notifyReuse: Bool = false
+  ) async throws -> T3OAuthRecord {
     let waiterID = UUID()
     guard refreshTask?.id == pending.id else { throw T3ConnectSessionError.staleOperation }
     refreshTask?.waiterIDs.insert(waiterID)
+    if notifyReuse { onRefreshTaskReused() }
     let waiter = T3SessionTaskWaiter<T3OAuthRecord>()
     Task { [self] in
       let result = await pending.task.result
