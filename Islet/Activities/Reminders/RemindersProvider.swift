@@ -4,7 +4,7 @@ import Defaults
 import EventKit
 import Foundation
 
-/// Loads incomplete reminders via EventKit and completes them on request.
+/// Loads and manages reminders through one EventKit store.
 /// Only requests access once the feature is enabled, to avoid an unwanted permission prompt.
 @MainActor
 final class RemindersProvider: ObservableObject {
@@ -24,15 +24,25 @@ final class RemindersProvider: ObservableObject {
   @Published private(set) var hasRequestedAccess = false
   @Published private(set) var loadState: LoadState = .idle
   @Published private(set) var lastActionError: String?
+  @Published private(set) var availableLists: [ReminderListItem] = []
+  @Published private(set) var completionUndo: ReminderWriteCoordinator.CompletionUndo?
 
   var accessDenied: Bool { !authorization.canRead }
 
-  private let store = EKEventStore()
+  private let store: EKEventStore
+  private let writes: ReminderWriteCoordinator
   private var cancellables: Set<AnyCancellable> = []
   private var observing = false
   private var isRunning = false
   private let storeChangeDebouncer = ReminderReloadDebouncer()
   private var reloadState = ReminderReloadState()
+  private var undoExpiryTask: Task<Void, Never>?
+
+  init(store: EKEventStore = EKEventStore(), writes: ReminderWriteCoordinator? = nil) {
+    self.store = store
+    self.writes =
+      writes ?? ReminderWriteCoordinator(store: EventKitReminderWriteStore(store: store))
+  }
 
   func start() {
     guard !isRunning else { return }
@@ -47,6 +57,7 @@ final class RemindersProvider: ObservableObject {
           self?.reloadState.invalidate(clearOptimisticCompletions: true)
           self?.reminders = []
           self?.hasMoreReminders = false
+          self?.availableLists = []
           self?.loadState = .idle
           return
         }
@@ -66,8 +77,12 @@ final class RemindersProvider: ObservableObject {
     observing = false
     storeChangeDebouncer.cancel()
     reloadState.invalidate(clearOptimisticCompletions: true)
+    undoExpiryTask?.cancel()
+    undoExpiryTask = nil
     reminders = []
     hasMoreReminders = false
+    availableLists = []
+    completionUndo = nil
     loadState = .idle
     lastActionError = nil
   }
@@ -131,6 +146,7 @@ final class RemindersProvider: ObservableObject {
   func refreshAuthorization() async {
     authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .reminder))
     if authorization.canRead, isRunning, Defaults[.remindersEnabled] {
+      availableLists = writes.lists()
       observeStoreChanges()
       await reload()
     } else if isRunning {
@@ -138,6 +154,7 @@ final class RemindersProvider: ObservableObject {
       reloadState.invalidate(clearOptimisticCompletions: true)
       reminders = []
       hasMoreReminders = false
+      availableLists = []
       loadState = .idle
     }
   }
@@ -151,6 +168,7 @@ final class RemindersProvider: ObservableObject {
       reloadState.invalidate(clearOptimisticCompletions: true)
       reminders = []
       hasMoreReminders = false
+      availableLists = []
       loadState = .idle
       return
     }
@@ -181,7 +199,9 @@ final class RemindersProvider: ObservableObject {
             dueDate: RemindersLogic.dueDate(from: dueComponents),
             hasDueTime: hasDueTime,
             priority: reminder.priority,
-            listColorHex: ColorHex.string(from: reminder.calendar?.cgColor))
+            listColorHex: ColorHex.string(from: reminder.calendar?.cgColor),
+            listID: reminder.calendar?.calendarIdentifier,
+            listTitle: reminder.calendar?.title)
         }
         continuation.resume(returning: (items, selection.hasMore))
       }
@@ -192,6 +212,7 @@ final class RemindersProvider: ObservableObject {
     else { return }
     reminders = visibleItems
     hasMoreReminders = result.hasMore
+    availableLists = writes.lists()
     loadState = .loaded
   }
 
@@ -202,50 +223,52 @@ final class RemindersProvider: ObservableObject {
     NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
   }
 
-  /// Marks a reminder complete and refreshes.
+  /// Marks a reminder complete and offers one short, source-revision-bound undo.
   func complete(_ item: ReminderItem) {
-    guard let reminder = store.calendarItem(withIdentifier: item.id) as? EKReminder else {
-      lastActionError = "That reminder is no longer available."
-      Task { await reload() }
-      return
-    }
-    reminder.isCompleted = true
-    do {
-      try store.save(reminder, commit: true)
+    switch writes.complete(item) {
+    case .success(let undo):
       lastActionError = nil
       reloadState.markCompleted(item.id)
-      reminders.removeAll { $0.id == item.id }  // optimistic; store-change reload confirms
-    } catch {
-      lastActionError = "Couldn’t complete \(item.title)."
-      Log.app.error("Failed to complete reminder: \(error.localizedDescription)")
+      reconcileDashboard(.remove(item.id))
+      completionUndo = undo
+      scheduleUndoExpiry(undo)
+    case .failure(let error):
+      report(error, action: "complete \(item.title)")
     }
   }
 
-  /// Moves a reminder without changing its list, notes, recurrence, or other EventKit metadata.
-  /// This is the model operation used by future quick-snooze surfaces and automation actions.
+  @discardableResult
+  func create(_ draft: ReminderDraft) -> Bool {
+    switch writes.create(draft) {
+    case .success(let item):
+      lastActionError = nil
+      reconcileDashboard(.insert(item))
+      availableLists = writes.lists()
+      return true
+    case .failure(let error):
+      report(error, action: "create reminder")
+      availableLists = writes.lists()
+      return false
+    }
+  }
+
+  @discardableResult
+  func update(_ item: ReminderItem, with draft: ReminderDraft) -> Bool {
+    apply(writes.update(item, with: draft), replacing: item, action: "update \(item.title)")
+  }
+
+  /// Changes only the reminder's calendar. EventKit retains notes, recurrence, due date and
+  /// priority because the coordinator starts from the store's current record.
+  @discardableResult
+  func move(_ item: ReminderItem, toListWithID listID: String) -> Bool {
+    apply(writes.move(item, toListWithID: listID), replacing: item, action: "move \(item.title)")
+  }
+
   @discardableResult
   func reschedule(_ item: ReminderItem, to date: Date, hasTime: Bool = true) -> Bool {
-    guard authorization.canRead,
-      let reminder = store.calendarItem(withIdentifier: item.id) as? EKReminder
-    else {
-      lastActionError = "That reminder is no longer available."
-      return false
-    }
-    reminder.dueDateComponents = RemindersLogic.dueComponents(for: date, hasTime: hasTime)
-    do {
-      try store.save(reminder, commit: true)
-      lastActionError = nil
-      if let index = reminders.firstIndex(where: { $0.id == item.id }) {
-        reminders[index].dueDate = date
-        reminders[index].hasDueTime = hasTime
-        reminders = RemindersLogic.display(reminders)
-      }
-      return true
-    } catch {
-      lastActionError = "Couldn’t reschedule \(item.title)."
-      Log.app.error("Failed to reschedule reminder: \(error.localizedDescription)")
-      return false
-    }
+    apply(
+      writes.reschedule(item, to: date, hasTime: hasTime), replacing: item,
+      action: "reschedule \(item.title)")
   }
 
   /// User-facing quick snooze. Snoozes intentionally gain a clock time, even when the original
@@ -262,4 +285,86 @@ final class RemindersProvider: ObservableObject {
   }
 
   func dismissActionError() { lastActionError = nil }
+
+  func undoLastCompletion() {
+    undoExpiryTask?.cancel()
+    undoExpiryTask = nil
+    switch writes.undoCompletion() {
+    case .success(let item):
+      completionUndo = nil
+      lastActionError = nil
+      reloadState.restoreCompleted(item.id)
+      reconcileDashboard(.insert(item))
+    case .failure(let error):
+      completionUndo = nil
+      report(error, action: "undo completion")
+      Task { await reload() }
+    }
+  }
+
+  func defaultDraft() -> ReminderDraft {
+    var draft = ReminderDraft.empty
+    draft.listID = writes.defaultListID()
+    return draft
+  }
+
+  func draft(for item: ReminderItem) -> ReminderDraft? {
+    switch writes.draft(for: item) {
+    case .success(let draft):
+      lastActionError = nil
+      return draft
+    case .failure(let error):
+      report(error, action: "open \(item.title) for editing")
+      availableLists = writes.lists()
+      return nil
+    }
+  }
+
+  private func apply(
+    _ result: Result<ReminderItem, ReminderWriteError>, replacing original: ReminderItem,
+    action: String
+  ) -> Bool {
+    switch result {
+    case .success(let item):
+      lastActionError = nil
+      reconcileDashboard(.replace(originalID: original.id, with: item))
+      availableLists = writes.lists()
+      return true
+    case .failure(let error):
+      report(error, action: action)
+      availableLists = writes.lists()
+      return false
+    }
+  }
+
+  private func reconcileDashboard(_ mutation: ReminderDashboardReconciliation.Mutation) {
+    let reconciliation = ReminderDashboardReconciliation.make(
+      visibleReminders: reminders, hasMoreReminders: hasMoreReminders, mutation: mutation)
+    reminders = reconciliation.reminders
+    hasMoreReminders = reconciliation.hasMoreReminders
+    if reconciliation.requiresReload {
+      Task { await reload() }
+    }
+  }
+
+  private func scheduleUndoExpiry(_ undo: ReminderWriteCoordinator.CompletionUndo) {
+    undoExpiryTask?.cancel()
+    undoExpiryTask = Task { @MainActor [weak self] in
+      let delay = max(undo.expiresAt.timeIntervalSinceNow, 0)
+      do {
+        try await Task.sleep(for: .seconds(delay))
+      } catch {
+        return
+      }
+      guard self?.completionUndo == undo else { return }
+      self?.writes.discardExpiredUndo()
+      self?.completionUndo = nil
+      self?.undoExpiryTask = nil
+    }
+  }
+
+  private func report(_ error: ReminderWriteError, action: String) {
+    lastActionError = error.localizedDescription
+    Log.app.error("Failed to \(action): \(error.localizedDescription)")
+  }
 }
