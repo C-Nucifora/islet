@@ -135,6 +135,8 @@ final class ShelfModel: ObservableObject {
   static let shared = ShelfModel()
   nonisolated static let maximumItemCount = 100
   nonisolated static let maximumConcurrentThumbnailRequests = 2
+  nonisolated private static let legacyThumbnailVisibilityOwner = UUID(
+    uuidString: "00000000-0000-0000-0000-000000000001")!
 
   private struct ImportBatch {
     let urls: [URL]
@@ -183,7 +185,6 @@ final class ShelfModel: ObservableObject {
   /// `nil` means the Shelf storage is available. It must not be inferred from an empty item list.
   @Published private(set) var storageFailure: ShelfStorageFailure?
   @Published private var dropState = ShelfDropState()
-  @Published private(set) var presentationRequest: UUID?
   @Published private(set) var currentUsageBytes: Int64?
   @Published private(set) var lastRejectedImportBytes: Int64?
   @Published private(set) var stacks: [ShelfStack]
@@ -225,7 +226,7 @@ final class ShelfModel: ObservableObject {
   private var importWorker: Task<Void, Never>?
   private var importGeneration: UInt = 0
   private var usageMutationGeneration: UInt = 0
-  private var visibleThumbnailIDs: Set<UUID> = []
+  private var thumbnailVisibilityOwners: [UUID: Set<UUID>] = [:]
   private var queuedThumbnailWork: [ThumbnailWork] = []
   private var activeThumbnailWork: [UUID: ThumbnailWork] = [:]
   private var thumbnailTasks: [UUID: Task<Void, Never>] = [:]
@@ -367,13 +368,6 @@ final class ShelfModel: ObservableObject {
 
   func setDropTarget(_ id: UUID, active: Bool) {
     dropState.setTarget(id, active: active)
-  }
-
-  func requestPresentation() { presentationRequest = UUID() }
-
-  func consumePresentationRequest(_ id: UUID) {
-    guard presentationRequest == id else { return }
-    presentationRequest = nil
   }
 
   func retryStorage() {
@@ -1172,7 +1166,7 @@ final class ShelfModel: ObservableObject {
     defer { isClearing = false }
     await cancelPendingImports()
     let current = items
-    let previouslyVisibleThumbnailIDs = visibleThumbnailIDs
+    let previousThumbnailVisibilityOwners = thumbnailVisibilityOwners
     for item in current {
       cancelThumbnailWork(for: item.id, removingCachedThumbnailFor: item.url)
     }
@@ -1198,8 +1192,8 @@ final class ShelfModel: ObservableObject {
       manifest.items.removeAll { removedIDs.contains($0.id) }
       // A failed deletion leaves its tile in place. Restore any visible request that Clear
       // cancelled; SwiftUI does not call `onAppear` again for a view whose identity never changed.
-      for item in items where previouslyVisibleThumbnailIDs.contains(item.id) {
-        visibleThumbnailIDs.insert(item.id)
+      for item in items where previousThumbnailVisibilityOwners[item.id]?.isEmpty == false {
+        thumbnailVisibilityOwners[item.id] = previousThumbnailVisibilityOwners[item.id]
         requestThumbnail(for: item)
       }
       usageMutationGeneration &+= 1
@@ -1458,20 +1452,32 @@ final class ShelfModel: ObservableObject {
   /// Called by an item tile as it enters or leaves the horizontal viewport. There is deliberately
   /// no eager work on Shelf launch: `LazyHStack` asks for the visible tiles first.
   func setThumbnailVisibility(for item: ShelfItem, isVisible: Bool) {
+    setThumbnailVisibility(
+      for: item, owner: Self.legacyThumbnailVisibilityOwner, isVisible: isVisible)
+  }
+
+  func setThumbnailVisibility(for item: ShelfItem, owner: UUID, isVisible: Bool) {
     if !isVisible {
-      visibleThumbnailIDs.remove(item.id)
-      cancelThumbnailWork(for: item.id)
+      thumbnailVisibilityOwners[item.id]?.remove(owner)
+      if thumbnailVisibilityOwners[item.id]?.isEmpty != false {
+        thumbnailVisibilityOwners.removeValue(forKey: item.id)
+        cancelThumbnailWork(for: item.id)
+      }
       return
     }
     guard let currentItem = items.first(where: { $0.id == item.id && $0.url == item.url }) else {
       return
     }
-    visibleThumbnailIDs.insert(item.id)
+    thumbnailVisibilityOwners[item.id, default: []].insert(owner)
     requestThumbnail(for: currentItem)
   }
 
+  private func isThumbnailVisible(_ id: UUID) -> Bool {
+    thumbnailVisibilityOwners[id]?.isEmpty == false
+  }
+
   private func requestThumbnail(for item: ShelfItem) {
-    guard visibleThumbnailIDs.contains(item.id), let metadata = thumbnailMetadata(item.url) else {
+    guard isThumbnailVisible(item.id), let metadata = thumbnailMetadata(item.url) else {
       return
     }
     let cacheKey = ThumbnailCacheKey(url: item.url, metadata: metadata)
@@ -1502,7 +1508,7 @@ final class ShelfModel: ObservableObject {
       let nextIndex = queuedThumbnailWork.firstIndex(where: { activeThumbnailWork[$0.id] == nil })
     {
       let work = queuedThumbnailWork.remove(at: nextIndex)
-      guard visibleThumbnailIDs.contains(work.id),
+      guard isThumbnailVisible(work.id),
         items.contains(where: { $0.id == work.id && $0.url == work.url })
       else { continue }
       activeThumbnailWork[work.id] = work
@@ -1525,7 +1531,7 @@ final class ShelfModel: ObservableObject {
     thumbnailTasks.removeValue(forKey: work.id)
     defer { startThumbnailWorkIfPossible() }
     guard !wasCancelled,
-      visibleThumbnailIDs.contains(work.id),
+      isThumbnailVisible(work.id),
       items.contains(where: { $0.id == work.id && $0.url == work.url }),
       thumbnailMetadata(work.url) == work.cacheKey.metadata,
       let data
@@ -1545,13 +1551,13 @@ final class ShelfModel: ObservableObject {
     if let work = activeThumbnailWork[id] { cancelledThumbnailTokens.insert(work.token) }
     thumbnailTasks[id]?.cancel()
     if let url {
-      visibleThumbnailIDs.remove(id)
+      thumbnailVisibilityOwners.removeValue(forKey: id)
       thumbnailCache = thumbnailCache.filter { $0.key.url != url }
     }
   }
 
   private func cancelAllThumbnailWork() {
-    visibleThumbnailIDs.removeAll()
+    thumbnailVisibilityOwners.removeAll()
     queuedThumbnailWork.removeAll()
     for (id, task) in thumbnailTasks {
       if let work = activeThumbnailWork[id] { cancelledThumbnailTokens.insert(work.token) }

@@ -8,7 +8,6 @@ struct ExpandedContainerView: View {
   /// Size tiers are reported to the view model, whose screen-clamped maximum width is observed.
   @ObservedObject var vm: NotchViewModel
   @ObservedObject private var center = ActivityCenter.shared
-  @ObservedObject private var shelf = ShelfModel.shared
   @Environment(\.appTheme) private var appTheme
   private static let homeTab = "\u{0000}home"  // sentinel id for the dashboard chip
 
@@ -44,9 +43,7 @@ struct ExpandedContainerView: View {
   private var effectiveSelection: String {
     let ids = tabs.map(\.id)
     // A file drag jumps straight to the shelf so you can drop onto it.
-    if shelf.isDropPresentationActive || shelf.presentationRequest != nil,
-      ids.contains("shelf")
-    {
+    if vm.isShelfDropTargeted, ids.contains("shelf") {
       return "shelf"
     }
     if let selection = vm.selectedActivityID, ids.contains(selection) { return selection }
@@ -91,14 +88,6 @@ struct ExpandedContainerView: View {
     }
     .onChange(of: vm.state.isExpanded) { _, isExpanded in
       if isExpanded { vm.setExpandedHeight(selectedHeight) }
-    }
-    .onChange(of: shelf.isDropPresentationActive, initial: true) { _, active in
-      if active { vm.selectActivity("shelf") }
-    }
-    .onChange(of: shelf.presentationRequest, initial: true) { _, request in
-      guard let request else { return }
-      vm.selectActivity("shelf")
-      Task { @MainActor in shelf.consumePresentationRequest(request) }
     }
     .onChange(of: tabs.map(\.id), initial: true) { _, ids in
       vm.clearTemporaryPresentationIfUnavailable(
@@ -209,6 +198,7 @@ struct ExpandedContainerView: View {
       $0.id == effectiveSelection
     }) {
       activity.expandedView
+        .environment(\.shelfDropTargeted, vm.isShelfDropTargeted)
     } else {
       IdleDashboardView(vm: vm) { vm.selectActivity($0) }
     }

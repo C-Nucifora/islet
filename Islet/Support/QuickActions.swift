@@ -41,9 +41,10 @@ struct IsletQuickAction: Identifiable {
         symbol: "tray.full.fill", keywords: "files drop drag tray open", opensIsletWindow: true,
         isAvailable: { ActivityCenter.shared.isAvailableInExpandedSwitcher("shelf") },
         perform: {
-          ShelfModel.shared.requestPresentation()
-          let viewModel = ScreenManager.shared.viewModel
-          if viewModel?.state.isExpanded != true { viewModel?.apply(.clickedNotch) }
+          ScreenManager.shared.performOnActionTarget { viewModel in
+            viewModel.selectActivity("shelf")
+            if !viewModel.state.isExpanded { viewModel.apply(.clickedNotch) }
+          }
         }),
       .init(
         id: "timer-5", title: "Start 5-minute timer", detail: "Set a five-minute countdown",

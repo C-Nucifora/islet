@@ -9,6 +9,9 @@ final class NotchViewModel: ObservableObject {
   /// The expanded switcher's explicit choice. A nil value lets the view choose its normal default.
   @Published private(set) var selectedActivityID: String?
   @Published private(set) var temporarilyPresentedActivityID: String?
+  /// File-drop targeting belongs to this panel. Shelf contents are shared, but entering the Shelf
+  /// on one display must not retarget an already-expanded island on another display.
+  @Published private(set) var isShelfDropTargeted = false
   /// Screen-coordinate frame the panel should occupy right now. Growth is published before the
   /// island animates into it. Shrinkage waits for that animation to finish.
   @Published private(set) var panelFrame: CGRect
@@ -142,6 +145,11 @@ final class NotchViewModel: ObservableObject {
     homeAttentionDisposition.snooze(item, until: until)
   }
 
+  func setShelfDropTargeted(_ targeted: Bool) {
+    if isShelfDropTargeted != targeted { isShelfDropTargeted = targeted }
+    if targeted { selectActivity("shelf") }
+  }
+
   /// Resumes hover bookkeeping after ScreenManager restores an expanded presentation. Without
   /// this, an unpinned panel rebuilt while the pointer is already outside would never start its
   /// normal collapse timer because the new model has not observed an exit event.
@@ -250,9 +258,11 @@ final class NotchViewModel: ObservableObject {
     if inside {
       wasInside = true
       collapseTask?.cancel()
+      selectActivity("shelf")
       if !state.isExpanded { apply(.fileDragEntered) }
       return
     }
+    setShelfDropTargeted(false)
     guard wasInside else { return }
     wasInside = false
     resetBarrier()
