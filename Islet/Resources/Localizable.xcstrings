@@ -215,6 +215,22 @@
         }
       }
     },
+    "%@ exceeds %lld UTF-8 bytes" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ exceeds %2$lld UTF-8 bytes"
+          }
+        },
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［%@ ëxçëëds %lld ÛTF-8 bÿtës ~~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "%@ free" : {
       "localizations" : {
         "en-XA" : {
@@ -10851,12 +10867,12 @@
         }
       }
     },
-    "Provider name must contain 1 through 80 characters." : {
+    "Provider name must contain 1 through 80 UTF-8 bytes." : {
       "localizations" : {
         "en-XA" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "［Prøvïdër ñåmë mûst çøñtåïñ 1 thrøûgh 80 çhåråçtërs. ~~~~~~~~~~~~~~~~~~~］"
+            "value" : "［Prøvïdër ñåmë mûst çøñtåïñ 1 thrøûgh 80 ÛTF-8 bÿtës. ~~~~~~~~~~~~~~~~~~~］"
           }
         }
       }
@@ -14349,6 +14365,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Thë Pûlsë prøvïdër rëgïstrÿ ïs ûñrëådåblë. Ït wås lëft ûñçhåñgëd. ~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "The Pulse provider registry exceeds its size limit." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Thë Pûlsë prøvïdër rëgïstrÿ ëxçëëds ïts sïzë lïmït. ~~~~~~~~~~~~~~~~~~］"
           }
         }
       }
