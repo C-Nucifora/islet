@@ -375,6 +375,19 @@ final class ClipboardModel: ObservableObject {
     pollNow()
   }
 
+  private func scheduleTimedPauseExpiry(at deadline: Date) {
+    cancelPollingTimer()
+    guard isRunning else { return }
+    let generation = pollingGeneration
+    pollingTimer = pollingScheduler.schedule(
+      after: max(0, deadline.timeIntervalSince(now()))
+    ) { [weak self] in
+      guard let self, generation == pollingGeneration else { return }
+      pollingTimer = nil
+      refreshPrivacyState()
+    }
+  }
+
   func pollNow() {
     refreshPrivacyState()
     guard pollingPolicy.nextDelay(for: pollingState) != nil else { return }
@@ -545,8 +558,12 @@ final class ClipboardModel: ObservableObject {
       lastChange = pasteboard.changeCount
       pollingState = pollingPolicy.stateRecordingActivity(from: pollingState)
       scheduleNextPoll()
-    } else if !wasPaused, willPause {
-      cancelPollingTimer()
+    } else if willPause {
+      if case .timed = evaluation.reason, let deadline = evaluation.configuration.pausedUntil {
+        scheduleTimedPauseExpiry(at: deadline)
+      } else if !wasPaused {
+        cancelPollingTimer()
+      }
     }
   }
 
