@@ -57,10 +57,11 @@ struct ExpandedContainerView: View {
     return Self.homeTab
   }
 
-  /// The height tier the selected tab wants. The dashboard always takes the base tier.
+  /// The height tier the selected tab wants. Home uses the tall tier so three ranked rows and the
+  /// overflow control remain clear of the physical notch.
   private var selectedHeight: CGFloat {
-    guard effectiveSelection != Self.homeTab,
-      let activity = activities.first(where: { $0.id == effectiveSelection })
+    guard effectiveSelection != Self.homeTab else { return Metrics.tallExpandedHeight }
+    guard let activity = activities.first(where: { $0.id == effectiveSelection })
     else { return Metrics.expandedSize.height }
     return activity.preferredExpandedHeight
   }
@@ -83,7 +84,13 @@ struct ExpandedContainerView: View {
         .padding(.horizontal, Self.rowPadding)
     }
     .onChange(of: effectiveSelection, initial: true) { _, id in
+      // Only the drawn island resizes; the panel already holds the tallest tier while expanded.
+      // Making the panel follow this crashed the app — see NotchViewModel.targetPanelFrame.
+      guard vm.state.isExpanded else { return }
       vm.setExpandedHeight(selectedHeight)
+    }
+    .onChange(of: vm.state.isExpanded) { _, isExpanded in
+      if isExpanded { vm.setExpandedHeight(selectedHeight) }
     }
     .onChange(of: shelf.isDropPresentationActive, initial: true) { _, active in
       if active { vm.selectActivity("shelf") }
@@ -197,13 +204,13 @@ struct ExpandedContainerView: View {
 
   @ViewBuilder private var content: some View {
     if effectiveSelection == Self.homeTab {
-      IdleDashboardView()
+      IdleDashboardView(vm: vm) { vm.selectActivity($0) }
     } else if let activity = activities.first(where: {
       $0.id == effectiveSelection
     }) {
       activity.expandedView
     } else {
-      IdleDashboardView()
+      IdleDashboardView(vm: vm) { vm.selectActivity($0) }
     }
   }
 }

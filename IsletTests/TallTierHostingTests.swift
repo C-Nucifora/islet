@@ -27,6 +27,13 @@ final class TallTierHostingTests: XCTestCase {
     RunLoop.main.run(until: Date().addingTimeInterval(seconds))
   }
 
+  private func pump(until condition: () -> Bool, timeout: TimeInterval = 2) {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition(), Date() < deadline {
+      RunLoop.main.run(until: min(deadline, Date().addingTimeInterval(0.05)))
+    }
+  }
+
   private var geometry: NotchGeometry {
     NotchGeometry(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
@@ -114,7 +121,9 @@ final class TallTierHostingTests: XCTestCase {
 
   /// The whole island follows the production frame coordinator through base, tall and closed tiers.
   func testTallTierSelectionSurvivesRealHosting() {
+    ActivityCenter.shared.register(MorphActivity())
     let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
+    vm.selectActivity("morph-test")
     let (panel, instance) = host(vm)
     defer { instance.stop() }
 
@@ -221,13 +230,12 @@ final class TallTierHostingTests: XCTestCase {
         index.isMultiple(of: 2) ? Metrics.tallExpandedHeight : Metrics.expandedSize.height)
       pump(0.08)
     }
-    pump(0.7)
+    let settledFrame = geometry.panelFrame(
+      width: Metrics.expandedSize.width, height: Metrics.expandedSize.height)
+    pump(until: { panel.frame == settledFrame && vm.panelFrame == settledFrame })
 
     XCTAssertEqual(panel.frame, vm.panelFrame)
-    XCTAssertEqual(
-      panel.frame,
-      geometry.panelFrame(
-        width: Metrics.expandedSize.width, height: Metrics.expandedSize.height))
+    XCTAssertEqual(panel.frame, settledFrame)
   }
 
   func testAdaptiveRendererAlignmentOnAnOffsetDisplay() {
