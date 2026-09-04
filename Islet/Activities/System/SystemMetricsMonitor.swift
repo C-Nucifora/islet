@@ -17,6 +17,7 @@ final class SystemMetricsMonitor: ObservableObject {
 
   @Published private(set) var sample = SystemMetricsSample()
   @Published private(set) var rings: [SystemMetricKind: MetricRing] = [:]
+  let attribution = ProcessAttributionMonitor()
 
   /// Retained by `SystemExpandedView` via `.liveSampling(_:)`.
   private(set) lazy var liveGate = LiveSamplingGate { [weak self] live in
@@ -79,11 +80,13 @@ final class SystemMetricsMonitor: ObservableObject {
     previous = nil
     previousDate = nil
     isSampling = false
+    attribution.stop()
   }
 
   private func setLive(_ live: Bool) {
     guard live != isLive else { return }
     isLive = live
+    attribution.setVisible(live)
     guard isRunning else { return }
     restartTimer()
     tick()  // don't make the user wait a whole interval for the first fast sample
@@ -122,6 +125,7 @@ final class SystemMetricsMonitor: ObservableObject {
     previousDate = now
     sample = next
     pushRings(next, at: now)
+    attribution.observe(next)
     isSampling = false
   }
 
