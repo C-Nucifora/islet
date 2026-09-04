@@ -93,6 +93,7 @@ actor T3ConnectSession {
       try requireCurrent(capturedGeneration)
       if let refreshTask {
         if refreshTask.cancellationRequested {
+          onRefreshTaskReused()
           try await waitForRefreshTaskTermination(refreshTask)
           try requireCurrent(capturedGeneration)
           continue
