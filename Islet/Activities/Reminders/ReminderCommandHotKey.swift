@@ -48,9 +48,6 @@ final class ReminderCommandHotKey: ObservableObject {
 
 @MainActor
 private final class CarbonReminderCommandHotKeyRegistration: ReminderCommandHotKeyRegistering {
-  private static let signature: OSType = 0x4953_4C54  // ISLT
-  private static let identifier: UInt32 = 1
-
   private var handler: (@MainActor () -> Void)?
   private var eventHandlerRef: EventHandlerRef?
   private var hotKeyRef: EventHotKeyRef?
@@ -75,7 +72,10 @@ private final class CarbonReminderCommandHotKeyRegistration: ReminderCommandHotK
     var hotKeyRef: EventHotKeyRef?
     let status = RegisterEventHotKey(
       UInt32(kVK_ANSI_R), UInt32(cmdKey | optionKey | shiftKey),
-      EventHotKeyID(signature: Self.signature, id: Self.identifier), GetApplicationEventTarget(), 0,
+      EventHotKeyID(
+        signature: IsletGlobalHotKeyIdentity.signature,
+        id: IsletGlobalHotKeyIdentity.reminderCommands),
+      GetApplicationEventTarget(), 0,
       &hotKeyRef)
     guard status == noErr, let hotKeyRef else {
       RemoveEventHandler(eventHandlerRef)
@@ -103,8 +103,8 @@ private final class CarbonReminderCommandHotKeyRegistration: ReminderCommandHotK
       GetEventParameter(
         event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
         MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID) == noErr,
-      hotKeyID.signature == CarbonReminderCommandHotKeyRegistration.signature,
-      hotKeyID.id == CarbonReminderCommandHotKeyRegistration.identifier
+      IsletGlobalHotKeyIdentity.matches(
+        hotKeyID, identifier: IsletGlobalHotKeyIdentity.reminderCommands)
     else {
       return OSStatus(eventNotHandledErr)
     }
