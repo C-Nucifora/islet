@@ -887,6 +887,27 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
+  func testCredentialRevocationCleanupRemovesOnlyItsBoundSourceItems() throws {
+    let center = makeCenter()
+    let now = Date(timeIntervalSince1970: 1_000)
+    let build = PulsePayload(
+      id: "job", source: "build", title: "Build", subtitle: nil, symbol: nil,
+      accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil, actions: nil)
+    var tests = build
+    tests.source = "tests"
+    tests.title = "Tests"
+    XCTAssertTrue(center.apply(command(.show, build), now: now).ok)
+    XCTAssertTrue(center.apply(command(.show, tests), now: now).ok)
+
+    center.removeItems(forSource: " BUILD ", now: now.addingTimeInterval(1))
+
+    XCTAssertEqual(center.items.map(\.source), ["tests"])
+    XCTAssertEqual(center.history.first?.source, "build")
+    XCTAssertEqual(center.history.first?.result, .dismissed)
+  }
+
+  @MainActor
   func testHistoryIsBoundedAndStoresOnlyWireMetadata() throws {
     let center = makeCenter()
     let now = Date(timeIntervalSince1970: 1_000)
@@ -1006,6 +1027,99 @@ final class PulseTests: XCTestCase {
     XCTAssertTrue(limiter.accepts(1_000))
     XCTAssertFalse(limiter.accepts(1_001))
     XCTAssertTrue(limiter.accepts(10))
+  }
+
+  func testProviderRateLimitsDoNotLetOneCredentialStarveAnother() {
+    var limiters = PulseProviderRateLimiters(providerLimit: 2, processLimit: 8, window: 60)
+
+    XCTAssertEqual(limiters.admit(providerID: "build-credential", at: 1_000), .accepted)
+    XCTAssertEqual(limiters.admit(providerID: "build-credential", at: 1_001), .accepted)
+    XCTAssertEqual(
+      limiters.admit(providerID: "build-credential", at: 1_002),
+      .rateLimited(scope: .provider, retryAfter: 58))
+    XCTAssertEqual(limiters.admit(providerID: "tests-credential", at: 1_002), .accepted)
+  }
+
+  func testProviderRateLimitPersistsAcrossConnectionsAndReturnsRetryAfter() {
+    var limiters = PulseProviderRateLimiters(providerLimit: 1, processLimit: 8, window: 60)
+
+    XCTAssertEqual(limiters.admit(providerID: "build-credential", at: 1_000), .accepted)
+    XCTAssertEqual(
+      limiters.admit(providerID: "build-credential", at: 1_001),
+      .rateLimited(scope: .provider, retryAfter: 59))
+    XCTAssertEqual(limiters.admit(providerID: "build-credential", at: 1_060), .accepted)
+  }
+
+  func testProcessCeilingProtectsPulseAfterIndependentProviderChecks() {
+    var limiters = PulseProviderRateLimiters(providerLimit: 2, processLimit: 3, window: 60)
+
+    XCTAssertEqual(limiters.admit(providerID: "build-credential", at: 1_000), .accepted)
+    XCTAssertEqual(limiters.admit(providerID: "build-credential", at: 1_001), .accepted)
+    XCTAssertEqual(limiters.admit(providerID: "tests-credential", at: 1_002), .accepted)
+    XCTAssertEqual(
+      limiters.admit(providerID: "deploy-credential", at: 1_003),
+      .rateLimited(scope: .process, retryAfter: 57))
+  }
+
+  func testProviderRateLimiterCleansExpiredBucketsAndCapsTrackedProviders() {
+    var limiters = PulseProviderRateLimiters(
+      providerLimit: 1, processLimit: 8, window: 60, maximumProviderStates: 2)
+
+    XCTAssertEqual(limiters.admit(providerID: "one", at: 1_000), .accepted)
+    XCTAssertEqual(limiters.admit(providerID: "two", at: 1_001), .accepted)
+    XCTAssertEqual(limiters.trackedProviderCount, 2)
+    XCTAssertEqual(limiters.admit(providerID: "three", at: 1_002), .accepted)
+    XCTAssertEqual(limiters.trackedProviderCount, 2)
+    XCTAssertEqual(limiters.admit(providerID: "fresh", at: 1_063), .accepted)
+    XCTAssertEqual(limiters.trackedProviderCount, 1)
+  }
+
+  func testRateLimitResponseIncludesRetryAfterMetadata() throws {
+    let response = PulseResponse.failure(
+      "provider command rate exceeded", code: .rateLimited, requestID: "request-1",
+      retryAfter: 12)
+    let decoded = try JSONDecoder().decode(PulseResponse.self, from: JSONEncoder().encode(response))
+
+    XCTAssertEqual(decoded.retryAfter, 12)
+    XCTAssertEqual(decoded.requestID, "request-1")
+  }
+
+  func testResponsesFromBeforeRetryMetadataRemainDecodable() throws {
+    let data = Data(
+      #"{"ok":false,"error":"provider command rate exceeded","errorCode":"rateLimited"}"#.utf8)
+    let response = try JSONDecoder().decode(PulseResponse.self, from: data)
+
+    XCTAssertEqual(response.errorCode, .rateLimited)
+    XCTAssertNil(response.retryAfter)
+  }
+
+  func testProviderRateLimiterSerializesConcurrentAdmissions() async {
+    let limiter = await MainActor.run {
+      TestPulseRateLimiters(providerLimit: 5, processLimit: 20, window: 60)
+    }
+    let results = await withTaskGroup(
+      of: PulseRateLimitResult.self,
+      returning: [
+        PulseRateLimitResult
+      ].self
+    ) { group in
+      for _ in 0..<20 {
+        group.addTask {
+          await limiter.admit(providerID: "build-credential", at: 1_000)
+        }
+      }
+      return await group.reduce(into: []) { $0.append($1) }
+    }
+
+    XCTAssertEqual(results.filter { if case .accepted = $0 { true } else { false } }.count, 5)
+    XCTAssertEqual(
+      results.filter {
+        if case .rateLimited(scope: .provider, retryAfter: 60) = $0 {
+          true
+        } else {
+          false
+        }
+      }.count, 15)
   }
 
   @MainActor
@@ -1212,18 +1326,21 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testPulseBindsNumericIPv4AndIPv6LoopbackAndAdvertisesLocalhost() async throws {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-bind-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
     var requestedPorts: [UInt16] = []
     var requestedEndpoints: [NWEndpoint] = []
     var listeners: [FakePulseListener] = []
     let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: supportDirectory),
       listenerFactory: { parameters, port in
         requestedPorts.append(port.rawValue)
         if let endpoint = parameters.requiredLocalEndpoint { requestedEndpoints.append(endpoint) }
         let listener = FakePulseListener(port: port)
         listeners.append(listener)
         return listener
-      },
-      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {})
+      }, activePortWriter: { _ in }, activePortRemover: {})
 
     server.start()
 
@@ -1257,11 +1374,15 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testOccupiedDefaultPortMovesToStableLoopbackFallbackAndPublishesIt() async throws {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-port-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
     var requestedPorts: [UInt16] = []
     var requestedHosts: [NWEndpoint.Host] = []
     var listeners: [FakePulseListener] = []
     var publishedPorts: [UInt16] = []
     let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: supportDirectory),
       listenerFactory: { parameters, port in
         requestedPorts.append(port.rawValue)
         if case .hostPort(let host, _) = parameters.requiredLocalEndpoint {
@@ -1271,7 +1392,6 @@ final class PulseTests: XCTestCase {
         listeners.append(listener)
         return listener
       },
-      tokenLoader: { Self.testToken },
       activePortWriter: { publishedPorts.append($0) },
       activePortRemover: {})
 
@@ -1300,14 +1420,17 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testOccupiedFallbacksEndInActionableStoppedState() {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-port-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
     var requestedPorts: [UInt16] = []
     var removedPortFile = false
     let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: supportDirectory),
       listenerFactory: { _, port in
         requestedPorts.append(port.rawValue)
         throw NWError.posix(.EADDRINUSE)
       },
-      tokenLoader: { Self.testToken },
       activePortWriter: { _ in XCTFail("An occupied listener must not publish a port") },
       activePortRemover: { removedPortFile = true })
 
@@ -1348,16 +1471,19 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testRecoverableFailureRetriesAtScheduledTimeAndPublishesIt() async {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-retry-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
     let scheduler = TestPulseRetryScheduler()
     let now = Date(timeIntervalSince1970: 1_000)
     var listeners: [FakePulseListener] = []
     let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: supportDirectory),
       listenerFactory: { _, port in
         let listener = FakePulseListener(port: port)
         listeners.append(listener)
         return listener
-      },
-      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {},
+      }, activePortWriter: { _ in }, activePortRemover: {},
       now: { now }, retryScheduler: scheduler.schedule)
 
     server.start()
@@ -1377,15 +1503,18 @@ final class PulseTests: XCTestCase {
 
   @MainActor
   func testStoppingOrRestartingPulseMakesQueuedRetryCallbacksHarmless() async {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-restart-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
     let scheduler = TestPulseRetryScheduler()
     var listeners: [FakePulseListener] = []
     let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: supportDirectory),
       listenerFactory: { _, port in
         let listener = FakePulseListener(port: port)
         listeners.append(listener)
         return listener
-      },
-      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {},
+      }, activePortWriter: { _ in }, activePortRemover: {},
       retryScheduler: scheduler.schedule)
 
     server.start()
@@ -1406,23 +1535,25 @@ final class PulseTests: XCTestCase {
   }
 
   @MainActor
-  func testRotatingTokenDuringBackoffRestartsPulseAndCancelsQueuedRetry() async throws {
+  func testRotatingCredentialDuringBackoffPreservesQueuedRetry() async throws {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-rotation-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
+    let credentialStore = PulseCredentialStore(supportDirectory: supportDirectory)
+    let credential = try credentialStore.createProvider(
+      name: "Build", source: "build", permissions: [.events])
     let scheduler = TestPulseRetryScheduler()
     var listeners: [FakePulseListener] = []
-    var storedToken = Self.testToken
-    let replacementToken = Data(repeating: 1, count: 32).base64EncodedString()
+    var removedSources: [String] = []
     let server = PulseServer(
+      credentialStore: credentialStore,
       listenerFactory: { _, port in
         let listener = FakePulseListener(port: port)
         listeners.append(listener)
         return listener
-      },
-      tokenLoader: { storedToken },
-      tokenRotator: {
-        storedToken = replacementToken
-        return replacementToken
-      },
-      activePortWriter: { _ in }, activePortRemover: {}, retryScheduler: scheduler.schedule)
+      }, activePortWriter: { _ in }, activePortRemover: {},
+      removeItemsForSource: { removedSources.append($0) },
+      retryScheduler: scheduler.schedule)
 
     server.start()
     listeners[0].emit(.failed(.posix(.ETIMEDOUT)))
@@ -1430,28 +1561,32 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(listeners.count, 2)
     XCTAssertNotNil(server.nextRetryAt)
 
-    try server.rotateToken()
+    try server.rotateCredential(credential.id)
 
-    XCTAssertEqual(server.token, replacementToken)
-    XCTAssertEqual(listeners.count, 4)
-    XCTAssertTrue(scheduler.tasks[0].cancelled)
-    XCTAssertNil(server.nextRetryAt)
+    XCTAssertEqual(listeners.count, 2)
+    XCTAssertEqual(removedSources, ["build"])
+    XCTAssertFalse(scheduler.tasks[0].cancelled)
+    XCTAssertNotNil(server.nextRetryAt)
     scheduler.fire(at: 0)
     XCTAssertEqual(listeners.count, 4)
+    XCTAssertNil(server.nextRetryAt)
     server.stop()
   }
 
   @MainActor
   func testStableReadyPeriodResetsRetryBackoff() async {
+    let supportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-stable-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: supportDirectory) }
     let scheduler = TestPulseRetryScheduler()
     var listeners: [FakePulseListener] = []
     let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: supportDirectory),
       listenerFactory: { _, port in
         let listener = FakePulseListener(port: port)
         listeners.append(listener)
         return listener
-      },
-      tokenLoader: { Self.testToken }, activePortWriter: { _ in }, activePortRemover: {},
+      }, activePortWriter: { _ in }, activePortRemover: {},
       retryScheduler: scheduler.schedule)
 
     server.start()
@@ -1550,8 +1685,6 @@ final class PulseTests: XCTestCase {
       revisionPersistenceDelay: revisionPersistenceDelay, symbolAvailability: symbolAvailability,
       deliveryProfileKey: key, sourcePoliciesKey: sourcePoliciesKey)
   }
-
-  private static let testToken = Data(repeating: 0, count: 32).base64EncodedString()
 }
 
 private final class FakePulseListener: PulseListening, @unchecked Sendable {
@@ -1671,5 +1804,19 @@ private final class PulseRevisionPersistenceBox: @unchecked Sendable {
         writes += 1
         lock.unlock()
       })
+  }
+}
+
+@MainActor
+private final class TestPulseRateLimiters {
+  private var limiters: PulseProviderRateLimiters
+
+  init(providerLimit: Int, processLimit: Int, window: TimeInterval) {
+    limiters = PulseProviderRateLimiters(
+      providerLimit: providerLimit, processLimit: processLimit, window: window)
+  }
+
+  func admit(providerID: String, at now: TimeInterval) -> PulseRateLimitResult {
+    limiters.admit(providerID: providerID, at: now)
   }
 }
