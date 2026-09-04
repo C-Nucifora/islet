@@ -131,7 +131,8 @@ struct PulseHistoryStore: @unchecked Sendable {
       throw PulseHistoryStoreError.invalidDocument
     }
     let document = CurrentDocument(
-      format: formatIdentifier, version: currentVersion, exportedAt: exportedAt, entries: entries)
+      format: formatIdentifier, version: currentVersion, exportedAt: exportedAt,
+      entries: entriesWithoutProviderIdentifiers(entries))
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -180,14 +181,17 @@ struct PulseHistoryStore: @unchecked Sendable {
           throw PulseHistoryStoreError.invalidDocument
         }
         try validate(legacy.history)
-        return PulseHistoryLoadResult(entries: legacy.history, needsRewrite: true)
+        return PulseHistoryLoadResult(
+          entries: entriesWithoutProviderIdentifiers(legacy.history), needsRewrite: true)
       case currentVersion:
         let current = try decoder.decode(CurrentDocument.self, from: data)
         guard current.format == formatIdentifier,
           current.entries.count <= maximumDecodedEntries
         else { throw PulseHistoryStoreError.invalidDocument }
         try validate(current.entries)
-        return PulseHistoryLoadResult(entries: current.entries, needsRewrite: false)
+        let entries = entriesWithoutProviderIdentifiers(current.entries)
+        return PulseHistoryLoadResult(
+          entries: entries, needsRewrite: entries != current.entries)
       default:
         throw PulseHistoryStoreError.unsupportedVersion(version)
       }
@@ -245,6 +249,17 @@ struct PulseHistoryStore: @unchecked Sendable {
           throw PulseHistoryStoreError.invalidDocument
         }
       }
+    }
+  }
+
+  private static func entriesWithoutProviderIdentifiers(_ entries: [PulseHistoryEntry])
+    -> [PulseHistoryEntry]
+  {
+    entries.map { entry in
+      PulseHistoryEntry(
+        id: entry.id, date: entry.date, operation: entry.operation, source: entry.source,
+        providerIdentifier: nil, state: entry.state, priority: entry.priority,
+        result: entry.result)
     }
   }
 
