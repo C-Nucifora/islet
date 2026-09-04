@@ -226,7 +226,7 @@
         "en-XA" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "［%@ ëxçëëds %lld ÛTF-8 bÿtës ~~~~~~~~~~］"
+            "value" : "［%@ ëxçëëds %lld ÛTF-8 bÿtës ~~~~~~~~~~~］"
           }
         }
       }
@@ -14374,7 +14374,7 @@
         "en-XA" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "［Thë Pûlsë prøvïdër rëgïstrÿ ëxçëëds ïts sïzë lïmït. ~~~~~~~~~~~~~~~~~~］"
+            "value" : "［Thë Pûlsë prøvïdër rëgïstrÿ ëxçëëds ïts sïzë lïmït. ~~~~~~~~~~~~~~~~~~~］"
           }
         }
       }
