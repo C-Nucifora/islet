@@ -8,6 +8,7 @@ final class NotchPanel: NSPanel, NSDraggingDestination {
   var fileDragTargetChanged: ((Bool) -> Void)?
   var fileURLsDropped: (([URL]) -> Bool)?
   private var isFileDragTargeted = false
+  private var acquiredKeyboardFocus = false
   var keyboardCommandHandler: ((IslandKeyboardCommand) -> Bool)?
 
   init(frame: CGRect) {
@@ -35,12 +36,25 @@ final class NotchPanel: NSPanel, NSDraggingDestination {
   override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { false }
 
-  func updateKeyboardFocus(isExpanded: Bool) {
-    if isExpanded {
-      makeKey()
-    } else if isKeyWindow {
-      resignKey()
-    }
+  override func resignKey() {
+    acquiredKeyboardFocus = false
+    super.resignKey()
+  }
+
+  /// Takes key status only for an explicit keyboard or accessibility entry path. Pointer-driven
+  /// expansion must leave the foreground application's keyboard focus alone.
+  func requestKeyboardFocus() {
+    guard !isKeyWindow else { return }
+    makeKey()
+    acquiredKeyboardFocus = isKeyWindow
+  }
+
+  /// Releases key status only when `requestKeyboardFocus()` acquired it. VoiceOver or AppKit can
+  /// make the panel key independently, and collapsing the island must not undo that ownership.
+  func releaseKeyboardFocusIfAcquired() {
+    guard acquiredKeyboardFocus else { return }
+    if isKeyWindow { resignKey() }
+    acquiredKeyboardFocus = false
   }
 
   override func performKeyEquivalent(with event: NSEvent) -> Bool {

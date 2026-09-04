@@ -46,17 +46,40 @@ final class MotionTests: XCTestCase {
 
 final class AccessibilityPolicyTests: XCTestCase {
   @MainActor
-  func testIslandPanelCanBecomeKeyForKeyboardTraversal() {
+  func testPanelInstanceTakesFocusOnlyAfterAnExplicitRequestAndReleasesItOnCollapse() {
     let panel = NotchPanel(frame: CGRect(x: 0, y: 0, width: 520, height: 190))
     defer { panel.close() }
+    let geometry = NotchGeometry(
+      screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+      safeAreaTop: 32, auxLeftWidth: 716, auxRightWidth: 716, menuBarHeight: 37)
+    let viewModel = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
+    let instance = PanelInstance(
+      display: ManagedDisplay(id: "test", hardwareIdentity: .builtin), panel: panel,
+      viewModel: viewModel)
     XCTAssertTrue(panel.canBecomeKey)
     XCTAssertFalse(panel.canBecomeMain)
 
     panel.orderFront(nil)
-    panel.updateKeyboardFocus(isExpanded: true)
-    XCTAssertTrue(panel.isKeyWindow)
-    panel.updateKeyboardFocus(isExpanded: false)
+    viewModel.apply(.clickedNotch)
+    instance.updateKeyboardFocus(isExpanded: viewModel.state.isExpanded)
     XCTAssertFalse(panel.isKeyWindow)
+    instance.requestKeyboardFocus()
+    XCTAssertTrue(panel.isKeyWindow)
+    viewModel.apply(.clickedNotch)
+    instance.updateKeyboardFocus(isExpanded: viewModel.state.isExpanded)
+    XCTAssertFalse(panel.isKeyWindow)
+  }
+
+  @MainActor
+  func testPanelDoesNotReleaseFocusItDidNotAcquire() {
+    let panel = NotchPanel(frame: CGRect(x: 0, y: 0, width: 520, height: 190))
+    defer { panel.close() }
+
+    panel.orderFront(nil)
+    panel.makeKey()
+    XCTAssertTrue(panel.isKeyWindow)
+    panel.releaseKeyboardFocusIfAcquired()
+    XCTAssertTrue(panel.isKeyWindow)
   }
 
   func testKeyboardCommandsUseStableShortcuts() {

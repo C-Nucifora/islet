@@ -176,11 +176,15 @@ final class PanelInstance {
     if panel.ignoresMouseEvents != shouldIgnore { panel.ignoresMouseEvents = shouldIgnore }
   }
 
-  func updateKeyboardFocus() {
-    let isExpanded = viewModel.state.isExpanded
+  func updateKeyboardFocus(isExpanded: Bool) {
     guard isExpanded != wasExpanded else { return }
     wasExpanded = isExpanded
-    panel.updateKeyboardFocus(isExpanded: isExpanded)
+    if !isExpanded { panel.releaseKeyboardFocusIfAcquired() }
+  }
+
+  func requestKeyboardFocus() {
+    guard viewModel.state.isExpanded else { return }
+    panel.requestKeyboardFocus()
   }
 
   func stop() {
@@ -524,16 +528,20 @@ final class ScreenManager: ObservableObject {
       inst.syncActualFrame()  // seed from the window we just placed, before anything is drawn
       vm.resumePointerTracking(at: NSEvent.mouseLocation)
       inst.updateMousePassthrough()
-      inst.updateKeyboardFocus()
+      inst.updateKeyboardFocus(isExpanded: vm.state.isExpanded)
       panel.alphaValue = 1  // alpha-flash hides ghost frames
       Publishers.CombineLatest4(
         vm.$state, vm.$expandedWidth, vm.$expandedHeight, vm.$actualPanelFrame
       )
-      .sink { [weak inst] _ in
+      .sink { [weak inst] state, _, _, _ in
         inst?.updateMousePassthrough()
-        inst?.updateKeyboardFocus()
+        inst?.updateKeyboardFocus(isExpanded: state.isExpanded)
       }
       .store(in: &inst.cancellables)
+      vm.$keyboardFocusRequestRevision
+        .dropFirst()
+        .sink { [weak inst] _ in inst?.requestKeyboardFocus() }
+        .store(in: &inst.cancellables)
       vm.$compactTargetRevision
         .dropFirst()
         .sink { [weak inst] _ in inst?.updateMousePassthrough() }
