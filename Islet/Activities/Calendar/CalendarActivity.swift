@@ -7,7 +7,9 @@ import SwiftUI
 struct CalendarChoice: Identifiable, Equatable, Sendable {
   let id: String
   let title: String
+  let sourceTitle: String
   let colorHex: String?
+  let allowsContentModifications: Bool
 }
 
 enum CalendarMeetingLinkTrust: Equatable, Sendable {
@@ -114,6 +116,8 @@ final class CalendarActivity: NotchActivity, ObservableObject {
     EKEventStore.authorizationStatus(for: .event))
   @Published private(set) var loadState: LoadState = .idle
   @Published private(set) var availableCalendars: [CalendarChoice] = []
+  @Published private(set) var defaultCalendarID: String?
+  @Published private(set) var lastActionError: String?
 
   /// Compatibility for existing views. New permission UI should render `authorization` so denied,
   /// restricted, write-only, and not-yet-requested states are not conflated.
@@ -136,6 +140,10 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   var isAvailableWhenInactive: Bool { Defaults[.calendarEnabled] }
 
   var nextEvent: AgendaEvent? { CalendarLogic.nextRelevant(events: events, now: Date()) }
+  var agendaDays: [CalendarDayAgenda] { CalendarLogic.days(events: events, now: Date()) }
+  var writableCalendars: [CalendarChoice] {
+    availableCalendars.filter(\.allowsContentModifications)
+  }
 
   func start() {
     guard !isRunning else { return }
@@ -151,6 +159,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
         } else {
           self?.events = []
           self?.availableCalendars = []
+          self?.defaultCalendarID = nil
           self?.loadState = .idle
           self?.activationDate = nil
           self?.objectWillChange.send()
@@ -170,6 +179,10 @@ final class CalendarActivity: NotchActivity, ObservableObject {
     NotificationCenter.default.publisher(for: .EKEventStoreChanged)
       .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
       .sink { [weak self] _ in Task { await self?.refreshAuthorization() } }
+      .store(in: &cancellables)
+    NotificationCenter.default.publisher(for: .NSCalendarDayChanged)
+      .merge(with: NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange))
+      .sink { [weak self] _ in Task { await self?.reload() } }
       .store(in: &cancellables)
     // Re-evaluate the countdown every 30 s, but only query EventKit every five minutes. Store
     // change and app-activation notifications still trigger immediate refreshes.
@@ -191,7 +204,9 @@ final class CalendarActivity: NotchActivity, ObservableObject {
     cancellables.removeAll()
     events = []
     availableCalendars = []
+    defaultCalendarID = nil
     loadState = .idle
+    lastActionError = nil
     activationDate = nil
     lastReloadDate = nil
   }
@@ -233,13 +248,24 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   }
 
   func refreshAuthorization() async {
-    authorization = EventKitPermissionState(EKEventStore.authorizationStatus(for: .event))
-    if authorization.canRead, isRunning, Defaults[.calendarEnabled] {
+    let previousAuthorization = authorization
+    let currentAuthorization = EventKitPermissionState(
+      EKEventStore.authorizationStatus(for: .event))
+    authorization = currentAuthorization
+    switch CalendarLogic.accessAction(
+      from: previousAuthorization, to: currentAuthorization,
+      providerEnabled: isRunning && Defaults[.calendarEnabled])
+    {
+    case .reload:
       await reload()
-    } else if isRunning {
+    case .clear:
+      reloadGeneration += 1
       events = []
       availableCalendars = []
+      defaultCalendarID = nil
       loadState = .idle
+    case .none:
+      break
     }
   }
 
@@ -251,16 +277,30 @@ final class CalendarActivity: NotchActivity, ObservableObject {
     guard authorization.canRead else {
       events = []
       availableCalendars = []
+      defaultCalendarID = nil
       loadState = .idle
       return
     }
-    availableCalendars = store.calendars(for: .event)
+    let calendars = store.calendars(for: .event)
+    availableCalendars =
+      calendars
       .map {
         CalendarChoice(
           id: $0.calendarIdentifier, title: $0.title,
-          colorHex: ColorHex.string(from: $0.cgColor))
+          sourceTitle: $0.source.title, colorHex: ColorHex.string(from: $0.cgColor),
+          allowsContentModifications: $0.allowsContentModifications)
       }
-      .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+      .sorted {
+        let titleOrder = $0.title.localizedStandardCompare($1.title)
+        if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
+        return $0.sourceTitle.localizedStandardCompare($1.sourceTitle) == .orderedAscending
+      }
+    defaultCalendarID = store.defaultCalendarForNewEvents?.calendarIdentifier
+    let sanitizedHiddenIDs = CalendarLogic.sanitizedHiddenCalendarIDs(
+      Defaults[.hiddenCalendarIDs], availableIDs: Set(calendars.map(\.calendarIdentifier)))
+    if sanitizedHiddenIDs != Defaults[.hiddenCalendarIDs] {
+      Defaults[.hiddenCalendarIDs] = sanitizedHiddenIDs
+    }
     loadState = .loading
     reloadGeneration += 1
     let generation = reloadGeneration
@@ -298,9 +338,68 @@ final class CalendarActivity: NotchActivity, ObservableObject {
         title: event.title ?? "Untitled",
         start: event.startDate, end: event.endDate, isAllDay: event.isAllDay,
         calendarColorHex: ColorHex.string(from: event.calendar?.cgColor),
-        joinURL: joinURL(from: event))
+        joinURL: joinURL(from: event), location: normalizedLocation(from: event))
     }
   }
+
+  nonisolated private static func normalizedLocation(from event: EKEvent) -> String? {
+    let value = event.structuredLocation?.title ?? event.location
+    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  @discardableResult
+  func createEvent(_ draft: CalendarEventDraft) async -> Bool {
+    let currentAuthorization = EventKitPermissionState(
+      EKEventStore.authorizationStatus(for: .event))
+    authorization = currentAuthorization
+    let prepared = CalendarLogic.prepareEvent(
+      draft, writableCalendarIDs: Set(writableCalendars.map(\.id)),
+      authorization: currentAuthorization)
+    switch prepared {
+    case .failure(let error):
+      lastActionError = error.message
+      return false
+    case .success(let event):
+      let result = await Task.detached(priority: .userInitiated) {
+        Self.saveEvent(event)
+      }.value
+      switch result {
+      case .success:
+        lastActionError = nil
+        await reload()
+        return true
+      case .failure(let error):
+        lastActionError = error.message
+        Log.app.error("Failed to add calendar event: \(String(describing: error))")
+        return false
+      }
+    }
+  }
+
+  nonisolated private static func saveEvent(
+    _ prepared: PreparedCalendarEvent
+  ) -> Result<Void, CalendarCreationError> {
+    guard EventKitPermissionState(EKEventStore.authorizationStatus(for: .event)).canRead else {
+      return .failure(.permissionRequired)
+    }
+    let store = EKEventStore()
+    guard let calendar = store.calendar(withIdentifier: prepared.calendarID),
+      calendar.allowsContentModifications
+    else { return .failure(.calendarUnavailable) }
+    return CalendarLogic.commitEvent(prepared) { prepared in
+      let event = EKEvent(eventStore: store)
+      event.calendar = calendar
+      event.title = prepared.title
+      event.startDate = prepared.start
+      event.endDate = prepared.end
+      event.location = prepared.location
+      event.url = prepared.conferenceURL
+      try store.save(event, span: .thisEvent, commit: true)
+    }
+  }
+
+  func dismissActionError() { lastActionError = nil }
 
   /// Pull a video-call link from the event's dedicated URL or unstructured text. EventKit's URL
   /// field wins even when a known provider also appears in the notes.
@@ -359,31 +458,215 @@ struct CalendarAgendaView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("Today").font(.headline).appThemeForeground(.calendar)
-      if activity.events.isEmpty {
-        Text("No more events today").font(.callout).foregroundStyle(.secondary)
+      HStack {
+        Text("Next three days").font(.headline).appThemeForeground(.calendar)
+        Spacer()
+        Button {
+          activity.dismissActionError()
+          CalendarEventEditor.shared.present(activity: activity)
+        } label: {
+          Image(systemName: "plus.circle.fill")
+        }
+        .buttonStyle(.plain)
+        .help("Add calendar event")
+        .accessibilityLabel("Add calendar event")
+        .disabled(!activity.authorization.canRead || activity.writableCalendars.isEmpty)
+      }
+      if !activity.authorization.canRead {
+        HStack(spacing: 6) {
+          Text("Calendar access: \(activity.authorization.summary)")
+            .font(.callout).foregroundStyle(.secondary)
+          Button("Review") { Task { await activity.recoverAccess() } }
+            .buttonStyle(.link)
+        }
+      } else if activity.loadState == .loading, activity.events.isEmpty {
+        ProgressView().controlSize(.small).accessibilityLabel("Loading calendar")
+      } else if case .failed(let message) = activity.loadState {
+        HStack(spacing: 6) {
+          Text(message).font(.callout).foregroundStyle(.orange).lineLimit(2)
+          Button("Retry") { Task { await activity.refreshAuthorization() } }
+            .buttonStyle(.link)
+        }
       } else {
-        ForEach(activity.events.prefix(4)) { event in
-          HStack(spacing: 8) {
-            if event.isAllDay {
-              Text("All day")
-                .font(.caption).foregroundStyle(.secondary)
-                .frame(width: 52, alignment: .leading)
-            } else {
-              Text(event.start, format: .dateTime.hour().minute())
-                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                .frame(width: 52, alignment: .leading)
-            }
-            Text(event.title).font(.callout).foregroundStyle(.white).lineLimit(1)
-            Spacer()
-            if let url = event.joinURL, let link = CalendarMeetingLinkPolicy.candidate(url) {
-              CalendarMeetingLinkButton(link: link, eventTitle: event.title)
+        ScrollView(.vertical, showsIndicators: false) {
+          VStack(alignment: .leading, spacing: 9) {
+            ForEach(activity.agendaDays) { day in
+              VStack(alignment: .leading, spacing: 4) {
+                Text(dayTitle(day.date))
+                  .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                if day.events.isEmpty {
+                  Text("No events").font(.caption).foregroundStyle(.tertiary)
+                } else {
+                  ForEach(day.events.prefix(5)) { event in
+                    CalendarAgendaEventRow(event: event)
+                  }
+                }
+              }
             }
           }
         }
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func dayTitle(_ date: Date) -> String {
+    if Calendar.current.isDateInToday(date) { return "Today" }
+    if Calendar.current.isDateInTomorrow(date) { return "Tomorrow" }
+    return date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+  }
+}
+
+private struct CalendarAgendaEventRow: View {
+  let event: AgendaEvent
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 8) {
+      Text(event.isAllDay ? "All day" : event.start.formatted(.dateTime.hour().minute()))
+        .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+        .lineLimit(1).frame(width: 58, alignment: .leading)
+      Capsule()
+        .fill(Color(isletHex: event.calendarColorHex) ?? .secondary)
+        .frame(width: 3, height: 17)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(event.title).font(.callout).foregroundStyle(.white).lineLimit(1)
+        if let location = event.location {
+          Label(location, systemImage: "mappin.and.ellipse")
+            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        }
+      }
+      Spacer(minLength: 0)
+      if let url = event.joinURL, let link = CalendarMeetingLinkPolicy.candidate(url) {
+        CalendarMeetingLinkButton(link: link, eventTitle: event.title)
+      }
+    }
+  }
+}
+
+private struct CalendarEventCreationView: View {
+  @ObservedObject var activity: CalendarActivity
+  let close: () -> Void
+  @State private var draft: CalendarEventDraft
+  @State private var isSaving = false
+
+  init(activity: CalendarActivity, close: @escaping () -> Void) {
+    self.activity = activity
+    self.close = close
+    let start =
+      Calendar.current.date(
+        bySetting: .minute, value: 0, of: Date().addingTimeInterval(60 * 60))
+      ?? Date().addingTimeInterval(60 * 60)
+    let writableIDs = Set(activity.writableCalendars.map(\.id))
+    let initialCalendarID =
+      activity.defaultCalendarID.flatMap {
+        writableIDs.contains($0) ? $0 : nil
+      } ?? activity.writableCalendars.first?.id ?? ""
+    _draft = State(
+      initialValue: CalendarEventDraft(
+        calendarID: initialCalendarID,
+        title: "", start: start, end: start.addingTimeInterval(60 * 60), location: "",
+        conferenceURL: ""))
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      Text("Add event").font(.title2.weight(.semibold))
+      Form {
+        Picker("Calendar", selection: $draft.calendarID) {
+          ForEach(activity.writableCalendars) { calendar in
+            Text(calendarLabel(calendar)).tag(calendar.id)
+          }
+        }
+        TextField("Title", text: $draft.title)
+        DatePicker("Starts", selection: $draft.start)
+        DatePicker("Ends", selection: $draft.end)
+        TextField("Location", text: $draft.location)
+        TextField("Conference URL", text: $draft.conferenceURL)
+          .textContentType(.URL)
+      }
+      .formStyle(.grouped)
+      Text(
+        "macOS does not share Calendar travel-time estimates, so Islet does not guess when to leave."
+      )
+      .font(.caption).foregroundStyle(.secondary)
+      if let error = activity.lastActionError {
+        Text(error).font(.callout).foregroundStyle(.orange)
+      }
+      HStack {
+        Button("Cancel") { close() }.keyboardShortcut(.cancelAction)
+        Spacer()
+        if isSaving { ProgressView().controlSize(.small) }
+        Button("Add") {
+          isSaving = true
+          Task {
+            if await activity.createEvent(draft) { close() }
+            isSaving = false
+          }
+        }
+        .keyboardShortcut(.defaultAction)
+        .disabled(
+          isSaving || !activity.authorization.canRead || activity.writableCalendars.isEmpty)
+      }
+    }
+    .padding(20)
+    .frame(width: 430)
+    .onChange(of: draft.start) { _, newValue in
+      if draft.end <= newValue { draft.end = newValue.addingTimeInterval(60 * 60) }
+    }
+    .onChange(of: activity.writableCalendars.map(\.id), initial: true) { _, ids in
+      guard !ids.contains(draft.calendarID) else { return }
+      draft.calendarID = ids.first ?? ""
+    }
+  }
+
+  private func calendarLabel(_ calendar: CalendarChoice) -> String {
+    let duplicateCount = activity.writableCalendars.filter { $0.title == calendar.title }.count
+    return duplicateCount > 1 ? "\(calendar.title) · \(calendar.sourceTitle)" : calendar.title
+  }
+}
+
+/// The notch lives in a non-activating panel and deliberately cannot become key. Event creation
+/// needs keyboard focus, so it uses a small regular window rather than placing text fields inside
+/// the notch panel.
+@MainActor
+private final class CalendarEventEditor: NSObject, NSWindowDelegate {
+  static let shared = CalendarEventEditor()
+
+  private var window: NSWindow?
+
+  func present(activity: CalendarActivity) {
+    if let window {
+      NSApp.activate()
+      window.makeKeyAndOrderFront(nil)
+      return
+    }
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 430, height: 430),
+      styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    window.title = "Add calendar event"
+    window.isReleasedWhenClosed = false
+    window.level = .floating
+    window.delegate = self
+    window.contentView = NSHostingView(
+      rootView: CalendarEventCreationView(activity: activity) { [weak self] in
+        self?.close()
+      })
+    window.center()
+    self.window = window
+    NSApp.activate()
+    window.makeKeyAndOrderFront(nil)
+  }
+
+  func windowWillClose(_ notification: Notification) {
+    guard let closedWindow = notification.object as? NSWindow, closedWindow === window else {
+      return
+    }
+    closedWindow.contentView = nil
+    window = nil
+  }
+
+  private func close() {
+    window?.close()
   }
 }
 

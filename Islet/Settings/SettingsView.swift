@@ -201,7 +201,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       pageContent + [
         "Calendar", "Activity", "Upcoming-event countdown", "Calendars shown in Islet",
         "Manage Calendar permission", "Reminders", "Show incomplete reminders on Home",
-        "Manage Reminders permission", "agenda meetings due snooze complete meeting links",
+        "Manage Reminders permission", "three day agenda add event title time location conference",
+        "meetings due snooze complete meeting links",
       ]
     case .nowPlaying:
       pageContent + [
@@ -552,6 +553,11 @@ struct SettingsView: View {
           hiddenCalendarIDs.append(id)
         }
       })
+  }
+
+  private func calendarChoiceLabel(_ choice: CalendarChoice) -> String {
+    let duplicateCount = calendar.availableCalendars.filter { $0.title == choice.title }.count
+    return duplicateCount > 1 ? "\(choice.title) · \(choice.sourceTitle)" : choice.title
   }
 
   private func sourcePolicyBinding(_ source: String) -> Binding<PulseSourcePolicy> {
@@ -1099,10 +1105,18 @@ struct SettingsView: View {
           if calendar.authorization.canRead, !calendar.availableCalendars.isEmpty {
             DisclosureGroup("Calendars shown in Islet") {
               ForEach(calendar.availableCalendars) { choice in
-                Toggle(choice.title, isOn: calendarEnabledBinding(choice.id))
+                Toggle(calendarChoiceLabel(choice), isOn: calendarEnabledBinding(choice.id))
               }
             }
+            Text(
+              "Deleted calendars are removed from this saved filter. Renaming one keeps its setting."
+            )
+            .font(.caption).foregroundStyle(.secondary)
           }
+          Text(
+            "The agenda covers three local calendar days. Add events from the Calendar activity."
+          )
+          .font(.caption).foregroundStyle(.secondary)
         }
         Button("Manage Calendar permission…") {
           navigate(to: .permissions)
