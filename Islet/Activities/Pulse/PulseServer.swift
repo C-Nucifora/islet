@@ -238,7 +238,7 @@ final class PulseServer: ObservableObject {
       nextRetryAt = nil
       stableReadyTask?.cancel()
       stableReadyTask = nil
-      lastError = "The Pulse listener stopped. Retry it from Settings."
+      lastError = String(localized: "The Pulse listener stopped. Retry it from Settings.")
     case .setup:
       break
     @unknown default:
@@ -283,7 +283,7 @@ final class PulseServer: ObservableObject {
     stableReadyTask?.cancel()
     stableReadyTask = nil
     activePortRemover()
-    lastError = "Pulse could not start: \(error.localizedDescription)"
+    lastError = String(localized: "Pulse could not start: \(error.localizedDescription)")
     Log.app.error("Pulse server failed: \(error.localizedDescription, privacy: .public)")
   }
 
@@ -701,7 +701,7 @@ private enum PulseServerError: LocalizedError {
 
   var errorDescription: String? {
     switch self {
-    case .missingActivePort: "The listener did not report its active port."
+    case .missingActivePort: String(localized: "The listener did not report its active port.")
     }
   }
 }

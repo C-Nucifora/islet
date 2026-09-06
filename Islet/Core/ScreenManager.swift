@@ -586,7 +586,8 @@ final class ScreenManager: ObservableObject {
       viewModel.selectActivity(selectedID)
       A11y.announce(
         selectedID == ExpandedSelectionPolicy.homeID
-          ? "Home selected" : "\(ActivityCatalog.name(for: selectedID)) selected")
+          ? String(localized: "Home selected")
+          : String(localized: "\(ActivityCatalog.name(for: selectedID)) selected"))
       return true
     }
 

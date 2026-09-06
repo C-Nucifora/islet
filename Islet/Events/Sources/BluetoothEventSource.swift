@@ -25,7 +25,7 @@ import IOBluetooth
 @MainActor
 final class BluetoothEventSource: NSObject, SystemEventSource {
   let id = "bluetooth"
-  let displayName = "Bluetooth devices"
+  let displayName = String(localized: "Bluetooth devices")
   let tier = SystemEventTier.extended
 
   private var connectNotification: IOBluetoothUserNotification?
@@ -59,7 +59,7 @@ final class BluetoothEventSource: NSObject, SystemEventSource {
   ) {
     // Read the non-Sendable device and register the per-device disconnect watch on the thread the
     // callback owns; only the name crosses the actor boundary.
-    let name = device.name ?? device.addressString ?? "Bluetooth device"
+    let name = device.name ?? device.addressString ?? String(localized: "Bluetooth device")
     if let n = device.register(
       forDisconnectNotification: self, selector: #selector(deviceDisconnected(_:device:)))
     {
@@ -71,16 +71,16 @@ final class BluetoothEventSource: NSObject, SystemEventSource {
       SystemEventBus.shared.emit(
         SystemEvent(
           sourceID: "bluetooth", icon: "dot.radiowaves.right", title: name,
-          subtitle: "Connected",
+          subtitle: String(localized: "Connected"),
           accentHex: EventAccent.info, motion: .bluetooth,
-          announcement: "\(name) connected"))
+          announcement: String(localized: "\(name) connected")))
     }
   }
 
   @objc nonisolated private func deviceDisconnected(
     _ notification: IOBluetoothUserNotification, device: IOBluetoothDevice
   ) {
-    let name = device.name ?? device.addressString ?? "Bluetooth device"
+    let name = device.name ?? device.addressString ?? String(localized: "Bluetooth device")
     notification.unregister()
     lock.lock()
     disconnectNotifications.removeAll { $0 === notification }
@@ -89,9 +89,9 @@ final class BluetoothEventSource: NSObject, SystemEventSource {
       SystemEventBus.shared.emit(
         SystemEvent(
           sourceID: "bluetooth", icon: "dot.radiowaves.right", title: name,
-          subtitle: "Disconnected",
+          subtitle: String(localized: "Disconnected"),
           accentHex: EventAccent.neutral, motion: .bluetooth, urgency: .ambient,
-          announcement: "\(name) disconnected"))
+          announcement: String(localized: "\(name) disconnected")))
     }
   }
 }

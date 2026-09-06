@@ -267,7 +267,8 @@ enum PulseActionTrustError: LocalizedError, Equatable {
     switch self {
     case .corruptStore:
       "The Pulse web destination allowlist is unreadable. No destinations are trusted."
-    case .unsafeStoreFile: "The Pulse web destination allowlist has unsafe file permissions."
+    case .unsafeStoreFile:
+      String(localized: "The Pulse web destination allowlist has unsafe file permissions.")
     }
   }
 }

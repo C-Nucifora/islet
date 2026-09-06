@@ -8,12 +8,12 @@ enum SystemMetricKind: String, CaseIterable, Codable {
 extension SystemMetricKind {
   var displayName: String {
     switch self {
-    case .cpu: "CPU"
-    case .gpu: "GPU"
-    case .memory: "Memory"
-    case .disk: "Disk"
-    case .network: "Network"
-    case .thermal: "Thermal"
+    case .cpu: String(localized: "CPU")
+    case .gpu: String(localized: "GPU")
+    case .memory: String(localized: "Memory")
+    case .disk: String(localized: "Disk")
+    case .network: String(localized: "Network")
+    case .thermal: String(localized: "Thermal")
     }
   }
 }
@@ -33,11 +33,11 @@ extension MetricDisplayStyle {
 
   var displayName: String {
     switch self {
-    case .number: "Number"
-    case .numberAndBar: "Number + bar"
-    case .sparkline: "Sparkline"
-    case .sparklineAndNumber: "Number + sparkline"
-    case .combined: "Everything"
+    case .number: String(localized: "Number")
+    case .numberAndBar: String(localized: "Number + bar")
+    case .sparkline: String(localized: "Sparkline")
+    case .sparklineAndNumber: String(localized: "Number + sparkline")
+    case .combined: String(localized: "Everything")
     }
   }
 

@@ -257,6 +257,6 @@ enum DisplaySelection {
 
   private static func cleanName(_ name: String) -> String {
     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? "Display" : trimmed
+    return trimmed.isEmpty ? String(localized: "Display") : trimmed
   }
 }

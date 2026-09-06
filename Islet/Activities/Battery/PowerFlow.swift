@@ -5,10 +5,10 @@ enum PowerInputKind: Equatable {
 
   var label: String {
     switch self {
-    case .usbC: "USB-C"
-    case .magSafe: "MagSafe"
-    case .wireless: "Wireless"
-    case .adapter: "Power adapter"
+    case .usbC: String(localized: "USB-C")
+    case .magSafe: String(localized: "MagSafe")
+    case .wireless: String(localized: "Wireless")
+    case .adapter: String(localized: "Power adapter")
     }
   }
 

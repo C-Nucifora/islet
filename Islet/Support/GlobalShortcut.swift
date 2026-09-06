@@ -90,8 +90,10 @@ enum GlobalShortcutValidationError: LocalizedError, Equatable {
 
   var errorDescription: String? {
     switch self {
-    case .modifierKeyRequired: "Use Command, Option, or Control with another key."
-    case .unsupportedKey: "Choose a letter, number, Space, arrow, or function key."
+    case .modifierKeyRequired:
+      String(localized: "Use Command, Option, or Control with another key.")
+    case .unsupportedKey:
+      String(localized: "Choose a letter, number, Space, arrow, or function key.")
     }
   }
 }
@@ -129,11 +131,12 @@ enum GlobalShortcutRegistrationStatus: Equatable {
 
   var message: String {
     switch self {
-    case .disabled: "Off"
-    case .registered: "Ready"
-    case .conflict: "That shortcut is already registered by another app."
+    case .disabled: String(localized: "Off")
+    case .registered: String(localized: "Ready")
+    case .conflict: String(localized: "That shortcut is already registered by another app.")
     case .invalid(let error): error.localizedDescription
-    case .failed(let status): "macOS could not register this shortcut (error \(status))."
+    case .failed(let status):
+      String(localized: "macOS could not register this shortcut (error \(status)).")
     }
   }
 }

@@ -11,13 +11,18 @@ enum T3CredentialStoreError: Error, LocalizedError {
   var errorDescription: String? {
     switch self {
     case .keychain(let status):
-      SecCopyErrorMessageString(status, nil) as String? ?? "Keychain error \(status)"
+      SecCopyErrorMessageString(status, nil) as String?
+        ?? String(localized: "Keychain error \(status)")
     case .invalidCredential:
-      "A saved T3 Code credential is unreadable. Other saved environments are unchanged."
+      String(
+        localized:
+          "A saved T3 Code credential is unreadable. Other saved environments are unchanged.")
     case .invalidVault:
-      "The saved T3 Code credential vault is unreadable. It was left unchanged."
+      String(localized: "The saved T3 Code credential vault is unreadable. It was left unchanged.")
     case .rollbackFailed:
-      "The T3 Code credential operation failed and Keychain rollback could not be verified."
+      String(
+        localized:
+          "The T3 Code credential operation failed and Keychain rollback could not be verified.")
     }
   }
 }

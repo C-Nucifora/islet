@@ -276,17 +276,21 @@ struct ShelfView: View {
   }
 
   private var airDropHelp: String {
-    if !airDrop.isServiceAvailable { return "AirDrop is unavailable on this Mac" }
-    if airDrop.isSharing { return "AirDrop share in progress" }
-    if airDrop.state == .busy { return "Another AirDrop share is in progress" }
-    return "Share all Shelf items with AirDrop"
+    if !airDrop.isServiceAvailable {
+      return String(localized: "AirDrop is unavailable on this Mac")
+    }
+    if airDrop.isSharing { return String(localized: "AirDrop share in progress") }
+    if airDrop.state == .busy {
+      return String(localized: "Another AirDrop share is in progress")
+    }
+    return String(localized: "Share all Shelf items with AirDrop")
   }
 
   private var airDropHint: String {
-    if !airDrop.isServiceAvailable { return "AirDrop is unavailable" }
-    if airDrop.isSharing { return "Wait for the current share to finish" }
-    if airDrop.state == .busy { return "Another Shelf share must finish first" }
-    return "Opens AirDrop for every item on the Shelf"
+    if !airDrop.isServiceAvailable { return String(localized: "AirDrop is unavailable") }
+    if airDrop.isSharing { return String(localized: "Wait for the current share to finish") }
+    if airDrop.state == .busy { return String(localized: "Another Shelf share must finish first") }
+    return String(localized: "Opens AirDrop for every item on the Shelf")
   }
 
   private var airDropFeedback: AirDropFeedback? {

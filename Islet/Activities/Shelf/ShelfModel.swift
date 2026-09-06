@@ -26,8 +26,8 @@ enum ShelfFileMeasurements {
 
     var errorDescription: String? {
       switch self {
-      case .arithmeticOverflow: "The item is too large to measure."
-      case .unsupportedItem: "The item contains an unsupported file type."
+      case .arithmeticOverflow: String(localized: "The item is too large to measure.")
+      case .unsupportedItem: String(localized: "The item contains an unsupported file type.")
       }
     }
   }
@@ -111,11 +111,11 @@ enum ShelfStorageFailure: Equatable, Sendable {
   var message: String {
     switch self {
     case .initialization:
-      "Shelf storage couldn't be prepared."
+      String(localized: "Shelf storage couldn't be prepared.")
     case .listing:
-      "Shelf storage couldn't be read."
+      String(localized: "Shelf storage couldn't be read.")
     case .metadata:
-      "Shelf workspace data couldn't be read."
+      String(localized: "Shelf workspace data couldn't be read.")
     }
   }
 
@@ -354,17 +354,21 @@ final class ShelfModel: ObservableObject {
   var isStorageAvailable: Bool { storageFailure == nil }
   var canRevealStorageLocation: Bool { dir.isFileURL }
   var storageUsageText: String {
-    guard let currentUsageBytes else { return "Calculating Shelf storage…" }
-    return
-      "\(Self.formattedByteCount(currentUsageBytes)) of \(Self.formattedByteCount(storagePolicy.maximumBytes))"
+    guard let currentUsageBytes else { return String(localized: "Calculating Shelf storage…") }
+    return String(
+      localized:
+        "\(Self.formattedByteCount(currentUsageBytes)) of \(Self.formattedByteCount(storagePolicy.maximumBytes))"
+    )
   }
 
   var storageUsageAccessibilityText: String {
-    guard let currentUsageBytes else { return "Calculating Shelf storage usage" }
-    return
-      "Shelf storage: \(Self.formattedByteCount(currentUsageBytes)) used of "
-      + "\(Self.formattedByteCount(storagePolicy.maximumBytes)). Keeps at least "
-      + "\(Self.formattedByteCount(storagePolicy.minimumFreeSpaceBytes)) free for other apps."
+    guard let currentUsageBytes else {
+      return String(localized: "Calculating Shelf storage usage")
+    }
+    return String(
+      localized:
+        "Shelf storage: \(Self.formattedByteCount(currentUsageBytes)) used of \(Self.formattedByteCount(storagePolicy.maximumBytes)). Keeps at least \(Self.formattedByteCount(storagePolicy.minimumFreeSpaceBytes)) free for other apps."
+    )
   }
 
   func shareAllItems(using airDrop: AirDropShareController) {
@@ -426,7 +430,7 @@ final class ShelfModel: ObservableObject {
   func revealStorageLocation() {
     let location = isStorageAvailable ? dir : dir.deletingLastPathComponent()
     guard NSWorkspace.shared.open(location) else {
-      lastError = "Couldn't open the Shelf storage location."
+      lastError = String(localized: "Couldn't open the Shelf storage location.")
       return
     }
     lastError = nil
@@ -437,7 +441,7 @@ final class ShelfModel: ObservableObject {
     let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
     return await withManifestMutation {
       guard !name.isEmpty else {
-        lastError = "Workspace names can't be empty."
+        lastError = String(localized: "Workspace names can't be empty.")
         return nil
       }
       guard
@@ -445,7 +449,7 @@ final class ShelfModel: ObservableObject {
           $0.name.caseInsensitiveCompare(name) == .orderedSame
         })
       else {
-        lastError = "A workspace named \(name) already exists."
+        lastError = String(localized: "A workspace named \(name) already exists.")
         return nil
       }
       let stack = ShelfStack(id: UUID(), name: name, expiryRule: .never)
@@ -471,7 +475,7 @@ final class ShelfModel: ObservableObject {
         }),
         let index = manifest.stacks.firstIndex(where: { $0.id == stack.id })
       else {
-        lastError = "Workspace names must be unique and non-empty."
+        lastError = String(localized: "Workspace names must be unique and non-empty.")
         return false
       }
       let previous = manifest
@@ -812,27 +816,27 @@ final class ShelfModel: ObservableObject {
     _ source: URL, to stackID: UUID, updatesLastError: Bool,
     expectedImportGeneration: UInt? = nil
   ) async -> (item: ShelfItem?, error: String?, rejectedBytes: Int64?) {
-    guard !isClearing else { return (nil, "Shelf is being cleared.", nil) }
+    guard !isClearing else { return (nil, String(localized: "Shelf is being cleared."), nil) }
     if let expectedImportGeneration, expectedImportGeneration != importGeneration {
       return (nil, nil, nil)
     }
     guard isStorageAvailable else {
-      let error = "Shelf storage is unavailable."
+      let error = String(localized: "Shelf storage is unavailable.")
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
     guard source.isFileURL else {
-      let error = "Only files and folders can be added."
+      let error = String(localized: "Only files and folders can be added.")
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
     guard let targetStack = stacks.first(where: { $0.id == stackID }) else {
-      let error = "That Shelf workspace no longer exists."
+      let error = String(localized: "That Shelf workspace no longer exists.")
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
     guard FileManager.default.fileExists(atPath: source.path) else {
-      let error = "That item is no longer available."
+      let error = String(localized: "That item is no longer available.")
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
@@ -862,17 +866,16 @@ final class ShelfModel: ObservableObject {
         currentCount: items.count, pendingCount: reservedImports.count,
         maximum: Self.maximumItemCount)
     else {
-      let error = "Shelf is full (\(Self.maximumItemCount) items)."
+      let error = String(localized: "Shelf is full (\(Self.maximumItemCount) items).")
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
-
     let estimatedBytes: Int64
     switch await measureItem(source) {
     case .success(let bytes) where bytes >= 0:
       estimatedBytes = bytes
     case .success, .failure:
-      let error = "Couldn't calculate the size of \(source.lastPathComponent)."
+      let error = String(localized: "Couldn't calculate the size of \(source.lastPathComponent).")
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
@@ -882,7 +885,7 @@ final class ShelfModel: ObservableObject {
     }
     guard await refreshUsageForImport(expectedImportGeneration: expectedImportGeneration) else {
       guard importIsCurrent(expectedImportGeneration) else { return (nil, nil, nil) }
-      let error = "Couldn't calculate current Shelf storage usage."
+      let error = String(localized: "Couldn't calculate current Shelf storage usage.")
       setImportError(error, rejectedBytes: estimatedBytes, updatesLastError: updatesLastError)
       return (nil, error, estimatedBytes)
     }
@@ -903,7 +906,7 @@ final class ShelfModel: ObservableObject {
         currentCount: items.count, pendingCount: reservedImports.count,
         maximum: Self.maximumItemCount)
     else {
-      let error = "Shelf is full (\(Self.maximumItemCount) items)."
+      let error = String(localized: "Shelf is full (\(Self.maximumItemCount) items).")
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
@@ -945,7 +948,7 @@ final class ShelfModel: ObservableObject {
         stagedBytes = bytes
       case .success, .failure:
         removeStagingItem(staging)
-        let error = "Couldn't verify the size of \(source.lastPathComponent)."
+        let error = String(localized: "Couldn't verify the size of \(source.lastPathComponent).")
         setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
         return (nil, error, nil)
       }
@@ -957,7 +960,7 @@ final class ShelfModel: ObservableObject {
       guard await refreshUsageForImport(expectedImportGeneration: expectedImportGeneration) else {
         removeStagingItem(staging)
         guard importIsCurrent(expectedImportGeneration) else { return (nil, nil, nil) }
-        let error = "Couldn't calculate current Shelf storage usage."
+        let error = String(localized: "Couldn't calculate current Shelf storage usage.")
         setImportError(error, rejectedBytes: stagedBytes, updatesLastError: updatesLastError)
         return (nil, error, stagedBytes)
       }
@@ -992,7 +995,7 @@ final class ShelfModel: ObservableObject {
         return (nil, nil, nil)
       case .saveFailed:
         removeStagingItem(staging)
-        let error = "Couldn't save Shelf workspace data."
+        let error = String(localized: "Couldn't save Shelf workspace data.")
         setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
         return (nil, error, nil)
       }
@@ -1036,7 +1039,7 @@ final class ShelfModel: ObservableObject {
       case .failure(let error):
         await discardPendingImport(pending.id)
         removeStagingItem(staging)
-        let message = "Couldn’t add \(source.lastPathComponent)."
+        let message = String(localized: "Couldn’t add \(source.lastPathComponent).")
         setImportError(message, rejectedBytes: nil, updatesLastError: updatesLastError)
         Log.app.error("Shelf staged rename failed: \(error.localizedDescription)")
         return (nil, message, nil)
@@ -1047,7 +1050,7 @@ final class ShelfModel: ObservableObject {
       removeStagingItem(staging)
       // A file can disappear between Finder producing its drag payload and the async copy. Give a
       // useful, non-technical error while retaining the detailed failure in the log.
-      let message = "Couldn’t add \(source.lastPathComponent)."
+      let message = String(localized: "Couldn’t add \(source.lastPathComponent).")
       setImportError(message, rejectedBytes: nil, updatesLastError: updatesLastError)
       Log.app.error("Shelf copy failed: \(error.localizedDescription)")
       return (nil, message, nil)
@@ -1122,11 +1125,11 @@ final class ShelfModel: ObservableObject {
     case .success(let bytes) where bytes >= 0:
       available = bytes
     case .success, .failure:
-      return "Couldn't check free disk space."
+      return String(localized: "Couldn't check free disk space.")
     }
 
     guard let currentUsageBytes, reservedImports[destination] != nil else {
-      return "Couldn't calculate current Shelf storage usage."
+      return String(localized: "Couldn't calculate current Shelf storage usage.")
     }
     let reservations = Array(reservedImports.values)
     let decision = ShelfLogic.storageDecision(
@@ -1150,12 +1153,19 @@ final class ShelfModel: ObservableObject {
     switch decision {
     case .accepted, .overBudget:
       return
-        "Can't add \(sourceName) (\(size)). The Shelf limit is \(Self.formattedByteCount(storagePolicy.maximumBytes))."
+        String(
+          localized:
+            "Can't add \(sourceName) (\(size)). The Shelf limit is \(Self.formattedByteCount(storagePolicy.maximumBytes))."
+        )
     case .lowFreeSpace:
       return
-        "Can't add \(sourceName) (\(size)). Islet keeps \(Self.formattedByteCount(storagePolicy.minimumFreeSpaceBytes)) free for other apps."
+        String(
+          localized:
+            "Can't add \(sourceName) (\(size)). Islet keeps \(Self.formattedByteCount(storagePolicy.minimumFreeSpaceBytes)) free for other apps."
+        )
     case .invalidMeasurement:
-      return "Can't add \(sourceName) (\(size)) because its storage size is invalid."
+      return String(
+        localized: "Can't add \(sourceName) (\(size)) because its storage size is invalid.")
     }
   }
 
@@ -1168,7 +1178,7 @@ final class ShelfModel: ObservableObject {
   }
 
   nonisolated private static func formattedByteCount(_ bytes: Int64) -> String {
-    ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    LocalizedFormat.bytes(bytes)
   }
 
   func remove(_ item: ShelfItem) async {
@@ -1194,7 +1204,7 @@ final class ShelfModel: ObservableObject {
       // final state is still achieved, so do not strand a ghost tile on the Shelf.
       await completeRemoval(of: item)
     case .failure(let error):
-      lastError = "Couldn’t remove \(item.name)."
+      lastError = String(localized: "Couldn’t remove \(item.name).")
       Log.app.error("Shelf removal failed: \(error.localizedDescription)")
     }
   }
@@ -1264,7 +1274,7 @@ final class ShelfModel: ObservableObject {
       }
       lastError =
         originalIDs.subtracting(removedIDs).isEmpty
-        ? nil : "Some Shelf items couldn’t be removed."
+        ? nil : String(localized: "Some Shelf items couldn’t be removed.")
       if lastError == nil { lastRejectedImportBytes = nil }
       _ = await persistManifest(reportingError: lastError == nil)
       scheduleExpiry()
@@ -1274,12 +1284,12 @@ final class ShelfModel: ObservableObject {
   @discardableResult
   func open(_ item: ShelfItem) -> Bool {
     guard beginUsing(item) else {
-      lastError = "\(item.name) is no longer available."
+      lastError = String(localized: "\(item.name) is no longer available.")
       return false
     }
     guard openItem(item.url) else {
       endUsing(item)
-      lastError = "Couldn’t open \(item.name)."
+      lastError = String(localized: "Couldn’t open \(item.name).")
       return false
     }
     // Keep the path stable while LaunchServices hands it to the destination app. Once that app has
@@ -1294,15 +1304,15 @@ final class ShelfModel: ObservableObject {
 
   func quickLook(_ item: ShelfItem) {
     guard beginUsing(item) else {
-      lastError = "\(item.name) is no longer available."
+      lastError = String(localized: "\(item.name) is no longer available.")
       return
     }
     guard quickLookController.present(item, onClose: { [weak self] in self?.endUsing(item) }) else {
       endUsing(item)
       lastError =
         FileManager.default.fileExists(atPath: item.url.path)
-        ? "Quick Look isn't available for \(item.name)."
-        : "\(item.name) is no longer available."
+        ? String(localized: "Quick Look isn't available for \(item.name).")
+        : String(localized: "\(item.name) is no longer available.")
       return
     }
     lastError = nil
@@ -1337,8 +1347,11 @@ final class ShelfModel: ObservableObject {
 
   func expirationText(for item: ShelfItem, now: Date = .now) -> String? {
     guard let expiry = item.expiresAt else { return nil }
-    if expiry <= now { return useCounts[item.id] == nil ? "Expired" : "Expires after use" }
-    return "Expires \(expiry.formatted(.relative(presentation: .named)))"
+    if expiry <= now {
+      return useCounts[item.id] == nil
+        ? String(localized: "Expired") : String(localized: "Expires after use")
+    }
+    return String(localized: "Expires \(expiry.formatted(.relative(presentation: .named)))")
   }
 
   func cleanupStorage() async {

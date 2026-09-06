@@ -68,8 +68,11 @@ struct IdleDashboardView: View {
       Image(systemName: keepAwake.isActive ? "cup.and.heat.waves.fill" : "cup.and.heat.waves")
         .appThemeForeground(.interaction)
       VStack(alignment: .leading, spacing: 1) {
-        Text(keepAwake.isActive ? "Mac stays awake" : "Keep Mac awake")
-          .font(.caption.weight(.semibold))
+        Text(
+          keepAwake.isActive
+            ? String(localized: "Mac stays awake") : String(localized: "Keep Mac awake")
+        )
+        .font(.caption.weight(.semibold))
         if keepAwake.isActive {
           Text(keepAwake.lastError ?? keepAwake.statusText)
             .font(.caption2.monospacedDigit())
@@ -164,7 +167,11 @@ struct IdleDashboardView: View {
           }
         }
         if !overflow.overflow.isEmpty {
-          Button(showsAll ? "Show less" : "More (\(overflow.overflow.count))") {
+          Button(
+            showsAll
+              ? String(localized: "Show less")
+              : String(localized: "More (\(overflow.overflow.count))")
+          ) {
             withAnimation(Motion.gated(.snappy)) { showsAll.toggle() }
           }
           .buttonStyle(.link)

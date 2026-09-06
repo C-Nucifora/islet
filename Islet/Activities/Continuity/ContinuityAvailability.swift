@@ -36,21 +36,26 @@ enum ContinuityAvailability: Equatable, Sendable {
   var explanation: String {
     switch self {
     case .needsAccessibility:
-      return "Islet needs Accessibility access to read Live Activities from the menu bar."
+      return String(
+        localized: "Islet needs Accessibility access to read Live Activities from the menu bar.")
     case .controlCenterUnavailable:
-      return "Control Centre is not running. Retry after macOS starts it again."
+      return String(localized: "Control Centre is not running. Retry after macOS starts it again.")
     case .incompatibleSchema:
-      return "This macOS version exposes a Control Centre layout Islet cannot read."
+      return String(
+        localized: "This macOS version exposes a Control Centre layout Islet cannot read.")
     case .systemDisabled:
-      return "Turn on iPhone Live Activities in System Settings to see them here."
+      return String(
+        localized: "Turn on iPhone Live Activities in System Settings to see them here.")
     case .waiting:
       // Deliberately not "keep your iPhone nearby": during development this Mac sat with a
       // connected phone and an empty menu bar for two days because ControlCenter was holding stale
       // pairing state. Telling the user to move their phone would have been useless advice.
-      return
-        "Nothing running on your iPhone. If the menu bar shows one and this doesn't, restart Control Centre."
+      return String(
+        localized:
+          "Nothing running on your iPhone. If the menu bar shows one and this doesn't, restart Control Centre."
+      )
     case .active:
-      return "Nothing running on your iPhone right now."
+      return String(localized: "Nothing running on your iPhone right now.")
     }
   }
 }

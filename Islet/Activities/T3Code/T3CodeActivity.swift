@@ -24,7 +24,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       let active =
         "\(liveAgentCount) active T3 Code agent\(liveAgentCount == 1 ? "" : "s")"
       guard staleAgentCount > 0 else { return active }
-      return "\(active); \(staleAgentCount) stale"
+      return String(localized: "\(active); \(staleAgentCount) stale")
     }
   }
 
@@ -423,7 +423,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
             T3EnvironmentSnapshot(
               id: Self.localSnapshotID(descriptor.environmentId),
               logicalEnvironmentID: descriptor.environmentId, source: .local,
-              label: descriptor.label.isEmpty ? "This Mac" : descriptor.label,
+              label: descriptor.label.isEmpty ? String(localized: "This Mac") : descriptor.label,
               baseURL: endpoint.baseURL.absoluteString, platform: nil,
               serverVersion: descriptor.serverVersion,
               state: .needsPairing, agents: []))
@@ -462,7 +462,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
             T3EnvironmentSnapshot(
               id: Self.localSnapshotID(descriptor.environmentId),
               logicalEnvironmentID: descriptor.environmentId, source: .local,
-              label: descriptor.label.isEmpty ? "This Mac" : descriptor.label,
+              label: descriptor.label.isEmpty ? String(localized: "This Mac") : descriptor.label,
               baseURL: endpoint.baseURL.absoluteString,
               platform: nil, serverVersion: descriptor.serverVersion,
               state: .needsPairing, agents: []))
@@ -648,7 +648,9 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     let environmentID = descriptor?.environmentId ?? provisionalLocalSnapshotID
     let platform = [descriptor?.platform?.os, descriptor?.platform?.arch]
       .compactMap { $0 }.joined(separator: " · ")
-    let label = descriptor.map { $0.label.isEmpty ? "This Mac" : $0.label } ?? "This Mac"
+    let label =
+      descriptor.map { $0.label.isEmpty ? String(localized: "This Mac") : $0.label }
+      ?? String(localized: "This Mac")
     return T3EnvironmentSnapshot(
       id: descriptor == nil ? provisionalLocalSnapshotID : localSnapshotID(environmentID),
       logicalEnvironmentID: environmentID, source: .local,

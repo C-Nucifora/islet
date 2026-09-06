@@ -33,50 +33,75 @@ enum PowerStatus {
     onAC: Bool, isCharging: Bool, fullyCharged: Bool,
     batteryDirection: BatteryFlowDirection, notChargingReason: UInt64?
   ) -> String {
-    if !onAC { return "On battery" }
-    if batteryDirection == .supplementing { return "Adapter can't keep up" }
-    if batteryDirection == .charging || isCharging { return "Charging" }
-    if fullyCharged { return "Charged" }
+    if !onAC { return String(localized: "On battery") }
+    if batteryDirection == .supplementing {
+      return String(localized: "Adapter can't keep up")
+    }
+    if batteryDirection == .charging || isCharging { return String(localized: "Charging") }
+    if fullyCharged { return String(localized: "Charged") }
     // The reason bitfield is undocumented diagnostics, not prose — the view offers it in a
     // tooltip. Putting the hex in this line truncated it into "Not charging · 0x80000…".
-    return "Not charging"
+    return String(localized: "Not charging")
   }
 }
 
-/// Number-to-string rules for the power screen. `String(format:)` with no locale argument is
-/// non-localised, so the decimal separator is always "." and these results are stable in tests.
+/// Locale-aware number-to-string rules for the power screen.
 enum PowerFormat {
-  static func time(minutes: Int) -> String {
-    minutes < 60 ? "\(minutes)m" : String(format: "%dh %02dm", minutes / 60, minutes % 60)
+  static func time(minutes: Int, locale: Locale = .current) -> String {
+    if minutes < 60 {
+      return String(localized: "\(LocalizedFormat.integer(minutes, locale: locale))m")
+    }
+    return String(
+      localized:
+        "\(LocalizedFormat.integer(minutes / 60, locale: locale))h \(LocalizedFormat.integer(minutes % 60, minimumDigits: 2, locale: locale))m"
+    )
   }
 
   static func capacity(_ current: Int?, of design: Int?) -> String? {
     guard let current else { return nil }
-    guard let design, design > 0 else { return "\(current) mAh" }
-    return "\(current) / \(design) mAh"
+    let currentText = LocalizedFormat.integer(current)
+    guard let design, design > 0 else { return String(localized: "\(currentText) mAh") }
+    return String(localized: "\(currentText) / \(LocalizedFormat.integer(design)) mAh")
   }
 
   static func cycles(_ count: Int, of design: Int?) -> String {
-    guard let design, design > 0 else { return "\(count)" }
-    return "\(count) / \(design)"
+    guard let design, design > 0 else { return LocalizedFormat.integer(count) }
+    return String(
+      localized: "\(LocalizedFormat.integer(count)) / \(LocalizedFormat.integer(design))")
   }
 
   /// Signed: the sign is the information — into the pack or out of it.
-  static func watts(_ w: Double) -> String { String(format: "%+.1f W", w) }
-  static func wattsUnsigned(_ w: Double) -> String { String(format: "%.1f W", w) }
-  static func percentage(_ fraction: Double) -> String {
-    "\(Int((min(1, max(0, fraction)) * 100).rounded()))%"
+  static func watts(_ w: Double, locale: Locale = .current) -> String {
+    String(localized: "\(LocalizedFormat.signedNumber(w, fractionDigits: 1, locale: locale)) W")
   }
-  static func amps(_ a: Double) -> String { String(format: "%+.2f A", a) }
-  static func volts(_ v: Double) -> String { String(format: "%.2f V", v) }
-  static func temperature(_ c: Double) -> String { String(format: "%.1f°C", c) }
+  static func wattsUnsigned(_ w: Double, locale: Locale = .current) -> String {
+    LocalizedFormat.measurement(w, unit: UnitPower.watts, fractionDigits: 1...1, locale: locale)
+  }
+  static func percentage(_ fraction: Double) -> String {
+    LocalizedFormat.percent(min(1, max(0, fraction)))
+  }
+  static func amps(_ a: Double, locale: Locale = .current) -> String {
+    String(localized: "\(LocalizedFormat.signedNumber(a, fractionDigits: 2, locale: locale)) A")
+  }
+  static func volts(_ v: Double, locale: Locale = .current) -> String {
+    LocalizedFormat.measurement(
+      v, unit: UnitElectricPotentialDifference.volts, fractionDigits: 2...2, locale: locale)
+  }
+  static func temperature(_ c: Double, locale: Locale = .current) -> String {
+    LocalizedFormat.measurement(
+      c, unit: UnitTemperature.celsius, fractionDigits: 1...1, locale: locale)
+  }
+  static func temperatureAccessibility(_ c: Double, locale: Locale = .current) -> String {
+    LocalizedFormat.measurement(
+      c, unit: UnitTemperature.celsius, fractionDigits: 1...1, width: .wide, locale: locale)
+  }
 
   static func chargerSummary(watts: Int?, description: String?) -> String? {
     // Written with explicit returns: a switch *expression* whose branches mix String and nil does
     // not type-check against a String? contextual type.
     switch (watts, description) {
-    case (let w?, let d?): return "\(w) W · \(d)"
-    case (let w?, nil): return "\(w) W"
+    case (let w?, let d?): return String(localized: "\(w) W · \(d)")
+    case (let w?, nil): return String(localized: "\(w) W")
     case (nil, let d?): return d
     case (nil, nil): return nil
     }
@@ -93,8 +118,8 @@ enum PowerFormat {
 
   /// The time tile: counting up to full while charging, down to empty otherwise.
   static func remaining(timeToFull: Int?, timeToEmpty: Int?) -> (label: String, value: String)? {
-    if let timeToFull { return ("Full in", time(minutes: timeToFull)) }
-    if let timeToEmpty { return ("Left", time(minutes: timeToEmpty)) }
+    if let timeToFull { return (String(localized: "Full in"), time(minutes: timeToFull)) }
+    if let timeToEmpty { return (String(localized: "Left"), time(minutes: timeToEmpty)) }
     return nil
   }
 

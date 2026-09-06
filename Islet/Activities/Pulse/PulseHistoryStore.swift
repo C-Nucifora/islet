@@ -38,8 +38,8 @@ enum PulseHistoryStoreError: LocalizedError, Equatable {
 
   var errorDescription: String? {
     switch self {
-    case .documentTooLarge: "The saved Pulse history exceeds its size limit."
-    case .invalidDocument: "The saved Pulse history is not valid."
+    case .documentTooLarge: String(localized: "The saved Pulse history exceeds its size limit.")
+    case .invalidDocument: String(localized: "The saved Pulse history is not valid.")
     case .unsupportedVersion(let version):
       "The saved Pulse history uses unsupported version \(version)."
     }
@@ -400,9 +400,11 @@ final class PulseHistoryPersistenceWriter: @unchecked Sendable {
     } catch {
       switch pending.operation {
       case .save:
-        errorMessage = "Pulse history could not be saved. \(error.localizedDescription)"
+        errorMessage = String(
+          localized: "Pulse history could not be saved. \(error.localizedDescription)")
       case .remove:
-        errorMessage = "Pulse history could not be removed. \(error.localizedDescription)"
+        errorMessage = String(
+          localized: "Pulse history could not be removed. \(error.localizedDescription)")
       }
     }
     resultHandler(pending.generation, errorMessage)

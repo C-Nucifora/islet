@@ -83,7 +83,7 @@ final class ScreenshotEventSource: SystemEventSource {
   }
 
   let id = "screenshot"
-  let displayName = "Screenshots"
+  let displayName = String(localized: "Screenshots")
   let tier = SystemEventTier.extended
 
   private(set) var status = Status.stopped
@@ -183,11 +183,11 @@ final class ScreenshotEventSource: SystemEventSource {
     emit(
       SystemEvent(
         sourceID: id, icon: "camera.viewfinder",
-        title: count > 1 ? "\(count) screenshots" : "Screenshot",
-        subtitle: count > 1 ? nil : records[0].displayName ?? "Screenshot",
+        title: String(localized: "\(count) screenshot", comment: "Screenshot count"),
+        subtitle: count > 1 ? nil : records[0].displayName ?? String(localized: "Screenshot"),
         accentHex: EventAccent.info, motion: .screenshot,
         urgency: .ambient, duration: 1.5,
-        announcement: "Screenshot taken"))
+        announcement: String(localized: "Screenshot taken")))
   }
 
   private func fail(_ message: String) {
@@ -196,9 +196,9 @@ final class ScreenshotEventSource: SystemEventSource {
     emit(
       SystemEvent(
         sourceID: id, icon: "exclamationmark.triangle.fill",
-        title: "Screenshot detection unavailable", subtitle: message,
+        title: String(localized: "Screenshot detection unavailable"), subtitle: message,
         accentHex: EventAccent.warning, urgency: .alert,
-        announcement: "Screenshot detection is unavailable"))
+        announcement: String(localized: "Screenshot detection is unavailable")))
   }
 
   private func tearDownQuery() {

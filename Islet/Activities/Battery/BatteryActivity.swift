@@ -133,25 +133,29 @@ final class BatteryActivity: NotchActivity, ObservableObject {
     switch event {
     case .acConnected(let percent):
       SystemEvent(
-        sourceID: "battery", icon: "bolt.fill", title: "Charging",
-        subtitle: "\(percent)%", accentHex: EventAccent.positive, motion: .generic,
-        announcement: "Charger connected, \(percent) percent")
+        sourceID: "battery", icon: "bolt.fill", title: String(localized: "Charging"),
+        subtitle: LocalizedFormat.percent(Double(percent) / 100), accentHex: EventAccent.positive,
+        motion: .generic,
+        announcement: String(localized: "Charger connected, \(percent) percent"))
     case .acDisconnected(let percent):
       SystemEvent(
-        sourceID: "battery", icon: "battery.100percent", title: "On battery",
-        subtitle: "\(percent)%", accentHex: EventAccent.neutral, motion: .generic,
-        announcement: "Charger disconnected, \(percent) percent")
+        sourceID: "battery", icon: "battery.100percent", title: String(localized: "On battery"),
+        subtitle: LocalizedFormat.percent(Double(percent) / 100), accentHex: EventAccent.neutral,
+        motion: .generic,
+        announcement: String(localized: "Charger disconnected, \(percent) percent"))
     case .lowBattery(_, let percent):
       SystemEvent(
-        sourceID: "battery", icon: "battery.25percent", title: "Low battery",
-        subtitle: "\(percent)%", accentHex: EventAccent.danger, motion: .peripheralLow,
+        sourceID: "battery", icon: "battery.25percent", title: String(localized: "Low battery"),
+        subtitle: LocalizedFormat.percent(Double(percent) / 100), accentHex: EventAccent.danger,
+        motion: .peripheralLow,
         urgency: .alert, duration: 3,
-        announcement: "Low battery, \(percent) percent")
+        announcement: String(localized: "Low battery, \(percent) percent"))
     case .chargeComplete(let percent):
       SystemEvent(
-        sourceID: "battery", icon: "checkmark.circle.fill", title: "Charged",
-        subtitle: "\(percent)%", accentHex: EventAccent.positive, motion: .chargeComplete,
-        announcement: "Battery fully charged")
+        sourceID: "battery", icon: "checkmark.circle.fill", title: String(localized: "Charged"),
+        subtitle: LocalizedFormat.percent(Double(percent) / 100), accentHex: EventAccent.positive,
+        motion: .chargeComplete,
+        announcement: String(localized: "Battery fully charged"))
     }
   }
 

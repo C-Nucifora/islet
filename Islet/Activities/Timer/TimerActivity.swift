@@ -325,7 +325,7 @@ final class TimerActivity: NotchActivity, ObservableObject {
     }
     persistCompletedSession(completedAt: completionDate)
     if playEffects {
-      let title = "\(label ?? "Timer") done"
+      let title = String(localized: "\(label ?? String(localized: "Timer")) done")
       Haptics.perform(.levelChange)
       NSSound(named: NSSound.Name("Glass"))?.play()
       SystemEventBus.shared.emit(
@@ -337,7 +337,7 @@ final class TimerActivity: NotchActivity, ObservableObject {
         completionID: completionID,
         snapshot: TimerCompletionSnapshot(
           duration: total, label: label, completedAt: completionDate), title: title,
-        body: "Your timer finished."
+        body: String(localized: "Your timer finished.")
       ) { [weak self] in
         self?.notificationFallbackMessage = TimerActivity.notificationFallbackMessage
       }
@@ -353,12 +353,15 @@ final class TimerActivity: NotchActivity, ObservableObject {
   var expandedView: AnyView { AnyView(TimerExpandedView(activity: self)) }
 
   private static let notificationFallbackMessage =
-    "Timer notifications are off. Islet will still play its completion sound and show Done in the island."
+    String(
+      localized:
+        "Timer notifications are off. Islet will still play its completion sound and show Done in the island."
+    )
 
   var accessibilityPrimaryActionName: String? {
-    if finished { return lastDuration == nil ? nil : "Timer repeated" }
-    if isRunning { return "Timer paused" }
-    if isPaused { return "Timer resumed" }
+    if finished { return lastDuration == nil ? nil : String(localized: "Timer repeated") }
+    if isRunning { return String(localized: "Timer paused") }
+    if isPaused { return String(localized: "Timer resumed") }
     return nil
   }
 
@@ -416,11 +419,18 @@ struct TimerCountdownText: View {
         .foregroundStyle(
           appTheme.color(for: TimerPresentation.tintRole(finished: activity.finished))
         )
-        .accessibilityLabel(activity.label.map { "\($0) timer" } ?? "Timer")
+        .accessibilityLabel(
+          activity.label.map { label in String(localized: "\(label) timer") }
+            ?? String(localized: "Timer")
+        )
         .accessibilityValue(
           activity.finished
-            ? "Done"
-            : "\(TimerFormat.accessible(activity.remainingNow)) remaining\(activity.isPaused ? ", paused" : "")"
+            ? String(localized: "Done")
+            : activity.isPaused
+              ? String(
+                localized:
+                  "\(TimerFormat.accessible(activity.remainingNow)) remaining, paused")
+              : String(localized: "\(TimerFormat.accessible(activity.remainingNow)) remaining")
         )
     }
   }
@@ -452,11 +462,18 @@ struct TimerExpandedView: View {
         }
         .frame(width: 96, height: 96)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(activity.label.map { "\($0) timer" } ?? "Timer")
+        .accessibilityLabel(
+          activity.label.map { label in String(localized: "\(label) timer") }
+            ?? String(localized: "Timer")
+        )
         .accessibilityValue(
           activity.finished
-            ? "Done"
-            : "\(TimerFormat.accessible(activity.remainingNow)) remaining\(activity.isPaused ? ", paused" : "")"
+            ? String(localized: "Done")
+            : activity.isPaused
+              ? String(
+                localized:
+                  "\(TimerFormat.accessible(activity.remainingNow)) remaining, paused")
+              : String(localized: "\(TimerFormat.accessible(activity.remainingNow)) remaining")
         )
       }
 
@@ -474,13 +491,16 @@ struct TimerExpandedView: View {
           HStack(spacing: 14) {
             control(
               activity.isPaused ? "play.fill" : "pause.fill",
-              label: activity.isPaused ? "Resume timer" : "Pause timer"
+              label: activity.isPaused
+                ? String(localized: "Resume timer") : String(localized: "Pause timer")
             ) { activity.togglePause() }
-            control("minus", label: "Remove one minute") { activity.adjust(by: -60) }
-            control("plus", label: "Add one minute") { activity.addMinute() }
-            control("xmark", label: "Cancel timer") { activity.cancel() }
+            control("minus", label: String(localized: "Remove one minute")) {
+              activity.adjust(by: -60)
+            }
+            control("plus", label: String(localized: "Add one minute")) { activity.addMinute() }
+            control("xmark", label: String(localized: "Cancel timer")) { activity.cancel() }
           }
-          Text(activity.isPaused ? "Paused" : "Running")
+          Text(activity.isPaused ? String(localized: "Paused") : String(localized: "Running"))
             .font(.caption2).foregroundStyle(.secondary)
         }
         if let message = activity.notificationFallbackMessage {
@@ -580,15 +600,15 @@ enum TimerFormat {
   }
 
   static func accessible(_ t: TimeInterval) -> String {
-    guard t.isFinite else { return "0 seconds" }
+    guard t.isFinite else { return LocalizedText.secondCount(0) }
     let seconds = max(0, Int(t.rounded(.up)))
     let hours = seconds / 3600
     let minutes = (seconds % 3600) / 60
     let remainder = seconds % 60
     return [
-      hours > 0 ? "\(hours) hour\(hours == 1 ? "" : "s")" : nil,
-      minutes > 0 ? "\(minutes) minute\(minutes == 1 ? "" : "s")" : nil,
-      remainder > 0 || seconds == 0 ? "\(remainder) second\(remainder == 1 ? "" : "s")" : nil,
+      hours > 0 ? LocalizedText.hourCount(hours) : nil,
+      minutes > 0 ? LocalizedText.minuteCount(minutes) : nil,
+      remainder > 0 || seconds == 0 ? LocalizedText.secondCount(remainder) : nil,
     ].compactMap { $0 }.joined(separator: ", ")
   }
 }

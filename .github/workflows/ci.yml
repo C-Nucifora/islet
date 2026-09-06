@@ -130,6 +130,9 @@ jobs:
             -packageAuthorizationProvider netrc | xcbeautify
           cmp Package.resolved Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
+      - name: Verify localization catalog coverage
+        run: Scripts/verify-localization-catalog.sh
+
       - name: Run arm64 tests
         run: |
           set -o pipefail

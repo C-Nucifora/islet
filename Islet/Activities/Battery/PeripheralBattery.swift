@@ -41,11 +41,11 @@ enum PeripheralDeviceType: String, CaseIterable, Codable, Identifiable, Sendable
 
   var title: String {
     switch self {
-    case .mouse: "Mouse"
-    case .trackpad: "Trackpad"
-    case .keyboard: "Keyboard"
-    case .pencil: "Pencil"
-    case .other: "Other devices"
+    case .mouse: String(localized: "Mouse")
+    case .trackpad: String(localized: "Trackpad")
+    case .keyboard: String(localized: "Keyboard")
+    case .pencil: String(localized: "Pencil")
+    case .other: String(localized: "Other devices")
     }
   }
 

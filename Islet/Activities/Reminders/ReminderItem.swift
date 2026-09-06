@@ -57,8 +57,8 @@ enum RemindersLogic {
 
     var title: String {
       switch self {
-      case .oneHour: "In 1 Hour"
-      case .tomorrowMorning: "Tomorrow Morning"
+      case .oneHour: String(localized: "In 1 Hour")
+      case .tomorrowMorning: String(localized: "Tomorrow Morning")
       }
     }
   }

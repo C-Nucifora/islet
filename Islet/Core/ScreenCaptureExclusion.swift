@@ -7,20 +7,29 @@ enum ScreenCaptureExclusionStatus: Equatable {
 
   var summary: String {
     switch self {
-    case .active: "Active"
-    case .unsupported: "Unsupported"
-    case .unverified: "Unverified"
+    case .active: String(localized: "Active")
+    case .unsupported: String(localized: "Unsupported")
+    case .unverified: String(localized: "Unverified")
     }
   }
 
   var detail: String {
     switch self {
     case .active:
-      "A system capture check confirmed exclusion for this session. Other capture apps may behave differently. Enabled activities keep running."
+      String(
+        localized:
+          "A system capture check confirmed exclusion for this session. Other capture apps may behave differently. Enabled activities keep running."
+      )
     case .unsupported:
-      "Apple does not support AppKit's legacy window-sharing setting as capture protection. Islet can appear in screenshots, recordings and shared screens. Enabled activities keep running."
+      String(
+        localized:
+          "Apple does not support AppKit's legacy window-sharing setting as capture protection. Islet can appear in screenshots, recordings and shared screens. Enabled activities keep running."
+      )
     case .unverified:
-      "Islet asked macOS to exclude its panels, but no capture check confirmed the result. Capture apps may still show Islet. Enabled activities keep running."
+      String(
+        localized:
+          "Islet asked macOS to exclude its panels, but no capture check confirmed the result. Capture apps may still show Islet. Enabled activities keep running."
+      )
     }
   }
 }

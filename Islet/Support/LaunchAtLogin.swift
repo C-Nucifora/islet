@@ -48,7 +48,7 @@ enum LaunchAtLoginPolicy {
 final class LaunchAtLoginStatus: ObservableObject {
   static let shared = LaunchAtLoginStatus()
 
-  @Published private(set) var summary = "Checking…"
+  @Published private(set) var summary = String(localized: "Checking…")
   @Published private(set) var error: String?
 
   private init() { refresh() }
@@ -56,11 +56,11 @@ final class LaunchAtLoginStatus: ObservableObject {
   func refresh(error: String? = nil) {
     self.error = error
     switch SMAppService.mainApp.status {
-    case .enabled: summary = "On"
-    case .requiresApproval: summary = "Needs approval in System Settings"
-    case .notRegistered: summary = "Off"
-    case .notFound: summary = "Unavailable"
-    @unknown default: summary = "Unknown"
+    case .enabled: summary = String(localized: "On")
+    case .requiresApproval: summary = String(localized: "Needs approval in System Settings")
+    case .notRegistered: summary = String(localized: "Off")
+    case .notFound: summary = String(localized: "Unavailable")
+    @unknown default: summary = String(localized: "Unknown")
     }
   }
 }

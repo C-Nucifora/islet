@@ -13,19 +13,19 @@ enum PulseCredentialPermission: String, Codable, CaseIterable, Identifiable, Sen
 
   var title: String {
     switch self {
-    case .events: "Events"
-    case .persistentActivities: "Persistent activities"
-    case .progress: "Progress"
-    case .webActions: "Web actions"
+    case .events: String(localized: "Events")
+    case .persistentActivities: String(localized: "Persistent activities")
+    case .progress: String(localized: "Progress")
+    case .webActions: String(localized: "Web actions")
     }
   }
 
   var detail: String {
     switch self {
-    case .events: "Publish transient eight-second events"
-    case .persistentActivities: "Create, update, and end retained activities"
-    case .progress: "Attach numeric progress and progress state"
-    case .webActions: "Attach validated HTTP and HTTPS actions"
+    case .events: String(localized: "Publish transient eight-second events")
+    case .persistentActivities: String(localized: "Create, update, and end retained activities")
+    case .progress: String(localized: "Attach numeric progress and progress state")
+    case .webActions: String(localized: "Attach validated HTTP and HTTPS actions")
     }
   }
 }
@@ -70,21 +70,29 @@ enum PulseCredentialError: LocalizedError, Equatable {
 
   var errorDescription: String? {
     switch self {
-    case .corruptRegistry: "The Pulse provider registry is unreadable. It was left unchanged."
-    case .registryTooLarge: "The Pulse provider registry exceeds its size limit."
-    case .duplicateSource: "An active credential already owns this provider source."
-    case .providerLimitReached: "Pulse already has the maximum number of provider credentials."
-    case .invalidName: "Provider name must contain 1 through 80 UTF-8 bytes."
-    case .invalidSource: "Provider source must contain 1 through 80 characters."
-    case .notFound: "Provider credential was not found."
-    case .revoked: "Provider credential is revoked."
-    case .unauthorized: "Provider credential is invalid."
-    case .requestIDRequired: "requestID is required for provider credentials."
-    case .replayedRequest: "requestID was already used with this credential."
-    case .sourceSpoofing: "Command source does not match the provider credential."
+    case .corruptRegistry:
+      String(localized: "The Pulse provider registry is unreadable. It was left unchanged.")
+    case .registryTooLarge:
+      String(localized: "The Pulse provider registry exceeds its size limit.")
+    case .duplicateSource:
+      String(localized: "An active credential already owns this provider source.")
+    case .providerLimitReached:
+      String(localized: "Pulse already has the maximum number of provider credentials.")
+    case .invalidName: String(localized: "Provider name must contain 1 through 80 UTF-8 bytes.")
+    case .invalidSource: String(localized: "Provider source must contain 1 through 80 characters.")
+    case .notFound: String(localized: "Provider credential was not found.")
+    case .revoked: String(localized: "Provider credential is revoked.")
+    case .unauthorized: String(localized: "Provider credential is invalid.")
+    case .requestIDRequired:
+      String(localized: "requestID is required for provider credentials.")
+    case .replayedRequest:
+      String(localized: "requestID was already used with this credential.")
+    case .sourceSpoofing:
+      String(localized: "Command source does not match the provider credential.")
     case .permissionDenied(let permission):
       "Provider credential does not allow \(permission.title.lowercased())."
-    case .unsafeCredentialFile: "Provider credential file is missing or has unsafe permissions."
+    case .unsafeCredentialFile:
+      String(localized: "Provider credential file is missing or has unsafe permissions.")
     }
   }
 }
@@ -346,7 +354,8 @@ final class PulseCredentialStore: ObservableObject {
         try persistRegistry()
         lastError = nil
       } catch {
-        lastError = "Could not save Pulse provider last use: \(error.localizedDescription)"
+        lastError = String(
+          localized: "Could not save Pulse provider last use: \(error.localizedDescription)")
       }
       return (command, provider)
     }

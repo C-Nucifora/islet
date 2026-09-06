@@ -79,10 +79,12 @@ final class PulseCenter: ObservableObject {
 
     var errorDescription: String? {
       switch self {
-      case .stale: "revision is not newer than the last accepted command"
-      case .revisionRequired: "revision is required after an ordered stream starts"
-      case .generationEnded: "update cannot reopen an ended activity; use show or event"
-      case .capacity: "Pulse revision tracking is at capacity"
+      case .stale: String(localized: "revision is not newer than the last accepted command")
+      case .revisionRequired:
+        String(localized: "revision is required after an ordered stream starts")
+      case .generationEnded:
+        String(localized: "update cannot reopen an ended activity; use show or event")
+      case .capacity: String(localized: "Pulse revision tracking is at capacity")
       }
     }
 

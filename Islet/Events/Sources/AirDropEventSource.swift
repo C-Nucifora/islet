@@ -10,7 +10,7 @@ import Foundation
 @MainActor
 final class AirDropOutEventSource: SystemEventSource {
   let id = "airdropOut"
-  let displayName = "AirDrop sent"
+  let displayName = String(localized: "AirDrop sent")
   let tier = SystemEventTier.heuristic
 
   private var running = false
@@ -24,9 +24,9 @@ final class AirDropOutEventSource: SystemEventSource {
     SystemEventBus.shared.emit(
       SystemEvent(
         sourceID: id, icon: "square.and.arrow.up",
-        title: fileCount == 1 ? "Sent by AirDrop" : "\(fileCount) files sent",
+        title: String(localized: "\(fileCount) file sent", comment: "AirDrop file count"),
         accentHex: EventAccent.info, motion: .airdrop,
-        announcement: "AirDrop send complete"))
+        announcement: String(localized: "AirDrop send complete")))
   }
 }
 
@@ -45,7 +45,7 @@ final class AirDropOutEventSource: SystemEventSource {
 @MainActor
 final class AirDropInEventSource: SystemEventSource {
   let id = "airdropIn"
-  let displayName = "AirDrop received"
+  let displayName = String(localized: "AirDrop received")
   let tier = SystemEventTier.heuristic
 
   private var source: DispatchSourceFileSystemObject?
@@ -95,10 +95,10 @@ final class AirDropInEventSource: SystemEventSource {
       guard Self.arrivedViaAirDrop(url) else { continue }
       SystemEventBus.shared.emit(
         SystemEvent(
-          sourceID: id, icon: "square.and.arrow.down", title: "AirDrop received",
+          sourceID: id, icon: "square.and.arrow.down", title: String(localized: "AirDrop received"),
           subtitle: name, accentHex: EventAccent.info, motion: .airdrop,
           duration: 3,
-          announcement: "Received \(name) by AirDrop"))
+          announcement: String(localized: "Received \(name) by AirDrop")))
     }
   }
 

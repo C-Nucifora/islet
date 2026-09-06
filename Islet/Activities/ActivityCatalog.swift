@@ -3,17 +3,17 @@ import Foundation
 /// The activities the user can reorder in the expanded switcher (Home is always pinned first).
 enum ActivityCatalog {
   static let orderable: [(id: String, name: String, icon: String)] = [
-    ("pulse", "Pulse", "waveform.path.ecg"),
-    ("t3Code", "T3 Code", "terminal.fill"),
-    ("timer", "Timer", "timer"),
-    ("nowPlaying", "Now Playing", "music.note"),
-    ("shelf", "File Shelf", "tray.full.fill"),
-    ("clipboard", "Clipboard", "doc.on.clipboard"),
-    ("ports", "Ports", "cable.connector"),
-    ("calendar", "Calendar", "calendar"),
-    ("battery", "Battery", "battery.100percent.bolt"),
-    ("system", "System", "cpu"),
-    ("continuity", "iPhone", "iphone.gen3"),
+    ("pulse", String(localized: "Pulse"), "waveform.path.ecg"),
+    ("t3Code", String(localized: "T3 Code"), "terminal.fill"),
+    ("timer", String(localized: "Timer"), "timer"),
+    ("nowPlaying", String(localized: "Now Playing"), "music.note"),
+    ("shelf", String(localized: "File Shelf"), "tray.full.fill"),
+    ("clipboard", String(localized: "Clipboard"), "doc.on.clipboard"),
+    ("ports", String(localized: "Ports"), "cable.connector"),
+    ("calendar", String(localized: "Calendar"), "calendar"),
+    ("battery", String(localized: "Battery"), "battery.100percent.bolt"),
+    ("system", String(localized: "System"), "cpu"),
+    ("continuity", String(localized: "iPhone"), "iphone.gen3"),
   ]
 
   static var defaultOrder: [String] { orderable.map(\.id) }

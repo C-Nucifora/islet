@@ -11,10 +11,10 @@ enum HapticStrength: String, CaseIterable, Codable, Sendable {
 
   var title: String {
     switch self {
-    case .off: "Off"
-    case .light: "Light"
-    case .medium: "Medium"
-    case .strong: "Strong"
+    case .off: String(localized: "Off")
+    case .light: String(localized: "Light")
+    case .medium: String(localized: "Medium")
+    case .strong: String(localized: "Strong")
     }
   }
 }

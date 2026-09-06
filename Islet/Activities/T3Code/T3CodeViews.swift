@@ -39,7 +39,9 @@ struct T3ConnectionIndicatorView: View {
   }
 
   static func accessibilityLabel(for state: T3ConnectionState, isStale: Bool) -> String {
-    isStale ? "\(state.accessibilityLabel), showing the last update" : state.accessibilityLabel
+    isStale
+      ? String(localized: "\(state.accessibilityLabel), showing the last update")
+      : state.accessibilityLabel
   }
 
   private var color: Color {
@@ -116,77 +118,91 @@ struct T3ConnectAccountPresentation: Equatable {
     let canRetryCleanup: Bool
     switch state {
     case .signedOut:
-      statusText = "Not linked"
-      detailText = "Link an account to find T3 Code environments available through T3 Connect."
+      statusText = String(localized: "Not linked")
+      detailText = String(
+        localized: "Link an account to find T3 Code environments available through T3 Connect.")
       identity = nil
       lastSync = nil
       isBusy = false
-      actions = [.init(kind: .link, title: "Link T3 Connect account")]
+      actions = [.init(kind: .link, title: String(localized: "Link T3 Connect account"))]
       stateError = nil
       canRetryCleanup = true
     case .linking(let previous):
-      statusText = previous == nil ? "Linking account" : "Relinking account"
+      statusText =
+        previous == nil
+        ? String(localized: "Linking account") : String(localized: "Relinking account")
       detailText =
         previous == nil
-        ? "Waiting for browser…"
-        : "Waiting for browser… Your current account stays linked unless this attempt succeeds."
+        ? String(localized: "Waiting for browser…")
+        : String(
+          localized:
+            "Waiting for browser… Your current account stays linked unless this attempt succeeds.")
       identity = Self.normalizedIdentity(previous?.displayIdentity)
       lastSync = nil
       isBusy = true
-      actions = [.init(kind: .cancel, title: "Cancel")]
+      actions = [.init(kind: .cancel, title: String(localized: "Cancel"))]
       stateError = nil
       canRetryCleanup = false
     case .linked(let account, let sync):
-      statusText = "Linked"
+      statusText = String(localized: "Linked")
       detailText =
         !monitoringEnabled
-        ? "Monitoring is off. Your linked account remains saved."
+        ? String(localized: "Monitoring is off. Your linked account remains saved.")
         : !remotePollingActive
-          ? "Cloud polling is paused by Energy mode. Your linked account remains saved."
+          ? String(
+            localized: "Cloud polling is paused by Energy mode. Your linked account remains saved.")
           : sync == nil
-            ? "Waiting for the first environment sync."
-            : "T3 Connect is monitoring your available environments."
+            ? String(localized: "Waiting for the first environment sync.")
+            : String(localized: "T3 Connect is monitoring your available environments.")
       identity = Self.normalizedIdentity(account.displayIdentity)
       lastSync = sync
       isBusy = false
-      actions = [.init(kind: .signOut, title: "Sign out", isDestructive: true)]
+      actions = [
+        .init(kind: .signOut, title: String(localized: "Sign out"), isDestructive: true)
+      ]
       stateError = nil
       canRetryCleanup = false
     case .needsSignIn(let account, let error):
-      statusText = "Sign-in required"
+      statusText = String(localized: "Sign-in required")
       detailText =
         account == nil
-        ? "Remove the unreadable saved credentials before linking an account again."
-        : "Link the account again to restore T3 Connect access."
+        ? String(
+          localized: "Remove the unreadable saved credentials before linking an account again.")
+        : String(localized: "Link the account again to restore T3 Connect access.")
       identity = Self.normalizedIdentity(account?.displayIdentity)
       lastSync = nil
       isBusy = false
       actions =
         account == nil
         ? [
-          .init(kind: .retryLoad, title: "Try loading again"),
-          .init(kind: .signOut, title: "Clean up saved credentials", isDestructive: true),
+          .init(kind: .retryLoad, title: String(localized: "Try loading again")),
+          .init(
+            kind: .signOut, title: String(localized: "Clean up saved credentials"),
+            isDestructive: true),
         ]
         : [
-          .init(kind: .link, title: "Link again"),
-          .init(kind: .signOut, title: "Sign out", isDestructive: true),
+          .init(kind: .link, title: String(localized: "Link again")),
+          .init(kind: .signOut, title: String(localized: "Sign out"), isDestructive: true),
         ]
       stateError = error
       canRetryCleanup = false
     case .unavailable(let account, let error):
-      statusText = "T3 Connect unavailable"
+      statusText = String(localized: "T3 Connect unavailable")
       detailText =
         !monitoringEnabled
-        ? "Monitoring is off. Your linked account remains saved."
+        ? String(localized: "Monitoring is off. Your linked account remains saved.")
         : !remotePollingActive
-          ? "Cloud polling is paused by Energy mode. Your linked account remains saved."
-          : "Your last known environments stay visible while T3 Connect is unavailable."
+          ? String(
+            localized: "Cloud polling is paused by Energy mode. Your linked account remains saved.")
+          : String(
+            localized:
+              "Your last known environments stay visible while T3 Connect is unavailable.")
       identity = Self.normalizedIdentity(account.displayIdentity)
       lastSync = nil
       isBusy = false
       actions = [
-        .init(kind: .retry, title: "Retry"),
-        .init(kind: .signOut, title: "Sign out", isDestructive: true),
+        .init(kind: .retry, title: String(localized: "Retry")),
+        .init(kind: .signOut, title: String(localized: "Sign out"), isDestructive: true),
       ]
       stateError = error
       canRetryCleanup = false
@@ -201,7 +217,7 @@ struct T3ConnectAccountPresentation: Equatable {
     errorMessages = errors
 
     if cleanupError != nil {
-      actions = [.init(kind: .retryCleanup, title: "Retry cleanup")]
+      actions = [.init(kind: .retryCleanup, title: String(localized: "Retry cleanup"))]
     }
   }
 
@@ -230,16 +246,20 @@ struct T3EnvironmentRowPresentation: Equatable {
   let controls: [Control]
 
   var accessibilityLabel: String {
-    let freshness = isStale ? ", showing the last update" : ""
-    return "\(label), \(sourceText), \(stateAccessibilityText)\(freshness)"
+    return isStale
+      ? String(
+        localized:
+          "\(label), \(sourceText), \(stateAccessibilityText), showing the last update")
+      : String(localized: "\(label), \(sourceText), \(stateAccessibilityText)")
   }
 
   init(snapshot: T3EnvironmentSnapshot, remotePollingActive: Bool = true) {
     let isPaused = snapshot.source != .local && !remotePollingActive
     self.init(
       label: snapshot.label, source: snapshot.source,
-      stateText: isPaused ? "Paused" : snapshot.state.label, isPaused: isPaused,
-      stateAccessibilityText: isPaused ? "Paused" : snapshot.state.accessibilityLabel,
+      stateText: isPaused ? String(localized: "Paused") : snapshot.state.label, isPaused: isPaused,
+      stateAccessibilityText: isPaused
+        ? String(localized: "Paused") : snapshot.state.accessibilityLabel,
       isStale: snapshot.isStale)
   }
 
@@ -259,15 +279,15 @@ struct T3EnvironmentRowPresentation: Equatable {
     switch source {
     case .local:
       systemImage = "laptopcomputer"
-      sourceText = "This Mac"
+      sourceText = String(localized: "This Mac")
       controls = []
     case .connect:
       systemImage = "cloud.fill"
-      sourceText = "T3 Connect"
+      sourceText = String(localized: "T3 Connect")
       controls = []
     case .manual:
       systemImage = "network"
-      sourceText = "Manually paired"
+      sourceText = String(localized: "Manually paired")
       controls = [.enable, .remove]
     }
   }
@@ -285,12 +305,15 @@ struct T3EnvironmentRowPresentation: Equatable {
       label: manualLabel,
       source: .manual,
       stateText: !monitoringEnabled || !profileEnabled
-        ? "Off"
-        : isPaused ? "Paused" : (state?.label ?? "Connecting"),
+        ? String(localized: "Off")
+        : isPaused
+          ? String(localized: "Paused") : (state?.label ?? String(localized: "Connecting")),
       isPaused: isPaused,
       stateAccessibilityText: !monitoringEnabled || !profileEnabled
-        ? "Off"
-        : isPaused ? "Paused" : (state?.accessibilityLabel ?? "Connecting"),
+        ? String(localized: "Off")
+        : isPaused
+          ? String(localized: "Paused")
+          : (state?.accessibilityLabel ?? String(localized: "Connecting")),
       isStale: isStale)
   }
 }
@@ -340,7 +363,7 @@ struct T3CodeExpandedView: View {
         Label("T3 Code", systemImage: "terminal.fill")
           .font(.caption.weight(.semibold))
         Spacer()
-        Text("\(activity.agents.count) agent\(activity.agents.count == 1 ? "" : "s")")
+        Text(LocalizedText.agentCount(activity.agents.count))
           .font(.caption2).foregroundStyle(.secondary)
       }
 
@@ -382,8 +405,8 @@ struct T3CodeExpandedView: View {
     let connected = T3CodeActivity.connectedEnvironmentCount(
       in: visibleEnvironments, remotePollingActive: activity.remotePollingActive)
     return connected == 0
-      ? "Open T3 Code, link T3 Connect, or add a machine in Settings."
-      : "Connected to \(connected) machine\(connected == 1 ? "" : "s")"
+      ? String(localized: "Open T3 Code, link T3 Connect, or add a machine in Settings.")
+      : String(localized: "Connected to \(connected) machine", comment: "Connected machine count")
   }
 
   private var visibleEnvironments: [T3EnvironmentSnapshot] {
@@ -548,6 +571,7 @@ struct T3SettingsSection: View {
   @State private var pairingForm = T3PairingFormState()
   @FocusState private var focusedField: T3PairingFormField?
   @State private var machineStatusMessage: String?
+  @State private var machineStatusSucceeded: Bool?
   @State private var pendingRemoval: T3EnvironmentProfile?
   @State private var pendingAccountAction: T3ConnectAccountPresentation.Action.Kind?
   @State private var confirmingSignOut = false
@@ -602,9 +626,7 @@ struct T3SettingsSection: View {
       if let machineStatusMessage {
         Text(machineStatusMessage)
           .font(.caption2)
-          .foregroundStyle(
-            machineStatusMessage.hasPrefix("Removed") ? .green : .orange
-          )
+          .foregroundStyle(machineStatusSucceeded == true ? .green : .orange)
           .fixedSize(horizontal: false, vertical: true)
       }
       Button("Reconnect now") { activity.reconnect() }.disabled(!isActivityEnabled)
@@ -701,10 +723,14 @@ struct T3SettingsSection: View {
             set: { pairingForm.pairingLink = $0 })
         )
         .focused($focusedField, equals: .pairingLink)
-        Button(pairingForm.isPairing ? "Pairing…" : "Add") { pair() }
-          .disabled(
-            pairingForm.pairingLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-              || pairingForm.isPairing || pairingIsBlockedRemoteHTTP)
+        Button(
+          pairingForm.isPairing ? String(localized: "Pairing…") : String(localized: "Add")
+        ) {
+          pair()
+        }
+        .disabled(
+          pairingForm.pairingLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || pairingForm.isPairing || pairingIsBlockedRemoteHTTP)
       }
       if pairingUsesPlainRemoteHTTP, pairingRemoteHTTPIsApproved {
         Toggle(
@@ -730,9 +756,7 @@ struct T3SettingsSection: View {
       }
       if let statusMessage = pairingForm.statusMessage {
         Text(statusMessage).font(.caption2)
-          .foregroundStyle(
-            statusMessage.hasPrefix("Added") ? .green : .orange
-          )
+          .foregroundStyle(pairingForm.statusSucceeded == true ? .green : .orange)
           .fixedSize(horizontal: false, vertical: true)
       }
     }
@@ -778,12 +802,16 @@ struct T3SettingsSection: View {
       environmentRow(local)
     } else if !activity.hasLocalObservation {
       LabeledContent {
-        Text(isActivityEnabled ? "Discovering…" : "Off").foregroundStyle(.secondary)
+        Text(
+          isActivityEnabled ? String(localized: "Discovering…") : String(localized: "Off")
+        ).foregroundStyle(.secondary)
       } label: {
         Label("This Mac", systemImage: "laptopcomputer")
       }
       .accessibilityElement(children: .combine)
-      .accessibilityLabel("This Mac, \(isActivityEnabled ? "Discovering" : "Off")")
+      .accessibilityLabel(
+        isActivityEnabled
+          ? String(localized: "This Mac, Discovering") : String(localized: "This Mac, Off"))
     }
     ForEach(activity.environments.filter { $0.source == .connect }) { snapshot in
       environmentRow(snapshot)
@@ -809,7 +837,7 @@ struct T3SettingsSection: View {
         }
         Spacer()
         if !isActivityEnabled || !profile.enabled {
-          Text("Off").font(.caption).foregroundStyle(.secondary)
+          Text(String(localized: "Off")).font(.caption).foregroundStyle(.secondary)
         } else if row.isPaused {
           Text(row.stateText).font(.caption).foregroundStyle(.secondary)
         } else {
@@ -890,9 +918,12 @@ struct T3SettingsSection: View {
   private func remove(_ profile: T3EnvironmentProfile) {
     do {
       try activity.removeRemote(environmentID: profile.id)
-      machineStatusMessage = "Removed T3 Code machine."
+      machineStatusMessage = String(localized: "Removed T3 Code machine.")
+      machineStatusSucceeded = true
     } catch {
-      machineStatusMessage = "Machine was not removed: \(error.localizedDescription)"
+      machineStatusMessage = String(
+        localized: "Machine was not removed: \(error.localizedDescription)")
+      machineStatusSucceeded = false
     }
   }
 

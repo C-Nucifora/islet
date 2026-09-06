@@ -137,6 +137,7 @@ final class ContinuityMonitor: ObservableObject {
             .font(.caption.weight(.semibold))
             .foregroundStyle(.white)
             .lineLimit(1)),
-        announcement: appearing ? "iPhone: \(text) live activity started" : text))
+        announcement: appearing
+          ? String(localized: "iPhone: \(text) live activity started") : text))
   }
 }

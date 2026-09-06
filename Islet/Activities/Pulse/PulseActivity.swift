@@ -29,7 +29,7 @@ final class PulseActivity: NotchActivity, ObservableObject {
 
   var compactTrailing: AnyView {
     AnyView(
-      Text(center.primary?.title ?? "Pulse")
+      Text(center.primary?.title ?? String(localized: "Pulse"))
         .font(.caption.weight(.semibold))
         .lineLimit(1)
         .frame(maxWidth: 110)
@@ -149,10 +149,14 @@ private struct PulseItemRow: View {
             .accessibilityValue(Text(progress, format: .percent))
         }
         if item.state == .stale {
-          Text(item.isStaleKept ? "Provider silent, kept" : "Provider stopped updating")
-            .font(.caption2)
-            .foregroundStyle(.orange)
-            .lineLimit(1)
+          Text(
+            item.isStaleKept
+              ? String(localized: "Provider silent, kept")
+              : String(localized: "Provider stopped updating")
+          )
+          .font(.caption2)
+          .foregroundStyle(.orange)
+          .lineLimit(1)
         } else if item.state != .active, item.state != .progress {
           Label(stateLabel.capitalized, systemImage: stateSymbol)
             .font(.system(size: 9, weight: .semibold))
@@ -251,14 +255,18 @@ private struct PulseItemRow: View {
   private func confirmationMessage(for confirmation: PulseActionConfirmation) -> String {
     let locality =
       confirmation.destination.kind == .loopback
-      ? "This is a local loopback destination and may control software running on this Mac."
-      : "This is an external destination."
+      ? String(
+        localized:
+          "This is a local loopback destination and may control software running on this Mac.")
+      : String(localized: "This is an external destination.")
     let transport =
       confirmation.destination.scheme == "http"
-      ? "The connection is unencrypted."
-      : "The connection uses HTTPS."
-    return
-      "Provider \(confirmation.provider.sourceKey) wants to open \(confirmation.destination.canonicalOrigin). \(locality) \(transport) Confirming trusts only this origin for this provider."
+      ? String(localized: "The connection is unencrypted.")
+      : String(localized: "The connection uses HTTPS.")
+    return String(
+      localized:
+        "Provider \(confirmation.provider.sourceKey) wants to open \(confirmation.destination.canonicalOrigin). \(locality) \(transport) Confirming trusts only this origin for this provider."
+    )
   }
 
   private var accent: Color {
@@ -269,13 +277,13 @@ private struct PulseItemRow: View {
 
   private var stateLabel: String {
     switch item.state {
-    case .active: "active"
-    case .progress: "in progress"
-    case .needsAction: "needs action"
-    case .succeeded: "succeeded"
-    case .failed: "failed"
-    case .cancelled: "cancelled"
-    case .stale: "stale"
+    case .active: String(localized: "active")
+    case .progress: String(localized: "in progress")
+    case .needsAction: String(localized: "needs action")
+    case .succeeded: String(localized: "succeeded")
+    case .failed: String(localized: "failed")
+    case .cancelled: String(localized: "cancelled")
+    case .stale: String(localized: "stale")
     }
   }
 

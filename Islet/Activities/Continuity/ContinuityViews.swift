@@ -44,7 +44,7 @@ struct ContinuityExpandedView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       Label(
-        cards.isEmpty ? "iPhone" : "iPhone, \(cards.count)",
+        cards.isEmpty ? String(localized: "iPhone") : String(localized: "iPhone, \(cards.count)"),
         systemImage: "iphone.gen3"
       )
       .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -121,7 +121,11 @@ struct ContinuityCardRow: View {
     }
     .buttonStyle(.plain)
     .help("Open iPhone Mirroring")
-    .accessibilityLabel("\(card.appName), \(card.isRemote ? "iPhone" : "Mac") Live Activity")
+    .accessibilityLabel(
+      card.isRemote
+        ? String(localized: "\(card.appName), iPhone Live Activity")
+        : String(localized: "\(card.appName), Mac Live Activity")
+    )
     .accessibilityHint("Opens iPhone Mirroring")
   }
 }
