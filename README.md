@@ -1,199 +1,84 @@
 # Islet
 
-Islet is a menu bar app that puts live activities and short system events around the MacBook
-notch. It shows media, timers, calendar events, reminders, clipboard history, system metrics,
-attached devices, file transfers, T3 Code agents, and local [Pulse](Integrations/Pulse/README.md)
-providers. Macs without a hardware notch use the same top-edge panel.
+[![CI](https://github.com/C-Nucifora/islet/actions/workflows/ci.yml/badge.svg)](https://github.com/C-Nucifora/islet/actions/workflows/ci.yml)
+
+Islet is a macOS utility that puts timers, media controls, files, and live status around the MacBook notch. It runs without a Dock or menu-bar icon. Open it by pushing the pointer past the top edge of the display, or switch to click-to-pin interaction in Settings.
+
+Islet currently targets macOS 26 and is under active development. Build it from source to try it.
+
+## What Islet includes
+
+- A contextual Home view for upcoming events, reminders, timers, and actions that adapt to the current app, Focus, power state, display, and time.
+- Activities for Now Playing, battery and power flow, system metrics, clipboard history, connected ports, iPhone Live Activities, and a temporary file shelf.
+- Brief alerts for hardware, network, power, session, screenshot, Focus, and VPN changes.
+- Local integrations for T3 Code agents and Pulse updates from scripts or other tools.
+
+You can choose, reorder, and hide activities during setup or in Settings. Islet can also run on multiple displays and hide itself when another app is full screen.
 
 ## Requirements
 
-- macOS 26 or later. The deployment target is defined in [`project.yml`](project.yml).
-- Xcode 26.6 with its macOS 26 SDK. CI selects this exact Xcode release.
-- Internet access to download XcodeGen and resolve packages. Direct and transitive Swift package
-  versions are pinned in [`Package.resolved`](Package.resolved).
-- XcodeGen 2.46.0. The repository installer downloads the pinned release and verifies its SHA-256.
+- macOS 26 or later
+- Xcode 26 with the command-line tools installed
+- A stable code-signing identity for local builds
 
-CI builds and tests both Apple Silicon and Intel. Apple Silicon exposes an optional CPU energy
-metric that is unavailable on Intel. The vendored MediaRemote adapter contains both slices.
+The project uses [XcodeGen](https://github.com/yonaskolb/XcodeGen), so the generated `Islet.xcodeproj` is not committed.
 
-## Build and test
+## Build from source
 
-Start from a clean checkout. These commands use the same project generation, resolved package,
-destination, and signing flags as CI. The test selects the current Mac's architecture; CI runs the
-same build once on arm64 and once on x86_64.
+Clone the repository and install its pinned XcodeGen version into the ignored `.build` directory:
 
 ```sh
 git clone https://github.com/C-Nucifora/islet.git
 cd islet
-
-build_tools="${TMPDIR:-/tmp}/islet-build-tools"
-Scripts/install-xcodegen.sh "$build_tools"
-export PATH="$build_tools/bin:$PATH"
-
-Scripts/verify-mediaremote-adapter.sh
-xcodegen generate
-resolved_dir=Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
-mkdir -p "$resolved_dir"
-install -m 0644 Package.resolved "$resolved_dir/Package.resolved"
-git diff --exit-code -- Islet/Info.plist
-
-xcodebuild \
-  -resolvePackageDependencies \
-  -project Islet.xcodeproj \
-  -scheme Islet \
-  -derivedDataPath DerivedData \
-  -onlyUsePackageVersionsFromResolvedFile
-cmp Package.resolved "$resolved_dir/Package.resolved"
-
-test_arch=$(uname -m)
-xcodebuild \
-  -project Islet.xcodeproj \
-  -scheme Islet \
-  -destination "platform=macOS,arch=$test_arch" \
-  -derivedDataPath DerivedData \
-  -disableAutomaticPackageResolution \
-  ARCHS="$test_arch" \
-  ONLY_ACTIVE_ARCH=NO \
-  CODE_SIGN_IDENTITY=- \
-  CODE_SIGN_STYLE=Manual \
-  test
+Scripts/install-xcodegen.sh "$PWD/.build/xcodegen"
+export PATH="$PWD/.build/xcodegen/bin:$PATH"
 ```
 
-The generated Xcode project is ignored. Change `project.yml`, then regenerate it instead of
-editing `Islet.xcodeproj` by hand.
-
-CI also checks Swift formatting, the Pulse schema and examples, static analysis, both supported
-architectures, and a reproducible build of the vendored MediaRemote adapter. See the
-[`CI` workflow](.github/workflows/ci.yml) for the complete command list and
-[`Vendor/README.md`](Vendor/README.md) before changing the adapter or its checksums.
-
-## Run a local build
-
-Islet's macOS permission grants are tied to its code signature. Ad hoc builds get a new identity
-after code changes, which makes macOS discard earlier grants. Create the repository's stable local
-identity once:
+Create the local signing identity once. Stable signing keeps Calendar, Reminders, Accessibility, and other macOS permission grants attached to the same app identity across rebuilds.
 
 ```sh
 Scripts/create-signing-certificate.sh
+```
+
+Generate the project, then open it in Xcode:
+
+```sh
 xcodegen generate
-resolved_dir=Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
-mkdir -p "$resolved_dir"
-install -m 0644 Package.resolved "$resolved_dir/Package.resolved"
 open Islet.xcodeproj
 ```
 
-Run the `Islet` scheme from Xcode. The default local identity is `Islet Dev` and the bundle
-identifier is `dev.islet`. To use another identity or bundle identifier, put the overrides in the
-ignored `Config/Islet.local.xcconfig` file. After changing either value, grant the requested
-permissions to the new app identity.
+Select the `Islet` scheme and run it. The first launch walks through interaction, activities, and the permissions used by the features you select.
 
-## Code map
+To use a different bundle identifier or signing identity, add an ignored `Config/Islet.local.xcconfig` file with your overrides:
 
-| Area | Location | Responsibility |
-| --- | --- | --- |
-| App startup | [`Islet/App`](Islet/App) | Creates activities and event sources, then starts their lifecycle controllers. |
-| Activities | [`Islet/Activities`](Islet/Activities) | One directory per live surface. Each activity implements [`NotchActivity`](Islet/Activities/NotchActivity.swift) and registers with [`ActivityCenter`](Islet/Activities/ActivityCenter.swift). |
-| System events | [`Islet/Events`](Islet/Events) | Defines event delivery, coalescing, motion, and the source catalogue. Observers live in [`Islet/Events/Sources`](Islet/Events/Sources). |
-| Window and layout | [`Islet/Core`](Islet/Core), [`Islet/UI`](Islet/UI) | Owns display selection, panel geometry, notch state, and shared views. |
-| Settings | [`Islet/Settings`](Islet/Settings) | Contains the Settings UI, persistent Defaults keys, diagnostics, and settings import and export. |
-| Pulse | [`Islet/Activities/Pulse`](Islet/Activities/Pulse), [`Integrations/Pulse`](Integrations/Pulse) | Implements the loopback server, provider rules, protocol schema, CLI, and examples. |
-| Tests | [`IsletTests`](IsletTests) | Holds the unit tests. Tests use the `Islet` app as their host, while app startup skips hardware monitors under XCTest. |
+```xcconfig
+ISLET_PRODUCT_BUNDLE_IDENTIFIER = com.example.islet
+ISLET_CODE_SIGN_IDENTITY = Your Code Signing Identity
+```
 
-To add an activity, create its directory under `Islet/Activities`, implement `NotchActivity`, add
-its metadata to `ActivityCatalog`, and register it in `AppState` and `AppDelegate`. Activities with
-observers must also be classified in `ActivityCatalog.lifecycleManagedIDs` or
-`persistentLifecycleIDs` and wired into `AppDelegate.configureActivityLifecycles`. To add a system
-event, implement `SystemEventSource` under `Islet/Events/Sources`, add it to `SourceCatalog`, and
-register it in `AppState.eventSources`. Settings renders activity and source controls from those
-catalogues.
+## Run the tests
 
-## Permissions
+Generate the project first, then run the scheme from Xcode or with `xcodebuild`:
 
-Islet requests access when a feature needs it. Denying a permission leaves the rest of the app
-running.
+```sh
+xcodebuild \
+  -project Islet.xcodeproj \
+  -scheme Islet \
+  -destination "platform=macOS,arch=$(uname -m)" \
+  -derivedDataPath DerivedData \
+  test
+```
 
-| Permission | Used for | Behavior without it |
-| --- | --- | --- |
-| Calendar | Three-day agenda, countdowns, meeting links, and event editing | Calendar content stays empty and event actions are unavailable. |
-| Reminders | Reading incomplete reminders and completing or rescheduling them | Reminder content and actions are unavailable. |
-| Accessibility | Reading media-key events for the HUD and app names for iPhone Live Activities | Those two features stay limited or inactive. |
-| Location | Reading the current Wi-Fi network name | Wi-Fi events still appear without the network name. |
-| Bluetooth | Connection events and supported Apple peripheral battery levels | Bluetooth-specific status is unavailable. |
-| Local network | Connecting to an explicitly paired T3 Code service on another Mac | Remote LAN environments cannot be reached. Loopback Pulse does not need this grant. |
+CI runs the full suite on both arm64 and x86_64, verifies the vendored MediaRemote adapter, lints integration files, and runs static analysis.
 
-The capture-exclusion setting is not a permission. AppKit's legacy window-sharing flag does not
-provide reliable capture protection on the supported macOS release. Islet may appear in
-screenshots, recordings, and shared screens even when the setting is enabled.
+## Permissions and privacy
 
-## Private system dependencies
+Islet asks for access only when a selected feature needs it. Calendar and Reminders data stays on the Mac. Clipboard history is held in memory for the current session and filters concealed, transient, password-manager, and likely credential content. Location access is optional and is used only to add Wi-Fi network names to connection alerts.
 
-Several optional features use undocumented macOS interfaces:
+The Permissions and Diagnostics pages in Settings show the current state of each integration and provide recovery actions when macOS access is missing.
 
-- Now Playing reads through the vendored MediaRemoteAdapter. Media commands use the private
-  `MediaRemote.framework` only when they can target the displayed source safely; otherwise the
-  controls fail closed.
-- Brightness control loads the private `DisplayServices.framework` at runtime.
-- Native fullscreen detection calls undocumented CoreGraphics WindowServer symbols, with a public
-  window-list fallback.
-- Apple Silicon CPU power sampling loads `libIOReport.dylib` at runtime.
-- Battery details read undocumented AppleSmartBattery and IORegistry keys. Missing or changed keys
-  remove only the affected metrics from the panel.
-- Focus mode reads the private `~/Library/DoNotDisturb/DB/Assertions.json` schema. Missing,
-  unreadable, or unrecognised data produces no Focus event and is reported in diagnostics.
-- Screen lock and unlock use undocumented distributed-notification names. If those names change,
-  lock events stop; the independent Caps Lock observer continues to work.
+## Project notes
 
-Runtime-loaded frameworks resolve symbols dynamically and fall back or disable the affected
-feature when macOS no longer provides one. File, registry-key, and notification dependencies are
-handled defensively but can still stop producing events or metrics after an operating system
-update. The adapter's source, patch, binary provenance, and rebuild procedure are documented in
-[`Vendor/README.md`](Vendor/README.md).
-
-## Network and storage boundaries
-
-Islet has no analytics or telemetry client. Its network code is limited to Pulse and T3 Code:
-
-- Pulse listens only on `127.0.0.1`, starting at TCP port `47717` and using a bounded fallback
-  range if that port is busy. Each provider uses an owner-only credential under
-  `~/Library/Application Support/Islet/pulse-credentials`; upgrades retain the old `pulse-token`
-  as a restricted legacy provider. See the
-  [Pulse integration guide](Integrations/Pulse/README.md) for protocol limits and examples.
-- T3 Code reads a current local runtime descriptor and verifies the owning process before using a
-  loopback endpoint. Other Macs must be paired explicitly. Remote endpoints use HTTPS unless a
-  reviewed build and the user both approve one exact plain HTTP origin. Credentials use isolated
-  per-environment Keychain records with `ThisDeviceOnly` protection.
-
-Islet does not operate a cloud service. Data leaves the Mac only through configured system
-services and explicit actions: paired T3 requests go to the selected endpoint, AirDrop sends Shelf
-files selected by the user, and opening a meeting or Pulse link hands its URL to the chosen app.
-Calendar and reminder data may also follow the system accounts configured in macOS.
-
-Local retention follows these rules:
-
-- Interface settings, activity order, paired T3 endpoint metadata, hidden calendar identifiers,
-  and timer state use local Defaults. A stale timer session is discarded after 30 days.
-- Shelf drops are copies under `~/Library/Application Support/Islet/Shelf`. Workspaces, duplicate
-  rules, and file metadata persist in its manifest. A workspace can retain files indefinitely or
-  expire them after one hour, one day, or one week; the default is indefinite. The Shelf accepts
-  at most 100 items and 2 GiB while reserving 1 GiB of free disk space.
-- Clipboard history stays in process memory, holds at most 20 items or 32 MiB, and clears when the
-  activity stops, the user pauses it, or Islet quits. Filters reject concealed pasteboard entries
-  and common credential formats, but callers should not treat the filter as a secret scanner.
-- Calendar and reminder records stay in memory. Completing or rescheduling a reminder writes that
-  change back through EventKit.
-- Pulse active items are memory-only and leave when they end, expire, are dismissed, or Pulse
-  stops. Payload-free history is session-only by default; an opt-in setting persists it for 1, 7,
-  30, or 90 days with a 50, 100, 200, or 500-entry cap. The history omits titles, subtitles,
-  links, credentials, action text, progress, accents, symbols, and error text. Provider
-  credentials persist with user-only file permissions until they are rotated or revoked.
-- Live T3 agent snapshots and system metric samples stay in memory. T3 credentials persist only in
-  Keychain.
-
-Settings can export portable preferences as JSON. The export excludes credentials, tokens, paired
-machines, permission grants, calendar identifiers, activity data, and session history.
-
-## Integrations and releases
-
-- [Pulse provider protocol, reference CLI, and examples](Integrations/Pulse/README.md)
-- [Release signing, notarization, and tag procedure](RELEASING.md)
-- [MediaRemoteAdapter provenance and review procedure](Vendor/README.md)
+- [Release process](RELEASING.md)
+- [T3 Connect verification](docs/t3-connect-verification.md)
+- [Vendored MediaRemote adapter](Vendor/README.md)
