@@ -23,7 +23,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   /// Secondary sources drawn as chips under the hero. Adapter sources first, then CoreAudio ones,
   /// which carry no metadata at all — only "this app is producing audio".
   @Published private(set) var strip: [SourceID] = []
-  @Published private(set) var adapterStatus = "Starting…"
+  @Published private(set) var adapterStatus = String(localized: "Starting…")
   @Published private(set) var mediaControlNotice: String?
   /// The most recent command result. The view uses the accompanying notice only for failures,
   /// while this preserves the success or failure result for observers and tests.
@@ -31,7 +31,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   @Published private(set) var adapterFailure: String?
   private(set) var activationDate: Date?
 
-  private var table = MediaSourceTable()
+  private(set) var table = MediaSourceTable()
   private var artworkPayloads: [SourceID: Data] = [:]
   private var artworkImages: [SourceID: NSImage] = [:]
   private var artworkDecodeTasks: [SourceID: Task<Void, Never>] = [:]
@@ -81,6 +81,35 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   /// A source hidden by the user's media filter must not leave behind an empty, selectable tab.
   var isActive: Bool { publishedPrimaryKey != nil }
 
+  func receive(_ update: AdapterUpdate, now: Date = Date()) {
+    switch update {
+    case .ignored:
+      return
+    case .idle:
+      table.removeAll()
+      activationDate = nil
+      expiryTask?.cancel()
+      expiryTask = nil
+      publish()
+    case .sourceGone(let key):
+      guard table.remove(key) else { return }
+      if table.isEmpty { activationDate = nil }
+      publish()
+      rescheduleExpiry()
+    case .nowPlaying(let key, let state):
+      let wasVisible = !table.isEmpty
+      let previous = table.states[key]
+      table.upsert(key, state, now: now)
+      if !wasVisible { activationDate = now }
+      if let previous, previous.title != state.title, !state.title.isEmpty {
+        let appName = resolvedApplicationName(for: key.displayBundleIdentifier)
+        SystemEventBus.shared.emit(Self.trackChangeEvent(for: state, appName: appName))
+      }
+      publish()
+      rescheduleExpiry()
+    }
+  }
+
   func start() {
     guard !isMonitoring else { return }
     isMonitoring = true
@@ -114,32 +143,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     streamTask = Task { [weak self] in
       guard let self else { return }
       for await update in self.watcher.updates {
-        switch update {
-        case .ignored:
-          continue
-        case .idle:
-          self.table.removeAll()
-          self.activationDate = nil
-          self.expiryTask?.cancel()
-          self.expiryTask = nil
-          self.publish()
-        case .sourceGone(let key):
-          guard self.table.remove(key) else { continue }
-          if self.table.isEmpty { self.activationDate = nil }
-          self.publish()
-          self.rescheduleExpiry()
-        case .nowPlaying(let key, let state):
-          let wasVisible = !self.table.isEmpty
-          let previous = self.table.states[key]
-          self.table.upsert(key, state, now: Date())
-          if !wasVisible { self.activationDate = Date() }
-          if let previous, previous.title != state.title, !state.title.isEmpty {
-            let appName = self.resolvedApplicationName(for: key.displayBundleIdentifier)
-            SystemEventBus.shared.emit(Self.trackChangeEvent(for: state, appName: appName))
-          }
-          self.publish()
-          self.rescheduleExpiry()
-        }
+        self.receive(update)
       }
     }
   }
@@ -168,7 +172,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     appIcons = [:]
     resolvedBundleIdentifiers = []
     activationDate = nil
-    adapterStatus = "Stopped"
+    adapterStatus = String(localized: "Stopped")
     mediaControlRequest &+= 1
     clearMediaControlFeedback()
     adapterFailure = nil
@@ -185,7 +189,8 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     MediaRemoteCommands.shared.promote(source)
   }
 
-  func perform(_ command: MediaCommand, for source: SourceID) async {
+  @discardableResult
+  func perform(_ command: MediaCommand, for source: SourceID) async -> MediaCommandResult {
     mediaControlRequest &+= 1
     let request = mediaControlRequest
     // Do not leave an old failure beside a newer action while its command is still running.
@@ -202,13 +207,13 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
 
     // A later tap or source change owns the displayed feedback. The command queue still records
     // the older result above, but it must not overwrite the user's newer action.
-    guard request == mediaControlRequest else { return }
+    guard request == mediaControlRequest else { return result }
     lastMediaCommandResult = result
     guard let notice = MediaControlFeedback.message(for: command, result: result) else {
       mediaControlNoticeTask?.cancel()
       mediaControlNoticeTask = nil
       mediaControlNotice = nil
-      return
+      return result
     }
     mediaControlNotice = notice
     announce("Media control error: \(notice)")
@@ -219,6 +224,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
       self.mediaControlNotice = nil
       self.mediaControlNoticeTask = nil
     }
+    return result
   }
 
   /// A control stays disabled unless the player capability and a source-scoped transport are
@@ -259,6 +265,16 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     MediaControlPresentation.accessibilityLabel(
       action: action,
       targeting: MediaRemoteCommands.shared.targeting)
+  }
+
+  /// A scrub can finish after SwiftUI has redrawn for another primary source. Check the source at
+  /// the command boundary so a stale completion cannot seek the newly selected player.
+  func seek(to position: TimeInterval, for source: SourceID) async {
+    guard primaryKey == source, let target = table.seek(source, to: position, now: Date()) else {
+      return
+    }
+    publish()
+    await perform(.seek(to: target), for: source)
   }
 
   func artwork(for source: SourceID?) -> NSImage? {
@@ -336,8 +352,7 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   }
 
   /// Mirrors the table (and the audio monitor) into the published properties the views read.
-  private func audioSourcesChanged(_ latest: [SourceID]) {
-    table.setActiveAudioSources(latest, now: Date())
+  func audioSourcesChanged(_ latest: [SourceID]) {
     watcher.setPlaybackRecoverySources(Set(latest.map(\.displayBundleIdentifier)))
     publish(audioSources: latest)
     rescheduleExpiry()
@@ -490,7 +505,8 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
     let subtitle = [state.artist, appName].filter { !$0.isEmpty }.joined(separator: " · ")
     var announcement =
       state.artist.isEmpty
-      ? "Now playing \(state.title)" : "Now playing \(state.title) by \(state.artist)"
+      ? String(localized: "Now playing \(state.title)")
+      : String(localized: "Now playing \(state.title) by \(state.artist)")
     if !appName.isEmpty, appName != state.sourceBundleIdentifier {
       announcement += " in \(appName)"
     }
@@ -512,4 +528,18 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
   var compactLeading: AnyView { AnyView(CompactArtworkView(activity: self)) }
   var compactTrailing: AnyView { AnyView(CompactBarsView(activity: self)) }
   var expandedView: AnyView { AnyView(ExpandedPlayerView(activity: self)) }
+
+  var accessibilityPrimaryActionName: String? {
+    guard let playback, !playback.isAdvertisement else { return nil }
+    return playback.isPlaying
+      ? String(localized: "Playback paused") : String(localized: "Playback started")
+  }
+
+  func performAccessibilityPrimaryAction() async -> Bool {
+    guard let playback, !playback.isAdvertisement, let primaryKey,
+      canPerform(.togglePlayPause, for: primaryKey)
+    else { return false }
+    if case .sent = await perform(.togglePlayPause, for: primaryKey) { return true }
+    return false
+  }
 }

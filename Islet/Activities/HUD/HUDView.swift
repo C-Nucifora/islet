@@ -37,8 +37,9 @@ struct HUDBarView: View {
   private var normalizedLevel: CGFloat { CGFloat(max(0, min(1, snapshot.level))) }
   private var accessibilityLabel: String {
     switch snapshot.kind {
-    case .brightness: "Brightness"
-    case .volume: snapshot.isMuted ? "Volume muted" : "Volume"
+    case .brightness: String(localized: "Brightness")
+    case .volume:
+      snapshot.isMuted ? String(localized: "Volume muted") : String(localized: "Volume")
     }
   }
 
@@ -67,6 +68,7 @@ struct HUDBarView: View {
     .animation(Motion.gated(.linear(duration: 0.12)), value: snapshot.level)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(accessibilityLabel)
-    .accessibilityValue("\(Int((normalizedLevel * 100).rounded())) percent")
+    .accessibilityValue(
+      String(localized: "\(Int((normalizedLevel * 100).rounded())) percent"))
   }
 }

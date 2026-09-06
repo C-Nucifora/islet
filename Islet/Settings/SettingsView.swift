@@ -13,6 +13,17 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 
   var id: Self { self }
 
+  var title: String {
+    switch self {
+    case .general: String(localized: "General")
+    case .activities: String(localized: "Activities")
+    case .notifications: String(localized: "Notifications")
+    case .integrations: String(localized: "Integrations")
+    case .privacy: String(localized: "Privacy")
+    case .advanced: String(localized: "Advanced")
+    }
+  }
+
   init(destination: SettingsDestination) {
     switch destination {
     case .overview, .appearance: self = .general
@@ -37,9 +48,9 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
   var searchTerms: String {
     switch self {
     case .general:
-      "launch login displays fullscreen recording hover click haptics energy keep awake sleep battery"
+      "launch login displays fullscreen recording hover click haptics energy keep awake sleep battery updates version channel"
     case .activities:
-      "tabs order battery calendar reminders clipboard ports audio hud timer shelf system media iphone continuity live activities"
+      "tabs order battery calendar reminders clipboard ports audio hud timer shelf system media iphone continuity live activities process spike attribution threshold CPU memory disk network Activity Monitor"
     case .notifications:
       "events usb wifi bluetooth airdrop vpn focus screenshot sleep power volume display"
     case .integrations:
@@ -57,14 +68,25 @@ private enum SystemMetricPreset: String, CaseIterable, Identifiable {
   case custom = "Custom"
 
   var id: Self { self }
+
+  var title: String {
+    switch self {
+    case .compact: String(localized: "Compact")
+    case .balanced: String(localized: "Balanced")
+    case .detailed: String(localized: "Detailed")
+    case .custom: String(localized: "Custom")
+    }
+  }
 }
 
 enum SettingsDetailPage: String, CaseIterable, Identifiable {
   case startupDisplays
+  case updates
   case appearance
   case interaction
   case energy
   case contextRules
+  case batteryWarnings
   case activityOrder
   case calendarReminders
   case nowPlaying
@@ -84,59 +106,65 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
 
   var title: String {
     switch self {
-    case .startupDisplays: "Startup and displays"
-    case .appearance: "Appearance"
-    case .interaction: "Interaction"
-    case .energy: "Energy"
-    case .contextRules: "Context rules"
-    case .activityOrder: "Activity order"
-    case .calendarReminders: "Calendar and reminders"
-    case .nowPlaying: "Now playing"
-    case .continuity: "iPhone Live Activities"
-    case .systemMetrics: "System metrics"
-    case .clipboard: "Clipboard"
-    case .systemHUD: "System HUD"
-    case .eventSources: "Event sources"
-    case .t3Code: "T3 Code"
-    case .pulse: "Pulse providers"
-    case .permissions: "App permissions"
-    case .diagnostics: "Diagnostics"
-    case .settingsTransfer: "Import and export"
-    case .reset: "Reset"
+    case .startupDisplays: String(localized: "Startup and displays")
+    case .updates: String(localized: "Updates")
+    case .appearance: String(localized: "Appearance")
+    case .interaction: String(localized: "Interaction")
+    case .energy: String(localized: "Energy")
+    case .contextRules: String(localized: "Context rules")
+    case .batteryWarnings: String(localized: "Battery warnings")
+    case .activityOrder: String(localized: "Activity order")
+    case .calendarReminders: String(localized: "Calendar and reminders")
+    case .nowPlaying: String(localized: "Now playing")
+    case .continuity: String(localized: "iPhone Live Activities")
+    case .systemMetrics: String(localized: "System metrics")
+    case .clipboard: String(localized: "Clipboard")
+    case .systemHUD: String(localized: "System HUD")
+    case .eventSources: String(localized: "Event sources")
+    case .t3Code: String(localized: "T3 Code")
+    case .pulse: String(localized: "Pulse providers")
+    case .permissions: String(localized: "App permissions")
+    case .diagnostics: String(localized: "Diagnostics")
+    case .settingsTransfer: String(localized: "Import and export")
+    case .reset: String(localized: "Reset")
     }
   }
 
   var subtitle: String {
     switch self {
-    case .startupDisplays: "Login item and display placement"
-    case .appearance: "Choose the colours used across Islet"
-    case .interaction: "How the notch opens and closes"
-    case .energy: "Refresh rates, sleep and battery protection"
-    case .contextRules: "Adapt Islet to your current context"
-    case .activityOrder: "Show, hide and reorder activities"
-    case .calendarReminders: "Agenda, countdown and reminder options"
-    case .nowPlaying: "Choose which active player opens first"
-    case .continuity: "App names from iPhone Live Activities"
-    case .systemMetrics: "Choose metrics and chart styles"
-    case .clipboard: "History, storage and filtering"
-    case .systemHUD: "Volume and brightness controls"
-    case .eventSources: "Brief alerts for system changes"
-    case .t3Code: "Pair T3 Code machines"
-    case .pulse: "Local API, providers and access token"
-    case .permissions: "macOS access used by each feature"
-    case .diagnostics: "App identity and integration status"
-    case .settingsTransfer: "Back up or move portable preferences"
-    case .reset: "Restore interface defaults"
+    case .startupDisplays: String(localized: "Login item and display placement")
+    case .updates: String(localized: "Signed automatic and manual updates")
+    case .appearance: String(localized: "Choose the colours used across Islet")
+    case .interaction: String(localized: "How the notch opens and closes")
+    case .energy: String(localized: "Refresh rates, sleep and battery protection")
+    case .contextRules: String(localized: "Adapt Islet to your current context")
+    case .batteryWarnings: String(localized: "Drain, charger and peripheral alerts")
+    case .activityOrder: String(localized: "Show, hide and reorder activities")
+    case .calendarReminders: String(localized: "Agenda, countdown and reminder options")
+    case .nowPlaying: String(localized: "Choose which active player opens first")
+    case .continuity: String(localized: "App names from iPhone Live Activities")
+    case .systemMetrics: String(localized: "Choose metrics and chart styles")
+    case .clipboard: String(localized: "History, storage and filtering")
+    case .systemHUD: String(localized: "Volume and brightness controls")
+    case .eventSources: String(localized: "Brief alerts for system changes")
+    case .t3Code: String(localized: "Pair T3 Code machines")
+    case .pulse: String(localized: "Local API, providers and credentials")
+    case .permissions: String(localized: "macOS access used by each feature")
+    case .diagnostics: String(localized: "App identity and integration status")
+    case .settingsTransfer: String(localized: "Back up or move portable preferences")
+    case .reset: String(localized: "Restore interface defaults")
     }
   }
 
   var icon: String {
     switch self {
     case .startupDisplays: "macwindow.on.rectangle"
+    case .updates: "arrow.triangle.2.circlepath.circle"
     case .appearance: "paintpalette"
     case .interaction: "cursorarrow.motionlines"
     case .energy: "leaf"
     case .contextRules: "switch.2"
+    case .batteryWarnings: "battery.100percent.bolt"
     case .activityOrder: "list.number"
     case .calendarReminders: "calendar.badge.clock"
     case .nowPlaying: "music.note"
@@ -156,9 +184,9 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
 
   var category: SettingsCategory {
     switch self {
-    case .startupDisplays, .appearance, .interaction, .energy, .contextRules: .general
-    case .activityOrder, .calendarReminders, .nowPlaying, .continuity, .systemMetrics, .clipboard,
-      .systemHUD:
+    case .startupDisplays, .updates, .appearance, .interaction, .energy, .contextRules: .general
+    case .activityOrder, .batteryWarnings, .calendarReminders, .nowPlaying, .continuity,
+      .systemMetrics, .clipboard, .systemHUD:
       .activities
     case .eventSources: .notifications
     case .t3Code, .pulse: .integrations
@@ -175,7 +203,13 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "Startup", "Launch Islet at login", "Login item status", "Run setup again",
         "Displays", "Show Islet on every display", "Preferred display",
         "Hide Islet while an app is fullscreen",
-        "screen multiple monitors external dock clamshell closed lid reconnect",
+        "screen multiple monitors external dock clamshell closed lid reconnect pointer active app quick actions shelf",
+      ]
+    case .updates:
+      pageContent + [
+        "Updates", "Current version", "Channel", "Stable", "Last check", "Status",
+        "Automatically check for updates", "Check for Updates", "release notes", "download",
+        "restart install Sparkle signed feed package verification",
       ]
     case .appearance:
       pageContent + [
@@ -203,6 +237,13 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "frontmost app", "fullscreen presentation", "time range", "active display",
         "Wi-Fi network", "Pulse delivery", "activity visibility", "manual override",
         "precedence active rule match reason expiry local deterministic",
+      ]
+    case .batteryWarnings:
+      pageContent + [
+        "Battery warnings", "Unusual battery drain", "Learned rolling baseline",
+        "Reset learned battery data", "Charger capacity", "Charger cannot meet demand",
+        "Slow charging", "Temporary workload spike", "Peripheral early warnings",
+        "Mouse Trackpad Keyboard Pencil Other devices", "threshold off critical 10 percent",
       ]
     case .activityOrder:
       pageContent + [
@@ -235,7 +276,9 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "Automatic presence", "High CPU", "Thermal pressure", "Memory pressure",
         "Low disk space", "Heavy disk activity", "High network traffic",
         "Metric presentation", "Presentation", "Compact", "Balanced", "Detailed", "Custom",
-        "Customize individual metrics", "current value recent graph state labels",
+        "Customize individual metrics", "Process attribution", "Identify processes after a spike",
+        "CPU Memory Disk Network threshold Activity Monitor one second estimates unavailable",
+        "current value recent graph state labels",
       ] + SystemMetricKind.allCases.map(\.displayName)
         + MetricDisplayStyle.allCases.map(\.displayName)
     case .clipboard:
@@ -265,11 +308,15 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
     case .pulse:
       pageContent + [
         "Pulse providers", "Local activity API", "Pulse items", "Authentication",
-        "Shared bearer token", "Quick Actions", "Reveal token folder", "Dismiss visible",
-        "Rotate provider token", "Provider examples", "Allow Mute Revoke Policy",
+        "Mark silent work stale after provider timeout",
+        "provider credentials permissions rotation revocation age last use", "Quick Actions",
+        "Reveal credential folder", "Dismiss visible",
+        "Rotate provider credential", "Provider examples", "Allow Mute Revoke Policy",
+        "Trusted web destinations host origin allowlist loopback revoke",
         "Other sources seen this session", "Pulse history", "Show session history",
+        "Keep history after quitting", "Retention period", "Maximum entries", "Export history",
         "History filter", "All Accepted Filtered Rejected", "Clear history",
-        "source result priority time local scripts CLI access token delivery",
+        "source result priority state operation time local scripts CLI access token delivery privacy",
       ]
     case .permissions:
       pageContent + [
@@ -314,6 +361,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "Launch Islet at login", "Run setup again", "Show Islet on every display",
         "Hide Islet while an app is fullscreen",
       ]
+    case .updates:
+      ["Automatically check for updates", "Check for Updates"]
     case .appearance:
       ["Choose theme", "Use coloured battery graph", "Use monochrome battery graph"]
     case .interaction:
@@ -327,6 +376,11 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       [
         "Create context rule", "Edit context rule", "Reorder context rules",
         "Set a temporary context override",
+      ]
+    case .batteryWarnings:
+      [
+        "Toggle unusual battery drain warnings", "Toggle charger capacity warnings",
+        "Set peripheral battery warning thresholds", "Reset learned battery data",
       ]
     case .activityOrder:
       ["Show, hide, or reorder activities"]
@@ -435,11 +489,20 @@ private enum PulseHistoryFilter: String, CaseIterable, Identifiable {
 
   var id: Self { self }
 
+  var title: String {
+    switch self {
+    case .all: String(localized: "All")
+    case .accepted: String(localized: "Accepted")
+    case .filtered: String(localized: "Filtered")
+    case .rejected: String(localized: "Rejected")
+    }
+  }
+
   func includes(_ entry: PulseHistoryEntry) -> Bool {
     switch self {
     case .all: true
     case .accepted:
-      [.shown, .updated, .ended, .dismissed, .expired].contains(entry.result)
+      [.shown, .updated, .ended, .dismissed, .expired, .stale, .kept].contains(entry.result)
     case .filtered: [.suppressed, .evicted].contains(entry.result)
     case .rejected: entry.result == .rejected
     }
@@ -459,6 +522,8 @@ struct SettingsView: View {
   @ObservedObject private var reminders = RemindersProvider.shared
   @ObservedObject private var pulse = PulseCenter.shared
   @ObservedObject private var pulseServer = PulseServer.shared
+  @ObservedObject private var pulseCredentials = PulseServer.shared.credentialStore
+  @ObservedObject private var pulseActionTrust = PulseServer.shared.actionTrustStore
   @ObservedObject private var permissions = PermissionCenter.shared
   @ObservedObject private var hud = HUDController.shared
   @ObservedObject private var continuity = ContinuityMonitor.shared
@@ -466,12 +531,14 @@ struct SettingsView: View {
   @ObservedObject private var t3Code = AppState.t3Code
   @ObservedObject private var focus = AppState.focus
   @ObservedObject private var clipboard = ClipboardModel.shared
+  @ObservedObject private var battery = AppState.battery
   @ObservedObject private var launchAtLoginStatus = LaunchAtLoginStatus.shared
   @ObservedObject private var screenManager = ScreenManager.shared
   @ObservedObject private var eventSourcePreferences = EventSourcePreferences.shared
   @ObservedObject private var ports = PortMonitor.shared
   @ObservedObject private var keepAwake = KeepAwakeManager.shared
   @ObservedObject private var shortcutManager = GlobalShortcutManager.shared
+  @ObservedObject private var updates = AppUpdateController.shared
 
   @Default(.appTheme) private var appTheme
   @Default(.batteryGraphStyle) private var batteryGraphStyle
@@ -484,6 +551,9 @@ struct SettingsView: View {
   @Default(.mediaSourceMode) private var sourceMode
   @Default(.mediaPriorityList) private var priorityList
   @Default(.excludedAudioOnlySourceBundleIdentifiers) private var excludedAudioOnlySourceBundleIDs
+  @Default(.unusualBatteryDrainWarnings) private var unusualBatteryDrainWarnings
+  @Default(.chargerCapacityWarnings) private var chargerCapacityWarnings
+  @Default(.peripheralBatteryWarningThresholds) private var peripheralBatteryWarningThresholds
   @Default(.hudEnabled) private var hudEnabled
   @Default(.hudStyle) private var hudStyle
   @Default(.calendarEnabled) private var calendarEnabled
@@ -505,6 +575,12 @@ struct SettingsView: View {
   @Default(.systemAutoPresentDiskThroughput) private var systemAutoPresentDiskThroughput
   @Default(.systemAutoPresentNetworkThroughput) private var systemAutoPresentNetworkThroughput
   @Default(.metricStyles) private var metricStyles
+  @Default(.pulseStaleTimeout) private var pulseStaleTimeout
+  @Default(.processAttributionEnabled) private var processAttributionEnabled
+  @Default(.processCPUThreshold) private var processCPUThreshold
+  @Default(.processMemoryThreshold) private var processMemoryThreshold
+  @Default(.processDiskThresholdMBPerSecond) private var processDiskThreshold
+  @Default(.processNetworkThresholdMBPerSecond) private var processNetworkThreshold
   @Default(.energyMode) private var energyMode
   @Default(.allowDisplaySleep) private var allowDisplaySleep
   @Default(.keepAwakeWithLidClosed) private var keepAwakeWithLidClosed
@@ -515,6 +591,9 @@ struct SettingsView: View {
   @Default(.clipboardPausedFocusIdentifiers) private var clipboardPausedFocusIdentifiers
   @Default(.clipboardClearHistoryOnPause) private var clipboardClearHistoryOnPause
   @Default(.commandPaletteShortcut) private var commandPaletteShortcut
+  @Default(.pulseHistoryPersistenceEnabled) private var pulseHistoryPersistenceEnabled
+  @Default(.pulseHistoryRetentionDays) private var pulseHistoryRetentionDays
+  @Default(.pulseHistoryMaximumEntries) private var pulseHistoryMaximumEntries
 
   @State private var selection: SettingsCategory?
   @State private var detailPage: SettingsDetailPage?
@@ -525,8 +604,9 @@ struct SettingsView: View {
   @State private var newClipboardFocusIdentifier = ""
   @State private var clipboardPrivacyError: String?
   @State private var confirmingRestore = false
-  @State private var confirmingPulseTokenRotation = false
-  @State private var pulseTokenRotationResult: String?
+  @State private var showingPulseCredentialEditor = false
+  @State private var pulseCredentialResult: String?
+  @State private var confirmingBatteryDataReset = false
   @State private var showPulseHistory = false
   @State private var pulseHistoryFilter: PulseHistoryFilter = .all
   @State private var settingsImportPreview: SettingsTransferPreview?
@@ -586,6 +666,12 @@ struct SettingsView: View {
         hapticStrength = value == .off ? .medium : value
         haptics = value != .off
       })
+  }
+
+  private var automaticallyChecksForUpdatesBinding: Binding<Bool> {
+    Binding(
+      get: { updates.automaticallyChecksForUpdates },
+      set: { updates.setAutomaticallyChecksForUpdates($0) })
   }
 
   private var hapticStrengthLevelBinding: Binding<Double> {
@@ -676,11 +762,44 @@ struct SettingsView: View {
       set: { pulse.setPolicy($0, for: source) })
   }
 
+  private var pulseHistoryPersistenceBinding: Binding<Bool> {
+    Binding(
+      get: { pulseHistoryPersistenceEnabled },
+      set: { enabled in
+        pulseHistoryPersistenceEnabled = enabled
+        applyPulseHistoryConfiguration()
+      })
+  }
+
+  private var pulseHistoryRetentionBinding: Binding<Int> {
+    Binding(
+      get: {
+        PulseHistoryConfiguration.allowedRetentionDays.contains(pulseHistoryRetentionDays)
+          ? pulseHistoryRetentionDays : PulseHistoryConfiguration.defaultRetentionDays
+      },
+      set: { days in
+        pulseHistoryRetentionDays = days
+        applyPulseHistoryConfiguration()
+      })
+  }
+
+  private var pulseHistoryMaximumEntriesBinding: Binding<Int> {
+    Binding(
+      get: {
+        PulseHistoryConfiguration.allowedEntryCounts.contains(pulseHistoryMaximumEntries)
+          ? pulseHistoryMaximumEntries : PulseHistoryConfiguration.defaultMaximumEntries
+      },
+      set: { count in
+        pulseHistoryMaximumEntries = count
+        applyPulseHistoryConfiguration()
+      })
+  }
+
   var body: some View {
     NavigationSplitView {
       List(selection: $selection) {
         ForEach(filteredCategories) { category in
-          Label(category.rawValue, systemImage: category.icon).tag(category)
+          Label(category.title, systemImage: category.icon).tag(category)
         }
         if !filteredDetailPages.isEmpty {
           Section("Settings") {
@@ -716,7 +835,7 @@ struct SettingsView: View {
       Group {
         if let detailPage { detailView(detailPage) } else { categoryView }
       }
-      .navigationTitle(detailPage?.title ?? (selection ?? .general).rawValue)
+      .navigationTitle(detailPage?.title ?? (selection ?? .general).title)
       .toolbar {
         ToolbarItemGroup(placement: .navigation) {
           ControlGroup {
@@ -764,7 +883,10 @@ struct SettingsView: View {
     {
       _ in refreshPermissionState()
     }
-    .onAppear { updateWindowTitle() }
+    .onAppear {
+      updateWindowTitle()
+      updates.refresh()
+    }
     .onReceive(NotificationCenter.default.publisher(for: .isletSettingsDestination)) {
       notification in
       guard let rawValue = notification.object as? String,
@@ -783,6 +905,19 @@ struct SettingsView: View {
       searchText = ""
     }
     .confirmationDialog(
+      "Reset learned battery data?", isPresented: $confirmingBatteryDataReset,
+      titleVisibility: .visible
+    ) {
+      Button("Reset learned battery data", role: .destructive) {
+        battery.resetLearnedBatteryData()
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(
+        "Clears the local drain baseline, reported-capacity history and warning cooldowns. Islet will learn a new baseline from future battery use."
+      )
+    }
+    .confirmationDialog(
       "Restore appearance and interaction defaults?", isPresented: $confirmingRestore,
       titleVisibility: .visible
     ) {
@@ -795,26 +930,27 @@ struct SettingsView: View {
         "Resets the theme, notch interaction, haptics, HUD style, player order, activity order and metric styles. It keeps enabled activities, permissions, paired machines and activity data."
       )
     }
-    .confirmationDialog(
-      "Rotate the Pulse provider token?", isPresented: $confirmingPulseTokenRotation,
-      titleVisibility: .visible
-    ) {
-      Button("Rotate token and disconnect providers", role: .destructive) { rotatePulseToken() }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(
-        "Disconnects every provider. Scripts must read the new token before publishing again. Revoking one source is not enough because providers choose their own source name."
-      )
+    .sheet(isPresented: $showingPulseCredentialEditor) {
+      PulseCredentialEditor { name, source, permissions in
+        do {
+          _ = try pulseServer.createProvider(
+            name: name, source: source, permissions: permissions)
+          showingPulseCredentialEditor = false
+          NSWorkspace.shared.open(pulseCredentials.credentialDirectory)
+        } catch {
+          pulseCredentialResult = error.localizedDescription
+        }
+      }
     }
     .alert(
       "Pulse authentication",
       isPresented: Binding(
-        get: { pulseTokenRotationResult != nil },
-        set: { if !$0 { pulseTokenRotationResult = nil } })
+        get: { pulseCredentialResult != nil },
+        set: { if !$0 { pulseCredentialResult = nil } })
     ) {
-      Button("OK") { pulseTokenRotationResult = nil }
+      Button("OK") { pulseCredentialResult = nil }
     } message: {
-      Text(pulseTokenRotationResult ?? "")
+      Text(pulseCredentialResult ?? "")
     }
     .sheet(item: $settingsImportPreview) { preview in
       SettingsImportPreviewSheet(
@@ -824,9 +960,10 @@ struct SettingsView: View {
           SettingsTransfer.apply(preview) { SettingsTransferDefaults.apply($0) }
           settingsImportPreview = nil
           settingsTransferNotice = SettingsTransferNotice(
-            title: "Settings imported",
-            message:
-              "Applied \(preview.changes.count) change\(preview.changes.count == 1 ? "" : "s").")
+            title: String(localized: "Settings imported"),
+            message: String(
+              localized: "Applied \(preview.changes.count) setting.",
+              comment: "Number of imported settings that were applied"))
         })
     }
     .alert(item: $settingsTransferNotice) { notice in
@@ -839,10 +976,13 @@ struct SettingsView: View {
   @ViewBuilder private var categoryView: some View {
     switch selection ?? .general {
     case .general:
-      settingsLanding(pages: [.startupDisplays, .appearance, .interaction, .energy, .contextRules])
+      settingsLanding(pages: [
+        .startupDisplays, .updates, .appearance, .interaction, .energy, .contextRules,
+      ])
     case .activities:
       settingsLanding(pages: [
-        .activityOrder, .calendarReminders, .nowPlaying, .continuity, .systemMetrics,
+        .activityOrder, .batteryWarnings, .calendarReminders, .nowPlaying, .continuity,
+        .systemMetrics,
         .clipboard, .systemHUD,
       ])
     case .notifications:
@@ -859,10 +999,12 @@ struct SettingsView: View {
   @ViewBuilder private func detailView(_ page: SettingsDetailPage) -> some View {
     switch page {
     case .startupDisplays: startupDisplaysForm
+    case .updates: updatesForm
     case .appearance: appearanceForm
     case .interaction: interactionForm
     case .energy: energyForm
     case .contextRules: ContextRulesSettingsView()
+    case .batteryWarnings: batteryWarningsForm
     case .activityOrder: activityOrderForm
     case .calendarReminders: calendarRemindersForm
     case .nowPlaying: nowPlayingForm
@@ -951,6 +1093,12 @@ struct SettingsView: View {
           "Automatic uses the built-in display, then the main display. A disconnected preference returns when that display reconnects."
         )
         .font(.caption).foregroundStyle(.secondary)
+        if showOnAllDisplays {
+          Text(
+            "Show Islet and Open File Shelf target the display under the pointer, then the frontmost app's display, your preference, and the main display."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
       }
     }
     .formStyle(.grouped)
@@ -967,7 +1115,47 @@ struct SettingsView: View {
   }
 
   private var unavailablePreferredDisplayName: String {
-    preferredDisplayName.isEmpty ? "Preferred display" : preferredDisplayName
+    preferredDisplayName.isEmpty ? String(localized: "Preferred display") : preferredDisplayName
+  }
+
+  private var updatesForm: some View {
+    Form {
+      Section("Installed version") {
+        LabeledContent("Current version") {
+          Text(updates.currentVersion.text).foregroundStyle(.secondary)
+        }
+        LabeledContent("Channel") {
+          Text(updates.channel.title).foregroundStyle(.secondary)
+        }
+        LabeledContent("Last check") {
+          if let lastCheckDate = updates.lastCheckDate {
+            Text(lastCheckDate.formatted(date: .abbreviated, time: .shortened))
+              .foregroundStyle(.secondary)
+          } else {
+            Text("Never").foregroundStyle(.secondary)
+          }
+        }
+        LabeledContent("Status") {
+          Text(updates.state.summary)
+            .foregroundStyle(updates.state.isFailure ? .orange : .secondary)
+            .textSelection(.enabled)
+        }
+      }
+      Section("Update checks") {
+        Toggle(
+          "Automatically check for updates",
+          isOn: automaticallyChecksForUpdatesBinding
+        )
+        .disabled(!updates.isConfigured)
+        Button("Check for Updates…") { updates.checkForUpdates() }
+          .disabled(!updates.canCheckForUpdates)
+        Text(
+          "Islet asks before enabling automatic checks. Sparkle shows signed release notes, download and verification progress, then offers to restart and install."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+    .formStyle(.grouped)
   }
 
   private var appearanceForm: some View {
@@ -1096,7 +1284,9 @@ struct SettingsView: View {
       Section("Command palette") {
         LabeledContent("Global shortcut") {
           Button(
-            isRecordingShortcut ? "Press shortcut…" : commandPaletteShortcut?.displayName ?? "Off"
+            isRecordingShortcut
+              ? String(localized: "Press shortcut…")
+              : commandPaletteShortcut?.displayName ?? String(localized: "Off")
           ) {
             shortcutValidationMessage = nil
             isRecordingShortcut = true
@@ -1235,9 +1425,12 @@ struct SettingsView: View {
                   Text(bundleID).font(.caption.monospaced()).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text(excludedAudioOnlySourceBundleIDs.contains(bundleID) ? "Excluded" : "Included")
-                  .font(.caption)
-                  .foregroundStyle(.secondary)
+                Text(
+                  excludedAudioOnlySourceBundleIDs.contains(bundleID)
+                    ? String(localized: "Excluded") : String(localized: "Included")
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
               }
             }
           }
@@ -1251,7 +1444,8 @@ struct SettingsView: View {
     Form {
       Section("Calendar") {
         LabeledContent("Activity") {
-          Text(isActivityEnabled("calendar") ? "On" : "Off").foregroundStyle(.secondary)
+          Text(isActivityEnabled("calendar") ? String(localized: "On") : String(localized: "Off"))
+            .foregroundStyle(.secondary)
         }
         Toggle("Read calendar events", isOn: $calendarEnabled)
         Text("Calendar data also supplies the Home agenda when its activity is off.")
@@ -1301,7 +1495,8 @@ struct SettingsView: View {
     Form {
       Section("Visibility") {
         LabeledContent("System activity") {
-          Text(isActivityEnabled("system") ? "On" : "Off").foregroundStyle(.secondary)
+          Text(isActivityEnabled("system") ? String(localized: "On") : String(localized: "Off"))
+            .foregroundStyle(.secondary)
         }
         Text("By default, System appears only during sustained load.")
           .font(.caption).foregroundStyle(.secondary)
@@ -1325,7 +1520,7 @@ struct SettingsView: View {
         Section("Metric presentation") {
           Picker("Presentation", selection: metricPresetBinding) {
             ForEach(SystemMetricPreset.allCases) { preset in
-              Text(preset.rawValue).tag(preset)
+              Text(preset.title).tag(preset)
             }
           }
           DisclosureGroup("Customize individual metrics") {
@@ -1347,9 +1542,46 @@ struct SettingsView: View {
           )
           .font(.caption).foregroundStyle(.secondary)
         }
+        Section("Process attribution") {
+          Toggle("Identify processes after a spike", isOn: $processAttributionEnabled)
+          if processAttributionEnabled {
+            thresholdSlider(
+              "CPU", value: $processCPUThreshold, range: 0.5...1, step: 0.05,
+              valueText: "\(Int((processCPUThreshold * 100).rounded()))%")
+            thresholdSlider(
+              "Memory", value: $processMemoryThreshold, range: 0.5...1, step: 0.05,
+              valueText: "\(Int((processMemoryThreshold * 100).rounded()))%")
+            thresholdSlider(
+              "Disk", value: $processDiskThreshold, range: 5...500, step: 5,
+              valueText: "\(Int(processDiskThreshold)) MB/s")
+            thresholdSlider(
+              "Network", value: $processNetworkThreshold, range: 1...500, step: 5,
+              valueText: "\(Int(processNetworkThreshold)) MB/s")
+          }
+          Text(
+            "Islet reads process counters for one second after a threshold crossing, only while the System view is open. CPU, memory and disk values are estimates. macOS does not provide reliable per-process network totals to Islet."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
       }
     }
     .formStyle(.grouped)
+  }
+
+  private func thresholdSlider(
+    _ label: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double,
+    valueText: String
+  ) -> some View {
+    LabeledContent(label) {
+      HStack {
+        Slider(value: value, in: range, step: step)
+          .frame(width: 180)
+        Text(valueText)
+          .monospacedDigit()
+          .foregroundStyle(.secondary)
+          .frame(width: 62, alignment: .trailing)
+      }
+    }
   }
 
   private var continuityForm: some View {
@@ -1360,7 +1592,7 @@ struct SettingsView: View {
           .font(.caption).foregroundStyle(.secondary)
         if isActivityEnabled("continuity") {
           PermissionStatusRow(
-            title: "Availability", icon: "iphone.gen3",
+            title: String(localized: "Availability"), icon: "iphone.gen3",
             status: continuityStatusText, color: continuityStatusColor)
           Text(continuity.availability.explanation)
             .font(.caption).foregroundStyle(.secondary)
@@ -1395,7 +1627,8 @@ struct SettingsView: View {
     Form {
       Section("Clipboard history") {
         LabeledContent("Activity") {
-          Text(isActivityEnabled("clipboard") ? "On" : "Off").foregroundStyle(.secondary)
+          Text(isActivityEnabled("clipboard") ? String(localized: "On") : String(localized: "Off"))
+            .foregroundStyle(.secondary)
         }
         Text("Turning Clipboard off stops polling and clears its history.")
           .font(.caption).foregroundStyle(.secondary)
@@ -1531,7 +1764,7 @@ struct SettingsView: View {
             }
           }
           PermissionStatusRow(
-            title: "Accessibility", icon: "accessibility",
+            title: String(localized: "Accessibility"), icon: "accessibility",
             status: hud.eventTapStatus.summary,
             color: hud.eventTapStatus == .active ? .green : .orange)
           if !hud.accessibilityTrusted {
@@ -1606,7 +1839,10 @@ struct SettingsView: View {
               "Closed-display mode needs a one-time administrator-approved helper. It changes only the system SleepDisabled setting while an Islet session is active."
             )
             .font(.caption).foregroundStyle(.secondary)
-            Button(keepAwake.isInstallingPowerProtect ? "Installing..." : "Install Power Protect") {
+            Button(
+              keepAwake.isInstallingPowerProtect
+                ? String(localized: "Installing...") : String(localized: "Install Power Protect")
+            ) {
               Task { await keepAwake.installPowerProtect() }
             }
             .disabled(keepAwake.isInstallingPowerProtect)
@@ -1636,20 +1872,75 @@ struct SettingsView: View {
     .onAppear { keepAwake.refreshPowerProtectInstallation() }
   }
 
+  private var batteryWarningsForm: some View {
+    Form {
+      Section("Mac battery") {
+        Toggle("Warn about unusual battery drain", isOn: $unusualBatteryDrainWarnings)
+        Text(
+          "Islet compares sustained battery use with a seven-day rolling baseline stored on this Mac. A single high or noisy reading does not trigger an alert."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Toggle("Warn when the charger cannot meet demand", isOn: $chargerCapacityWarnings)
+        Text(
+          "Brief workload spikes remain informational. Alerts require sustained battery discharge or slow charging while power is connected."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        LabeledContent("Learned baseline") {
+          Text(batteryBaselineDescription).foregroundStyle(.secondary)
+        }
+        Button("Reset learned battery data…", role: .destructive) {
+          confirmingBatteryDataReset = true
+        }
+      }
+      Section("Peripheral early warnings") {
+        ForEach(PeripheralDeviceType.allCases) { type in
+          Picker(type.title, selection: peripheralThresholdBinding(for: type)) {
+            Text("Off").tag(0)
+            ForEach([15, 20, 25, 30, 40, 50], id: \.self) { threshold in
+              Text("\(threshold)%").tag(threshold)
+            }
+          }
+        }
+        Text(
+          "Off disables the early warning for that device type. The existing critical alert at 10% remains enabled."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+    .formStyle(.grouped)
+  }
+
+  private var batteryBaselineDescription: String {
+    let summary = battery.batteryInsightSummary
+    guard let watts = summary.baselineWatts else {
+      return
+        "Learning, \(summary.baselineSampleCount)/\(BatteryInsightAnalyzer.minimumBaselinePoints) samples"
+    }
+    return String(format: "%.1f W from %d samples", watts, summary.baselineSampleCount)
+  }
+
+  private func peripheralThresholdBinding(for type: PeripheralDeviceType) -> Binding<Int> {
+    Binding(
+      get: { peripheralBatteryWarningThresholds[type.rawValue] ?? 20 },
+      set: { threshold in
+        peripheralBatteryWarningThresholds[type.rawValue] = threshold
+      })
+  }
+
   private var permissionsForm: some View {
     Form {
       Section("Screen recording") {
         let policy = ScreenCaptureExclusionPolicy.current
         Toggle("Request capture exclusion", isOn: $hideFromRecording)
         PermissionStatusRow(
-          title: "Capture exclusion", icon: "rectangle.dashed.badge.record",
+          title: String(localized: "Capture exclusion"), icon: "rectangle.dashed.badge.record",
           status: policy.status.summary, color: screenCaptureStatusColor)
         Text(policy.status.detail)
           .font(.caption).foregroundStyle(.secondary)
       }
       Section("Calendar") {
         PermissionStatusRow(
-          title: "Calendar access", icon: "calendar", status: eventStatusText,
+          title: String(localized: "Calendar access"), icon: "calendar", status: eventStatusText,
           color: eventStatusColor)
         Text("Shows today's agenda, event countdowns and meeting links.").font(.caption)
           .foregroundStyle(.secondary)
@@ -1665,7 +1956,8 @@ struct SettingsView: View {
       }
       Section("Reminders") {
         PermissionStatusRow(
-          title: "Reminders access", icon: "checklist", status: reminderStatusText,
+          title: String(localized: "Reminders access"), icon: "checklist",
+          status: reminderStatusText,
           color: reminderStatusColor)
         Text("Shows and manages reminders from Home.").font(.caption)
           .foregroundStyle(.secondary)
@@ -1681,8 +1973,9 @@ struct SettingsView: View {
       }
       Section("Accessibility") {
         PermissionStatusRow(
-          title: "Accessibility access", icon: "accessibility",
-          status: permissions.diagnostics.accessibilityGranted ? "Allowed" : "Not allowed",
+          title: String(localized: "Accessibility access"), icon: "accessibility",
+          status: permissions.diagnostics.accessibilityGranted
+            ? String(localized: "Allowed") : String(localized: "Not allowed"),
           color: permissions.diagnostics.accessibilityGranted ? .green : .red)
         Text("Reads media keys for Islet's HUD and app names for iPhone Live Activities.")
           .font(.caption).foregroundStyle(.secondary)
@@ -1695,7 +1988,7 @@ struct SettingsView: View {
       }
       Section("Nearby devices and networks") {
         PermissionStatusRow(
-          title: "Location for Wi-Fi names", icon: "location.fill",
+          title: String(localized: "Location for Wi-Fi names"), icon: "location.fill",
           status: permissions.diagnostics.location.summary,
           color: platformPermissionColor(permissions.diagnostics.location))
         Text("Without location access, Wi-Fi notifications still work but omit the network name.")
@@ -1709,12 +2002,13 @@ struct SettingsView: View {
           }
         }
         PermissionStatusRow(
-          title: "Bluetooth devices", icon: "dot.radiowaves.right",
+          title: String(localized: "Bluetooth devices"), icon: "dot.radiowaves.right",
           status: permissions.diagnostics.bluetooth.summary,
           color: platformPermissionColor(permissions.diagnostics.bluetooth))
         Button("Open Bluetooth Privacy Settings") { permissions.open(.bluetooth) }
         PermissionStatusRow(
-          title: "Local network", icon: "network", status: "Managed by macOS",
+          title: String(localized: "Local network"), icon: "network",
+          status: String(localized: "Managed by macOS"),
           color: .secondary)
         Text(
           "macOS asks when Islet first connects to T3 Code on another local Mac. macOS does not report this permission's status."
@@ -1744,9 +2038,10 @@ struct SettingsView: View {
     Form {
       Section("Pulse providers") {
         PermissionStatusRow(
-          title: "Local activity API", icon: "waveform.path.ecg",
+          title: String(localized: "Local activity API"), icon: "waveform.path.ecg",
           status: pulseServer.lastError
-            ?? (pulseServer.listeningAddress.map { "Listening on \($0)" } ?? "Stopped"),
+            ?? (pulseServer.listeningAddress.map { String(localized: "Listening on \($0)") }
+              ?? String(localized: "Stopped")),
           color: pulseServer.lastError == nil ? (pulseServer.isRunning ? .green : .secondary) : .red
         )
         LabeledContent("Pulse items") {
@@ -1758,10 +2053,31 @@ struct SettingsView: View {
           .monospacedDigit().foregroundStyle(.secondary)
         }
         LabeledContent("Authentication") {
-          Text("Shared bearer token").foregroundStyle(.secondary)
+          Text(
+            "\(pulseCredentials.credentials.filter { !$0.isRevoked }.count) active provider credentials"
+          )
+          .foregroundStyle(.secondary)
+        }
+        LabeledContent("Mark silent work stale after") {
+          Picker("Stale timeout", selection: $pulseStaleTimeout) {
+            Text("1 minute").tag(60.0)
+            Text("5 minutes").tag(300.0)
+            Text("15 minutes").tag(900.0)
+            Text("30 minutes").tag(1_800.0)
+            Text("1 hour").tag(3_600.0)
+          }
+          .labelsHidden()
+          .frame(width: 130)
+          .onChange(of: pulseStaleTimeout) { _, timeout in
+            pulse.setStaleTimeout(timeout)
+          }
         }
         Text(
-          "Local scripts publish status and web actions over \(pulseServer.listeningAddress ?? "localhost:47717"). A private token authenticates each connection."
+          "A valid provider update restarts this timer. Silent work is marked stale for one hour so you can keep or dismiss it."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Text(
+          "Local scripts publish status and web actions over \(pulseServer.listeningAddress ?? "localhost:47717"). Each approved provider has its own source identity and permissions. Credentials stay in user-only files and are never included in diagnostics."
         )
         .font(.caption).foregroundStyle(.secondary)
         if let nextRetryAt = pulseServer.nextRetryAt {
@@ -1772,7 +2088,7 @@ struct SettingsView: View {
           Text(recovery)
             .font(.caption).foregroundStyle(.orange)
           Text(
-            "Tools/islet-pulse.swift reads the active port from the token folder. Set other clients to \(pulseServer.activePort ?? 47_717)."
+            "Tools/islet-pulse.swift discovers the active port from Islet's support folder. Set other clients to \(pulseServer.activePort ?? 47_717)."
           )
           .font(.caption).foregroundStyle(.secondary)
           Button("Retry port 47717") { pulseServer.retryDefaultPort() }
@@ -1785,13 +2101,55 @@ struct SettingsView: View {
         .font(.caption).foregroundStyle(.secondary)
         HStack {
           Button("Quick Actions…") { QuickActionsOpener.open() }
-          Button("Reveal token folder") { NSWorkspace.shared.open(PulsePaths.supportDirectory) }
-            .help("The token is a provider credential. Do not share it.")
+          Button("Add provider…") { showingPulseCredentialEditor = true }
+          Button("Reveal credential folder") {
+            NSWorkspace.shared.open(pulseCredentials.credentialDirectory)
+          }
+          .help("Credential files grant Pulse access. Do not share them.")
           if !pulse.items.isEmpty {
             Button("Dismiss visible") { pulse.dismissVisible() }
           }
-          Button("Rotate provider token…", role: .destructive) {
-            confirmingPulseTokenRotation = true
+        }
+      }
+      Section("Provider credentials") {
+        if pulseCredentials.credentials.isEmpty {
+          ContentUnavailableView(
+            "No approved providers", systemImage: "key.slash",
+            description: Text("Add a provider before a local script can publish to Pulse."))
+        } else {
+          ForEach(pulseCredentials.credentials) { credential in
+            PulseCredentialRow(
+              credential: credential, server: pulseServer,
+              reportError: { pulseCredentialResult = $0 })
+          }
+        }
+      }
+      Section("Trusted web destinations") {
+        Text(
+          "Each entry trusts one canonical origin for one credential-bound provider. Paths, queries, action titles and payload text are never stored."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        if let error = pulseActionTrust.lastError {
+          Label(error, systemImage: "exclamationmark.triangle.fill")
+            .foregroundStyle(.orange)
+        } else if pulseActionTrust.trusts.isEmpty {
+          ContentUnavailableView(
+            "No trusted destinations", systemImage: "link.badge.plus",
+            description: Text("Opening a new Pulse web origin always asks first."))
+        } else {
+          ForEach(pulseActionTrust.trusts) { trust in
+            PulseTrustedDestinationRow(
+              trust: trust,
+              providerName: pulseCredentials.credentials.first {
+                $0.id == trust.provider.credentialID
+              }?.name,
+              revoke: {
+                do {
+                  try pulseActionTrust.revoke(trust)
+                } catch {
+                  pulseCredentialResult = error.localizedDescription
+                }
+              })
           }
         }
       }
@@ -1801,14 +2159,14 @@ struct SettingsView: View {
         )
         .font(.caption).foregroundStyle(.secondary)
         Text(
-          "Allow, Mute and Revoke match a provider's self-reported source name. Rotate the token to revoke access for every client."
+          "These delivery controls affect credential-bound sources. Revoke a provider credential above to remove its access."
         )
-        .font(.caption).foregroundStyle(.orange)
+        .font(.caption).foregroundStyle(.secondary)
         ForEach(pulse.providerStatuses) { status in
           PulseProviderRow(status: status, center: pulse)
         }
         if !pulse.unlistedSources.isEmpty {
-          Text("Other sources seen this session").font(.caption.weight(.medium))
+          Text("Other sources in history").font(.caption.weight(.medium))
           ForEach(pulse.unlistedSources, id: \.self) { source in
             LabeledContent {
               Picker("Policy", selection: sourcePolicyBinding(source)) {
@@ -1825,39 +2183,69 @@ struct SettingsView: View {
         }
       }
       Section("Pulse history") {
-        Toggle("Show session history", isOn: $showPulseHistory)
+        Toggle("Show history", isOn: $showPulseHistory)
+        Toggle("Keep history after quitting", isOn: pulseHistoryPersistenceBinding)
         Text(
-          "Stored in memory until Islet quits. History includes source, result, priority and time. It excludes payload text, links, tokens and errors."
+          pulseHistoryPersistenceEnabled
+            ? "Saved history contains source, result, priority, state, operation and time. It excludes item identifiers, payload text, progress, links, tokens and errors."
+            : "History stays in memory until Islet quits. Saving is off by default. History never contains item identifiers, payload text, progress, links, tokens or errors."
         )
         .font(.caption).foregroundStyle(.secondary)
+        LabeledContent("Retention period") {
+          Picker("Retention period", selection: pulseHistoryRetentionBinding) {
+            ForEach(PulseHistoryConfiguration.allowedRetentionDays, id: \.self) { days in
+              Text(
+                days == 1 ? String(localized: "1 day") : String(localized: "\(days) days")
+              ).tag(days)
+            }
+          }
+          .labelsHidden()
+          .frame(width: 120)
+        }
+        .disabled(!pulseHistoryPersistenceEnabled)
+        LabeledContent("Maximum entries") {
+          Picker("Maximum entries", selection: pulseHistoryMaximumEntriesBinding) {
+            ForEach(PulseHistoryConfiguration.allowedEntryCounts, id: \.self) { count in
+              Text("\(count)").tag(count)
+            }
+          }
+          .labelsHidden()
+          .frame(width: 120)
+        }
+        if let error = pulse.historyPersistenceError {
+          Label(error, systemImage: "exclamationmark.triangle.fill")
+            .font(.caption).foregroundStyle(.orange)
+        }
         if showPulseHistory {
           Picker("History filter", selection: $pulseHistoryFilter) {
-            ForEach(PulseHistoryFilter.allCases) { filter in Text(filter.rawValue).tag(filter) }
+            ForEach(PulseHistoryFilter.allCases) { filter in Text(filter.title).tag(filter) }
           }
           .pickerStyle(.segmented)
           if filteredPulseHistory.isEmpty {
             Text(
               pulse.history.isEmpty
-                ? "No provider activity this session." : "No matching history entries."
+                ? String(localized: "No provider activity recorded.")
+                : String(localized: "No matching history entries.")
             )
             .foregroundStyle(.secondary)
           } else {
             ForEach(filteredPulseHistory.prefix(30)) { entry in
               PulseHistoryRow(entry: entry)
             }
-            HStack {
-              Text(
-                "Showing \(min(30, filteredPulseHistory.count)) of \(filteredPulseHistory.count)"
-              )
+            Text("Showing \(min(30, filteredPulseHistory.count)) of \(filteredPulseHistory.count)")
               .font(.caption).foregroundStyle(.secondary)
-              Spacer()
-              Button("Clear history") { pulse.clearHistory() }
-            }
           }
+        }
+        HStack {
+          Button("Export history…") { exportPulseHistory() }
+            .disabled(pulse.history.isEmpty)
+          Button("Clear history", role: .destructive) { pulse.clearHistory() }
+            .disabled(pulse.history.isEmpty)
         }
       }
     }
     .formStyle(.grouped)
+    .onAppear { try? pulseActionTrust.prepare() }
   }
 
   private var diagnosticsForm: some View {
@@ -1880,7 +2268,7 @@ struct SettingsView: View {
       }
       Section("Integration health") {
         PermissionStatusRow(
-          title: "Continuity reader", icon: "iphone.gen3",
+          title: String(localized: "Continuity reader"), icon: "iphone.gen3",
           status: continuityStatusText, color: continuityStatusColor)
         LabeledContent("Continuity last successful read") {
           Text(continuityLastSuccessfulReadText).foregroundStyle(.secondary)
@@ -1900,7 +2288,8 @@ struct SettingsView: View {
           Button("Retry Continuity") { continuity.retry() }
         }
         PermissionStatusRow(
-          title: "Focus event source", icon: "moon.circle.fill", status: focus.health.summary,
+          title: String(localized: "Focus event source"), icon: "moon.circle.fill",
+          status: focus.health.summary,
           color: focus.health.isFailure ? .orange : focus.health == .stopped ? .secondary : .green)
         if let lastSuccessfulParse = focus.lastSuccessfulParse {
           LabeledContent("Focus last parsed") {
@@ -1915,21 +2304,24 @@ struct SettingsView: View {
         Button("Retry Focus source") { focus.retry() }
           .disabled(focus.health == .stopped)
         PermissionStatusRow(
-          title: "Media adapter", icon: "music.note", status: nowPlaying.adapterStatus,
+          title: String(localized: "Media adapter"), icon: "music.note",
+          status: nowPlaying.adapterStatus,
           color: nowPlaying.adapterStatus.localizedCaseInsensitiveContains("error")
             || nowPlaying.adapterStatus.localizedCaseInsensitiveContains("timeout")
             ? .orange : .green)
         PermissionStatusRow(
-          title: "T3 Code credentials", icon: "key.fill",
-          status: t3Code.lastCredentialError ?? "Available",
+          title: String(localized: "T3 Code credentials"), icon: "key.fill",
+          status: t3Code.lastCredentialError ?? String(localized: "Available"),
           color: t3Code.lastCredentialError == nil ? .green : .orange)
         PermissionStatusRow(
-          title: "Pulse", icon: "waveform.path.ecg",
-          status: pulseServer.lastError ?? (pulseServer.isRunning ? "Listening" : "Stopped"),
+          title: String(localized: "Pulse"), icon: "waveform.path.ecg",
+          status: pulseServer.lastError
+            ?? (pulseServer.isRunning
+              ? String(localized: "Listening") : String(localized: "Stopped")),
           color: pulseServer.lastError == nil ? (pulseServer.isRunning ? .green : .secondary) : .red
         )
         PermissionStatusRow(
-          title: "Media-key HUD", icon: "keyboard",
+          title: String(localized: "Media-key HUD"), icon: "keyboard",
           status: hud.lastControlFailure ?? hud.eventTapStatus.summary,
           color: hud.lastControlFailure == nil
             ? (hud.eventTapStatus == .active ? .green : .secondary) : .orange)
@@ -2011,12 +2403,12 @@ struct SettingsView: View {
 
   private var continuityStatusText: String {
     switch continuity.availability {
-    case .needsAccessibility: "Needs Accessibility"
-    case .controlCenterUnavailable: "Control Centre unavailable"
-    case .incompatibleSchema: "Unsupported AX layout"
-    case .systemDisabled: "Off in macOS"
-    case .waiting: "Waiting"
-    case .active: "Active"
+    case .needsAccessibility: String(localized: "Needs Accessibility")
+    case .controlCenterUnavailable: String(localized: "Control Centre unavailable")
+    case .incompatibleSchema: String(localized: "Unsupported AX layout")
+    case .systemDisabled: String(localized: "Off in macOS")
+    case .waiting: String(localized: "Waiting")
+    case .active: String(localized: "Active")
     }
   }
 
@@ -2030,7 +2422,7 @@ struct SettingsView: View {
   }
 
   private var continuityLastSuccessfulReadText: String {
-    guard let date = continuity.lastSuccessfulRead else { return "Never" }
+    guard let date = continuity.lastSuccessfulRead else { return String(localized: "Never") }
     return date.formatted(date: .abbreviated, time: .standard)
   }
 
@@ -2084,20 +2476,24 @@ struct SettingsView: View {
   }
 
   private var clipboardCaptureStatus: String {
-    guard isActivityEnabled("clipboard") else { return "Stopped with the activity" }
-    return clipboard.pauseReason?.summary ?? "Capturing new copies"
+    guard isActivityEnabled("clipboard") else {
+      return String(localized: "Stopped with the activity")
+    }
+    return clipboard.pauseReason?.summary ?? String(localized: "Capturing new copies")
   }
 
   private func addClipboardApplication(_ rawBundleIdentifier: String) {
     guard let bundleIdentifier = ClipboardIdentifierPolicy.bundleIdentifier(rawBundleIdentifier)
     else {
-      clipboardPrivacyError = "Enter a valid application bundle identifier up to 255 bytes."
+      clipboardPrivacyError = String(
+        localized: "Enter a valid application bundle identifier up to 255 bytes.")
       return
     }
     let updated = ClipboardIdentifierPolicy.bundleIdentifiers(
       clipboardExcludedBundleIdentifiers + [bundleIdentifier])
     guard updated.contains(bundleIdentifier) else {
-      clipboardPrivacyError = "The exclusion list is limited to 128 applications."
+      clipboardPrivacyError = String(
+        localized: "The exclusion list is limited to 128 applications.")
       return
     }
     clipboardExcludedBundleIdentifiers = updated
@@ -2111,11 +2507,12 @@ struct SettingsView: View {
     panel.allowsMultipleSelection = false
     panel.canChooseDirectories = false
     panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
-    panel.title = "Exclude an application from clipboard history"
-    panel.prompt = "Exclude"
+    panel.title = String(localized: "Exclude an application from clipboard history")
+    panel.prompt = String(localized: "Exclude")
     guard panel.runModal() == .OK, let url = panel.url else { return }
     guard let bundleIdentifier = Bundle(url: url)?.bundleIdentifier else {
-      clipboardPrivacyError = "That application does not declare a bundle identifier."
+      clipboardPrivacyError = String(
+        localized: "That application does not declare a bundle identifier.")
       return
     }
     addClipboardApplication(bundleIdentifier)
@@ -2123,13 +2520,14 @@ struct SettingsView: View {
 
   private func addClipboardFocus(_ rawIdentifier: String) {
     guard let identifier = ClipboardIdentifierPolicy.focusIdentifier(rawIdentifier) else {
-      clipboardPrivacyError = "Enter a valid Focus name or identifier up to 128 bytes."
+      clipboardPrivacyError = String(
+        localized: "Enter a valid Focus name or identifier up to 128 bytes.")
       return
     }
     let updated = ClipboardIdentifierPolicy.focusIdentifiers(
       clipboardPausedFocusIdentifiers + [identifier])
     guard updated.contains(identifier) else {
-      clipboardPrivacyError = "The Focus rule list is limited to 64 entries."
+      clipboardPrivacyError = String(localized: "The Focus rule list is limited to 64 entries.")
       return
     }
     clipboardPausedFocusIdentifiers = updated
@@ -2153,6 +2551,7 @@ struct SettingsView: View {
     hud.refreshPermissionStatus()
     permissions.refresh()
     launchAtLoginStatus.refresh()
+    updates.refresh()
   }
 
   private func navigate(to page: SettingsDetailPage) {
@@ -2162,13 +2561,13 @@ struct SettingsView: View {
   }
 
   private func updateWindowTitle() {
-    SettingsOpener.setTitle(detailPage?.title ?? (selection ?? .general).rawValue)
+    SettingsOpener.setTitle(detailPage?.title ?? (selection ?? .general).title)
   }
 
   private var versionText: String {
     let version =
       Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-      ?? "Development"
+      ?? String(localized: "Development")
     let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
     return build.map { "\(version) (\($0))" } ?? version
   }
@@ -2176,19 +2575,24 @@ struct SettingsView: View {
   private var energyModeDetail: String {
     switch energyMode {
     case .automatic:
-      "Follows macOS Low Power Mode and slows hidden activity automatically."
+      String(localized: "Follows macOS Low Power Mode and slows hidden activity automatically.")
     case .lowEnergy:
-      "Always uses conservative refresh rates and disables optional remote T3 polling."
+      String(
+        localized: "Always uses conservative refresh rates and disables optional remote T3 polling."
+      )
     case .live:
-      "Prioritises fresh metrics and remote status, including while macOS Low Power Mode is on."
+      String(
+        localized:
+          "Prioritises fresh metrics and remote status, including while macOS Low Power Mode is on."
+      )
     }
   }
 
   private var energyModeTitle: String {
     switch energyMode {
-    case .automatic: "Automatic"
-    case .lowEnergy: "Low Energy"
-    case .live: "Live"
+    case .automatic: String(localized: "Automatic")
+    case .lowEnergy: String(localized: "Low Energy")
+    case .live: String(localized: "Live")
     }
   }
 
@@ -2208,6 +2612,8 @@ struct SettingsView: View {
       + "\nPulse: \(pulseServer.isRunning ? "Running" : "Stopped")"
       + "\nPulse items: \(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
       + "\nUSB reader: \(ports.readerHealth.summary)"
+      + "\nUpdate channel: \(updates.channel.title)"
+      + "\nUpdater: \(updates.state.summary)"
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(text, forType: .string)
   }
@@ -2221,13 +2627,34 @@ struct SettingsView: View {
     }
   }
 
-  private func rotatePulseToken() {
+  private func applyPulseHistoryConfiguration() {
+    pulse.configureHistoryPersistence(
+      enabled: pulseHistoryPersistenceEnabled,
+      retentionDays: pulseHistoryRetentionBinding.wrappedValue,
+      maximumEntries: pulseHistoryMaximumEntriesBinding.wrappedValue)
+  }
+
+  private func exportPulseHistory() {
+    let panel = NSSavePanel()
+    panel.allowedContentTypes = [.json]
+    panel.canCreateDirectories = true
+    panel.nameFieldStringValue = "Islet Pulse History.json"
+    panel.title = String(localized: "Export Pulse history")
+    panel.prompt = String(localized: "Export")
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+
     do {
-      try pulseServer.rotateToken()
-      pulseTokenRotationResult =
-        "The token was replaced and all provider connections were disconnected. Providers must read the new token before reconnecting."
+      let count = pulse.history.count
+      try pulse.exportHistoryData().write(to: url, options: .atomic)
+      settingsTransferNotice = SettingsTransferNotice(
+        title: String(localized: "Pulse history exported"),
+        message: count == 1
+          ? String(localized: "Saved 1 metadata entry.")
+          : String(localized: "Saved \(count) metadata entries."))
     } catch {
-      pulseTokenRotationResult = "The token could not be rotated: \(error.localizedDescription)"
+      settingsTransferNotice = SettingsTransferNotice(
+        title: String(localized: "Pulse history could not be exported"),
+        message: error.localizedDescription)
     }
   }
 
@@ -2236,19 +2663,21 @@ struct SettingsView: View {
     panel.allowedContentTypes = [.json]
     panel.canCreateDirectories = true
     panel.nameFieldStringValue = "Islet Settings.json"
-    panel.title = "Export Islet settings"
-    panel.prompt = "Export"
+    panel.title = String(localized: "Export Islet settings")
+    panel.prompt = String(localized: "Export")
     guard panel.runModal() == .OK, let url = panel.url else { return }
 
     do {
       let data = try SettingsTransfer.exportData(snapshot: SettingsTransferDefaults.snapshot())
       try data.write(to: url, options: .atomic)
       settingsTransferNotice = SettingsTransferNotice(
-        title: "Settings exported",
-        message: "Saved \(SettingsTransfer.portableKeys.count) portable preferences.")
+        title: String(localized: "Settings exported"),
+        message: String(
+          localized: "Saved \(SettingsTransfer.portableKeys.count) portable preference."))
     } catch {
       settingsTransferNotice = SettingsTransferNotice(
-        title: "Settings could not be exported", message: error.localizedDescription)
+        title: String(localized: "Settings could not be exported"),
+        message: error.localizedDescription)
     }
   }
 
@@ -2257,8 +2686,8 @@ struct SettingsView: View {
     panel.allowedContentTypes = [.json]
     panel.allowsMultipleSelection = false
     panel.canChooseDirectories = false
-    panel.title = "Import Islet settings"
-    panel.prompt = "Preview"
+    panel.title = String(localized: "Import Islet settings")
+    panel.prompt = String(localized: "Preview")
     guard panel.runModal() == .OK, let url = panel.url else { return }
 
     let hasAccess = url.startAccessingSecurityScopedResource()
@@ -2273,7 +2702,8 @@ struct SettingsView: View {
         data: data, current: SettingsTransferDefaults.snapshot())
     } catch {
       settingsTransferNotice = SettingsTransferNotice(
-        title: "Settings could not be imported", message: error.localizedDescription)
+        title: String(localized: "Settings could not be imported"),
+        message: error.localizedDescription)
     }
   }
 
@@ -2296,6 +2726,11 @@ struct SettingsView: View {
     systemAutoPresentDiskThroughput = true
     systemAutoPresentNetworkThroughput = true
     metricStyles = [:]
+    processAttributionEnabled = true
+    processCPUThreshold = 0.8
+    processMemoryThreshold = 0.9
+    processDiskThreshold = 50
+    processNetworkThreshold = 25
     hudStyle = .bar
     Defaults[.disabledExternalBrightnessDisplays] = []
   }
@@ -2536,7 +2971,7 @@ private struct SettingsNavigationButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .background(configuration.isPressed ? Color.accentColor.opacity(0.16) : .clear)
-      .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+      .animation(Motion.gated(.easeOut(duration: 0.1)), value: configuration.isPressed)
   }
 }
 
@@ -2599,6 +3034,14 @@ private struct PulseProviderRow: View {
       Text(status.descriptor.setupHint)
         .font(.caption2)
         .foregroundStyle(.tertiary)
+      if !status.descriptor.documentationLinks.isEmpty {
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Starter examples").font(.caption2).foregroundStyle(.secondary)
+          ForEach(status.descriptor.documentationLinks) { link in
+            Link(link.title, destination: link.url).font(.caption2)
+          }
+        }
+      }
     }
     .padding(.vertical, 4)
     .accessibilityElement(children: .contain)
@@ -2620,6 +3063,224 @@ private struct PulseProviderRow: View {
   }
 }
 
+private struct PulseCredentialEditor: View {
+  let create: (String, String, Set<PulseCredentialPermission>) -> Void
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var name = ""
+  @State private var source = ""
+  @State private var permissions: Set<PulseCredentialPermission> = [.events]
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section("Provider identity") {
+          TextField("Name", text: $name, prompt: Text("Build watcher"))
+          TextField("Source", text: $source, prompt: Text("build"))
+          Text(
+            "The source becomes part of this credential's identity. Commands cannot publish under another source."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
+        Section("Permissions") {
+          ForEach(PulseCredentialPermission.allCases) { permission in
+            Toggle(isOn: permissionBinding(permission)) {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(permission.title)
+                Text(permission.detail).font(.caption).foregroundStyle(.secondary)
+              }
+            }
+          }
+        }
+      }
+      .formStyle(.grouped)
+      .navigationTitle("Add Pulse provider")
+      .frame(width: 520, height: 510)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel") { dismiss() }
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Add provider") { create(name, source, permissions) }
+            .disabled(
+              name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+      }
+    }
+  }
+
+  private func permissionBinding(_ permission: PulseCredentialPermission) -> Binding<Bool> {
+    Binding(
+      get: { permissions.contains(permission) },
+      set: { allowed in
+        if allowed { permissions.insert(permission) } else { permissions.remove(permission) }
+      })
+  }
+}
+
+private struct PulseCredentialRow: View {
+  let credential: PulseCredentialSummary
+  let server: PulseServer
+  let reportError: (String) -> Void
+
+  @State private var confirmingRotation = false
+  @State private var confirmingRevocation = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack {
+        VStack(alignment: .leading, spacing: 2) {
+          HStack(spacing: 6) {
+            Text(credential.name).font(.body.weight(.medium))
+            if credential.isLegacy {
+              Text("LEGACY").font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+            }
+          }
+          Text(credential.source).font(.caption.monospaced()).foregroundStyle(.secondary)
+        }
+        Spacer()
+        Label(
+          credential.isRevoked ? String(localized: "Revoked") : String(localized: "Active"),
+          systemImage: credential.isRevoked ? "xmark.shield.fill" : "checkmark.shield.fill"
+        )
+        .font(.caption)
+        .foregroundStyle(credential.isRevoked ? .red : .green)
+      }
+
+      HStack(spacing: 16) {
+        LabeledContent("Credential age") {
+          Text(credential.credentialAgeDate, style: .relative)
+        }
+        LabeledContent("Last use") {
+          if let lastUsedAt = credential.lastUsedAt {
+            Text(lastUsedAt, style: .relative)
+          } else {
+            Text("Never")
+          }
+        }
+      }
+      .font(.caption)
+      .foregroundStyle(.secondary)
+
+      if credential.isLegacy, !credential.isRevoked {
+        Text(
+          "The old token may be held by several scripts. Added permissions apply to every holder. Create separate provider credentials, then revoke this entry."
+        )
+        .font(.caption)
+        .foregroundStyle(.orange)
+      }
+
+      if !credential.isLegacy, !credential.isRevoked {
+        Text(
+          "Bearer credential: trusted processes running as your macOS user can use this file. Source binding separates cooperative tools, not hostile same-user processes."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      }
+
+      ForEach(PulseCredentialPermission.allCases) { permission in
+        Toggle(permission.title, isOn: permissionBinding(permission))
+          .help(permission.detail)
+          .disabled(credential.isRevoked)
+      }
+      .font(.caption)
+
+      HStack {
+        if let url = server.credentialStore.credentialFileURL(for: credential.id) {
+          Button("Reveal credential") {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+          }
+        }
+        if !credential.isLegacy, !credential.isRevoked {
+          Button("Rotate credential…") { confirmingRotation = true }
+        }
+        if !credential.isRevoked {
+          Button("Revoke…", role: .destructive) { confirmingRevocation = true }
+        }
+      }
+    }
+    .padding(.vertical, 5)
+    .confirmationDialog(
+      "Rotate \(credential.name)'s credential?", isPresented: $confirmingRotation,
+      titleVisibility: .visible
+    ) {
+      Button("Rotate and disconnect provider", role: .destructive) {
+        do {
+          try server.rotateCredential(credential.id)
+        } catch {
+          reportError(error.localizedDescription)
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Other Pulse providers stay connected. This provider must reread its credential file.")
+    }
+    .confirmationDialog(
+      "Revoke \(credential.name)?", isPresented: $confirmingRevocation,
+      titleVisibility: .visible
+    ) {
+      Button("Revoke and disconnect provider", role: .destructive) {
+        do {
+          try server.revokeCredential(credential.id)
+        } catch {
+          reportError(error.localizedDescription)
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("This removes the provider's credential file. Other providers are not affected.")
+    }
+  }
+
+  private func permissionBinding(_ permission: PulseCredentialPermission) -> Binding<Bool> {
+    Binding(
+      get: { credential.permissions.contains(permission) },
+      set: { allowed in
+        var updated = credential.permissions
+        if allowed { updated.insert(permission) } else { updated.remove(permission) }
+        do {
+          try server.setPermissions(updated, for: credential.id)
+        } catch {
+          reportError(error.localizedDescription)
+        }
+      })
+  }
+}
+
+private struct PulseTrustedDestinationRow: View {
+  let trust: PulseActionTrust
+  let providerName: String?
+  let revoke: () -> Void
+
+  var body: some View {
+    HStack(spacing: 10) {
+      Image(systemName: trust.kind == .loopback ? "desktopcomputer" : "globe")
+        .frame(width: 18)
+        .foregroundStyle(trust.kind == .loopback ? .orange : .secondary)
+        .accessibilityHidden(true)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(trust.canonicalOrigin).font(.caption.monospaced()).textSelection(.enabled)
+        Text(
+          providerName.map { "\($0) · \(trust.provider.sourceKey)" }
+            ?? trust.provider.sourceKey
+        )
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        if trust.kind == .loopback {
+          Text("Local loopback destination")
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.orange)
+        }
+      }
+      Spacer()
+      Button("Revoke", role: .destructive, action: revoke)
+        .accessibilityLabel("Revoke trusted destination \(trust.displayHost)")
+    }
+    .padding(.vertical, 3)
+  }
+}
+
 private struct PulseHistoryRow: View {
   let entry: PulseHistoryEntry
 
@@ -2632,6 +3293,9 @@ private struct PulseHistoryRow: View {
           Text(entry.result.title).font(.caption.weight(.medium))
           if let source = entry.source {
             Text(source).font(.caption.monospaced()).foregroundStyle(.secondary)
+          }
+          if let providerIdentifier = entry.providerIdentifier {
+            Text(providerIdentifier).font(.caption.monospaced()).foregroundStyle(.tertiary)
           }
         }
         Text(metadata).font(.caption2).foregroundStyle(.tertiary)
@@ -2652,6 +3316,8 @@ private struct PulseHistoryRow: View {
     switch entry.result {
     case .shown, .updated: "waveform.path.ecg"
     case .ended, .dismissed, .expired: "checkmark.circle"
+    case .stale: "clock.badge.exclamationmark"
+    case .kept: "pin.circle"
     case .suppressed: "line.3.horizontal.decrease.circle"
     case .rejected: "exclamationmark.triangle"
     case .evicted: "arrow.down.circle"
@@ -2661,8 +3327,8 @@ private struct PulseHistoryRow: View {
   private var color: Color {
     switch entry.result {
     case .rejected: .red
-    case .suppressed, .evicted: .orange
-    case .shown, .updated: .blue
+    case .suppressed, .evicted, .stale: .orange
+    case .shown, .updated, .kept: .blue
     case .ended, .dismissed, .expired: .secondary
     }
   }

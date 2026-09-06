@@ -7,7 +7,7 @@ import Combine
 @MainActor
 final class VolumeEventSource: SystemEventSource {
   let id = "volume"
-  let displayName = "Disks and volumes"
+  let displayName = String(localized: "Disks and volumes")
   let tier = SystemEventTier.core
 
   private var cancellables: Set<AnyCancellable> = []
@@ -28,16 +28,18 @@ final class VolumeEventSource: SystemEventSource {
 
   private func report(_ note: Notification, mounted: Bool) {
     let url = note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL
-    let name = url.map { FileManager.default.displayName(atPath: $0.path) } ?? "Volume"
+    let name =
+      url.map { FileManager.default.displayName(atPath: $0.path) } ?? String(localized: "Volume")
     SystemEventBus.shared.emit(
       SystemEvent(
         sourceID: id,
         icon: mounted ? "externaldrive.fill.badge.plus" : "externaldrive.fill.badge.minus",
         title: name,
-        subtitle: mounted ? "Mounted" : "Ejected",
+        subtitle: mounted ? String(localized: "Mounted") : String(localized: "Ejected"),
         accentHex: mounted ? EventAccent.info : EventAccent.neutral,
         motion: .volumeMount,
         urgency: mounted ? .normal : .ambient,
-        announcement: "\(name) \(mounted ? "mounted" : "ejected")"))
+        announcement: mounted
+          ? String(localized: "\(name) mounted") : String(localized: "\(name) ejected")))
   }
 }

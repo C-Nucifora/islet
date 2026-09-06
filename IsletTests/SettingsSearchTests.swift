@@ -6,10 +6,12 @@ final class SettingsSearchTests: XCTestCase {
   func testEveryDetailPageMatchesAControlBelowItsPageTitle() {
     let deepQueries: [SettingsDetailPage: String] = [
       .startupDisplays: "run setup",
+      .updates: "check for updates",
       .appearance: "catppuccin battery graph",
       .interaction: "collapse after",
       .energy: "automatic low power",
       .contextRules: "wifi manual override",
+      .batteryWarnings: "slow charging keyboard threshold",
       .activityOrder: "file shelf",
       .calendarReminders: "calendars shown",
       .nowPlaying: "bundle identifier",
@@ -54,11 +56,16 @@ final class SettingsSearchTests: XCTestCase {
   func testDisplayPreferenceTermsFindStartupAndDisplays() {
     XCTAssertTrue(SettingsDetailPage.startupDisplays.matchesSearch("preferred display"))
     XCTAssertTrue(SettingsDetailPage.startupDisplays.matchesSearch("clamshell reconnect"))
+    XCTAssertTrue(SettingsDetailPage.startupDisplays.matchesSearch("pointer quick actions"))
   }
 
   func testT3ConnectAccountActionsAreSearchable() {
     XCTAssertTrue(SettingsDetailPage.t3Code.matchesSearch("link account"))
     XCTAssertTrue(SettingsDetailPage.t3Code.matchesSearch("sign out"))
     XCTAssertTrue(SettingsDetailPage.t3Code.matchesSearch("reconnect now"))
+  }
+
+  func testPulseSearchFindsProviderSilenceTimeout() {
+    XCTAssertTrue(SettingsDetailPage.pulse.matchesSearch("silent stale timeout"))
   }
 }

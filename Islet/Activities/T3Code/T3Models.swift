@@ -129,12 +129,12 @@ enum T3AgentPhase: String, Codable, Sendable {
 
   var label: String {
     switch self {
-    case .needsInput: "Needs input"
-    case .needsApproval: "Needs approval"
-    case .working: "Working"
-    case .monitoring: "Monitoring"
-    case .finished: "Finished"
-    case .failed: "Failed"
+    case .needsInput: String(localized: "Needs input")
+    case .needsApproval: String(localized: "Needs approval")
+    case .working: String(localized: "Working")
+    case .monitoring: String(localized: "Monitoring")
+    case .finished: String(localized: "Finished")
+    case .failed: String(localized: "Failed")
     }
   }
 
@@ -167,9 +167,11 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
   private static let maximumFutureClockSkew: TimeInterval = 5 * 60
 
   let logicalEnvironmentID: String
+  var isLocal = false
   let threadID: String
   let title: String
   let project: String
+  var workspacePath: String? = nil
   let providerInstance: String
   let model: String
   let branch: String?
@@ -181,15 +183,26 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
 
   var id: String { "\(logicalEnvironmentID):\(threadID)" }
 
+  var accessibilityLabel: String {
+    var parts = [title, phase.label, providerInstance, model, project]
+    if let branch { parts.append("branch \(branch)") }
+    if let completedPlanSteps, let totalPlanSteps {
+      parts.append("\(completedPlanSteps) of \(totalPlanSteps) plan steps complete")
+    }
+    if let planStep { parts.append("current step \(planStep)") }
+    return parts.joined(separator: ", ")
+  }
+
   static func activeAgents(
     in shell: T3ShellSnapshot,
     logicalEnvironmentID: String,
+    isLocal: Bool = false,
     now: Date = Date()
   ) -> [Self] {
     // The shell snapshot is server-controlled. Keep the first project for a duplicated id rather
     // than using `Dictionary(uniqueKeysWithValues:)`, which traps and takes down the app.
-    let projects = shell.projects.reduce(into: [String: String]()) { projects, project in
-      if projects[project.id] == nil { projects[project.id] = project.title }
+    let projects = shell.projects.reduce(into: [String: T3ProjectShell]()) { projects, project in
+      if projects[project.id] == nil { projects[project.id] = project }
     }
     let agents: [Self] = shell.threads.compactMap { thread in
       guard thread.archivedAt == nil,
@@ -197,9 +210,11 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
       else { return nil }
       return Self(
         logicalEnvironmentID: logicalEnvironmentID,
+        isLocal: isLocal,
         threadID: thread.id,
         title: thread.title,
-        project: projects[thread.projectId] ?? "Unknown project",
+        project: projects[thread.projectId]?.title ?? String(localized: "Unknown project"),
+        workspacePath: thread.worktreePath ?? projects[thread.projectId]?.workspaceRoot,
         providerInstance: thread.session?.providerName
           ?? thread.session?.providerInstanceId
           ?? thread.modelSelection.instanceId,
@@ -265,6 +280,25 @@ struct T3AgentSnapshot: Equatable, Identifiable, Sendable {
   }
 }
 
+enum T3SessionActionPolicy {
+  // Desktop T3 Code does not currently expose a supported thread deep-link contract. Keep thread
+  // open/copy actions out of the UI until that contract can be verified against the desktop app.
+  nonisolated static func safeWorkspacePath(_ value: String?) -> String? {
+    guard let value,
+      !value.isEmpty,
+      value.hasPrefix("/"),
+      value == value.trimmingCharacters(in: .whitespacesAndNewlines),
+      !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    else { return nil }
+    return value
+  }
+}
+
+enum T3SessionAvailability: Equatable, Sendable {
+  case available
+  case reconnect(reason: String)
+}
+
 enum T3ConnectionState: Equatable, Sendable {
   case connecting
   case connected
@@ -284,12 +318,12 @@ enum T3ConnectionState: Equatable, Sendable {
 
   var label: String {
     switch self {
-    case .connecting: "Connecting"
-    case .connected: "Connected"
-    case .offline: "Offline"
-    case .reconnecting: "Reconnecting"
-    case .needsPairing: "Pair again"
-    case .credentialError: "Credential error"
+    case .connecting: String(localized: "Connecting")
+    case .connected: String(localized: "Connected")
+    case .offline: String(localized: "Offline")
+    case .reconnecting: String(localized: "Reconnecting")
+    case .needsPairing: String(localized: "Pair again")
+    case .credentialError: String(localized: "Credential error")
     }
   }
 

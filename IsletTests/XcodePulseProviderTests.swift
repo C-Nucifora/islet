@@ -301,7 +301,10 @@ final class XcodePulseProviderTests: XCTestCase {
         "MOCK_PULSE_SCENARIO": "hung",
       ])
 
-    try runToCompletion(launched.process, timeout: 4)
+    // The provider runs as a Swift script, so Intel CI can spend several seconds compiling it
+    // before the 0.5-second reporter deadline begins. Keep the outer watchdog generous enough to
+    // test the provider deadline instead of the runner's cold compiler startup.
+    try runToCompletion(launched.process, timeout: 20)
 
     XCTAssertEqual(launched.process.terminationStatus, 0)
     let records = try pulseRecords()

@@ -44,7 +44,7 @@ struct ContinuityExpandedView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       Label(
-        cards.isEmpty ? "iPhone" : "iPhone, \(cards.count)",
+        cards.isEmpty ? String(localized: "iPhone") : String(localized: "iPhone, \(cards.count)"),
         systemImage: "iphone.gen3"
       )
       .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -96,11 +96,7 @@ struct ContinuityCardRow: View {
     Button {
       // Read-only by design: the phone owns the activity, so the useful action is to reach the
       // phone. iPhone Mirroring is the only supported way in from the Mac.
-      if let url = NSWorkspace.shared.urlForApplication(
-        withBundleIdentifier: "com.apple.ScreenContinuity")
-      {
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-      }
+      ContinuityActivity.openIPhoneMirroring()
     } label: {
       HStack(spacing: 8) {
         Image(systemName: card.symbol)
@@ -125,5 +121,11 @@ struct ContinuityCardRow: View {
     }
     .buttonStyle(.plain)
     .help("Open iPhone Mirroring")
+    .accessibilityLabel(
+      card.isRemote
+        ? String(localized: "\(card.appName), iPhone Live Activity")
+        : String(localized: "\(card.appName), Mac Live Activity")
+    )
+    .accessibilityHint("Opens iPhone Mirroring")
   }
 }

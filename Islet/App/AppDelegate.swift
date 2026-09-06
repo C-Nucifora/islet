@@ -144,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     timerCompletionNotifications.start()
     Task { @MainActor in
       ActivityEnablement.migrateLegacyPreferencesIfNeeded()
+      AppUpdateController.shared.start()
       // Bring a persisted activity order forward before anything renders from it: entries added to
       // the catalogue after the order was first written would otherwise be missing from Settings.
       let merged = ActivityCatalog.mergedOrder(Defaults[.activityOrder])
@@ -176,7 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       if OnboardingState.isComplete { SystemEventBus.shared.startEnabled() }
       ContextRuleCenter.shared.start()
       SneakQueue.shared.isSuspended = {
-        ScreenManager.shared.viewModel?.state.isExpanded ?? false
+        ScreenManager.shared.isAnyPanelExpanded
       }
       HUDController.shared.startObserving()
       LaunchAtLogin.sync()
@@ -199,6 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     MainActor.assumeIsolated {
       reminderCommandHotKey.stop()
       KeepAwakeManager.shared.stop(reason: .quit)
+      PulseCenter.shared.flushRevisionPersistence()
       AppState.nowPlaying.stop()
       AppState.battery.stop()
       AppState.calendar.stop()
@@ -208,6 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       AppState.system.stop()
       AppState.t3Code.stop()
       AppState.pulse.stop()
+      PulseCenter.shared.flushHistoryPersistence()
       AppState.continuity.stop()
       RemindersProvider.shared.stop()
       AudioDeviceMonitor.shared.stop()

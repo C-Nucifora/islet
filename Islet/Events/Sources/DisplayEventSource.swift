@@ -9,7 +9,7 @@ import Combine
 @MainActor
 final class DisplayEventSource: SystemEventSource {
   let id = "display"
-  let displayName = "External displays"
+  let displayName = String(localized: "External displays")
   let tier = SystemEventTier.core
 
   private var cancellable: AnyCancellable?
@@ -35,7 +35,7 @@ final class DisplayEventSource: SystemEventSource {
 
   private static func name(forUUID uuid: String) -> String {
     guard let screen = NSScreen.screens.first(where: { $0.displayUUID == uuid })
-    else { return "Display" }
+    else { return String(localized: "Display") }
     return screen.localizedName
   }
 
@@ -47,9 +47,9 @@ final class DisplayEventSource: SystemEventSource {
       let name = Self.name(forUUID: uuid)
       SystemEventBus.shared.emit(
         SystemEvent(
-          sourceID: id, icon: "display", title: name, subtitle: "Connected",
+          sourceID: id, icon: "display", title: name, subtitle: String(localized: "Connected"),
           accentHex: EventAccent.info, motion: .display,
-          announcement: "\(name) connected"))
+          announcement: String(localized: "\(name) connected")))
     }
     for _ in diff.removed {
       // The screen is already gone, so its name is no longer resolvable — say so plainly rather
@@ -57,9 +57,9 @@ final class DisplayEventSource: SystemEventSource {
       SystemEventBus.shared.emit(
         SystemEvent(
           sourceID: id, icon: "display.trianglebadge.exclamationmark",
-          title: "Display disconnected",
+          title: String(localized: "Display disconnected"),
           accentHex: EventAccent.neutral, motion: .display, urgency: .ambient,
-          announcement: "Display disconnected"))
+          announcement: String(localized: "Display disconnected")))
     }
   }
 }

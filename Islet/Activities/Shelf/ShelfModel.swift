@@ -26,8 +26,8 @@ enum ShelfFileMeasurements {
 
     var errorDescription: String? {
       switch self {
-      case .arithmeticOverflow: "The item is too large to measure."
-      case .unsupportedItem: "The item contains an unsupported file type."
+      case .arithmeticOverflow: String(localized: "The item is too large to measure.")
+      case .unsupportedItem: String(localized: "The item contains an unsupported file type.")
       }
     }
   }
@@ -111,11 +111,11 @@ enum ShelfStorageFailure: Equatable, Sendable {
   var message: String {
     switch self {
     case .initialization:
-      "Shelf storage couldn't be prepared."
+      String(localized: "Shelf storage couldn't be prepared.")
     case .listing:
-      "Shelf storage couldn't be read."
+      String(localized: "Shelf storage couldn't be read.")
     case .metadata:
-      "Shelf workspace data couldn't be read."
+      String(localized: "Shelf workspace data couldn't be read.")
     }
   }
 
@@ -135,6 +135,8 @@ final class ShelfModel: ObservableObject {
   static let shared = ShelfModel()
   nonisolated static let maximumItemCount = 100
   nonisolated static let maximumConcurrentThumbnailRequests = 2
+  nonisolated private static let legacyThumbnailVisibilityOwner = UUID(
+    uuidString: "00000000-0000-0000-0000-000000000001")!
 
   private struct ImportBatch {
     let urls: [URL]
@@ -177,13 +179,13 @@ final class ShelfModel: ObservableObject {
   typealias LoadManifest = @Sendable (URL) -> Result<ShelfManifest?, Error>
   typealias SaveManifest = @Sendable (ShelfManifest, URL) async -> Result<Void, Error>
   typealias CurrentDate = @Sendable () -> Date
+  typealias OpenItem = (URL) -> Bool
 
   @Published private(set) var items: [ShelfItem] = []
   @Published private(set) var lastError: String?
   /// `nil` means the Shelf storage is available. It must not be inferred from an empty item list.
   @Published private(set) var storageFailure: ShelfStorageFailure?
   @Published private var dropState = ShelfDropState()
-  @Published private(set) var presentationRequest: UUID?
   @Published private(set) var currentUsageBytes: Int64?
   @Published private(set) var lastRejectedImportBytes: Int64?
   @Published private(set) var stacks: [ShelfStack]
@@ -219,19 +221,26 @@ final class ShelfModel: ObservableObject {
   private var manifestSaveTail: Task<Result<Void, Error>, Never>?
   private var manifestMutationInProgress = false
   private var manifestMutationWaiters: [CheckedContinuation<Void, Never>] = []
+  private let openItem: OpenItem
   private var itemUsageBytes: [URL: Int64] = [:]
   private var reservedImports: [URL: StorageReservation] = [:]
   private var importQueue: [ImportBatch] = []
   private var importWorker: Task<Void, Never>?
   private var importGeneration: UInt = 0
+  private var importCompletionWaiters: [CheckedContinuation<Void, Never>] = []
   private var usageMutationGeneration: UInt = 0
-  private var visibleThumbnailIDs: Set<UUID> = []
+  private var pendingUsageMeasurements = 0
+  private var usageMeasurementWaiters: [CheckedContinuation<Void, Never>] = []
+  private var thumbnailVisibilityOwners: [UUID: Set<UUID>] = [:]
   private var queuedThumbnailWork: [ThumbnailWork] = []
   private var activeThumbnailWork: [UUID: ThumbnailWork] = [:]
   private var thumbnailTasks: [UUID: Task<Void, Never>] = [:]
   private var thumbnailCache: [ThumbnailCacheKey: Data] = [:]
   private var cancelledThumbnailTokens: Set<UInt> = []
   private var thumbnailWorkToken: UInt = 0
+  private var thumbnailWorkWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
+  private var allThumbnailWorkWaiters: [CheckedContinuation<Void, Never>] = []
+  private var clearStartWaiters: [CheckedContinuation<Void, Never>] = []
   private(set) var isClearing = false
 
   init(
@@ -248,6 +257,7 @@ final class ShelfModel: ObservableObject {
     loadManifest: LoadManifest? = nil,
     saveManifest: SaveManifest? = nil,
     currentDate: @escaping CurrentDate = { .now },
+    openItem: OpenItem? = nil,
     storagePolicy: ShelfStoragePolicy = .standard
   ) {
     let base =
@@ -319,6 +329,7 @@ final class ShelfModel: ObservableObject {
     self.loadManifest = loadManifest ?? ShelfManifestStore.load
     self.saveManifest = saveManifest ?? ShelfManifestStore.save
     self.currentDate = currentDate
+    self.openItem = openItem ?? { NSWorkspace.shared.open($0) }
     self.storagePolicy = storagePolicy
     dir = base
     manifestURL = base.appendingPathExtension("json")
@@ -343,17 +354,21 @@ final class ShelfModel: ObservableObject {
   var isStorageAvailable: Bool { storageFailure == nil }
   var canRevealStorageLocation: Bool { dir.isFileURL }
   var storageUsageText: String {
-    guard let currentUsageBytes else { return "Calculating Shelf storage…" }
-    return
-      "\(Self.formattedByteCount(currentUsageBytes)) of \(Self.formattedByteCount(storagePolicy.maximumBytes))"
+    guard let currentUsageBytes else { return String(localized: "Calculating Shelf storage…") }
+    return String(
+      localized:
+        "\(Self.formattedByteCount(currentUsageBytes)) of \(Self.formattedByteCount(storagePolicy.maximumBytes))"
+    )
   }
 
   var storageUsageAccessibilityText: String {
-    guard let currentUsageBytes else { return "Calculating Shelf storage usage" }
-    return
-      "Shelf storage: \(Self.formattedByteCount(currentUsageBytes)) used of "
-      + "\(Self.formattedByteCount(storagePolicy.maximumBytes)). Keeps at least "
-      + "\(Self.formattedByteCount(storagePolicy.minimumFreeSpaceBytes)) free for other apps."
+    guard let currentUsageBytes else {
+      return String(localized: "Calculating Shelf storage usage")
+    }
+    return String(
+      localized:
+        "Shelf storage: \(Self.formattedByteCount(currentUsageBytes)) used of \(Self.formattedByteCount(storagePolicy.maximumBytes)). Keeps at least \(Self.formattedByteCount(storagePolicy.minimumFreeSpaceBytes)) free for other apps."
+    )
   }
 
   func shareAllItems(using airDrop: AirDropShareController) {
@@ -365,15 +380,40 @@ final class ShelfModel: ObservableObject {
     }
   }
 
-  func setDropTarget(_ id: UUID, active: Bool) {
-    dropState.setTarget(id, active: active)
+  /// Waits until every accepted drop in the current queue has resolved, including a worker that
+  /// Clear cancelled and is still cleaning up its staging file.
+  func waitForImportCompletion() async {
+    guard !isImportWorkerIdle else { return }
+    await withCheckedContinuation { importCompletionWaiters.append($0) }
   }
 
-  func requestPresentation() { presentationRequest = UUID() }
+  /// Waits for Clear to become active, allowing callers to coordinate a copy-versus-clear race
+  /// without guessing how long the import worker needs to reach its cancellation point.
+  func waitForClearToStart() async {
+    guard !isClearing else { return }
+    await withCheckedContinuation { clearStartWaiters.append($0) }
+  }
 
-  func consumePresentationRequest(_ id: UUID) {
-    guard presentationRequest == id else { return }
-    presentationRequest = nil
+  /// Waits for every outstanding usage scan that was scheduled before this call to finish.
+  func waitForUsageMeasurement() async {
+    guard pendingUsageMeasurements > 0 else { return }
+    await withCheckedContinuation { usageMeasurementWaiters.append($0) }
+  }
+
+  /// Waits until the specified tile has no queued or active thumbnail request.
+  func waitForThumbnailWork(for item: ShelfItem) async {
+    guard hasThumbnailWork(for: item.id) else { return }
+    await withCheckedContinuation { thumbnailWorkWaiters[item.id, default: []].append($0) }
+  }
+
+  /// Waits until no visible Shelf tile has thumbnail work outstanding.
+  func waitForAllThumbnailWork() async {
+    guard !activeThumbnailWork.isEmpty || !queuedThumbnailWork.isEmpty else { return }
+    await withCheckedContinuation { allThumbnailWorkWaiters.append($0) }
+  }
+
+  func setDropTarget(_ id: UUID, active: Bool) {
+    dropState.setTarget(id, active: active)
   }
 
   func retryStorage() {
@@ -390,7 +430,7 @@ final class ShelfModel: ObservableObject {
   func revealStorageLocation() {
     let location = isStorageAvailable ? dir : dir.deletingLastPathComponent()
     guard NSWorkspace.shared.open(location) else {
-      lastError = "Couldn't open the Shelf storage location."
+      lastError = String(localized: "Couldn't open the Shelf storage location.")
       return
     }
     lastError = nil
@@ -401,7 +441,7 @@ final class ShelfModel: ObservableObject {
     let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
     return await withManifestMutation {
       guard !name.isEmpty else {
-        lastError = "Workspace names can't be empty."
+        lastError = String(localized: "Workspace names can't be empty.")
         return nil
       }
       guard
@@ -409,7 +449,7 @@ final class ShelfModel: ObservableObject {
           $0.name.caseInsensitiveCompare(name) == .orderedSame
         })
       else {
-        lastError = "A workspace named \(name) already exists."
+        lastError = String(localized: "A workspace named \(name) already exists.")
         return nil
       }
       let stack = ShelfStack(id: UUID(), name: name, expiryRule: .never)
@@ -435,7 +475,7 @@ final class ShelfModel: ObservableObject {
         }),
         let index = manifest.stacks.firstIndex(where: { $0.id == stack.id })
       else {
-        lastError = "Workspace names must be unique and non-empty."
+        lastError = String(localized: "Workspace names must be unique and non-empty.")
         return false
       }
       let previous = manifest
@@ -675,11 +715,14 @@ final class ShelfModel: ObservableObject {
   private func scheduleUsageScan() {
     let urls = items.map(\.url)
     let generation = usageMutationGeneration
+    pendingUsageMeasurements += 1
     Task { [weak self] in
       guard let self else { return }
       let result = await self.measureUsage(of: urls)
-      guard generation == self.usageMutationGeneration else { return }
-      self.applyUsageMeasurement(result)
+      if generation == self.usageMutationGeneration {
+        self.applyUsageMeasurement(result)
+      }
+      self.finishUsageMeasurement()
     }
   }
 
@@ -712,6 +755,14 @@ final class ShelfModel: ObservableObject {
       currentUsageBytes = nil
       Log.app.error("Shelf usage measurement failed: \(error.localizedDescription)")
     }
+  }
+
+  private func finishUsageMeasurement() {
+    pendingUsageMeasurements = max(0, pendingUsageMeasurements - 1)
+    guard pendingUsageMeasurements == 0 else { return }
+    let waiters = usageMeasurementWaiters
+    usageMeasurementWaiters.removeAll()
+    for waiter in waiters { waiter.resume() }
   }
 
   private func cleanAbandonedStagingEntries(in found: [URL]) {
@@ -765,27 +816,27 @@ final class ShelfModel: ObservableObject {
     _ source: URL, to stackID: UUID, updatesLastError: Bool,
     expectedImportGeneration: UInt? = nil
   ) async -> (item: ShelfItem?, error: String?, rejectedBytes: Int64?) {
-    guard !isClearing else { return (nil, "Shelf is being cleared.", nil) }
+    guard !isClearing else { return (nil, String(localized: "Shelf is being cleared."), nil) }
     if let expectedImportGeneration, expectedImportGeneration != importGeneration {
       return (nil, nil, nil)
     }
     guard isStorageAvailable else {
-      let error = "Shelf storage is unavailable."
+      let error = String(localized: "Shelf storage is unavailable.")
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
     guard source.isFileURL else {
-      let error = "Only files and folders can be added."
+      let error = String(localized: "Only files and folders can be added.")
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
     guard let targetStack = stacks.first(where: { $0.id == stackID }) else {
-      let error = "That Shelf workspace no longer exists."
+      let error = String(localized: "That Shelf workspace no longer exists.")
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
     guard FileManager.default.fileExists(atPath: source.path) else {
-      let error = "That item is no longer available."
+      let error = String(localized: "That item is no longer available.")
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
@@ -815,17 +866,16 @@ final class ShelfModel: ObservableObject {
         currentCount: items.count, pendingCount: reservedImports.count,
         maximum: Self.maximumItemCount)
     else {
-      let error = "Shelf is full (\(Self.maximumItemCount) items)."
+      let error = String(localized: "Shelf is full (\(Self.maximumItemCount) items).")
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
-
     let estimatedBytes: Int64
     switch await measureItem(source) {
     case .success(let bytes) where bytes >= 0:
       estimatedBytes = bytes
     case .success, .failure:
-      let error = "Couldn't calculate the size of \(source.lastPathComponent)."
+      let error = String(localized: "Couldn't calculate the size of \(source.lastPathComponent).")
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
@@ -835,7 +885,7 @@ final class ShelfModel: ObservableObject {
     }
     guard await refreshUsageForImport(expectedImportGeneration: expectedImportGeneration) else {
       guard importIsCurrent(expectedImportGeneration) else { return (nil, nil, nil) }
-      let error = "Couldn't calculate current Shelf storage usage."
+      let error = String(localized: "Couldn't calculate current Shelf storage usage.")
       setImportError(error, rejectedBytes: estimatedBytes, updatesLastError: updatesLastError)
       return (nil, error, estimatedBytes)
     }
@@ -856,7 +906,7 @@ final class ShelfModel: ObservableObject {
         currentCount: items.count, pendingCount: reservedImports.count,
         maximum: Self.maximumItemCount)
     else {
-      let error = "Shelf is full (\(Self.maximumItemCount) items)."
+      let error = String(localized: "Shelf is full (\(Self.maximumItemCount) items).")
       setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
       return (nil, error, nil)
     }
@@ -898,7 +948,7 @@ final class ShelfModel: ObservableObject {
         stagedBytes = bytes
       case .success, .failure:
         removeStagingItem(staging)
-        let error = "Couldn't verify the size of \(source.lastPathComponent)."
+        let error = String(localized: "Couldn't verify the size of \(source.lastPathComponent).")
         setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
         return (nil, error, nil)
       }
@@ -910,7 +960,7 @@ final class ShelfModel: ObservableObject {
       guard await refreshUsageForImport(expectedImportGeneration: expectedImportGeneration) else {
         removeStagingItem(staging)
         guard importIsCurrent(expectedImportGeneration) else { return (nil, nil, nil) }
-        let error = "Couldn't calculate current Shelf storage usage."
+        let error = String(localized: "Couldn't calculate current Shelf storage usage.")
         setImportError(error, rejectedBytes: stagedBytes, updatesLastError: updatesLastError)
         return (nil, error, stagedBytes)
       }
@@ -945,7 +995,7 @@ final class ShelfModel: ObservableObject {
         return (nil, nil, nil)
       case .saveFailed:
         removeStagingItem(staging)
-        let error = "Couldn't save Shelf workspace data."
+        let error = String(localized: "Couldn't save Shelf workspace data.")
         setImportError(error, rejectedBytes: nil, updatesLastError: updatesLastError)
         return (nil, error, nil)
       }
@@ -989,7 +1039,7 @@ final class ShelfModel: ObservableObject {
       case .failure(let error):
         await discardPendingImport(pending.id)
         removeStagingItem(staging)
-        let message = "Couldn’t add \(source.lastPathComponent)."
+        let message = String(localized: "Couldn’t add \(source.lastPathComponent).")
         setImportError(message, rejectedBytes: nil, updatesLastError: updatesLastError)
         Log.app.error("Shelf staged rename failed: \(error.localizedDescription)")
         return (nil, message, nil)
@@ -1000,7 +1050,7 @@ final class ShelfModel: ObservableObject {
       removeStagingItem(staging)
       // A file can disappear between Finder producing its drag payload and the async copy. Give a
       // useful, non-technical error while retaining the detailed failure in the log.
-      let message = "Couldn’t add \(source.lastPathComponent)."
+      let message = String(localized: "Couldn’t add \(source.lastPathComponent).")
       setImportError(message, rejectedBytes: nil, updatesLastError: updatesLastError)
       Log.app.error("Shelf copy failed: \(error.localizedDescription)")
       return (nil, message, nil)
@@ -1075,11 +1125,11 @@ final class ShelfModel: ObservableObject {
     case .success(let bytes) where bytes >= 0:
       available = bytes
     case .success, .failure:
-      return "Couldn't check free disk space."
+      return String(localized: "Couldn't check free disk space.")
     }
 
     guard let currentUsageBytes, reservedImports[destination] != nil else {
-      return "Couldn't calculate current Shelf storage usage."
+      return String(localized: "Couldn't calculate current Shelf storage usage.")
     }
     let reservations = Array(reservedImports.values)
     let decision = ShelfLogic.storageDecision(
@@ -1103,12 +1153,19 @@ final class ShelfModel: ObservableObject {
     switch decision {
     case .accepted, .overBudget:
       return
-        "Can't add \(sourceName) (\(size)). The Shelf limit is \(Self.formattedByteCount(storagePolicy.maximumBytes))."
+        String(
+          localized:
+            "Can't add \(sourceName) (\(size)). The Shelf limit is \(Self.formattedByteCount(storagePolicy.maximumBytes))."
+        )
     case .lowFreeSpace:
       return
-        "Can't add \(sourceName) (\(size)). Islet keeps \(Self.formattedByteCount(storagePolicy.minimumFreeSpaceBytes)) free for other apps."
+        String(
+          localized:
+            "Can't add \(sourceName) (\(size)). Islet keeps \(Self.formattedByteCount(storagePolicy.minimumFreeSpaceBytes)) free for other apps."
+        )
     case .invalidMeasurement:
-      return "Can't add \(sourceName) (\(size)) because its storage size is invalid."
+      return String(
+        localized: "Can't add \(sourceName) (\(size)) because its storage size is invalid.")
     }
   }
 
@@ -1121,7 +1178,7 @@ final class ShelfModel: ObservableObject {
   }
 
   nonisolated private static func formattedByteCount(_ bytes: Int64) -> String {
-    ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    LocalizedFormat.bytes(bytes)
   }
 
   func remove(_ item: ShelfItem) async {
@@ -1147,7 +1204,7 @@ final class ShelfModel: ObservableObject {
       // final state is still achieved, so do not strand a ghost tile on the Shelf.
       await completeRemoval(of: item)
     case .failure(let error):
-      lastError = "Couldn’t remove \(item.name)."
+      lastError = String(localized: "Couldn’t remove \(item.name).")
       Log.app.error("Shelf removal failed: \(error.localizedDescription)")
     }
   }
@@ -1169,10 +1226,13 @@ final class ShelfModel: ObservableObject {
   func clear() async {
     guard !isClearing else { return }
     isClearing = true
+    let clearWaiters = clearStartWaiters
+    clearStartWaiters.removeAll()
+    for waiter in clearWaiters { waiter.resume() }
     defer { isClearing = false }
     await cancelPendingImports()
     let current = items
-    let previouslyVisibleThumbnailIDs = visibleThumbnailIDs
+    let previousThumbnailVisibilityOwners = thumbnailVisibilityOwners
     for item in current {
       cancelThumbnailWork(for: item.id, removingCachedThumbnailFor: item.url)
     }
@@ -1198,8 +1258,8 @@ final class ShelfModel: ObservableObject {
       manifest.items.removeAll { removedIDs.contains($0.id) }
       // A failed deletion leaves its tile in place. Restore any visible request that Clear
       // cancelled; SwiftUI does not call `onAppear` again for a view whose identity never changed.
-      for item in items where previouslyVisibleThumbnailIDs.contains(item.id) {
-        visibleThumbnailIDs.insert(item.id)
+      for item in items where previousThumbnailVisibilityOwners[item.id]?.isEmpty == false {
+        thumbnailVisibilityOwners[item.id] = previousThumbnailVisibilityOwners[item.id]
         requestThumbnail(for: item)
       }
       usageMutationGeneration &+= 1
@@ -1214,22 +1274,23 @@ final class ShelfModel: ObservableObject {
       }
       lastError =
         originalIDs.subtracting(removedIDs).isEmpty
-        ? nil : "Some Shelf items couldn’t be removed."
+        ? nil : String(localized: "Some Shelf items couldn’t be removed.")
       if lastError == nil { lastRejectedImportBytes = nil }
       _ = await persistManifest(reportingError: lastError == nil)
       scheduleExpiry()
     }
   }
 
-  func open(_ item: ShelfItem) {
+  @discardableResult
+  func open(_ item: ShelfItem) -> Bool {
     guard beginUsing(item) else {
-      lastError = "\(item.name) is no longer available."
-      return
+      lastError = String(localized: "\(item.name) is no longer available.")
+      return false
     }
-    guard NSWorkspace.shared.open(item.url) else {
+    guard openItem(item.url) else {
       endUsing(item)
-      lastError = "Couldn’t open \(item.name)."
-      return
+      lastError = String(localized: "Couldn’t open \(item.name).")
+      return false
     }
     // Keep the path stable while LaunchServices hands it to the destination app. Once that app has
     // opened the file, removing the Shelf directory entry cannot invalidate its open descriptor.
@@ -1238,19 +1299,20 @@ final class ShelfModel: ObservableObject {
       self?.endUsing(item)
     }
     lastError = nil
+    return true
   }
 
   func quickLook(_ item: ShelfItem) {
     guard beginUsing(item) else {
-      lastError = "\(item.name) is no longer available."
+      lastError = String(localized: "\(item.name) is no longer available.")
       return
     }
     guard quickLookController.present(item, onClose: { [weak self] in self?.endUsing(item) }) else {
       endUsing(item)
       lastError =
         FileManager.default.fileExists(atPath: item.url.path)
-        ? "Quick Look isn't available for \(item.name)."
-        : "\(item.name) is no longer available."
+        ? String(localized: "Quick Look isn't available for \(item.name).")
+        : String(localized: "\(item.name) is no longer available.")
       return
     }
     lastError = nil
@@ -1285,8 +1347,11 @@ final class ShelfModel: ObservableObject {
 
   func expirationText(for item: ShelfItem, now: Date = .now) -> String? {
     guard let expiry = item.expiresAt else { return nil }
-    if expiry <= now { return useCounts[item.id] == nil ? "Expired" : "Expires after use" }
-    return "Expires \(expiry.formatted(.relative(presentation: .named)))"
+    if expiry <= now {
+      return useCounts[item.id] == nil
+        ? String(localized: "Expired") : String(localized: "Expires after use")
+    }
+    return String(localized: "Expires \(expiry.formatted(.relative(presentation: .named)))")
   }
 
   func cleanupStorage() async {
@@ -1455,23 +1520,53 @@ final class ShelfModel: ObservableObject {
     items[idx].thumbnail = data
   }
 
+  private func hasThumbnailWork(for id: UUID) -> Bool {
+    activeThumbnailWork[id] != nil || queuedThumbnailWork.contains { $0.id == id }
+  }
+
+  private func notifyThumbnailCompletionIfNeeded(for id: UUID) {
+    guard !hasThumbnailWork(for: id) else { return }
+    let waiters = thumbnailWorkWaiters.removeValue(forKey: id) ?? []
+    for waiter in waiters { waiter.resume() }
+    notifyAllThumbnailWorkCompletionIfNeeded()
+  }
+
+  private func notifyAllThumbnailWorkCompletionIfNeeded() {
+    guard activeThumbnailWork.isEmpty, queuedThumbnailWork.isEmpty else { return }
+    let waiters = allThumbnailWorkWaiters
+    allThumbnailWorkWaiters.removeAll()
+    for waiter in waiters { waiter.resume() }
+  }
+
   /// Called by an item tile as it enters or leaves the horizontal viewport. There is deliberately
   /// no eager work on Shelf launch: `LazyHStack` asks for the visible tiles first.
   func setThumbnailVisibility(for item: ShelfItem, isVisible: Bool) {
+    setThumbnailVisibility(
+      for: item, owner: Self.legacyThumbnailVisibilityOwner, isVisible: isVisible)
+  }
+
+  func setThumbnailVisibility(for item: ShelfItem, owner: UUID, isVisible: Bool) {
     if !isVisible {
-      visibleThumbnailIDs.remove(item.id)
-      cancelThumbnailWork(for: item.id)
+      thumbnailVisibilityOwners[item.id]?.remove(owner)
+      if thumbnailVisibilityOwners[item.id]?.isEmpty != false {
+        thumbnailVisibilityOwners.removeValue(forKey: item.id)
+        cancelThumbnailWork(for: item.id)
+      }
       return
     }
     guard let currentItem = items.first(where: { $0.id == item.id && $0.url == item.url }) else {
       return
     }
-    visibleThumbnailIDs.insert(item.id)
+    thumbnailVisibilityOwners[item.id, default: []].insert(owner)
     requestThumbnail(for: currentItem)
   }
 
+  private func isThumbnailVisible(_ id: UUID) -> Bool {
+    thumbnailVisibilityOwners[id]?.isEmpty == false
+  }
+
   private func requestThumbnail(for item: ShelfItem) {
-    guard visibleThumbnailIDs.contains(item.id), let metadata = thumbnailMetadata(item.url) else {
+    guard isThumbnailVisible(item.id), let metadata = thumbnailMetadata(item.url) else {
       return
     }
     let cacheKey = ThumbnailCacheKey(url: item.url, metadata: metadata)
@@ -1502,7 +1597,7 @@ final class ShelfModel: ObservableObject {
       let nextIndex = queuedThumbnailWork.firstIndex(where: { activeThumbnailWork[$0.id] == nil })
     {
       let work = queuedThumbnailWork.remove(at: nextIndex)
-      guard visibleThumbnailIDs.contains(work.id),
+      guard isThumbnailVisible(work.id),
         items.contains(where: { $0.id == work.id && $0.url == work.url })
       else { continue }
       activeThumbnailWork[work.id] = work
@@ -1523,19 +1618,20 @@ final class ShelfModel: ObservableObject {
     let wasCancelled = cancelledThumbnailTokens.remove(work.token) != nil
     activeThumbnailWork.removeValue(forKey: work.id)
     thumbnailTasks.removeValue(forKey: work.id)
-    defer { startThumbnailWorkIfPossible() }
-    guard !wasCancelled,
-      visibleThumbnailIDs.contains(work.id),
+    if !wasCancelled,
+      isThumbnailVisible(work.id),
       items.contains(where: { $0.id == work.id && $0.url == work.url }),
       thumbnailMetadata(work.url) == work.cacheKey.metadata,
       let data
-    else { return }
-
-    // Keep one version per URL. This bounds the in-memory cache to the Shelf item limit while
-    // invalidating an entry as soon as modification metadata changes.
-    thumbnailCache = thumbnailCache.filter { $0.key.url != work.url || $0.key == work.cacheKey }
-    thumbnailCache[work.cacheKey] = data
-    setThumbnail(data, id: work.id)
+    {
+      // Keep one version per URL. This bounds the in-memory cache to the Shelf item limit while
+      // invalidating an entry as soon as modification metadata changes.
+      thumbnailCache = thumbnailCache.filter { $0.key.url != work.url || $0.key == work.cacheKey }
+      thumbnailCache[work.cacheKey] = data
+      setThumbnail(data, id: work.id)
+    }
+    startThumbnailWorkIfPossible()
+    notifyThumbnailCompletionIfNeeded(for: work.id)
   }
 
   private func cancelThumbnailWork(
@@ -1545,18 +1641,22 @@ final class ShelfModel: ObservableObject {
     if let work = activeThumbnailWork[id] { cancelledThumbnailTokens.insert(work.token) }
     thumbnailTasks[id]?.cancel()
     if let url {
-      visibleThumbnailIDs.remove(id)
+      thumbnailVisibilityOwners.removeValue(forKey: id)
       thumbnailCache = thumbnailCache.filter { $0.key.url != url }
     }
+    notifyThumbnailCompletionIfNeeded(for: id)
   }
 
   private func cancelAllThumbnailWork() {
-    visibleThumbnailIDs.removeAll()
+    let cancelledIDs = Set(queuedThumbnailWork.map(\.id)).union(thumbnailTasks.keys)
+    thumbnailVisibilityOwners.removeAll()
     queuedThumbnailWork.removeAll()
     for (id, task) in thumbnailTasks {
       if let work = activeThumbnailWork[id] { cancelledThumbnailTokens.insert(work.token) }
       task.cancel()
     }
+    for id in cancelledIDs { notifyThumbnailCompletionIfNeeded(for: id) }
+    notifyAllThumbnailWorkCompletionIfNeeded()
   }
 
   private static func thumbnailData(for url: URL) async -> Data? {
@@ -1598,6 +1698,23 @@ final class ShelfModel: ObservableObject {
     }
   }
 
+  private var isImportWorkerIdle: Bool {
+    importWorker == nil && importQueue.isEmpty && pendingImportCount == 0
+  }
+
+  private func finishImportWorker() {
+    importWorker = nil
+    startImportWorkerIfNeeded()
+    notifyImportCompletionIfIdle()
+  }
+
+  private func notifyImportCompletionIfIdle() {
+    guard isImportWorkerIdle else { return }
+    let waiters = importCompletionWaiters
+    importCompletionWaiters.removeAll()
+    for waiter in waiters { waiter.resume() }
+  }
+
   private func drainImportQueue(generation: UInt) async {
     var firstError: String?
     var firstRejectedBytes: Int64?
@@ -1622,8 +1739,7 @@ final class ShelfModel: ObservableObject {
     guard generation == importGeneration else { return }
     lastError = firstError
     lastRejectedImportBytes = firstRejectedBytes
-    importWorker = nil
-    startImportWorkerIfNeeded()
+    finishImportWorker()
   }
 
   private func cancelPendingImports() async {
@@ -1637,6 +1753,7 @@ final class ShelfModel: ObservableObject {
     await activeWorker?.value
     importWorker = nil
     startImportWorkerIfNeeded()
+    notifyImportCompletionIfIdle()
   }
 }
 

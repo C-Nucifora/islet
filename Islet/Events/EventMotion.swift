@@ -13,9 +13,20 @@ import SwiftUI
 ///    rather than removing the event.
 private struct EventMotionModifier: ViewModifier {
   let profile: MotionProfile
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var appeared = false
 
+  @ViewBuilder
   func body(content: Content) -> some View {
+    if reduceMotion {
+      content
+    } else {
+      animated(content: content)
+    }
+  }
+
+  @ViewBuilder
+  private func animated(content: Content) -> some View {
     switch profile {
     // Signal arcs filling outward from the dot.
     case .wifi:

@@ -1,4 +1,5 @@
 ISLET_PRODUCT_BUNDLE_IDENTIFIER = dev.islet
 ISLET_CODE_SIGN_IDENTITY = Islet Dev
 
+#include "Update.xcconfig"
 #include? "Islet.local.xcconfig"

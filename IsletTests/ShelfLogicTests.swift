@@ -7,6 +7,21 @@ import XCTest
 final class ShelfLogicTests: XCTestCase {
   private enum CopyFailure: Error { case expected }
 
+  @MainActor
+  func testOpenReportsFailureAndKeepsTheErrorVisible() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("blocked.txt")
+    try Data().write(to: url)
+    let model = ShelfModel(directory: directory, openItem: { _ in false })
+    let item = try XCTUnwrap(model.items.first)
+
+    XCTAssertFalse(model.open(item))
+    XCTAssertEqual(model.lastError, "Couldn’t open blocked.txt.")
+  }
+
   private final class RetryableStorage: @unchecked Sendable {
     private let lock = NSLock()
     private var available = false
@@ -30,48 +45,97 @@ final class ShelfLogicTests: XCTestCase {
     }
   }
 
-  private actor CopyProbe {
-    private var started = false
-
-    func markStarted() { started = true }
-    func hasStarted() -> Bool { started }
-  }
-
   private actor StagedCopyGate {
     private var started = false
     private var continuation: CheckedContinuation<Void, Never>?
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
 
     func copy(source: URL, to staging: URL) async -> Result<Void, Error> {
       let result = Result { try FileManager.default.copyItem(at: source, to: staging) }
       started = true
+      resumeStartWaiters()
       await withCheckedContinuation { continuation = $0 }
       return result
     }
 
     func hasStarted() -> Bool { started }
 
+    func waitUntilStarted() async {
+      guard !started else { return }
+      await withCheckedContinuation { startWaiters.append($0) }
+    }
+
     func release() {
       continuation?.resume()
       continuation = nil
+    }
+
+    private func resumeStartWaiters() {
+      let waiters = startWaiters
+      startWaiters.removeAll()
+      for waiter in waiters { waiter.resume() }
     }
   }
 
   private actor CompletedMoveGate {
     private var started = false
     private var continuation: CheckedContinuation<Void, Never>?
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
 
     func move(source: URL, to destination: URL) async -> Result<Void, Error> {
       let result = Result { try FileManager.default.moveItem(at: source, to: destination) }
       started = true
+      resumeStartWaiters()
       await withCheckedContinuation { continuation = $0 }
       return result
     }
 
     func hasStarted() -> Bool { started }
 
+    func waitUntilStarted() async {
+      guard !started else { return }
+      await withCheckedContinuation { startWaiters.append($0) }
+    }
+
     func release() {
       continuation?.resume()
       continuation = nil
+    }
+
+    private func resumeStartWaiters() {
+      let waiters = startWaiters
+      startWaiters.removeAll()
+      for waiter in waiters { waiter.resume() }
+    }
+  }
+
+  private actor FailingCopyGate {
+    private var started = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func copy(to staging: URL) async -> Result<Void, Error> {
+      try? Data("partial".utf8).write(to: staging)
+      started = true
+      resumeStartWaiters()
+      await withCheckedContinuation { continuation = $0 }
+      return .failure(CopyFailure.expected)
+    }
+
+    func waitUntilStarted() async {
+      guard !started else { return }
+      await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func release() {
+      continuation?.resume()
+      continuation = nil
+    }
+
+    private func resumeStartWaiters() {
+      let waiters = startWaiters
+      startWaiters.removeAll()
+      for waiter in waiters { waiter.resume() }
     }
   }
 
@@ -227,11 +291,14 @@ final class ShelfLogicTests: XCTestCase {
     private var maximumActiveCount = 0
     private var cancellationURLs: [URL] = []
     private var continuations: [CheckedContinuation<Data?, Never>] = []
+    private var requestWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var cancellationWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
     func generate(_ url: URL) async -> Data? {
       requestedURLs.append(url)
       activeCount += 1
       maximumActiveCount = max(maximumActiveCount, activeCount)
+      resumeRequestWaiters()
       let data = await withTaskCancellationHandler(
         operation: {
           await withCheckedContinuation { continuation in
@@ -250,6 +317,16 @@ final class ShelfLogicTests: XCTestCase {
     func maximumActiveRequests() -> Int { maximumActiveCount }
     func cancellationCount() -> Int { cancellationURLs.count }
 
+    func waitForRequestCount(atLeast count: Int) async {
+      guard requestedURLs.count < count else { return }
+      await withCheckedContinuation { requestWaiters.append((count, $0)) }
+    }
+
+    func waitForCancellationCount(atLeast count: Int) async {
+      guard cancellationURLs.count < count else { return }
+      await withCheckedContinuation { cancellationWaiters.append((count, $0)) }
+    }
+
     func releaseNext(with data: Data? = Data([1])) {
       guard !continuations.isEmpty else { return }
       continuations.removeFirst().resume(returning: data)
@@ -263,6 +340,19 @@ final class ShelfLogicTests: XCTestCase {
 
     private func recordCancellation(of url: URL) {
       cancellationURLs.append(url)
+      resumeCancellationWaiters()
+    }
+
+    private func resumeRequestWaiters() {
+      let ready = requestWaiters.filter { requestedURLs.count >= $0.0 }
+      requestWaiters.removeAll { requestedURLs.count >= $0.0 }
+      for (_, waiter) in ready { waiter.resume() }
+    }
+
+    private func resumeCancellationWaiters() {
+      let ready = cancellationWaiters.filter { cancellationURLs.count >= $0.0 }
+      cancellationWaiters.removeAll { cancellationURLs.count >= $0.0 }
+      for (_, waiter) in ready { waiter.resume() }
     }
   }
 
@@ -323,19 +413,53 @@ final class ShelfLogicTests: XCTestCase {
     model.setThumbnailVisibility(for: itemsByURL[first]!, isVisible: true)
     model.setThumbnailVisibility(for: itemsByURL[second]!, isVisible: true)
     model.setThumbnailVisibility(for: itemsByURL[third]!, isVisible: true)
-    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+    await renderer.waitForRequestCount(atLeast: 2)
 
     let initialRequests = await renderer.requests()
     let initialMaximum = await renderer.maximumActiveRequests()
     XCTAssertEqual(initialRequests, [first, second])
     XCTAssertEqual(initialMaximum, 2)
     await renderer.releaseNext()
-    for _ in 0..<100 where await renderer.requestCount() < 3 { await Task.yield() }
+    await renderer.waitForRequestCount(atLeast: 3)
     let allRequests = await renderer.requests()
     let maximum = await renderer.maximumActiveRequests()
     XCTAssertEqual(allRequests, [first, second, third])
     XCTAssertEqual(maximum, ShelfModel.maximumConcurrentThumbnailRequests)
     await renderer.releaseAll()
+    await model.waitForAllThumbnailWork()
+  }
+
+  @MainActor
+  func testThumbnailWorkContinuesUntilEveryVisiblePanelReleasesItsOwnership() async {
+    let shelf = URL(fileURLWithPath: "/Shelf")
+    let stored = shelf.appendingPathComponent("shared.pdf")
+    let metadata = ThumbnailMetadataStore(
+      [stored: ShelfThumbnailMetadata(modificationDate: .now, fileSize: 1)])
+    let renderer = ThumbnailGeneratorProbe()
+    let model = ShelfModel(
+      directory: shelf,
+      createDirectory: { _ in .success(()) },
+      listDirectory: { _ in .success([stored]) },
+      measureItem: { _ in .success(0) },
+      thumbnailMetadata: metadata.metadata,
+      generateThumbnailData: renderer.generate)
+    guard let item = model.items.first else {
+      return XCTFail("Expected the shared Shelf item")
+    }
+    let firstPanel = UUID()
+    let secondPanel = UUID()
+
+    model.setThumbnailVisibility(for: item, owner: firstPanel, isVisible: true)
+    model.setThumbnailVisibility(for: item, owner: secondPanel, isVisible: true)
+    for _ in 0..<100 where await renderer.requestCount() < 1 { await Task.yield() }
+    model.setThumbnailVisibility(for: item, owner: firstPanel, isVisible: false)
+    await renderer.releaseNext()
+    for _ in 0..<100 where model.items.first?.thumbnail == nil { await Task.yield() }
+
+    XCTAssertNotNil(model.items.first?.thumbnail)
+    let requestCount = await renderer.requestCount()
+    XCTAssertEqual(requestCount, 1)
+    model.setThumbnailVisibility(for: item, owner: secondPanel, isVisible: false)
   }
 
   @MainActor
@@ -359,14 +483,13 @@ final class ShelfLogicTests: XCTestCase {
     }
 
     model.setThumbnailVisibility(for: item, isVisible: true)
-    for _ in 0..<100 where await renderer.requestCount() < 1 { await Task.yield() }
+    await renderer.waitForRequestCount(atLeast: 1)
     await renderer.releaseNext()
-    for _ in 0..<100 where model.items.first?.thumbnail == nil { await Task.yield() }
+    await model.waitForThumbnailWork(for: item)
     XCTAssertNotNil(model.items.first?.thumbnail)
 
     model.setThumbnailVisibility(for: item, isVisible: false)
     model.setThumbnailVisibility(for: item, isVisible: true)
-    for _ in 0..<10 { await Task.yield() }
     let cachedRequestCount = await renderer.requestCount()
     XCTAssertEqual(cachedRequestCount, 1)
 
@@ -376,10 +499,11 @@ final class ShelfLogicTests: XCTestCase {
         modificationDate: originalDate.addingTimeInterval(1), fileSize: 1),
       for: stored)
     model.setThumbnailVisibility(for: item, isVisible: true)
-    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+    await renderer.waitForRequestCount(atLeast: 2)
     let refreshedRequestCount = await renderer.requestCount()
     XCTAssertEqual(refreshedRequestCount, 2)
     await renderer.releaseAll()
+    await model.waitForAllThumbnailWork()
   }
 
   @MainActor
@@ -403,20 +527,21 @@ final class ShelfLogicTests: XCTestCase {
     }
 
     model.setThumbnailVisibility(for: item, isVisible: true)
-    for _ in 0..<100 where await renderer.requestCount() < 1 { await Task.yield() }
+    await renderer.waitForRequestCount(atLeast: 1)
     metadata.set(
       ShelfThumbnailMetadata(modificationDate: originalDate.addingTimeInterval(1), fileSize: 1),
       for: stored)
     await renderer.releaseNext()
-    for _ in 0..<100 { await Task.yield() }
+    await model.waitForThumbnailWork(for: item)
     XCTAssertNil(model.items.first?.thumbnail)
 
     model.setThumbnailVisibility(for: item, isVisible: false)
     model.setThumbnailVisibility(for: item, isVisible: true)
-    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+    await renderer.waitForRequestCount(atLeast: 2)
     let requestCount = await renderer.requestCount()
     XCTAssertEqual(requestCount, 2)
     await renderer.releaseAll()
+    await model.waitForAllThumbnailWork()
   }
 
   @MainActor
@@ -439,13 +564,13 @@ final class ShelfLogicTests: XCTestCase {
     }
 
     model.setThumbnailVisibility(for: item, isVisible: true)
-    for _ in 0..<100 where await renderer.requestCount() < 1 { await Task.yield() }
+    await renderer.waitForRequestCount(atLeast: 1)
     model.setThumbnailVisibility(for: item, isVisible: false)
     model.setThumbnailVisibility(for: item, isVisible: true)
     await renderer.releaseNext()
-    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+    await renderer.waitForRequestCount(atLeast: 2)
     await renderer.releaseNext()
-    for _ in 0..<100 where model.items.first?.thumbnail == nil { await Task.yield() }
+    await model.waitForThumbnailWork(for: item)
 
     XCTAssertNotNil(model.items.first?.thumbnail)
   }
@@ -470,16 +595,17 @@ final class ShelfLogicTests: XCTestCase {
     let itemsByURL = Dictionary(uniqueKeysWithValues: model.items.map { ($0.url, $0) })
     model.setThumbnailVisibility(for: itemsByURL[first]!, isVisible: true)
     model.setThumbnailVisibility(for: itemsByURL[second]!, isVisible: true)
-    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+    await renderer.waitForRequestCount(atLeast: 2)
 
     await model.remove(itemsByURL[first]!)
     await model.clear()
-    for _ in 0..<100 where await renderer.cancellationCount() < 2 { await Task.yield() }
+    await renderer.waitForCancellationCount(atLeast: 2)
 
     let cancellationCount = await renderer.cancellationCount()
     XCTAssertEqual(cancellationCount, 2)
     XCTAssertTrue(model.items.isEmpty)
     await renderer.releaseAll()
+    await model.waitForAllThumbnailWork()
   }
 
   @MainActor
@@ -503,14 +629,14 @@ final class ShelfLogicTests: XCTestCase {
     }
 
     model.setThumbnailVisibility(for: item, isVisible: true)
-    for _ in 0..<100 where await renderer.requestCount() < 1 { await Task.yield() }
+    await renderer.waitForRequestCount(atLeast: 1)
     await model.clear()
-    for _ in 0..<100 where await renderer.cancellationCount() < 1 { await Task.yield() }
+    await renderer.waitForCancellationCount(atLeast: 1)
 
     await renderer.releaseNext()
-    for _ in 0..<100 where await renderer.requestCount() < 2 { await Task.yield() }
+    await renderer.waitForRequestCount(atLeast: 2)
     await renderer.releaseNext(with: Data([9]))
-    for _ in 0..<100 where model.items.first?.thumbnail == nil { await Task.yield() }
+    await model.waitForThumbnailWork(for: item)
 
     XCTAssertEqual(model.items.map(\.id), [item.id])
     XCTAssertEqual(model.items.first?.thumbnail, Data([9]))
@@ -662,9 +788,7 @@ final class ShelfLogicTests: XCTestCase {
     XCTAssertEqual(model.pendingImportCount, 1)
     XCTAssertTrue(model.isDropPresentationActive)
 
-    for _ in 0..<100 where model.pendingImportCount > 0 {
-      try await Task.sleep(for: .milliseconds(10))
-    }
+    await model.waitForImportCompletion()
 
     XCTAssertEqual(model.pendingImportCount, 0)
     XCTAssertFalse(model.isDropPresentationActive)
@@ -687,10 +811,7 @@ final class ShelfLogicTests: XCTestCase {
       copyItem: { source, staging in await gate.copy(source: source, to: staging) })
 
     let importTask = Task { await model.add(source) }
-    for _ in 0..<100 {
-      if await gate.hasStarted() { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    await gate.waitUntilStarted()
     let copyStarted = await gate.hasStarted()
     XCTAssertTrue(copyStarted)
 
@@ -777,9 +898,7 @@ final class ShelfLogicTests: XCTestCase {
 
     let model = ShelfModel(directory: shelfDirectory)
     XCTAssertTrue(model.importDroppedURLs([first, second]))
-    for _ in 0..<200 where model.pendingImportCount > 0 {
-      try await Task.sleep(for: .milliseconds(10))
-    }
+    await model.waitForImportCompletion()
 
     XCTAssertEqual(model.pendingImportCount, 0)
     XCTAssertEqual(model.items.count, ShelfModel.maximumItemCount)
@@ -812,9 +931,7 @@ final class ShelfLogicTests: XCTestCase {
     XCTAssertTrue(model.importDroppedURLs([failing]))
     XCTAssertTrue(model.importDroppedURLs([succeeding]))
 
-    for _ in 0..<200 where model.pendingImportCount > 0 {
-      try await Task.sleep(for: .milliseconds(10))
-    }
+    await model.waitForImportCompletion()
 
     XCTAssertEqual(model.pendingImportCount, 0)
     XCTAssertEqual(model.items.map(\.name), ["succeeding.txt"])
@@ -831,29 +948,22 @@ final class ShelfLogicTests: XCTestCase {
       at: temporaryRoot, withIntermediateDirectories: true)
     try Data("pending".utf8).write(to: source)
     defer { try? FileManager.default.removeItem(at: temporaryRoot) }
-    let probe = CopyProbe()
+    let gate = StagedCopyGate()
 
     let model = ShelfModel(
       directory: shelfDirectory,
-      copyItem: { source, destination in
-        await probe.markStarted()
-        return await Task.detached(priority: .utility) { () -> Result<Void, Error> in
-          usleep(150_000)
-          return Result { try FileManager.default.copyItem(at: source, to: destination) }
-        }.value
-      })
+      copyItem: { source, staging in await gate.copy(source: source, to: staging) })
     XCTAssertTrue(model.importDroppedURLs([source]))
-    for _ in 0..<100 {
-      if await probe.hasStarted() { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
-    let copyStarted = await probe.hasStarted()
+    await gate.waitUntilStarted()
+    let copyStarted = await gate.hasStarted()
     XCTAssertTrue(copyStarted)
 
-    await model.clear()
+    let clearTask = Task { await model.clear() }
+    await model.waitForClearToStart()
+    await gate.release()
+    await clearTask.value
     XCTAssertEqual(model.pendingImportCount, 0)
     XCTAssertTrue(model.items.isEmpty)
-    try await Task.sleep(for: .milliseconds(250))
 
     XCTAssertTrue(model.items.isEmpty)
     let remaining =
@@ -879,17 +989,12 @@ final class ShelfLogicTests: XCTestCase {
       })
 
     XCTAssertTrue(model.importDroppedURLs([source]))
-    for _ in 0..<100 {
-      if await gate.hasStarted() { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    await gate.waitUntilStarted()
     let moveStarted = await gate.hasStarted()
     XCTAssertTrue(moveStarted)
 
     let clearTask = Task { await model.clear() }
-    for _ in 0..<100 where !model.isClearing {
-      await Task.yield()
-    }
+    await model.waitForClearToStart()
     XCTAssertTrue(model.isClearing)
     await gate.release()
     await clearTask.value
@@ -910,29 +1015,18 @@ final class ShelfLogicTests: XCTestCase {
       at: temporaryRoot, withIntermediateDirectories: true)
     try Data("source".utf8).write(to: source)
     defer { try? FileManager.default.removeItem(at: temporaryRoot) }
-    let probe = CopyProbe()
+    let gate = FailingCopyGate()
 
     let model = ShelfModel(
       directory: shelfDirectory,
-      copyItem: { _, destination in
-        await Task.detached(priority: .utility) {
-          try? Data("partial".utf8).write(to: destination)
-        }.value
-        await probe.markStarted()
-        return await Task.detached(priority: .utility) { () -> Result<Void, Error> in
-          usleep(150_000)
-          return .failure(CopyFailure.expected)
-        }.value
-      })
+      copyItem: { _, staging in await gate.copy(to: staging) })
     XCTAssertTrue(model.importDroppedURLs([source]))
-    for _ in 0..<100 {
-      if await probe.hasStarted() { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
-    let copyStarted = await probe.hasStarted()
-    XCTAssertTrue(copyStarted)
+    await gate.waitUntilStarted()
 
-    await model.clear()
+    let clearTask = Task { await model.clear() }
+    await model.waitForClearToStart()
+    await gate.release()
+    await clearTask.value
 
     XCTAssertTrue(model.items.isEmpty)
     let remaining =
@@ -952,31 +1046,21 @@ final class ShelfLogicTests: XCTestCase {
     try Data("pending".utf8).write(to: pending)
     try Data("fresh".utf8).write(to: fresh)
     defer { try? FileManager.default.removeItem(at: temporaryRoot) }
-    let probe = CopyProbe()
+    let gate = StagedCopyGate()
 
     let model = ShelfModel(
       directory: shelfDirectory,
-      copyItem: { source, destination in
-        await probe.markStarted()
-        return await Task.detached(priority: .utility) {
-          usleep(150_000)
-          return Result { try FileManager.default.copyItem(at: source, to: destination) }
-        }.value
-      })
+      copyItem: { source, staging in await gate.copy(source: source, to: staging) })
     XCTAssertTrue(model.importDroppedURLs([pending]))
-    for _ in 0..<100 {
-      if await probe.hasStarted() { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    await gate.waitUntilStarted()
 
     let clearTask = Task { await model.clear() }
-    for _ in 0..<100 where !model.isClearing {
-      await Task.yield()
-    }
+    await model.waitForClearToStart()
     XCTAssertTrue(model.isClearing)
     XCTAssertFalse(model.importDroppedURLs([fresh]))
     XCTAssertEqual(model.pendingImportCount, 0)
 
+    await gate.release()
     await clearTask.value
     XCTAssertFalse(model.isClearing)
     XCTAssertTrue(model.items.isEmpty)
@@ -1176,10 +1260,7 @@ final class ShelfLogicTests: XCTestCase {
       storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 0))
 
     let firstTask = Task { await model.add(first) }
-    for _ in 0..<100 {
-      if await gate.hasStarted() { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    await gate.waitUntilStarted()
     let copyStarted = await gate.hasStarted()
     XCTAssertTrue(copyStarted)
 
@@ -1218,12 +1299,9 @@ final class ShelfLogicTests: XCTestCase {
       storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 0))
 
     XCTAssertTrue(model.importDroppedURLs([pending]))
-    for _ in 0..<100 {
-      if await gate.hasStarted() { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    await gate.waitUntilStarted()
     let clearTask = Task { await model.clear() }
-    for _ in 0..<100 where !model.isClearing { await Task.yield() }
+    await model.waitForClearToStart()
     await gate.release()
     await clearTask.value
 
@@ -1243,7 +1321,7 @@ final class ShelfLogicTests: XCTestCase {
       listDirectory: { _ in .success([stored]) },
       measureItem: { _ in .success(12) },
       storagePolicy: ShelfStoragePolicy(maximumBytes: 100, minimumFreeSpaceBytes: 25))
-    for _ in 0..<100 where model.currentUsageBytes == nil { await Task.yield() }
+    await model.waitForUsageMeasurement()
 
     XCTAssertEqual(model.currentUsageBytes, 12)
     XCTAssertEqual(model.storageUsageText, "12 bytes of 100 bytes")

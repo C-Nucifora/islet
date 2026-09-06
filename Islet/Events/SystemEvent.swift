@@ -15,9 +15,9 @@ enum SystemEventTier: Int, CaseIterable, Codable, Sendable {
 
   var label: String {
     switch self {
-    case .core: "Devices and power"
-    case .extended: "Network and session"
-    case .heuristic: "Inferred (may be late or wrong)"
+    case .core: String(localized: "Devices and power")
+    case .extended: String(localized: "Network and session")
+    case .heuristic: String(localized: "Inferred (may be late or wrong)")
     }
   }
 }
@@ -94,7 +94,7 @@ struct SystemEvent: Identifiable, Equatable, Sendable {
   var spokenAnnouncement: String {
     if let announcement { return announcement }
     guard let subtitle, !subtitle.isEmpty else { return title }
-    return "\(title), \(subtitle)"
+    return String(localized: "\(title), \(subtitle)", comment: "VoiceOver event announcement")
   }
 
   static func == (l: Self, r: Self) -> Bool {

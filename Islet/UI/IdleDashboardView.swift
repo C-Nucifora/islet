@@ -22,6 +22,8 @@ struct IdleDashboardView: View {
   @Default(.disabledActivities) private var disabledActivities
 
   @State private var showsAll = false
+  @State private var pendingPulseAction: PulseActionConfirmation?
+  @State private var pulseActionError: String?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -33,6 +35,32 @@ struct IdleDashboardView: View {
     }
     .foregroundStyle(.white)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .confirmationDialog(
+      "Open Pulse web destination?",
+      isPresented: Binding(
+        get: { pendingPulseAction != nil },
+        set: { if !$0 { pendingPulseAction = nil } }),
+      titleVisibility: .visible,
+      presenting: pendingPulseAction
+    ) { confirmation in
+      Button("Trust \(confirmation.destination.displayHost) and Open") {
+        pendingPulseAction = nil
+        handlePulseAction(PulseActionGate.shared.confirm(confirmation))
+      }
+      Button("Cancel", role: .cancel) { pendingPulseAction = nil }
+    } message: { confirmation in
+      Text(pulseConfirmationMessage(for: confirmation))
+    }
+    .alert(
+      "Pulse action blocked",
+      isPresented: Binding(
+        get: { pulseActionError != nil },
+        set: { if !$0 { pulseActionError = nil } })
+    ) {
+      Button("OK") { pulseActionError = nil }
+    } message: {
+      Text(pulseActionError ?? "")
+    }
   }
 
   private var keepAwakeControls: some View {
@@ -40,8 +68,11 @@ struct IdleDashboardView: View {
       Image(systemName: keepAwake.isActive ? "cup.and.heat.waves.fill" : "cup.and.heat.waves")
         .appThemeForeground(.interaction)
       VStack(alignment: .leading, spacing: 1) {
-        Text(keepAwake.isActive ? "Mac stays awake" : "Keep Mac awake")
-          .font(.caption.weight(.semibold))
+        Text(
+          keepAwake.isActive
+            ? String(localized: "Mac stays awake") : String(localized: "Keep Mac awake")
+        )
+        .font(.caption.weight(.semibold))
         if keepAwake.isActive {
           Text(keepAwake.lastError ?? keepAwake.statusText)
             .font(.caption2.monospacedDigit())
@@ -136,7 +167,11 @@ struct IdleDashboardView: View {
           }
         }
         if !overflow.overflow.isEmpty {
-          Button(showsAll ? "Show less" : "More (\(overflow.overflow.count))") {
+          Button(
+            showsAll
+              ? String(localized: "Show less")
+              : String(localized: "More (\(overflow.overflow.count))")
+          ) {
             withAnimation(Motion.gated(.snappy)) { showsAll.toggle() }
           }
           .buttonStyle(.link)
@@ -267,6 +302,8 @@ struct IdleDashboardView: View {
       onOpenActivity(id)
     case .openURL(let url):
       NSWorkspace.shared.open(url)
+    case .openPulseAction(let itemID, let actionID):
+      handlePulseAction(PulseActionGate.shared.requestOpen(itemID: itemID, actionID: actionID))
     case .openMeetingLink(let link):
       guard !link.trust.requiresConfirmation else { return }
       NSWorkspace.shared.open(link.url)
@@ -288,9 +325,32 @@ struct IdleDashboardView: View {
     }
   }
 
+  private func handlePulseAction(_ decision: PulseActionOpenDecision) {
+    switch decision {
+    case .opened: break
+    case .confirmationRequired(let confirmation): pendingPulseAction = confirmation
+    case .rejected(let message): pulseActionError = message
+    }
+  }
+
+  private func pulseConfirmationMessage(for confirmation: PulseActionConfirmation) -> String {
+    let locality =
+      confirmation.destination.kind == .loopback
+      ? "This is a local loopback destination and may control software running on this Mac."
+      : "This is an external destination."
+    let transport =
+      confirmation.destination.scheme == "http"
+      ? "The connection is unencrypted."
+      : "The connection uses HTTPS."
+    return
+      "Provider \(confirmation.provider.sourceKey) wants to open \(confirmation.destination.canonicalOrigin). \(locality) \(transport) Confirming trusts only this origin for this provider."
+  }
+
   private func dismiss(_ item: HomeAttentionItem) {
     if item.source == .pulse {
-      pulse.dismiss(item.stableID)
+      guard let pulseItem = pulse.items.first(where: { $0.id.stableIdentifier == item.stableID })
+      else { return }
+      pulse.dismiss(pulseItem.id)
     } else if item.source == .timer, item.state == "Done" {
       timer.cancel()
     } else {

@@ -6,6 +6,18 @@ import XCTest
 
 @MainActor
 final class T3CodeTests: XCTestCase {
+  func testAgentAccessibilityLabelIncludesEveryVisibleProgressField() {
+    let agent = T3AgentSnapshot(
+      logicalEnvironmentID: "local", threadID: "thread", title: "Fix accessibility",
+      project: "Islet", providerInstance: "provider", model: "model", branch: "fix/a11y",
+      phase: .working, planStep: "Run tests", completedPlanSteps: 3, totalPlanSteps: 5,
+      updatedAt: Date())
+
+    XCTAssertEqual(
+      agent.accessibilityLabel,
+      "Fix accessibility, Working, provider, model, Islet, branch fix/a11y, 3 of 5 plan steps complete, current step Run tests"
+    )
+  }
   func testCredentialVaultUsesTheCanonicalService() {
     XCTAssertEqual(T3CredentialStore.service, "dev.islet")
   }
@@ -35,20 +47,6 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(state.auth.bootstrapMethods, ["one-time-token"])
     XCTAssertEqual(state.auth.sessionMethods, ["bearer-access-token", "dpop-access-token"])
     XCTAssertEqual(state.auth.sessionCookieName, "t3_session")
-  }
-
-  func testCredentialMigrationPreservesCanonicalValuesAndImportsMissingLegacyValues() {
-    let merged = T3CredentialStore.merging(
-      current: ["shared": "current", "current-only": "current-token"],
-      legacy: [
-        ["shared": "old", "first": "first-token"],
-        ["first": "older-token", "second": "second-token"],
-      ])
-
-    XCTAssertEqual(merged["shared"], "current")
-    XCTAssertEqual(merged["current-only"], "current-token")
-    XCTAssertEqual(merged["first"], "first-token")
-    XCTAssertEqual(merged["second"], "second-token")
   }
 
   func testParsesHostedPairingLink() throws {
@@ -178,6 +176,7 @@ final class T3CodeTests: XCTestCase {
     XCTAssertEqual(form.pairingLink, "")
     XCTAssertFalse(form.allowInsecureHTTP)
     XCTAssertEqual(form.statusMessage, "Added T3 Code machine.")
+    XCTAssertEqual(form.statusSucceeded, true)
   }
 
   func testPairingFormSuccessKeepsAReplacementLinkTypedWhilePairing() throws {
@@ -203,6 +202,7 @@ final class T3CodeTests: XCTestCase {
     XCTAssertTrue(form.allowInsecureHTTP)
     XCTAssertEqual(form.focusedField, .pairingLink)
     XCTAssertEqual(form.statusMessage, "T3 Code returned HTTP 503.")
+    XCTAssertEqual(form.statusSucceeded, false)
   }
 
   func testPairingFormFailureDoesNotFocusAReplacementLinkTypedWhilePairing() throws {
@@ -230,6 +230,7 @@ final class T3CodeTests: XCTestCase {
     XCTAssertTrue(form.isPairing)
     XCTAssertEqual(form.pairingLink, second.pairingLink)
     XCTAssertNil(form.statusMessage)
+    XCTAssertNil(form.statusSucceeded)
   }
 
   func testAgentDerivationIsProviderNeutralAndPrioritizesQuestions() throws {
@@ -256,13 +257,36 @@ final class T3CodeTests: XCTestCase {
       """
     let shell = try JSONDecoder().decode(T3ShellSnapshot.self, from: Data(json.utf8))
     let agents = T3AgentSnapshot.activeAgents(
-      in: shell, logicalEnvironmentID: "machine",
+      in: shell, logicalEnvironmentID: "machine", isLocal: true,
       now: Date(timeIntervalSince1970: 1_788_000_000))
     XCTAssertEqual(agents.count, 1)
     XCTAssertEqual(agents[0].providerInstance, "Future Provider")
     XCTAssertEqual(agents[0].model, "future-1")
     XCTAssertEqual(agents[0].phase, .needsInput)
     XCTAssertEqual(agents[0].planStep, "Wire the API")
+    XCTAssertTrue(agents[0].isLocal)
+    XCTAssertEqual(agents[0].workspacePath, "/tmp/islet")
+  }
+
+  func testSessionActionsRejectUnsafePathsAndReconnectStaleAgents() {
+    XCTAssertNil(T3SessionActionPolicy.safeWorkspacePath("relative/private"))
+    XCTAssertNil(T3SessionActionPolicy.safeWorkspacePath(" /Users/test/private"))
+    XCTAssertNil(T3SessionActionPolicy.safeWorkspacePath("/Users/test/private\nnext"))
+    XCTAssertEqual(
+      T3SessionActionPolicy.safeWorkspacePath("/Users/test/Project Name"),
+      "/Users/test/Project Name")
+
+    let agent = Self.agent(
+      id: "approval", phase: .needsApproval,
+      updatedAt: Date(timeIntervalSince1970: 1_788_000_000))
+    let stale = T3EnvironmentSnapshot(
+      id: "remote|machine", logicalEnvironmentID: "machine", source: .manual,
+      label: "Office Mac", baseURL: "https://office.example", platform: nil,
+      serverVersion: nil, state: .reconnecting("No route"), agents: [agent], isStale: true)
+
+    XCTAssertEqual(
+      T3CodeActivity.sessionAvailability(for: agent, in: [stale]),
+      .reconnect(reason: "Office Mac is reconnecting. Reconnect to refresh it."))
   }
 
   func testAgentAttentionOrderCoversEveryPhase() {
@@ -1108,24 +1132,6 @@ final class T3CodeTests: XCTestCase {
         environmentID: "same", baseURL: "http://127.0.0.1:3773"),
       T3CodeActivity.remoteCredentialID(
         environmentID: "same", baseURL: "http://127.0.0.1:3773"))
-  }
-
-  func testExplicitLocalPairingReplacesObsoleteCredentialsWithoutMigratingThem() {
-    let current = "local|machine|http://127.0.0.1:4888/"
-    let old = "local|machine|http://127.0.0.1:3773/"
-    let replaced = T3CredentialStore.replacingLocalCredentials(
-      in: [
-        old: "scoped", "machine": "legacy",
-        "local|retired|http://127.0.0.1:3773/": "retired",
-        "remote|other|https://example.com/": "keep",
-      ],
-      token: "fresh", credentialID: current, environmentID: "machine")
-
-    XCTAssertEqual(replaced[current], "fresh")
-    XCTAssertNil(replaced[old])
-    XCTAssertNil(replaced["machine"])
-    XCTAssertNil(replaced["local|retired|http://127.0.0.1:3773/"])
-    XCTAssertEqual(replaced["remote|other|https://example.com/"], "keep")
   }
 
   func testPairingTargetsIdentifyLoopbackWithoutTrustingArbitraryHosts() throws {

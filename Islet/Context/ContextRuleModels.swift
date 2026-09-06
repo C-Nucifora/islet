@@ -15,14 +15,14 @@ enum ContextTriggerKind: String, CaseIterable, Codable, Identifiable, Sendable {
 
   var title: String {
     switch self {
-    case .focusMode: "Focus mode"
-    case .powerSource: "Power source"
-    case .lowPowerMode: "Low Power Mode"
-    case .frontmostApp: "Frontmost app"
-    case .fullscreenPresentation: "Fullscreen presentation"
-    case .timeRange: "Time range"
-    case .activeDisplay: "Active display"
-    case .wifiNetwork: "Wi-Fi network"
+    case .focusMode: String(localized: "Focus mode")
+    case .powerSource: String(localized: "Power source")
+    case .lowPowerMode: String(localized: "Low Power Mode")
+    case .frontmostApp: String(localized: "Frontmost app")
+    case .fullscreenPresentation: String(localized: "Fullscreen presentation")
+    case .timeRange: String(localized: "Time range")
+    case .activeDisplay: String(localized: "Active display")
+    case .wifiNetwork: String(localized: "Wi-Fi network")
     }
   }
 }
@@ -32,7 +32,9 @@ enum ContextPowerSource: String, CaseIterable, Codable, Identifiable, Sendable {
   case battery
 
   var id: Self { self }
-  var title: String { self == .ac ? "Power adapter" : "Battery" }
+  var title: String {
+    self == .ac ? String(localized: "Power adapter") : String(localized: "Battery")
+  }
 }
 
 struct ContextRuleTrigger: Codable, Equatable, Sendable {
@@ -82,11 +84,13 @@ struct ContextRuleAction: Codable, Equatable, Sendable {
 
   func summary(activityName: (String) -> String = ActivityCatalog.name) -> String {
     var changes: [String] = []
-    if let pulseDelivery { changes.append("Pulse: \(pulseDelivery.title)") }
-    if let energyMode { changes.append("Energy: \(energyMode.title)") }
+    if let pulseDelivery { changes.append(String(localized: "Pulse: \(pulseDelivery.title)")) }
+    if let energyMode { changes.append(String(localized: "Energy: \(energyMode.title)")) }
     let hidden = activityVisibility.filter { !$0.value }.keys.sorted().map(activityName)
-    if !hidden.isEmpty { changes.append("Hide: \(hidden.joined(separator: ", "))") }
-    return changes.isEmpty ? "No changes" : changes.joined(separator: " · ")
+    if !hidden.isEmpty {
+      changes.append(String(localized: "Hide: \(hidden.joined(separator: ", "))"))
+    }
+    return changes.isEmpty ? String(localized: "No changes") : changes.joined(separator: " · ")
   }
 }
 
@@ -96,7 +100,7 @@ struct ContextRule: Codable, Defaults.Serializable, Equatable, Identifiable, Sen
   static let maximumTriggerValueLength = 256
 
   var id = UUID()
-  var name = "New rule"
+  var name = String(localized: "New rule")
   var isEnabled = true
   var trigger = ContextRuleTrigger()
   var action = ContextRuleAction()
@@ -157,8 +161,10 @@ enum ContextRuleEvaluator {
   ) -> ContextRuleResolution {
     if let manualOverride, manualOverride.isActive(at: now) {
       return ContextRuleResolution(
-        title: "Manual override",
-        reason: "Expires \(manualOverride.expiresAt.formatted(date: .omitted, time: .shortened))",
+        title: String(localized: "Manual override"),
+        reason: String(
+          localized:
+            "Expires \(manualOverride.expiresAt.formatted(date: .omitted, time: .shortened))"),
         action: manualOverride.action, isManualOverride: true)
     }
 
@@ -179,37 +185,43 @@ enum ContextRuleEvaluator {
       guard let focus = snapshot.focusMode else { return nil }
       let wanted = normalized(trigger.text)
       guard wanted.isEmpty || normalized(focus) == wanted else { return nil }
-      return wanted.isEmpty ? "A Focus is active" : "Focus is \(focus)"
+      return wanted.isEmpty
+        ? String(localized: "A Focus is active") : String(localized: "Focus is \(focus)")
     case .powerSource:
       guard snapshot.powerSource == trigger.powerSource else { return nil }
-      return trigger.powerSource == .ac ? "Connected to a power adapter" : "Running on battery"
+      return trigger.powerSource == .ac
+        ? String(localized: "Connected to a power adapter")
+        : String(localized: "Running on battery")
     case .lowPowerMode:
       guard snapshot.lowPowerMode == trigger.boolean else { return nil }
-      return trigger.boolean ? "Low Power Mode is on" : "Low Power Mode is off"
+      return trigger.boolean
+        ? String(localized: "Low Power Mode is on") : String(localized: "Low Power Mode is off")
     case .frontmostApp:
       guard normalized(snapshot.frontmostBundleIdentifier) == normalized(trigger.text) else {
         return nil
       }
-      return "Frontmost app is \(trigger.text)"
+      return String(localized: "Frontmost app is \(trigger.text)")
     case .fullscreenPresentation:
       guard snapshot.isFullscreenPresentation == trigger.boolean else { return nil }
-      return trigger.boolean ? "A fullscreen presentation is active" : "No fullscreen presentation"
+      return trigger.boolean
+        ? String(localized: "A fullscreen presentation is active")
+        : String(localized: "No fullscreen presentation")
     case .timeRange:
       guard
         contains(
           minute: snapshot.minuteOfDay, start: trigger.startMinute, end: trigger.endMinute)
       else { return nil }
-      return "Current time is in the configured range"
+      return String(localized: "Current time is in the configured range")
     case .activeDisplay:
       let wanted = normalized(trigger.text)
       guard
         normalized(snapshot.activeDisplayID) == wanted
           || normalized(snapshot.activeDisplayName) == wanted
       else { return nil }
-      return "Active display is \(trigger.text)"
+      return String(localized: "Active display is \(trigger.text)")
     case .wifiNetwork:
       guard normalized(snapshot.wifiNetwork) == normalized(trigger.text) else { return nil }
-      return "Connected to \(trigger.text)"
+      return String(localized: "Connected to \(trigger.text)")
     }
   }
 
@@ -254,9 +266,9 @@ struct ContextRuleRuntime: Equatable, Sendable {
 extension EnergyMode {
   var title: String {
     switch self {
-    case .automatic: "Automatic"
-    case .lowEnergy: "Low Energy"
-    case .live: "Live"
+    case .automatic: String(localized: "Automatic")
+    case .lowEnergy: String(localized: "Low Energy")
+    case .live: String(localized: "Live")
     }
   }
 }

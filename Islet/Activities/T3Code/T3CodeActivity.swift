@@ -24,7 +24,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       let active =
         "\(liveAgentCount) active T3 Code agent\(liveAgentCount == 1 ? "" : "s")"
       guard staleAgentCount > 0 else { return active }
-      return "\(active); \(staleAgentCount) stale"
+      return String(localized: "\(active); \(staleAgentCount) stale")
     }
   }
 
@@ -170,6 +170,48 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   func reconnect() {
     restartMonitors(clearSnapshots: false)
     connectCoordinator.refreshNow()
+  }
+
+  func copyWorkspacePath(_ agent: T3AgentSnapshot) {
+    guard let path = T3SessionActionPolicy.safeWorkspacePath(agent.workspacePath) else { return }
+    Self.copy(path)
+  }
+
+  func revealWorkspace(_ agent: T3AgentSnapshot) {
+    guard agent.isLocal,
+      let path = T3SessionActionPolicy.safeWorkspacePath(agent.workspacePath)
+    else { return }
+    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+  }
+
+  func sessionAvailability(for agent: T3AgentSnapshot) -> T3SessionAvailability {
+    Self.sessionAvailability(for: agent, in: environments)
+  }
+
+  nonisolated static func sessionAvailability(
+    for agent: T3AgentSnapshot, in environments: [T3EnvironmentSnapshot]
+  ) -> T3SessionAvailability {
+    guard
+      let environment = environments.first(where: {
+        $0.agents.contains(where: { $0.id == agent.id })
+      })
+    else {
+      return .reconnect(reason: "This T3 Code machine is unavailable. Reconnect to refresh it.")
+    }
+    guard environment.state == .connected, !environment.isStale else {
+      return .reconnect(
+        reason:
+          "\(environment.label) is \(environment.state.label.lowercased()). Reconnect to refresh it."
+      )
+    }
+    return .available
+  }
+
+  var accessibilityPrimaryActionName: String? { "T3 Code reconnecting" }
+
+  func performAccessibilityPrimaryAction() -> Bool {
+    reconnect()
+    return true
   }
 
   func addRemote(pairingLink: String, allowInsecureHTTP: Bool = false) async throws {
@@ -381,7 +423,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
             T3EnvironmentSnapshot(
               id: Self.localSnapshotID(descriptor.environmentId),
               logicalEnvironmentID: descriptor.environmentId, source: .local,
-              label: descriptor.label.isEmpty ? "This Mac" : descriptor.label,
+              label: descriptor.label.isEmpty ? String(localized: "This Mac") : descriptor.label,
               baseURL: endpoint.baseURL.absoluteString, platform: nil,
               serverVersion: descriptor.serverVersion,
               state: .needsPairing, agents: []))
@@ -420,7 +462,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
             T3EnvironmentSnapshot(
               id: Self.localSnapshotID(descriptor.environmentId),
               logicalEnvironmentID: descriptor.environmentId, source: .local,
-              label: descriptor.label.isEmpty ? "This Mac" : descriptor.label,
+              label: descriptor.label.isEmpty ? String(localized: "This Mac") : descriptor.label,
               baseURL: endpoint.baseURL.absoluteString,
               platform: nil, serverVersion: descriptor.serverVersion,
               state: .needsPairing, agents: []))
@@ -555,7 +597,7 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       let busy = snapshot.agents.contains {
         [.working, .monitoring, .needsInput, .needsApproval].contains($0.phase)
       }
-      let expanded = ScreenManager.shared.viewModel?.state.isExpanded ?? false
+      let expanded = ScreenManager.shared.isAnyPanelExpanded
       let interval = Self.pollInterval(
         busy: busy, expanded: expanded, lowPowerMode: lowPowerMode,
         energyMode: ContextRuleCenter.shared.effectiveEnergyMode(
@@ -584,7 +626,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
         baseURL: endpoint.baseURL.absoluteString)
     }
     let agents = T3AgentSnapshot.activeAgents(
-      in: shell, logicalEnvironmentID: descriptor.environmentId, now: now)
+      in: shell, logicalEnvironmentID: descriptor.environmentId,
+      isLocal: source == .local, now: now)
     let platform = [descriptor.platform?.os, descriptor.platform?.arch]
       .compactMap { $0 }.joined(separator: " · ")
     return T3EnvironmentSnapshot(
@@ -605,7 +648,9 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     let environmentID = descriptor?.environmentId ?? provisionalLocalSnapshotID
     let platform = [descriptor?.platform?.os, descriptor?.platform?.arch]
       .compactMap { $0 }.joined(separator: " · ")
-    let label = descriptor.map { $0.label.isEmpty ? "This Mac" : $0.label } ?? "This Mac"
+    let label =
+      descriptor.map { $0.label.isEmpty ? String(localized: "This Mac") : $0.label }
+      ?? String(localized: "This Mac")
     return T3EnvironmentSnapshot(
       id: descriptor == nil ? provisionalLocalSnapshotID : localSnapshotID(environmentID),
       logicalEnvironmentID: environmentID, source: .local,
@@ -913,5 +958,10 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
     EnergyPolicy(
       mode: ContextRuleCenter.shared.effectiveEnergyMode(baseline: Defaults[.energyMode]),
       systemLowPowerMode: lowPowerMode)
+  }
+
+  private static func copy(_ value: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(value, forType: .string)
   }
 }

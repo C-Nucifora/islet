@@ -50,7 +50,7 @@ enum SettingsOpener {
   private static func createWindow(rootView: SettingsView) {
     let hosting = NSHostingController(rootView: rootView)
     let win = NSWindow(contentViewController: hosting)
-    win.title = "Settings"
+    win.title = String(localized: "Settings")
     win.styleMask = [.titled, .closable, .resizable]
     win.setContentSize(NSSize(width: 860, height: 650))
     win.contentMinSize = NSSize(width: 760, height: 560)

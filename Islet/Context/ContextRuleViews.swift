@@ -41,7 +41,10 @@ struct ContextRulesSettingsView: View {
               HStack(spacing: 10) {
                 Toggle("", isOn: enabledBinding(for: rule))
                   .labelsHidden()
-                  .help(rule.isEnabled ? "Disable \(rule.name)" : "Enable \(rule.name)")
+                  .help(
+                    rule.isEnabled
+                      ? String(localized: "Disable \(rule.name)")
+                      : String(localized: "Enable \(rule.name)"))
                 VStack(alignment: .leading, spacing: 2) {
                   Text(rule.name).font(.body.weight(.medium))
                   Text("\(rule.trigger.kind.title) · \(rule.action.summary())")

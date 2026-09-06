@@ -14,6 +14,11 @@ enum AdapterUpdate: Equatable {
 }
 
 enum AdapterParser {
+  struct ParsedSnapshot: Equatable {
+    let update: AdapterUpdate
+    let elapsedTime: TimeInterval?
+  }
+
   static func parse(line: String, current: PlaybackState?) -> AdapterUpdate {
     guard let data = line.data(using: .utf8),
       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -27,10 +32,18 @@ enum AdapterParser {
   /// The adapter's one-shot `get` command returns the payload without the stream envelope. Islet
   /// uses it once at startup to recover a track that was already playing before the stream began.
   static func parseSnapshot(line: String) -> AdapterUpdate {
+    parseSnapshotDetails(line: line)?.update ?? .ignored
+  }
+
+  /// Recovery needs to distinguish an omitted elapsed time from an explicit zero. PlaybackState
+  /// keeps its nonoptional presentation default, while this parser result preserves field presence.
+  static func parseSnapshotDetails(line: String) -> ParsedSnapshot? {
     guard let data = line.data(using: .utf8),
       let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    else { return .ignored }
-    return parse(payload: payload, isDiff: false, current: nil)
+    else { return nil }
+    return ParsedSnapshot(
+      update: parse(payload: payload, isDiff: false, current: nil),
+      elapsedTime: payload["elapsedTime"] as? Double)
   }
 
   private static func parse(
@@ -62,10 +75,18 @@ enum AdapterParser {
     }
     if let v = payload["playing"] as? Bool { state.isPlaying = v }
     if let v = payload["duration"] as? Double { state.duration = v }
+    if payload["duration"] is NSNull { state.duration = 0 }
     if let v = payload["elapsedTime"] as? Double {
       state.elapsed = v
       state.elapsedAt = Date()
     }
+    if payload.keys.contains("isLive") {
+      state.isLive = payload["isLive"] as? Bool ?? false
+    } else if payload.keys.contains("isLiveStream") {
+      state.isLive = payload["isLiveStream"] as? Bool ?? false
+    }
+    if let v = payload["supportsSeeking"] as? Bool { state.supportsSeeking = v }
+    if payload["supportsSeeking"] is NSNull { state.supportsSeeking = nil }
     if let v = payload["artworkData"] as? String {
       let policy = ArtworkDecodePolicy.standard
       state.artwork =

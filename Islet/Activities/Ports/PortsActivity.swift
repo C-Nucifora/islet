@@ -84,6 +84,11 @@ struct PortsView: View {
               }
               .padding(.vertical, 3).padding(.horizontal, 6)
               .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+              .accessibilityElement(children: .ignore)
+              .accessibilityLabel(
+                ActivityAccessibilityText.portDevice(
+                  name: device.name, vendor: device.vendor, speed: device.speed,
+                  port: device.portLabel))
             }
           }
         }

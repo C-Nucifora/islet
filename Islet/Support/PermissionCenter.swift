@@ -56,12 +56,12 @@ enum EventKitPermissionState: Equatable, Sendable {
 
   var summary: String {
     switch self {
-    case .notDetermined: "Not requested"
-    case .denied: "Denied"
-    case .restricted: "Restricted"
-    case .writeOnly: "Write only"
-    case .fullAccess: "Full access"
-    case .unknown(let value): "Unknown (\(value))"
+    case .notDetermined: String(localized: "Not requested")
+    case .denied: String(localized: "Denied")
+    case .restricted: String(localized: "Restricted")
+    case .writeOnly: String(localized: "Write only")
+    case .fullAccess: String(localized: "Full access")
+    case .unknown(let value): String(localized: "Unknown (\(value))")
     }
   }
 }
@@ -75,11 +75,11 @@ enum PlatformPermissionState: Equatable, Sendable {
 
   var summary: String {
     switch self {
-    case .notDetermined: "Not requested"
-    case .granted: "Allowed"
-    case .denied: "Denied"
-    case .restricted: "Restricted"
-    case .unavailable: "Unavailable"
+    case .notDetermined: String(localized: "Not requested")
+    case .granted: String(localized: "Allowed")
+    case .denied: String(localized: "Denied")
+    case .restricted: String(localized: "Restricted")
+    case .unavailable: String(localized: "Unavailable")
     }
   }
 }

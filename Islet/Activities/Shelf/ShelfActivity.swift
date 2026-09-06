@@ -1,6 +1,17 @@
 import Combine
 import SwiftUI
 
+private struct ShelfDropTargetedEnvironmentKey: EnvironmentKey {
+  static let defaultValue = false
+}
+
+extension EnvironmentValues {
+  var shelfDropTargeted: Bool {
+    get { self[ShelfDropTargetedEnvironmentKey.self] }
+    set { self[ShelfDropTargetedEnvironmentKey.self] = newValue }
+  }
+}
+
 /// Surfaces the file shelf in the island: a tray indicator in the compact view and a drop grid
 /// (open, drag-out, and AirDrop) when expanded. Active while it holds files or a drop is underway.
 @MainActor
@@ -60,12 +71,28 @@ final class ShelfActivity: NotchActivity, ObservableObject {
 
   var shelfView: ShelfView { ShelfView(model: model, airDrop: airDrop) }
   var expandedView: AnyView { AnyView(shelfView) }
+
+  var accessibilityPrimaryActionName: String? {
+    model.items.first.map { "Opened \($0.name)" }
+  }
+
+  func performAccessibilityPrimaryAction() -> Bool {
+    guard let item = model.items.first else { return false }
+    return model.open(item)
+  }
+
+  func dismissAccessibilityTransient() -> Bool {
+    guard model.lastError != nil else { return false }
+    model.dismissError()
+    return true
+  }
 }
 
 struct ShelfView: View {
   @ObservedObject var model: ShelfModel
   @ObservedObject var airDrop: AirDropShareController
   @Environment(\.appTheme) private var appTheme
+  @Environment(\.shelfDropTargeted) private var shelfDropTargeted
   @State private var isCreatingStack = false
   @State private var newStackName = ""
 
@@ -222,6 +249,9 @@ struct ShelfView: View {
             .foregroundStyle(.secondary)
           }
           .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel("Empty Shelf drop area")
+          .accessibilityHint("Drag files to the island to add them")
       } else {
         ScrollView(.horizontal, showsIndicators: false) {
           LazyHStack(spacing: 10) {
@@ -238,7 +268,7 @@ struct ShelfView: View {
     .contentShape(Rectangle())
     .onAppear { airDrop.refreshAvailability() }
     .overlay {
-      if model.isDragActive {
+      if shelfDropTargeted {
         RoundedRectangle(cornerRadius: 12)
           .strokeBorder(appTheme.color(for: .shelf), lineWidth: 2)
       }
@@ -246,17 +276,21 @@ struct ShelfView: View {
   }
 
   private var airDropHelp: String {
-    if !airDrop.isServiceAvailable { return "AirDrop is unavailable on this Mac" }
-    if airDrop.isSharing { return "AirDrop share in progress" }
-    if airDrop.state == .busy { return "Another AirDrop share is in progress" }
-    return "Share all Shelf items with AirDrop"
+    if !airDrop.isServiceAvailable {
+      return String(localized: "AirDrop is unavailable on this Mac")
+    }
+    if airDrop.isSharing { return String(localized: "AirDrop share in progress") }
+    if airDrop.state == .busy {
+      return String(localized: "Another AirDrop share is in progress")
+    }
+    return String(localized: "Share all Shelf items with AirDrop")
   }
 
   private var airDropHint: String {
-    if !airDrop.isServiceAvailable { return "AirDrop is unavailable" }
-    if airDrop.isSharing { return "Wait for the current share to finish" }
-    if airDrop.state == .busy { return "Another Shelf share must finish first" }
-    return "Opens AirDrop for every item on the Shelf"
+    if !airDrop.isServiceAvailable { return String(localized: "AirDrop is unavailable") }
+    if airDrop.isSharing { return String(localized: "Wait for the current share to finish") }
+    if airDrop.state == .busy { return String(localized: "Another Shelf share must finish first") }
+    return String(localized: "Opens AirDrop for every item on the Shelf")
   }
 
   private var airDropFeedback: AirDropFeedback? {
@@ -356,6 +390,7 @@ struct ShelfItemView: View {
   @ObservedObject var model: ShelfModel
   @State private var hovering = false
   @State private var thumbnailImage: NSImage?
+  @State private var thumbnailVisibilityOwner = UUID()
 
   var body: some View {
     VStack(spacing: 3) {
@@ -400,10 +435,14 @@ struct ShelfItemView: View {
     }
     .onHover { hovering = $0 }
     .onAppear {
-      model.setThumbnailVisibility(for: item, isVisible: true)
+      model.setThumbnailVisibility(
+        for: item, owner: thumbnailVisibilityOwner, isVisible: true)
       updateThumbnail()
     }
-    .onDisappear { model.setThumbnailVisibility(for: item, isVisible: false) }
+    .onDisappear {
+      model.setThumbnailVisibility(
+        for: item, owner: thumbnailVisibilityOwner, isVisible: false)
+    }
     .onChange(of: item.thumbnail) { _, _ in updateThumbnail() }
     .accessibilityElement(children: .contain)
     .contextMenu {

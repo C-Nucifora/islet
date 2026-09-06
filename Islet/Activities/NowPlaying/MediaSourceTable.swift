@@ -13,10 +13,6 @@ struct MediaSourceTable: Equatable {
   private(set) var firstSeen: [SourceID: Date] = [:]
   /// When each paused source becomes eligible for eviction. Absent while playing.
   private(set) var idleDeadlines: [SourceID: Date] = [:]
-  /// Display identities that CoreAudio currently reports as producing output. MediaRemote can
-  /// leave a browser session marked paused while its audio helper is still playing.
-  private(set) var activeAudioBundleIdentifiers: Set<String> = []
-
   init(idleTimeout: TimeInterval = 60) { self.idleTimeout = idleTimeout }
 
   var isEmpty: Bool { states.isEmpty }
@@ -24,22 +20,8 @@ struct MediaSourceTable: Equatable {
   /// The soonest idle deadline, so a single timer can drive expiry for the whole table.
   var nextDeadline: Date? { idleDeadlines.values.min() }
 
-  /// States corrected for presentation using the independent CoreAudio playback signal.
-  var presentationStates: [SourceID: PlaybackState] {
-    Dictionary(
-      uniqueKeysWithValues: states.map { key, state in
-        guard !state.isPlaying, isEffectivelyPlaying(key, state: state) else {
-          return (key, state)
-        }
-        var presented = state
-        presented.isPlaying = true
-        return (key, presented)
-      })
-  }
-
-  private func isEffectivelyPlaying(_ key: SourceID, state: PlaybackState) -> Bool {
-    state.isPlaying || activeAudioBundleIdentifiers.contains(key.displayBundleIdentifier)
-  }
+  /// Adapter-backed states used for the now-playing presentation.
+  var presentationStates: [SourceID: PlaybackState] { states }
 
   /// Inserts or updates a source. Returns true when the key was not already present.
   @discardableResult
@@ -47,14 +29,20 @@ struct MediaSourceTable: Equatable {
     let isNew = states[key] == nil
     states[key] = state
     if isNew { firstSeen[key] = now }
-    if isEffectivelyPlaying(key, state: state) {
+    updateIdleDeadline(for: key, state: state, now: now)
+    return isNew
+  }
+
+  private mutating func updateIdleDeadline(
+    for key: SourceID, state: PlaybackState, now: Date
+  ) {
+    if state.isPlaying {
       idleDeadlines[key] = nil
     } else if idleDeadlines[key] == nil {
       // The countdown starts when playback pauses, and repeated paused updates do not push it
       // back — otherwise a chatty player keeps a paused track on screen forever.
       idleDeadlines[key] = now.addingTimeInterval(idleTimeout)
     }
-    return isNew
   }
 
   /// Removes a source. Returns true when something was actually removed.
@@ -72,18 +60,21 @@ struct MediaSourceTable: Equatable {
     idleDeadlines.removeAll()
   }
 
-  /// Reconciles MediaRemote's sometimes-stale paused flag with CoreAudio's live process signal.
-  mutating func setActiveAudioSources(_ sources: [SourceID], now: Date) {
-    activeAudioBundleIdentifiers = Set(sources.map(\.displayBundleIdentifier))
-    for (key, state) in states {
-      if isEffectivelyPlaying(key, state: state) {
-        idleDeadlines[key] = nil
-      } else if idleDeadlines[key] == nil {
-        idleDeadlines[key] = now.addingTimeInterval(idleTimeout)
-      }
-    }
+  /// Applies a validated local seek immediately. The next adapter record always wins, even when
+  /// its position contradicts this optimistic value: the transport exposes no sequence number or
+  /// acknowledgement marker that could distinguish a delayed record from a newer external seek.
+  @discardableResult
+  mutating func seek(_ key: SourceID, to requestedPosition: TimeInterval, now: Date)
+    -> TimeInterval?
+  {
+    guard var state = states[key], state.seekability == .seekable, requestedPosition.isFinite
+    else { return nil }
+    let target = min(max(0, requestedPosition), state.duration)
+    state.elapsed = target
+    state.elapsedAt = now
+    states[key] = state
+    return target
   }
-
   /// Evicts every source whose paused deadline has passed. Returns the keys removed.
   @discardableResult
   mutating func expire(now: Date) -> [SourceID] {
@@ -105,8 +96,8 @@ struct MediaSourceTable: Equatable {
       }
       .sorted { left, right in
         if left.1 != right.1 { return left.1 < right.1 }
-        let leftPlaying = states[left.0].map { isEffectivelyPlaying(left.0, state: $0) } ?? false
-        let rightPlaying = states[right.0].map { isEffectivelyPlaying(right.0, state: $0) } ?? false
+        let leftPlaying = states[left.0]?.isPlaying ?? false
+        let rightPlaying = states[right.0]?.isPlaying ?? false
         if leftPlaying != rightPlaying { return leftPlaying }
         let leftSeen = firstSeen[left.0] ?? .distantPast
         let rightSeen = firstSeen[right.0] ?? .distantPast
@@ -187,12 +178,18 @@ enum MediaSourceChooser {
   static func accessibilityLabel(
     appName: String, isPlaying: Bool, isPrimary: Bool, isAdapterBacked: Bool = true
   ) -> String {
-    let status = isAdapterBacked ? (isPlaying ? "Playing" : "Paused") : "Audio detected only"
-    return "\(appName), \(status), \(isPrimary ? "Primary source" : "Additional source")"
+    let status =
+      isAdapterBacked
+      ? (isPlaying ? String(localized: "Playing") : String(localized: "Paused"))
+      : String(localized: "Audio detected only")
+    let rank =
+      isPrimary ? String(localized: "Primary source") : String(localized: "Additional source")
+    return String(localized: "\(appName), \(status), \(rank)")
   }
 
   static func accessibilityHint(appName: String, isAdapterBacked: Bool = true) -> String {
-    if isAdapterBacked { return "Makes \(appName) the preferred player" }
-    return "Brings \(appName) forward; Islet cannot control this audio source directly"
+    if isAdapterBacked { return String(localized: "Makes \(appName) the preferred player") }
+    return String(
+      localized: "Brings \(appName) forward; Islet cannot control this audio source directly")
   }
 }

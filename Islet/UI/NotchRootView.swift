@@ -62,6 +62,7 @@ struct NotchRootView: View {
   @ObservedObject private var keepAwake = KeepAwakeManager.shared
   @Default(.appTheme) private var appTheme
   @Default(.batteryGraphStyle) private var batteryGraphStyle
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var compactLeadingWidth: CGFloat = 0
   @State private var compactTrailingWidth: CGFloat = 0
 
@@ -287,7 +288,9 @@ struct NotchRootView: View {
       // content so replacing the system OSD never produces an invisible change.
       if let snapshot = hud.hud {
         ExpandedHUDOverlay(snapshot: snapshot)
-          .transition(.opacity.combined(with: .scale(scale: 0.94)))
+          .transition(
+            reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.94))
+          )
           .zIndex(2)
       }
     }
@@ -330,7 +333,9 @@ private struct KeepAwakeCompactIcon: View {
       .font(.caption2)
       .foregroundStyle(releasePending ? Color.orange : appTheme.color(for: .interaction))
       .accessibilityLabel(
-        releasePending ? "Keep-awake assertion release pending" : "Keep awake active")
+        releasePending
+          ? String(localized: "Keep-awake assertion release pending")
+          : String(localized: "Keep awake active"))
   }
 }
 
@@ -348,7 +353,9 @@ private struct ExpandedHUDOverlay: View {
     .overlay(Capsule().stroke(.white.opacity(0.14), lineWidth: 1))
     .shadow(color: .black.opacity(0.5), radius: 8, y: 3)
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel(snapshot.kind == .volume ? "Volume" : "Brightness")
+    .accessibilityLabel(
+      snapshot.kind == .volume ? String(localized: "Volume") : String(localized: "Brightness")
+    )
     .accessibilityValue("\(Int((snapshot.level * 100).rounded())) percent")
   }
 }

@@ -26,6 +26,35 @@ enum PulseState: String, Codable, Sendable {
   case succeeded
   case failed
   case cancelled
+  /// Set by Islet after provider silence. Providers cannot set this state directly.
+  case stale
+
+  var receivesStaleDeadline: Bool {
+    switch self {
+    case .active, .progress, .needsAction: true
+    case .succeeded, .failed, .cancelled, .stale: false
+    }
+  }
+}
+
+struct PulseStalenessPolicy: Equatable, Sendable {
+  static let defaultTimeout: TimeInterval = 5 * 60
+  static let defaultRetention: TimeInterval = 60 * 60
+
+  let timeout: TimeInterval
+  let retention: TimeInterval
+
+  init(
+    timeout: TimeInterval = Self.defaultTimeout,
+    retention: TimeInterval = Self.defaultRetention
+  ) {
+    self.timeout = Self.validInterval(timeout, fallback: Self.defaultTimeout)
+    self.retention = Self.validInterval(retention, fallback: Self.defaultRetention)
+  }
+
+  private static func validInterval(_ value: TimeInterval, fallback: TimeInterval) -> TimeInterval {
+    value.isFinite && value > 0 ? value : fallback
+  }
 }
 
 struct PulseAction: Codable, Equatable, Identifiable, Sendable {
@@ -38,6 +67,8 @@ struct PulseAction: Codable, Equatable, Identifiable, Sendable {
     self.title = title
     self.url = url
   }
+
+  var destination: PulseActionDestination? { try? PulseActionDestination.validate(url) }
 }
 
 /// The deliberately small wire payload accepted from local providers. Optional presentation fields
@@ -56,11 +87,37 @@ struct PulsePayload: Codable, Equatable, Sendable {
   var actions: [PulseAction]?
 }
 
+enum PulseRevision {
+  /// JSON integers above 2^53 - 1 are not represented exactly by every provider runtime.
+  static let maximum: UInt64 = 9_007_199_254_740_991
+
+  static func validate(_ value: UInt64?) throws {
+    guard let value else { return }
+    guard value <= maximum else { throw PulseValidationError.invalidRevision }
+  }
+}
+
 struct PulseItem: Equatable, Identifiable, Sendable {
+  struct ID: Equatable, Hashable, Sendable {
+    let normalizedSource: String
+    let providerIdentifier: String
+
+    init(source: String, providerIdentifier: String) throws {
+      normalizedSource = try PulseItem.normalizedSourceKey(source)
+      self.providerIdentifier = try PulseItem.normalizedIdentifier(providerIdentifier)
+    }
+
+    var stableIdentifier: String {
+      "\(normalizedSource.utf8.count):\(normalizedSource)\(providerIdentifier)"
+    }
+  }
+
   static let maximumIdentifierLength = 128
   static let maximumActionURLLength = 2_048
 
-  var id: String
+  let id: ID
+  let providerIdentity: PulseProviderIdentity
+  var providerIdentifier: String
   var source: String
   var title: String
   var subtitle: String?
@@ -73,16 +130,26 @@ struct PulseItem: Equatable, Identifiable, Sendable {
   var createdAt: Date
   var updatedAt: Date
   var expiresAt: Date?
+  var staleAt: Date?
+  var staleRemovalAt: Date?
+  var isStaleKept: Bool
   var actions: [PulseAction]
 
   init(
-    payload: PulsePayload,
-    now: Date,
-    previous: PulseItem? = nil,
+    payload: PulsePayload, now: Date, previous: PulseItem? = nil,
+    providerIdentity suppliedProviderIdentity: PulseProviderIdentity? = nil,
+    staleTimeout: TimeInterval = PulseStalenessPolicy.defaultTimeout,
     symbolAvailability: (String) -> Bool? = PulseSymbolValidator.platformAvailability
   ) throws {
-    id = try Self.clean(payload.id, field: "id", limit: Self.maximumIdentifierLength)
-    source = try Self.clean(payload.source, field: "source", limit: 80)
+    providerIdentifier = try Self.normalizedIdentifier(payload.id)
+    source = try Self.normalizedSource(payload.source)
+    id = try ID(source: source, providerIdentifier: providerIdentifier)
+    providerIdentity =
+      try suppliedProviderIdentity
+      ?? PulseProviderIdentity(credentialID: "source-local", source: source)
+    guard providerIdentity.sourceKey == id.normalizedSource else {
+      throw PulseValidationError.unsafeProviderIdentity
+    }
     title = try Self.clean(payload.title, field: "title", limit: 180)
     if let raw = payload.subtitle?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
       guard raw.count <= 240 else { throw PulseValidationError.tooLong("subtitle", 240) }
@@ -110,29 +177,23 @@ struct PulseItem: Equatable, Identifiable, Sendable {
       progress = nil
     }
     state = payload.state ?? (progress == nil ? .active : .progress)
+    guard state != .stale else { throw PulseValidationError.providerSetStale }
     priority = payload.priority ?? .normal
     createdAt = previous?.createdAt ?? now
     updatedAt = now
     expiresAt = payload.expiresAt
     guard (expiresAt ?? now) >= now else { throw PulseValidationError.expired }
+    let timeout = PulseStalenessPolicy(timeout: staleTimeout).timeout
+    staleAt = state.receivesStaleDeadline ? now.addingTimeInterval(timeout) : nil
+    staleRemovalAt = nil
+    isStaleKept = false
     let incomingActions = payload.actions ?? []
     guard incomingActions.count <= 3 else { throw PulseValidationError.tooManyActions }
     actions = try incomingActions.map { action in
-      let id = try Self.clean(
-        action.id, field: "action id", limit: Self.maximumIdentifierLength)
+      let id = try Self.cleanIdentity(
+        action.id, field: "action id", byteLimit: Self.maximumIdentifierLength)
       let title = try Self.clean(action.title, field: "action title", limit: 60)
-      let urlString = action.url.absoluteString
-      guard urlString.count <= Self.maximumActionURLLength else {
-        throw PulseValidationError.tooLong("action URL", Self.maximumActionURLLength)
-      }
-      guard
-        let components = URLComponents(url: action.url, resolvingAgainstBaseURL: false),
-        let scheme = components.scheme?.lowercased(),
-        ["http", "https"].contains(scheme),
-        components.host?.isEmpty == false,
-        components.user == nil,
-        components.password == nil
-      else { throw PulseValidationError.unsafeActionURL }
+      _ = try PulseActionDestination.validate(action.url)
       return PulseAction(id: id, title: title, url: action.url)
     }
     guard Set(actions.map(\.id)).count == actions.count else {
@@ -141,17 +202,32 @@ struct PulseItem: Equatable, Identifiable, Sendable {
   }
 
   static func normalizedIdentifier(_ value: String) throws -> String {
-    try clean(value, field: "id", limit: maximumIdentifierLength)
+    try cleanIdentity(value, field: "id", byteLimit: maximumIdentifierLength)
   }
 
   static func normalizedSource(_ value: String) throws -> String {
-    try clean(value, field: "source", limit: 80)
+    try cleanIdentity(value, field: "source", byteLimit: 80)
+  }
+
+  static func normalizedSourceKey(_ value: String) throws -> String {
+    try normalizedSource(value).lowercased()
   }
 
   private static func clean(_ value: String, field: String, limit: Int) throws -> String {
     let result = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !result.isEmpty else { throw PulseValidationError.empty(field) }
     guard result.count <= limit else { throw PulseValidationError.tooLong(field, limit) }
+    return result
+  }
+
+  private static func cleanIdentity(_ value: String, field: String, byteLimit: Int) throws
+    -> String
+  {
+    let result = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !result.isEmpty else { throw PulseValidationError.empty(field) }
+    guard result.utf8.count <= byteLimit else {
+      throw PulseValidationError.tooLongUTF8(field, byteLimit)
+    }
     return result
   }
 
@@ -207,10 +283,12 @@ enum PulseSymbolWarning: LocalizedError, Equatable, Sendable {
 
   var errorDescription: String? {
     switch self {
-    case .empty: "symbol was empty; using waveform.path.ecg"
-    case .invalid: "symbol is not available on this macOS version; using waveform.path.ecg"
+    case .empty: String(localized: "symbol was empty; using waveform.path.ecg")
+    case .invalid:
+      String(localized: "symbol is not available on this macOS version; using waveform.path.ecg")
     case .platformUnavailable:
-      "symbol validation is unavailable on this platform; using waveform.path.ecg"
+      String(
+        localized: "symbol validation is unavailable on this platform; using waveform.path.ecg")
     }
   }
 }
@@ -218,23 +296,37 @@ enum PulseSymbolWarning: LocalizedError, Equatable, Sendable {
 enum PulseValidationError: LocalizedError, Equatable {
   case empty(String)
   case tooLong(String, Int)
+  case tooLongUTF8(String, Int)
   case invalidProgress
   case invalidAccentHex
   case expired
+  case providerSetStale
   case tooManyActions
   case duplicateActionID
   case unsafeActionURL
+  case invalidRevision
+  case unsafeProviderIdentity
 
   var errorDescription: String? {
     switch self {
-    case .empty(let field): "\(field) must not be empty"
-    case .tooLong(let field, let limit): "\(field) exceeds \(limit) characters"
-    case .invalidProgress: "progress must be a finite number from 0 through 1"
-    case .invalidAccentHex: "accentHex must use #RRGGBB format"
-    case .expired: "expiresAt is already in the past"
-    case .tooManyActions: "an activity may expose at most three actions"
-    case .duplicateActionID: "action ids must be unique within an activity"
-    case .unsafeActionURL: "action URLs must be http or https URLs without credentials"
+    case .empty(let field): String(localized: "\(field) must not be empty")
+    case .tooLong(let field, let limit): String(localized: "\(field) exceeds \(limit) characters")
+    case .tooLongUTF8(let field, let limit):
+      String(localized: "\(field) exceeds \(limit) UTF-8 bytes")
+    case .invalidProgress: String(localized: "progress must be a finite number from 0 through 1")
+    case .invalidAccentHex: String(localized: "accentHex must use #RRGGBB format")
+    case .expired: String(localized: "expiresAt is already in the past")
+    case .providerSetStale: String(localized: "stale is an Islet-managed state")
+    case .tooManyActions: String(localized: "an activity may expose at most three actions")
+    case .duplicateActionID: String(localized: "action ids must be unique within an activity")
+    case .unsafeActionURL:
+      String(
+        localized:
+          "action URLs must use an unambiguous HTTP or HTTPS host without credentials or controls")
+    case .invalidRevision:
+      String(localized: "revision must be an integer from 0 through \(PulseRevision.maximum)")
+    case .unsafeProviderIdentity:
+      String(localized: "the action provider identity does not match its source")
     }
   }
 }
@@ -259,19 +351,20 @@ enum PulseDeliveryProfile: String, CaseIterable, Codable, Identifiable, Sendable
 
   var title: String {
     switch self {
-    case .everything: "Everything"
-    case .focused: "Focus"
-    case .criticalOnly: "Critical only"
-    case .paused: "Paused"
+    case .everything: String(localized: "Everything")
+    case .focused: String(localized: "Focus")
+    case .criticalOnly: String(localized: "Critical only")
+    case .paused: String(localized: "Paused")
     }
   }
 
   var detail: String {
     switch self {
-    case .everything: "Show every provider update"
-    case .focused: "Show high-priority, failed, and needs-action updates"
-    case .criticalOnly: "Show only critical and failed updates"
-    case .paused: "Keep the API available without showing new items"
+    case .everything: String(localized: "Show every provider update")
+    case .focused:
+      String(localized: "Show high-priority, failed, stale, and needs-action updates")
+    case .criticalOnly: String(localized: "Show only critical and failed updates")
+    case .paused: String(localized: "Keep the API available without showing new items")
     }
   }
 
@@ -280,6 +373,7 @@ enum PulseDeliveryProfile: String, CaseIterable, Codable, Identifiable, Sendable
     case .everything: true
     case .focused:
       item.priority >= .high || item.state == .failed || item.state == .needsAction
+        || item.state == .stale
     case .criticalOnly:
       item.priority == .critical || item.state == .failed
     case .paused: false
@@ -295,53 +389,58 @@ enum PulseSourcePolicy: String, CaseIterable, Identifiable, Sendable {
   var id: Self { self }
   var title: String {
     switch self {
-    case .allowed: "Allow"
-    case .muted: "Mute"
-    case .revoked: "Revoke"
+    case .allowed: String(localized: "Allow")
+    case .muted: String(localized: "Mute")
+    case .revoked: String(localized: "Revoke")
     }
   }
 
   var detail: String {
     switch self {
-    case .allowed: "Accept and show matching updates"
-    case .muted: "Accept state without showing it"
-    case .revoked: "Reject updates from this source"
+    case .allowed: String(localized: "Accept and show matching updates")
+    case .muted: String(localized: "Accept state without showing it")
+    case .revoked: String(localized: "Reject updates from this source")
     }
   }
 }
 
-enum PulseHistoryResult: String, Sendable {
+enum PulseHistoryResult: String, Codable, Sendable {
   case shown
   case updated
   case ended
   case dismissed
   case expired
+  case stale
+  case kept
   case suppressed
   case rejected
   case evicted
 
   var title: String {
     switch self {
-    case .shown: "Shown"
-    case .updated: "Updated"
-    case .ended: "Ended"
-    case .dismissed: "Dismissed"
-    case .expired: "Expired"
-    case .suppressed: "Filtered"
-    case .rejected: "Rejected"
-    case .evicted: "Evicted"
+    case .shown: String(localized: "Shown")
+    case .updated: String(localized: "Updated")
+    case .ended: String(localized: "Ended")
+    case .dismissed: String(localized: "Dismissed")
+    case .expired: String(localized: "Expired")
+    case .stale: String(localized: "Stale")
+    case .kept: String(localized: "Kept")
+    case .suppressed: String(localized: "Filtered")
+    case .rejected: String(localized: "Rejected")
+    case .evicted: String(localized: "Evicted")
     }
   }
 }
 
-/// A deliberately payload-free audit record. Payload IDs, titles, subtitles, action labels/URLs,
-/// tokens, and error text are never copied into history. The routing source and state metadata are
-/// retained for provider health. The list is memory-only and disappears when Islet quits.
-struct PulseHistoryEntry: Identifiable, Equatable, Sendable {
+/// A bounded audit record. A validated provider-local identifier may be retained for session-only
+/// presentation, but persistence and export remove it. Titles, subtitles, action labels and URLs,
+/// tokens, unvalidated identifiers, and error text are never copied into history.
+struct PulseHistoryEntry: Codable, Identifiable, Equatable, Sendable {
   let id: UUID
   let date: Date
   let operation: PulseOperation
   let source: String?
+  let providerIdentifier: String?
   let state: PulseState?
   let priority: PulsePriority?
   let result: PulseHistoryResult
@@ -349,20 +448,23 @@ struct PulseHistoryEntry: Identifiable, Equatable, Sendable {
 
 enum PulseCapability: String, CaseIterable, Identifiable, Sendable {
   case events
+  case persistentActivities
   case progress
   case webActions
 
   var id: Self { self }
   var title: String {
     switch self {
-    case .events: "Events"
-    case .progress: "Progress"
-    case .webActions: "Web links"
+    case .events: String(localized: "Events")
+    case .persistentActivities: String(localized: "Persistent activities")
+    case .progress: String(localized: "Progress")
+    case .webActions: String(localized: "Web links")
     }
   }
   var symbol: String {
     switch self {
     case .events: "sparkles"
+    case .persistentActivities: "rectangle.stack.fill"
     case .progress: "chart.bar.fill"
     case .webActions: "link"
     }
@@ -379,47 +481,94 @@ struct PulseProviderDescriptor: Identifiable, Equatable, Sendable {
   let sourceIDs: Set<String>
   let capabilities: Set<PulseCapability>
   let setupHint: String
+  let documentationLinks: [PulseProviderDocumentationLink]
+
+  init(
+    id: String, name: String, summary: String, symbol: String, sourceIDs: Set<String>,
+    capabilities: Set<PulseCapability>, setupHint: String,
+    documentationLinks: [PulseProviderDocumentationLink] = []
+  ) {
+    self.id = id
+    self.name = name
+    self.summary = summary
+    self.symbol = symbol
+    self.sourceIDs = sourceIDs
+    self.capabilities = capabilities
+    self.setupHint = setupHint
+    self.documentationLinks = documentationLinks
+  }
 
   static let gallery: [Self] = [
     .init(
-      id: "shortcuts", name: "Shortcuts", summary: "Publish events without writing code.",
+      id: "shortcuts", name: String(localized: "Shortcuts"),
+      summary: String(localized: "Publish events without writing code."),
       symbol: "square.stack.3d.up.fill", sourceIDs: ["shortcuts"],
-      capabilities: [.events], setupHint: "Add the Publish an Islet Pulse Event action."),
+      capabilities: [.events, .progress],
+      setupHint: String(localized: "Import a starter shortcut or add an Islet action."),
+      documentationLinks: PulseProviderDocumentationLink.shortcutStarterKit),
     .init(
-      id: "cli", name: "Pulse CLI", summary: "Send progress and alerts from local scripts.",
+      id: "cli", name: String(localized: "Pulse CLI"),
+      summary: String(localized: "Send progress and alerts from local scripts."),
       symbol: "terminal.fill", sourceIDs: ["cli"],
-      capabilities: [.events, .progress, .webActions],
-      setupHint: "Run Tools/islet-pulse.swift from this project."),
+      capabilities: [.events, .persistentActivities, .progress, .webActions],
+      setupHint: String(localized: "Run Tools/islet-pulse.swift from this project.")),
     .init(
-      id: "github-actions", name: "GitHub workflow watcher",
-      summary: "Shows GitHub run status observed on this Mac.",
+      id: "github-actions", name: String(localized: "GitHub workflow watcher"),
+      summary: String(localized: "Shows GitHub run status observed on this Mac."),
       symbol: "shippingbox.fill", sourceIDs: ["github-actions", "github"],
-      capabilities: [.events, .progress, .webActions],
-      setupHint: "Run the watcher after gh auth login; Islet never receives your GitHub token."),
+      capabilities: [.events, .persistentActivities, .progress, .webActions],
+      setupHint: String(
+        localized: "Run the watcher after gh auth login; Islet never receives your GitHub token.")),
     .init(
-      id: "xcode", name: "Xcode builds",
-      summary: "Shows local xcodebuild and test progress.",
+      id: "xcode", name: String(localized: "Xcode builds"),
+      summary: String(localized: "Shows local xcodebuild and test progress."),
       symbol: "hammer.fill", sourceIDs: ["xcode"],
       capabilities: [.events, .progress, .webActions],
-      setupHint: "Wrap xcodebuild with Tools/islet-xcode-pulse.swift."),
+      setupHint: String(localized: "Wrap xcodebuild with Tools/islet-xcode-pulse.swift.")),
     .init(
-      id: "chrome-downloads", name: "Chrome downloads",
-      summary: "Shows browser download progress without retaining URLs or paths.",
+      id: "chrome-downloads", name: String(localized: "Chrome downloads"),
+      summary: String(
+        localized: "Shows browser download progress without retaining URLs or paths."),
       symbol: "arrow.down.circle.fill", sourceIDs: ["chrome-downloads"],
       capabilities: [.events, .progress, .webActions],
-      setupHint: "Install the example Chrome extension and its local native host."),
+      setupHint: String(
+        localized: "Install the example Chrome extension and its local native host.")),
     .init(
-      id: "rclone", name: "rclone transfers",
-      summary: "Shows file copies and uploads from rclone's loopback control API.",
+      id: "rclone", name: String(localized: "rclone transfers"),
+      summary: String(
+        localized: "Shows file copies and uploads from rclone's loopback control API."),
       symbol: "arrow.up.arrow.down.circle.fill", sourceIDs: ["rclone"],
       capabilities: [.events, .progress, .webActions],
-      setupHint: "Run the example provider beside an rclone process with RC enabled."),
+      setupHint: String(
+        localized: "Run the example provider beside an rclone process with RC enabled.")),
     .init(
-      id: "developer-tools", name: "Developer tools", summary: "Build, test, and agent status.",
+      id: "developer-tools", name: String(localized: "Developer tools"),
+      summary: String(localized: "Build, test, and agent status."),
       symbol: "wrench.and.screwdriver.fill", sourceIDs: ["build", "tests", "agent"],
-      capabilities: [.events, .progress, .webActions],
-      setupHint: "Use a stable source name from your local automation."),
+      capabilities: [.events, .persistentActivities, .progress, .webActions],
+      setupHint: String(localized: "Use a stable source name from your local automation.")),
   ]
+}
+
+struct PulseProviderDocumentationLink: Identifiable, Equatable, Sendable {
+  let title: String
+  let url: URL
+
+  var id: String { url.absoluteString }
+
+  static let shortcutStarterKit: [Self] = [
+    link("Transient event", "01-transient-event"),
+    link("Progress task", "02-progress-task"),
+    link("Failed task", "03-failed-task"),
+    link("Guarded completion", "04-guarded-completion"),
+    link("Focus profile", "05-focus-profile"),
+    link("Focus timer", "06-focus-timer"),
+  ]
+
+  private static func link(_ title: String, _ filename: String) -> Self {
+    let baseURL = "https://github.com/C-Nucifora/islet/releases/latest/download"
+    return Self(title: title, url: URL(string: "\(baseURL)/\(filename).shortcut")!)
+  }
 }
 
 enum PulseProviderHealth: Equatable, Sendable {
@@ -430,10 +579,10 @@ enum PulseProviderHealth: Equatable, Sendable {
 
   var summary: String {
     switch self {
-    case .active(let count): "Active (\(count))"
-    case .needsAttention(let count): "Needs attention (\(count))"
-    case .seen: "Seen this session"
-    case .neverSeen: "Not connected yet"
+    case .active(let count): String(localized: "Active (\(count))")
+    case .needsAttention(let count): String(localized: "Needs attention (\(count))")
+    case .seen: String(localized: "Seen before")
+    case .neverSeen: String(localized: "Not connected yet")
     }
   }
 }
@@ -453,22 +602,34 @@ struct PulseCommand: Codable, Sendable {
   /// against the response instead of relying on response order.
   var requestID: String? = nil
   /// Optional source guard for `end`. Older clients may omit it, but providers should include it
-  /// so an accidental identifier collision cannot end another source's item.
+  /// to select the provider namespace. An unscoped end is rejected when more than one source owns
+  /// the identifier.
   var source: String? = nil
+  /// Optional ordering value scoped to the normalized source and provider-local identifier.
+  /// Once a stream sends one, every later command for that identity must include a larger value.
+  var revision: UInt64? = nil
 }
 
 enum PulseErrorCode: String, Codable, Sendable {
   case featureDisabled
   case unauthorized
+  case credentialRevoked
+  case permissionDenied
+  case requestIDRequired
+  case replayedRequest
   case invalidCommand
   case validationFailed
   case sourceRevoked
   case identifierConflict
   case sourceMismatch
+  case ambiguousIdentifier
   case messageTooLarge
   case commandLimitExceeded
   case rateLimited
   case capacityExceeded
+  case staleRevision
+  case revisionRequired
+  case generationEnded
 }
 
 struct PulseResponse: Codable, Equatable, Sendable {
@@ -478,6 +639,9 @@ struct PulseResponse: Codable, Equatable, Sendable {
   var warning: String? = nil
   var errorCode: PulseErrorCode? = nil
   var requestID: String? = nil
+  /// Whole seconds to wait before retrying a throttled command. This is the local protocol's
+  /// equivalent of HTTP's `Retry-After` response header.
+  var retryAfter: Int? = nil
 
   static func success(
     id: String? = nil, warning: String? = nil, requestID: String? = nil
@@ -486,33 +650,136 @@ struct PulseResponse: Codable, Equatable, Sendable {
   }
 
   static func failure(
-    _ error: String, code: PulseErrorCode = .validationFailed, requestID: String? = nil
+    _ error: String, code: PulseErrorCode = .validationFailed, requestID: String? = nil,
+    retryAfter: Int? = nil
   ) -> Self {
-    .init(ok: false, id: nil, error: error, warning: nil, errorCode: code, requestID: requestID)
+    .init(
+      ok: false, id: nil, error: error, warning: nil, errorCode: code, requestID: requestID,
+      retryAfter: retryAfter)
   }
 }
 
-/// Token-wide rolling-window protection. The per-connection cap bounds a single socket; this cap
-/// also prevents a noisy local provider from resetting its allowance by reconnecting repeatedly.
+/// Rolling-window protection with enough detail for a sender to retry at the right time.
 struct PulseRateLimiter: Sendable {
   let limit: Int
   let window: TimeInterval
   private(set) var acceptedTimes: [TimeInterval] = []
 
   init(limit: Int = 512, window: TimeInterval = 60) {
-    self.limit = limit
-    self.window = window
+    self.limit = max(1, limit)
+    self.window = window.isFinite && window > 0 ? window : 60
   }
 
   mutating func accepts(_ now: TimeInterval) -> Bool {
+    guard retryAfter(at: now) == nil else { return false }
+    acceptedTimes.append(now)
+    return true
+  }
+
+  mutating func retryAfter(at now: TimeInterval) -> Int? {
+    discardExpired(at: now)
+    guard acceptedTimes.count >= limit, let firstAccepted = acceptedTimes.first else { return nil }
+    return max(1, Int(ceil(firstAccepted + window - now)))
+  }
+
+  mutating func discardExpired(at now: TimeInterval) {
     if let last = acceptedTimes.last, now < last {
       acceptedTimes.removeAll(keepingCapacity: true)
+      return
     }
     let cutoff = now - window
     acceptedTimes.removeAll { $0 <= cutoff }
-    guard acceptedTimes.count < limit else { return false }
-    acceptedTimes.append(now)
-    return true
+  }
+
+  var isEmpty: Bool { acceptedTimes.isEmpty }
+}
+
+enum PulseRateLimitScope: Equatable, Sendable {
+  case provider
+  case process
+}
+
+enum PulseRateLimitResult: Equatable, Sendable {
+  case accepted
+  case rateLimited(scope: PulseRateLimitScope, retryAfter: Int)
+}
+
+/// Tracks authenticated provider buckets separately, then applies a bounded process-wide ceiling
+/// after a provider has spare capacity. Empty windows are discarded and the state count is capped,
+/// so provider churn cannot turn this into an unbounded dictionary.
+struct PulseProviderRateLimiters: Sendable {
+  static let defaultProviderLimit = 512
+  static let defaultProcessLimit = 2_048
+  static let defaultWindow: TimeInterval = 60
+  static let defaultMaximumProviderStates = 256
+
+  private struct ProviderState: Sendable {
+    var limiter: PulseRateLimiter
+    var lastAcceptedAt: TimeInterval
+  }
+
+  private let providerLimit: Int
+  private let window: TimeInterval
+  private let maximumProviderStates: Int
+  private var processLimiter: PulseRateLimiter
+  private var providers: [String: ProviderState] = [:]
+
+  init(
+    providerLimit: Int = Self.defaultProviderLimit,
+    processLimit: Int = Self.defaultProcessLimit,
+    window: TimeInterval = Self.defaultWindow,
+    maximumProviderStates: Int = Self.defaultMaximumProviderStates
+  ) {
+    self.providerLimit = max(1, providerLimit)
+    self.window = window.isFinite && window > 0 ? window : Self.defaultWindow
+    self.maximumProviderStates = max(1, maximumProviderStates)
+    processLimiter = PulseRateLimiter(limit: processLimit, window: self.window)
+  }
+
+  var trackedProviderCount: Int { providers.count }
+
+  mutating func admit(providerID: String, at now: TimeInterval) -> PulseRateLimitResult {
+    cleanup(at: now)
+
+    var provider =
+      providers[providerID]
+      ?? ProviderState(
+        limiter: PulseRateLimiter(limit: providerLimit, window: window), lastAcceptedAt: now)
+    if let retryAfter = provider.limiter.retryAfter(at: now) {
+      providers[providerID] = provider
+      return .rateLimited(scope: .provider, retryAfter: retryAfter)
+    }
+    if let retryAfter = processLimiter.retryAfter(at: now) {
+      if providers[providerID] != nil { providers[providerID] = provider }
+      return .rateLimited(scope: .process, retryAfter: retryAfter)
+    }
+
+    if providers[providerID] == nil { makeRoomForProvider() }
+    _ = provider.limiter.accepts(now)
+    provider.lastAcceptedAt = now
+    providers[providerID] = provider
+    _ = processLimiter.accepts(now)
+    return .accepted
+  }
+
+  mutating func removeProvider(_ providerID: String) {
+    providers[providerID] = nil
+  }
+
+  private mutating func cleanup(at now: TimeInterval) {
+    processLimiter.discardExpired(at: now)
+    for providerID in Array(providers.keys) {
+      providers[providerID]?.limiter.discardExpired(at: now)
+    }
+    providers = providers.filter { !$0.value.limiter.isEmpty }
+  }
+
+  private mutating func makeRoomForProvider() {
+    while providers.count >= maximumProviderStates,
+      let oldest = providers.min(by: { $0.value.lastAcceptedAt < $1.value.lastAcceptedAt })?.key
+    {
+      providers[oldest] = nil
+    }
   }
 }
 
@@ -523,9 +790,9 @@ enum PulseWireValidationError: LocalizedError, Equatable {
 
   var errorDescription: String? {
     switch self {
-    case .expectedObject(let path): "\(path) must be a JSON object"
-    case .invalidField(let path): "invalid field: \(path)"
-    case .unexpectedField(let path): "unexpected field: \(path)"
+    case .expectedObject(let path): String(localized: "\(path) must be a JSON object")
+    case .invalidField(let path): String(localized: "invalid field: \(path)")
+    case .unexpectedField(let path): String(localized: "unexpected field: \(path)")
     }
   }
 }
@@ -535,7 +802,7 @@ enum PulseWireValidationError: LocalizedError, Equatable {
 /// an error or diagnostic record.
 enum PulseWireValidator {
   private static let commandFields: Set<String> = [
-    "token", "operation", "activity", "id", "requestID", "source",
+    "token", "operation", "activity", "id", "requestID", "source", "revision",
   ]
   private static let activityFields: Set<String> = [
     "id", "source", "title", "subtitle", "symbol", "accentHex", "progress", "state",
@@ -553,6 +820,15 @@ enum PulseWireValidator {
         || requestID.count > PulseItem.maximumIdentifierLength
     {
       throw PulseWireValidationError.invalidField("command.requestID")
+    }
+    if let rawRevision = command["revision"] {
+      guard !(rawRevision is Bool), let revision = rawRevision as? NSNumber,
+        revision.doubleValue.isFinite,
+        revision.doubleValue.rounded(.towardZero) == revision.doubleValue,
+        revision.doubleValue >= 0, revision.doubleValue <= Double(PulseRevision.maximum)
+      else {
+        throw PulseWireValidationError.invalidField("command.revision")
+      }
     }
     if let rawActivity = command["activity"] {
       guard let activity = rawActivity as? [String: Any] else {

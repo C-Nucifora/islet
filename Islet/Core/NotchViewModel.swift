@@ -3,12 +3,66 @@ import Combine
 import Defaults
 import SwiftUI
 
+/// Schedules the view model's delayed state transitions. Production uses the wall clock; tests
+/// supply a virtual scheduler and advance it without waiting for an animation to elapse.
+@MainActor
+protocol NotchDelayScheduler: AnyObject {
+  func schedule(
+    after delay: Duration,
+    action: @escaping @MainActor () -> Void
+  ) -> any NotchScheduledOperation
+}
+
+@MainActor
+protocol NotchScheduledOperation: AnyObject {
+  func cancel()
+}
+
+@MainActor
+private final class WallClockNotchDelayScheduler: NotchDelayScheduler {
+  static let shared = WallClockNotchDelayScheduler()
+
+  private init() {}
+
+  func schedule(
+    after delay: Duration,
+    action: @escaping @MainActor () -> Void
+  ) -> any NotchScheduledOperation {
+    WallClockNotchScheduledOperation(after: delay, action: action)
+  }
+}
+
+@MainActor
+private final class WallClockNotchScheduledOperation: NotchScheduledOperation {
+  private var task: Task<Void, Never>?
+
+  init(after delay: Duration, action: @escaping @MainActor () -> Void) {
+    task = Task { @MainActor in
+      do {
+        try await Task.sleep(for: delay)
+      } catch {
+        return
+      }
+      guard !Task.isCancelled else { return }
+      action()
+    }
+  }
+
+  func cancel() {
+    task?.cancel()
+    task = nil
+  }
+}
+
 @MainActor
 final class NotchViewModel: ObservableObject {
   @Published private(set) var state: NotchState = .closed
   /// The expanded switcher's explicit choice. A nil value lets the view choose its normal default.
   @Published private(set) var selectedActivityID: String?
   @Published private(set) var temporarilyPresentedActivityID: String?
+  /// File-drop targeting belongs to this panel. Shelf contents are shared, but entering the Shelf
+  /// on one display must not retarget an already-expanded island on another display.
+  @Published private(set) var isShelfDropTargeted = false
   /// Screen-coordinate frame the panel should occupy right now. Growth is published before the
   /// island animates into it. Shrinkage waits for that animation to finish.
   @Published private(set) var panelFrame: CGRect
@@ -21,6 +75,10 @@ final class NotchViewModel: ObservableObject {
   /// Drawn island width for the live tab count.
   @Published private(set) var expandedWidth: CGFloat = Metrics.expandedSize.width
   @Published private(set) var compactTargetRevision: UInt = 0
+  /// Incremented only by explicit keyboard or accessibility entry paths. Panel instances observe
+  /// this separately from presentation state so pointer and programmatic expansion never take key
+  /// status from the foreground application.
+  @Published private(set) var keyboardFocusRequestRevision: UInt = 0
   /// Home dismissal and snooze state belongs to the panel model, not the expanded view. The model
   /// survives tab changes and collapse/reopen cycles, while `IdleDashboardView` does not.
   @Published private(set) var homeAttentionDisposition = HomeAttentionDisposition()
@@ -31,6 +89,7 @@ final class NotchViewModel: ObservableObject {
   let geometry: NotchGeometry
   private let modeOverride: InteractionMode?
   private let barrierPushDistanceOverride: CGFloat?
+  private let scheduler: any NotchDelayScheduler
   private var mode: InteractionMode { modeOverride ?? Defaults[.interactionMode] }
   private var barrierPushDistance: CGFloat {
     barrierPushDistanceOverride
@@ -47,19 +106,22 @@ final class NotchViewModel: ObservableObject {
   private var barrierTravel: CGFloat = 0
   private var upwardDeviceDeltaSign: CGFloat?
   private var didPlayBarrierContactHaptic = false
-  private var collapseTask: Task<Void, Never>?
-  private var shrinkTask: Task<Void, Never>?
-  private var shrinkTaskRevision: UInt = 0
+  private var collapseTask: (any NotchScheduledOperation)?
+  private var shrinkTask: (any NotchScheduledOperation)?
+  private var collapseTaskGeneration: UInt = 0
+  private var shrinkTaskGeneration: UInt = 0
   private var cancellables: Set<AnyCancellable> = []
 
   init(
     geometry: NotchGeometry, modeOverride: InteractionMode? = nil,
     barrierPushDistanceOverride: CGFloat? = nil,
-    initialPresentation: PanelPresentationState = .initial
+    initialPresentation: PanelPresentationState = .initial,
+    scheduler: (any NotchDelayScheduler)? = nil
   ) {
     self.geometry = geometry
     self.modeOverride = modeOverride
     self.barrierPushDistanceOverride = barrierPushDistanceOverride
+    self.scheduler = scheduler ?? WallClockNotchDelayScheduler.shared
     let initialFrame = geometry.collapsedPanelFrame()
     self.panelFrame = initialFrame
     self.actualPanelFrame = initialFrame
@@ -109,6 +171,16 @@ final class NotchViewModel: ObservableObject {
     if !state.isExpanded { apply(.clickedNotch) }
   }
 
+  /// Opens the island for a command-palette or accessibility interaction and asks its panel to
+  /// accept keyboard navigation. Ordinary pointer, drag, notification and programmatic opens use
+  /// `apply(_:)` or `open(activityID:)` and do not request focus.
+  func openForFocusedInteraction(activityID: String? = nil) {
+    if let activityID { selectActivity(activityID) }
+    if !state.isExpanded { apply(.clickedNotch) }
+    guard state.isExpanded else { return }
+    keyboardFocusRequestRevision &+= 1
+  }
+
   func clearTemporaryPresentationIfUnavailable(availableActivityIDs: [String]) {
     guard let activityID = temporarilyPresentedActivityID,
       !availableActivityIDs.contains(activityID)
@@ -140,6 +212,11 @@ final class NotchViewModel: ObservableObject {
 
   func snoozeHomeAttention(_ item: HomeAttentionItem, until: Date) {
     homeAttentionDisposition.snooze(item, until: until)
+  }
+
+  func setShelfDropTargeted(_ targeted: Bool) {
+    if isShelfDropTargeted != targeted { isShelfDropTargeted = targeted }
+    if targeted { selectActivity("shelf") }
   }
 
   /// Resumes hover bookkeeping after ScreenManager restores an expanded presentation. Without
@@ -232,7 +309,7 @@ final class NotchViewModel: ObservableObject {
     guard inside != wasInside else { return }
     wasInside = inside
     if inside {
-      collapseTask?.cancel()
+      cancelScheduledCollapse()
       apply(.hoverEntered)
       beginBarrier(at: location)
     } else {
@@ -249,10 +326,12 @@ final class NotchViewModel: ObservableObject {
     let inside = region(hoverRegion, contains: location)
     if inside {
       wasInside = true
-      collapseTask?.cancel()
+      cancelScheduledCollapse()
+      setShelfDropTargeted(true)
       if !state.isExpanded { apply(.fileDragEntered) }
       return
     }
+    setShelfDropTargeted(false)
     guard wasInside else { return }
     wasInside = false
     resetBarrier()
@@ -343,7 +422,7 @@ final class NotchViewModel: ObservableObject {
     guard inside != wasInside else { return }
     wasInside = inside
     if inside {
-      collapseTask?.cancel()
+      cancelScheduledCollapse()
     } else if case .expanded(false) = state {
       scheduleCollapse()
     }
@@ -364,30 +443,16 @@ final class NotchViewModel: ObservableObject {
     // the outgoing animation is never clipped. Every timer re-reads the current target when it
     // fires.
     guard target != panelFrame else { return }
-    guard shrinkTask == nil || restartingShrinkDelay else { return }
-    shrinkTaskRevision &+= 1
-    let revision = shrinkTaskRevision
-    shrinkTask?.cancel()
-    shrinkTask = Self.debounce(
-      for: Motion.panelShrinkDelay,
-      cleanup: { [weak self] in
-        guard let self, self.shrinkTaskRevision == revision else { return }
-        self.shrinkTask = nil
-      },
-      body: { [weak self] in
-        guard let self, self.shrinkTaskRevision == revision else { return }
-        let settled = self.targetPanelFrame(for: self.state)
-        if settled != self.panelFrame { self.panelFrame = settled }
-      })
+    if shrinkTask != nil {
+      guard restartingShrinkDelay else { return }
+      cancelScheduledShrink()
+    }
+    schedulePanelShrink()
   }
 
   /// Cancels a pending shrink without scheduling a replacement. Exposed for tests: nothing in the
   /// app cancels it today, and the point of the test is that the gating handle survives a cancel.
-  func cancelPendingShrink() {
-    shrinkTaskRevision &+= 1
-    shrinkTask?.cancel()
-    shrinkTask = nil
-  }
+  func cancelPendingShrink() { cancelScheduledShrink() }
 
   func apply(_ event: NotchEvent) {
     let next = NotchStateMachine.transition(
@@ -424,23 +489,28 @@ final class NotchViewModel: ObservableObject {
     }
   }
 
-  /// Runs `body` after `delay`, cancelling any timer passed as `cancelling`. Omitting it schedules
-  /// without disturbing what's already in flight.
-  ///
-  /// `cleanup` runs on every path, cancellation included. Callers that can replace a task use a
-  /// revision check in their cleanup closure so an old cancellation cannot clear the new handle.
-  private static func debounce(
-    cancelling existing: Task<Void, Never>? = nil, for delay: Duration,
-    cleanup: (@MainActor () -> Void)? = nil,
-    body: @escaping @MainActor () -> Void
-  ) -> Task<Void, Never> {
-    existing?.cancel()
-    return Task { @MainActor in
-      try? await Task.sleep(for: delay)
-      cleanup?()
-      guard !Task.isCancelled else { return }
-      body()
+  private func schedulePanelShrink() {
+    guard shrinkTask == nil else { return }
+    shrinkTaskGeneration &+= 1
+    let generation = shrinkTaskGeneration
+    shrinkTask = scheduler.schedule(after: Motion.panelShrinkDelay) { [weak self] in
+      guard let self, self.shrinkTaskGeneration == generation else { return }
+      self.shrinkTask = nil
+      let settled = self.targetPanelFrame(for: self.state)
+      if settled != self.panelFrame { self.panelFrame = settled }
     }
+  }
+
+  private func cancelScheduledShrink() {
+    shrinkTaskGeneration &+= 1
+    shrinkTask?.cancel()
+    shrinkTask = nil
+  }
+
+  private func cancelScheduledCollapse() {
+    collapseTaskGeneration &+= 1
+    collapseTask?.cancel()
+    collapseTask = nil
   }
 
   private func beginBarrier(at location: CGPoint) {
@@ -496,11 +566,15 @@ final class NotchViewModel: ObservableObject {
   }
 
   private func scheduleCollapse() {
-    collapseTask = Self.debounce(
-      cancelling: collapseTask, for: .seconds(Defaults[.hoverCollapseTimeout]),
-      body: { [weak self] in
-        guard let self, !self.wasInside else { return }
-        self.apply(.collapseTimeoutElapsed)
-      })
+    cancelScheduledCollapse()
+    collapseTaskGeneration &+= 1
+    let generation = collapseTaskGeneration
+    collapseTask = scheduler.schedule(after: .seconds(Defaults[.hoverCollapseTimeout])) {
+      [weak self] in
+      guard let self, self.collapseTaskGeneration == generation else { return }
+      self.collapseTask = nil
+      guard !self.wasInside else { return }
+      self.apply(.collapseTimeoutElapsed)
+    }
   }
 }

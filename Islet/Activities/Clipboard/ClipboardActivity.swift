@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Defaults
+import ImageIO
 import SwiftUI
 
 struct ClipboardItem: Identifiable, Equatable {
@@ -31,14 +32,14 @@ struct ClipboardItem: Identifiable, Equatable {
   var preview: String {
     switch kind {
     case .text(let s): s.trimmingCharacters(in: .whitespacesAndNewlines)
-    case .fileURLs(let urls): urls.first?.lastPathComponent ?? "Files"
-    case .image: "Image"
+    case .fileURLs(let urls): urls.first?.lastPathComponent ?? String(localized: "Files")
+    case .image: String(localized: "Image")
     }
   }
 
   var detail: String? {
     guard case .fileURLs(let urls) = kind else { return nil }
-    return "\(urls.count) \(urls.count == 1 ? "file" : "files")"
+    return LocalizedText.fileCount(urls.count)
   }
 
   var retainedByteCount: Int {
@@ -157,6 +158,412 @@ enum ClipboardPrivacyPolicy {
   }
 }
 
+/// The general pasteboard does not publish representation sizes before a provider materializes
+/// them. We therefore inspect only PNG and TIFF, cap the total materialized bytes for those two
+/// representations, then validate their headers before ImageIO parses the file. This prevents a
+/// tiny compressed image from expanding into an unbounded bitmap while still allowing us to pick
+/// the smaller lossless form when an app offers both.
+enum ClipboardImagePolicy {
+  static let maximumImageReadBytes = ClipboardPrivacyPolicy.maximumImageBytes * 2
+  static let maximumImageDimension = 16_384
+  static let maximumDecodedImageBytes = 128 * 1024 * 1024
+
+  private static let supportedTypes: [NSPasteboard.PasteboardType] = [.png, .tiff]
+
+  static func payload(from pasteboard: NSPasteboard) -> ClipboardItem.ImagePayload? {
+    let availableTypes = Set(pasteboard.types ?? [])
+    var representations: [(type: NSPasteboard.PasteboardType, data: Data)] = []
+    var readBytes = 0
+
+    for type in supportedTypes where availableTypes.contains(type) {
+      guard let data = pasteboard.data(forType: type) else { continue }
+      guard data.count <= maximumImageReadBytes - readBytes else { return nil }
+      readBytes += data.count
+      representations.append((type: type, data: data))
+    }
+
+    return payload(from: representations)
+  }
+
+  /// The type is retained with the bytes so copy-back writes a PNG as PNG and a TIFF as TIFF.
+  /// PNG wins an exact-size tie because it is the smaller interchange format in ordinary use.
+  static func payload(
+    from representations: [(type: NSPasteboard.PasteboardType, data: Data)]
+  ) -> ClipboardItem.ImagePayload? {
+    var inspectedBytes = 0
+    var best: (type: NSPasteboard.PasteboardType, data: Data)?
+
+    for representation in representations where supportedTypes.contains(representation.type) {
+      guard representation.data.count <= maximumImageReadBytes - inspectedBytes else { return nil }
+      inspectedBytes += representation.data.count
+      guard representation.data.count <= ClipboardPrivacyPolicy.maximumImageBytes,
+        isSafeImageData(representation.data, for: representation.type)
+      else { continue }
+
+      guard let currentBest = best else {
+        best = representation
+        continue
+      }
+      if representation.data.count < currentBest.data.count
+        || (representation.data.count == currentBest.data.count
+          && representation.type == .png && currentBest.type != .png)
+      {
+        best = representation
+      }
+    }
+
+    guard let best else { return nil }
+    return ClipboardItem.ImagePayload(data: best.data, pasteboardTypeRawValue: best.type.rawValue)
+  }
+
+  private static func isSafeImageData(_ data: Data, for type: NSPasteboard.PasteboardType) -> Bool {
+    let headerIsSafe: Bool
+    switch type {
+    case .png: headerIsSafe = hasSafePNGHeader(data)
+    case .tiff: headerIsSafe = hasSafeTIFFHeader(data)
+    default: return false
+    }
+    guard headerIsSafe, let source = CGImageSourceCreateWithData(data as CFData, nil),
+      let sourceType = CGImageSourceGetType(source), sourceType as String == type.rawValue,
+      CGImageSourceGetCount(source) == 1,
+      CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete
+    else { return false }
+    return true
+  }
+
+  private static func hasSafePNGHeader(_ data: Data) -> Bool {
+    let signature: [UInt8] = [137, 80, 78, 71, 13, 10, 26, 10]
+    guard data.count >= 33, Array(data.prefix(8)) == signature,
+      readBigEndianUInt32(data, at: 8) == 13,
+      Array(data[12..<16]) == [73, 72, 68, 82],
+      let width = readBigEndianUInt32(data, at: 16),
+      let height = readBigEndianUInt32(data, at: 20),
+      let bitDepth = byte(in: data, at: 24),
+      let colorType = byte(in: data, at: 25),
+      byte(in: data, at: 26) == 0,
+      byte(in: data, at: 27) == 0,
+      let interlace = byte(in: data, at: 28), interlace <= 1,
+      isValidPNGBitDepth(bitDepth, for: colorType),
+      hasSafeDecodedSize(width: Int(width), height: Int(height), bytesPerPixel: 8)
+    else { return false }
+
+    var offset = 8
+    var foundIEND = false
+    while offset <= data.count - 12 {
+      guard let length = readBigEndianUInt32(data, at: offset) else { return false }
+      let payloadOffset = offset + 8
+      guard length <= UInt32(data.count - payloadOffset - 4) else { return false }
+      let nextOffset = payloadOffset + Int(length) + 4
+      if Array(data[(offset + 4)..<payloadOffset]) == [73, 69, 78, 68] {
+        guard length == 0, nextOffset == data.count else { return false }
+        foundIEND = true
+        break
+      }
+      offset = nextOffset
+    }
+    return foundIEND
+  }
+
+  private static func isValidPNGBitDepth(_ bitDepth: UInt8, for colorType: UInt8) -> Bool {
+    switch colorType {
+    case 0: return [1, 2, 4, 8, 16].contains(bitDepth)
+    case 2, 4, 6: return [8, 16].contains(bitDepth)
+    case 3: return [1, 2, 4, 8].contains(bitDepth)
+    default: return false
+    }
+  }
+
+  private static func hasSafeTIFFHeader(_ data: Data) -> Bool {
+    guard data.count >= 8 else { return false }
+    let byteOrder: TIFFByteOrder
+    switch (byte(in: data, at: 0), byte(in: data, at: 1)) {
+    case (73, 73): byteOrder = .littleEndian
+    case (77, 77): byteOrder = .bigEndian
+    default: return false
+    }
+    guard readTIFFUInt16(data, at: 2, order: byteOrder) == 42,
+      let directoryOffset = readTIFFUInt32(data, at: 4, order: byteOrder),
+      let directory = TIFFDirectory(data: data, offset: Int(directoryOffset), order: byteOrder),
+      directory.nextOffset == 0,
+      let width = directory.singleValue(forTag: 256),
+      let height = directory.singleValue(forTag: 257)
+    else { return false }
+
+    let bitsPerSample: [UInt32]
+    if directory.contains(tag: 258) {
+      guard let parsedBits = directory.values(forTag: 258) else { return false }
+      bitsPerSample = parsedBits
+    } else {
+      // TIFF 6.0 defaults BitsPerSample to one when the tag is omitted.
+      bitsPerSample = [1]
+    }
+    let samplesPerPixel: UInt32
+    if directory.contains(tag: 277) {
+      guard let parsedSamples = directory.singleValue(forTag: 277) else { return false }
+      samplesPerPixel = parsedSamples
+    } else {
+      samplesPerPixel = 1
+    }
+    let compression: UInt32
+    if directory.contains(tag: 259) {
+      guard let parsedCompression = directory.singleValue(forTag: 259) else { return false }
+      compression = parsedCompression
+    } else {
+      compression = 1
+    }
+    guard bitsPerSample.allSatisfy({ $0 > 0 && $0 <= 64 }), samplesPerPixel > 0,
+      samplesPerPixel <= 16,
+      let maximumBitsPerSample = bitsPerSample.max(),
+      isLosslessTIFFCompression(compression)
+    else { return false }
+
+    let bitsPerPixel = Int(maximumBitsPerSample) * Int(samplesPerPixel)
+    // ImageIO commonly expands palette and low-bit-depth sources into 32- or 64-bit pixel buffers.
+    // Retain an eight-byte floor so the decoded-size limit describes memory use, not file packing.
+    let bytesPerPixel = max(8, (bitsPerPixel + 7) / 8)
+    return bytesPerPixel > 0
+      && hasSafeDecodedSize(width: Int(width), height: Int(height), bytesPerPixel: bytesPerPixel)
+  }
+
+  static func isLosslessTIFFCompression(_ compression: UInt32) -> Bool {
+    switch compression {
+    // None, CCITT RLE/Fax, LZW, Deflate, and PackBits are lossless TIFF encodings.
+    case 1, 2, 3, 4, 5, 8, 32_773, 32_946: true
+    default: false
+    }
+  }
+
+  private static func hasSafeDecodedSize(width: Int, height: Int, bytesPerPixel: Int) -> Bool {
+    guard width > 0, height > 0, width <= maximumImageDimension, height <= maximumImageDimension,
+      let pixelCount = checkedProduct(width, height),
+      let decodedBytes = checkedProduct(pixelCount, bytesPerPixel)
+    else { return false }
+    return decodedBytes <= maximumDecodedImageBytes
+  }
+
+  private static func checkedProduct(_ lhs: Int, _ rhs: Int) -> Int? {
+    let result = lhs.multipliedReportingOverflow(by: rhs)
+    return result.overflow ? nil : result.partialValue
+  }
+
+  private static func byte(in data: Data, at offset: Int) -> UInt8? {
+    guard offset >= 0, offset < data.count else { return nil }
+    return data[data.startIndex + offset]
+  }
+
+  private static func readBigEndianUInt32(_ data: Data, at offset: Int) -> UInt32? {
+    guard offset >= 0, offset <= data.count - 4 else { return nil }
+    return UInt32(data[data.startIndex + offset]) << 24
+      | UInt32(data[data.startIndex + offset + 1]) << 16
+      | UInt32(data[data.startIndex + offset + 2]) << 8
+      | UInt32(data[data.startIndex + offset + 3])
+  }
+
+  private enum TIFFByteOrder { case littleEndian, bigEndian }
+
+  private struct TIFFDirectory {
+    private struct Entry {
+      let type: UInt16
+      let count: UInt32
+      let valueFieldOffset: Int
+      let valueOffset: Int
+    }
+
+    private let data: Data
+    private let order: TIFFByteOrder
+    private let entries: [UInt16: Entry]
+    let nextOffset: UInt32
+
+    init?(data: Data, offset: Int, order: TIFFByteOrder) {
+      guard offset >= 0,
+        let entryCount = ClipboardImagePolicy.readTIFFUInt16(data, at: offset, order: order),
+        entryCount <= 64,
+        let entriesStart = ClipboardImagePolicy.checkedAdd(offset, 2),
+        let entriesBytes = ClipboardImagePolicy.checkedProduct(Int(entryCount), 12),
+        let nextOffsetPosition = ClipboardImagePolicy.checkedAdd(entriesStart, entriesBytes),
+        nextOffsetPosition <= data.count - 4,
+        let nextOffset = ClipboardImagePolicy.readTIFFUInt32(
+          data, at: nextOffsetPosition, order: order)
+      else { return nil }
+
+      var parsedEntries: [UInt16: Entry] = [:]
+      for index in 0..<Int(entryCount) {
+        guard let entryOffset = ClipboardImagePolicy.checkedAdd(entriesStart, index * 12),
+          let tag = ClipboardImagePolicy.readTIFFUInt16(data, at: entryOffset, order: order),
+          let type = ClipboardImagePolicy.readTIFFUInt16(data, at: entryOffset + 2, order: order),
+          let count = ClipboardImagePolicy.readTIFFUInt32(data, at: entryOffset + 4, order: order),
+          let valueOffset = ClipboardImagePolicy.readTIFFUInt32(
+            data, at: entryOffset + 8, order: order)
+        else { return nil }
+        parsedEntries[tag] = Entry(
+          type: type,
+          count: count,
+          valueFieldOffset: entryOffset + 8,
+          valueOffset: Int(valueOffset))
+      }
+
+      self.data = data
+      self.order = order
+      entries = parsedEntries
+      self.nextOffset = nextOffset
+    }
+
+    func singleValue(forTag tag: UInt16) -> UInt32? {
+      guard let values = values(forTag: tag), values.count == 1 else { return nil }
+      return values[0]
+    }
+
+    func contains(tag: UInt16) -> Bool { entries[tag] != nil }
+
+    func values(forTag tag: UInt16) -> [UInt32]? {
+      guard let entry = entries[tag], entry.count > 0, entry.count <= 16,
+        let valueSize = ClipboardImagePolicy.tiffValueSize(for: entry.type),
+        let byteCount = ClipboardImagePolicy.checkedProduct(Int(entry.count), valueSize)
+      else { return nil }
+
+      let valueStart = byteCount <= 4 ? entry.valueFieldOffset : entry.valueOffset
+      guard valueStart <= data.count - byteCount else { return nil }
+
+      var values: [UInt32] = []
+      values.reserveCapacity(Int(entry.count))
+      for index in 0..<Int(entry.count) {
+        guard let valueOffset = ClipboardImagePolicy.checkedAdd(valueStart, index * valueSize),
+          let value = ClipboardImagePolicy.readTIFFValue(
+            data, at: valueOffset, type: entry.type, order: order)
+        else { return nil }
+        values.append(value)
+      }
+      return values
+    }
+  }
+
+  private static func tiffValueSize(for type: UInt16) -> Int? {
+    switch type {
+    case 1, 2, 6, 7: return 1
+    case 3, 8: return 2
+    case 4, 9, 11: return 4
+    case 5, 10, 12: return 8
+    default: return nil
+    }
+  }
+
+  private static func readTIFFValue(
+    _ data: Data, at offset: Int, type: UInt16, order: TIFFByteOrder
+  ) -> UInt32? {
+    switch type {
+    case 1, 2, 6, 7: return byte(in: data, at: offset).map(UInt32.init)
+    case 3, 8: return readTIFFUInt16(data, at: offset, order: order).map(UInt32.init)
+    case 4, 9, 11: return readTIFFUInt32(data, at: offset, order: order)
+    default: return nil
+    }
+  }
+
+  private static func readTIFFUInt16(
+    _ data: Data, at offset: Int, order: TIFFByteOrder
+  ) -> UInt16? {
+    guard offset >= 0, offset <= data.count - 2 else { return nil }
+    let first = UInt16(data[data.startIndex + offset])
+    let second = UInt16(data[data.startIndex + offset + 1])
+    switch order {
+    case .littleEndian: return first | second << 8
+    case .bigEndian: return first << 8 | second
+    }
+  }
+
+  private static func readTIFFUInt32(
+    _ data: Data, at offset: Int, order: TIFFByteOrder
+  ) -> UInt32? {
+    guard offset >= 0, offset <= data.count - 4 else { return nil }
+    let bytes = (0..<4).map { UInt32(data[data.startIndex + offset + $0]) }
+    switch order {
+    case .littleEndian: return bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24
+    case .bigEndian: return bytes[0] << 24 | bytes[1] << 16 | bytes[2] << 8 | bytes[3]
+    }
+  }
+
+  private static func checkedAdd(_ lhs: Int, _ rhs: Int) -> Int? {
+    let result = lhs.addingReportingOverflow(rhs)
+    return result.overflow ? nil : result.partialValue
+  }
+}
+
+/// `NSPasteboard` has no public change notification for the general pasteboard. This policy keeps
+/// its fallback polling bounded: it is responsive during active copying, then progressively backs
+/// off and stops altogether whenever monitoring is paused or disabled.
+struct ClipboardPollingPolicy {
+  struct State: Equatable {
+    var isEnabled = false
+    var isPaused = false
+    var isAppActive = false
+    var isLowPowerMode = false
+    var lastActivity: Date?
+  }
+
+  /// The injected clock makes cadence tests deterministic without sleeping or starting timers.
+  var now: () -> Date
+
+  init(now: @escaping () -> Date = Date.init) { self.now = now }
+
+  func nextDelay(for state: State) -> TimeInterval? {
+    guard state.isEnabled, !state.isPaused else { return nil }
+
+    let idleTime = max(0, now().timeIntervalSince(state.lastActivity ?? now()))
+    let delay: TimeInterval
+    switch idleTime {
+    case ..<5: delay = 0.25
+    case ..<30: delay = 1
+    case ..<120: delay = 3
+    case ..<600: delay = 10
+    default: delay = 30
+    }
+    let multiplier = (state.isLowPowerMode ? 2.0 : 1.0) * (state.isAppActive ? 1.0 : 2.0)
+    return min(delay * multiplier, 60)
+  }
+
+  func stateRecordingActivity(from state: State) -> State {
+    var state = state
+    state.lastActivity = now()
+    return state
+  }
+}
+
+@MainActor
+protocol ClipboardPollingTask: AnyObject {
+  func cancel()
+}
+
+@MainActor
+protocol ClipboardPollingScheduling: AnyObject {
+  func schedule(
+    after delay: TimeInterval, action: @escaping @MainActor () -> Void
+  ) -> any ClipboardPollingTask
+}
+
+@MainActor
+private final class RunLoopClipboardPollingTask: ClipboardPollingTask {
+  private var timer: Timer?
+
+  init(_ timer: Timer) { self.timer = timer }
+
+  func cancel() {
+    timer?.invalidate()
+    timer = nil
+  }
+}
+
+@MainActor
+final class RunLoopClipboardPollingScheduler: ClipboardPollingScheduling {
+  func schedule(
+    after delay: TimeInterval, action: @escaping @MainActor () -> Void
+  ) -> any ClipboardPollingTask {
+    let timer = Timer(timeInterval: delay, repeats: false) { _ in
+      Task { @MainActor in action() }
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    return RunLoopClipboardPollingTask(timer)
+  }
+}
+
 /// Session-only clipboard history: polls the pasteboard, keeps recent copies, and lets you re-copy.
 /// Off by default (it would otherwise capture everything copied, including passwords).
 @MainActor
@@ -184,21 +591,32 @@ final class ClipboardModel: ObservableObject {
   private let loginSession: () -> String?
   private var lastChange: Int
   private var ownWriteChange = -1
-  private var timer: AnyCancellable?
+  private var pollingTimer: (any ClipboardPollingTask)?
+  private var cancellables: Set<AnyCancellable> = []
   private var isRunning = false
+  private let pollingPolicy: ClipboardPollingPolicy
+  private let pollingScheduler: any ClipboardPollingScheduling
+  private var pollingState = ClipboardPollingPolicy.State()
+  private var pollingGeneration: UInt64 = 0
+  private var historyGeneration: UInt64 = 0
+  private let pasteboardTransactions = ClipboardPasteboardTransaction.Pipeline()
 
   init(
     pasteboard: NSPasteboard = .general,
     privacyStore: (any ClipboardPrivacyStoring)? = nil,
     contextMonitor: (any ClipboardContextMonitoring)? = nil,
     now: @escaping () -> Date = Date.init,
-    loginSession: @escaping () -> String? = ClipboardLoginSession.currentIdentifier
+    loginSession: @escaping () -> String? = ClipboardLoginSession.currentIdentifier,
+    pollingPolicy: ClipboardPollingPolicy = ClipboardPollingPolicy(),
+    pollingScheduler: (any ClipboardPollingScheduling)? = nil
   ) {
     self.pasteboard = pasteboard
     self.privacyStore = privacyStore ?? DefaultsClipboardPrivacyStore()
     self.contextMonitor = contextMonitor ?? WorkspaceClipboardContextMonitor()
     self.now = now
     self.loginSession = loginSession
+    self.pollingPolicy = pollingPolicy
+    self.pollingScheduler = pollingScheduler ?? RunLoopClipboardPollingScheduler()
     self.lastChange = pasteboard.changeCount
     self.privacyStore.onChange = { [weak self] in self?.privacyConfigurationDidChange() }
     self.contextMonitor.onChange = { [weak self] context in self?.contextDidChange(context) }
@@ -212,10 +630,26 @@ final class ClipboardModel: ObservableObject {
     currentFocusIdentifier = contextMonitor.context.focusIdentifier
     lastChange = pasteboard.changeCount
     refreshPrivacyState()
-    startPolling()
+    pollingState.isEnabled = true
+    pollingState.isPaused = isPaused
+    pollingState.isAppActive = NSApp.isActive
+    pollingState.isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+    pollingState = pollingPolicy.stateRecordingActivity(from: pollingState)
+
+    NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)
+      .sink { [weak self] _ in self?.refreshLowPowerMode() }
+      .store(in: &cancellables)
+    NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
+      .sink { [weak self] _ in self?.setAppActive(false) }
+      .store(in: &cancellables)
+    NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+      .sink { [weak self] _ in self?.setAppActive(true) }
+      .store(in: &cancellables)
+    scheduleNextPoll()
   }
 
   func stop() {
+    invalidatePendingCopyBacks()
     guard isRunning else { return }
     isRunning = false
     contextMonitor.stop()
@@ -223,30 +657,80 @@ final class ClipboardModel: ObservableObject {
     currentFocusIdentifier = nil
     pauseReason = .unidentifiedApplication
     isPaused = true
-    stopPolling()
+    cancellables.removeAll()
+    pollingState.isEnabled = false
+    pollingState.isPaused = true
+    pollingState.lastActivity = nil
+    cancelPollingTimer()
+    clear()
   }
 
-  private func startPolling() {
-    lastChange = pasteboard.changeCount
-    timer = Timer.publish(every: 0.7, on: .main, in: .common).autoconnect()
-      .sink { [weak self] _ in self?.pollNow() }
+  private func refreshLowPowerMode() {
+    pollingState.isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+    scheduleNextPoll()
   }
 
-  private func stopPolling() {
-    timer = nil
-    items = []
-    lastWriteError = nil
+  private func setAppActive(_ active: Bool) {
+    pollingState.isAppActive = active
+    if active {
+      // The pasteboard may have changed while Islet was inactive. Check once on return, then let
+      // the idle policy choose the next wake-up.
+      cancelPollingTimer()
+      pollNow()
+    } else {
+      // Clipboard History is useful for copies made in other apps. Keep one slower background
+      // wake-up instead of treating an inactive menu-bar app as fully disabled.
+      scheduleNextPoll()
+    }
+  }
+
+  private func scheduleNextPoll() {
+    cancelPollingTimer()
+    guard let delay = pollingPolicy.nextDelay(for: pollingState) else { return }
+    let generation = pollingGeneration
+    pollingTimer = pollingScheduler.schedule(after: delay) { [weak self] in
+      self?.poll(generation: generation)
+    }
+  }
+
+  private func cancelPollingTimer() {
+    pollingGeneration &+= 1
+    pollingTimer?.cancel()
+    pollingTimer = nil
+  }
+
+  private func poll(generation: UInt64) {
+    guard generation == pollingGeneration else { return }
+    pollingTimer = nil
+    pollNow()
+  }
+
+  private func scheduleTimedPauseExpiry(at deadline: Date) {
+    cancelPollingTimer()
+    guard isRunning else { return }
+    let generation = pollingGeneration
+    pollingTimer = pollingScheduler.schedule(
+      after: max(0, deadline.timeIntervalSince(now()))
+    ) { [weak self] in
+      guard let self, generation == pollingGeneration else { return }
+      pollingTimer = nil
+      refreshPrivacyState()
+    }
   }
 
   func pollNow() {
     refreshPrivacyState()
+    guard pollingPolicy.nextDelay(for: pollingState) != nil else { return }
     guard !contextMonitor.refreshApplication() else { return }
     let pb = pasteboard
-    guard pb.changeCount != lastChange else { return }
+    guard pb.changeCount != lastChange else {
+      scheduleNextPoll()
+      return
+    }
     lastChange = pb.changeCount
-    guard pb.changeCount != ownWriteChange else { return }  // ignore our own re-copy
-    guard !isPaused else { return }
-    capture(pb)
+    pollingState = pollingPolicy.stateRecordingActivity(from: pollingState)
+    if pb.changeCount != ownWriteChange { capture(pb) }  // ignore our own re-copy
+    scheduleNextPoll()
   }
 
   private func capture(_ pb: NSPasteboard) {
@@ -276,45 +760,68 @@ final class ClipboardModel: ObservableObject {
   }
 
   @discardableResult
-  func copyBack(_ item: ClipboardItem) -> Bool {
+  func copyBack(_ item: ClipboardItem) async -> Bool {
+    invalidatePendingCopyBacks()
+    let generation = historyGeneration
     let pb = pasteboard
-    let succeeded = ClipboardPasteboardTransaction.replace(on: pb) {
-      switch item.kind {
-      case .text(let s): pb.setString(s, forType: .string)
-      case .fileURLs(let urls): ClipboardFileURLs.write(urls, to: pb)
-      case .image(let payload):
-        pb.setData(
-          payload.data,
-          forType: NSPasteboard.PasteboardType(rawValue: payload.pasteboardTypeRawValue))
-      }
+    let succeeded = await pasteboardTransactions.replace(
+      on: pb,
+      shouldWrite: { generation == self.historyGeneration },
+      write: {
+        switch item.kind {
+        case .text(let s): pb.setString(s, forType: .string)
+        case .fileURLs(let urls): ClipboardFileURLs.write(urls, to: pb)
+        case .image(let payload):
+          pb.setData(
+            payload.data,
+            forType: NSPasteboard.PasteboardType(rawValue: payload.pasteboardTypeRawValue))
+        }
+      })
+    if succeeded {
+      ownWriteChange = pb.changeCount
+      lastChange = pb.changeCount
     }
+    guard generation == historyGeneration else { return false }
     guard succeeded else {
-      lastWriteError = "Couldn’t restore that clipboard item."
+      lastWriteError = String(localized: "Couldn’t restore that clipboard item.")
       return false
     }
     lastWriteError = nil
     ownWriteChange = pb.changeCount
     lastChange = pb.changeCount
+    pollingState = pollingPolicy.stateRecordingActivity(from: pollingState)
+    scheduleNextPoll()
     items.removeAll { $0.id == item.id }
     items.insert(item, at: 0)
     return true
   }
 
-  func remove(_ item: ClipboardItem) { items.removeAll { $0.id == item.id } }
+  func remove(_ item: ClipboardItem) {
+    invalidatePendingCopyBacks()
+    items.removeAll { $0.id == item.id }
+  }
   func clear() {
+    invalidatePendingCopyBacks()
     items = []
     lastWriteError = nil
+    lastChange = pasteboard.changeCount
+    scheduleNextPoll()
   }
   func dismissWriteError() { lastWriteError = nil }
 
   /// Pausing immediately clears retained history. Copies made while paused are deliberately not
   /// backfilled when capture resumes.
   func setPaused(_ paused: Bool) {
+    invalidatePendingCopyBacks()
     var configuration = privacyStore.load()
     configuration.manuallyPaused = paused
     if !paused {
       configuration.pausedUntil = nil
       configuration.pausedLoginSession = nil
+    }
+    if paused {
+      pollingState.isPaused = true
+      cancelPollingTimer()
     }
     if paused, configuration.clearHistoryOnPause { clear() }
     privacyStore.save(configuration)
@@ -327,6 +834,8 @@ final class ClipboardModel: ObservableObject {
     configuration.manuallyPaused = false
     configuration.pausedUntil = now().addingTimeInterval(duration)
     configuration.pausedLoginSession = nil
+    pollingState.isPaused = true
+    cancelPollingTimer()
     if configuration.clearHistoryOnPause { clear() }
     privacyStore.save(configuration)
     privacyConfigurationDidChange()
@@ -339,6 +848,8 @@ final class ClipboardModel: ObservableObject {
     configuration.pausedLoginSession = loginSession()
     // If macOS cannot provide a login-session identity, fail closed with an ordinary manual pause.
     configuration.manuallyPaused = configuration.pausedLoginSession == nil
+    pollingState.isPaused = true
+    cancelPollingTimer()
     if configuration.clearHistoryOnPause { clear() }
     privacyStore.save(configuration)
     privacyConfigurationDidChange()
@@ -369,22 +880,30 @@ final class ClipboardModel: ObservableObject {
     let willPause = evaluation.reason != nil
     pauseReason = evaluation.reason
     isPaused = willPause
+    pollingState.isPaused = willPause
     if !wasPaused, willPause, evaluation.configuration.clearHistoryOnPause { clear() }
     if wasPaused, !willPause {
       // Establish a fresh generation boundary before capture resumes. This prevents a copy made
       // during a timed pause from being retained when no poll ran between the copy and expiry.
       lastChange = pasteboard.changeCount
+      pollingState = pollingPolicy.stateRecordingActivity(from: pollingState)
+      scheduleNextPoll()
+    } else if willPause {
+      if case .timed = evaluation.reason, let deadline = evaluation.configuration.pausedUntil {
+        scheduleTimedPauseExpiry(at: deadline)
+      } else if !wasPaused {
+        cancelPollingTimer()
+      }
     }
   }
 
+  private func invalidatePendingCopyBacks() {
+    historyGeneration &+= 1
+    pasteboardTransactions.cancel()
+  }
+
   private static func imagePayload(from pasteboard: NSPasteboard) -> ClipboardItem.ImagePayload? {
-    for type in [NSPasteboard.PasteboardType.tiff, .png] {
-      guard let data = pasteboard.data(forType: type),
-        data.count <= ClipboardPrivacyPolicy.maximumImageBytes
-      else { continue }
-      return ClipboardItem.ImagePayload(data: data, pasteboardTypeRawValue: type.rawValue)
-    }
-    return nil
+    ClipboardImagePolicy.payload(from: pasteboard)
   }
 }
 
@@ -406,23 +925,151 @@ enum ClipboardFileURLs {
 }
 
 enum ClipboardPasteboardTransaction {
-  /// NSPasteboard requires clearing before a write. Clone the current items first and restore them
-  /// if the replacement is rejected so a failed history action never destroys the user's clipboard.
-  static func replace(on pasteboard: NSPasteboard, write: () -> Bool) -> Bool {
-    let previous = (pasteboard.pasteboardItems ?? []).map { source in
-      let copy = NSPasteboardItem()
-      for type in source.types {
-        if let data = source.data(forType: type) { copy.setData(data, forType: type) }
+  static let maximumItemCount = 64
+  static let maximumTypeCount = 256
+  static let maximumTypesPerItem = 64
+  static let maximumTypeIdentifierBytes = 4 * 1024
+  static let maximumSnapshotBytes = 32 * 1024 * 1024
+
+  private struct Representation: Sendable {
+    let typeRawValue: String
+    let data: Data
+  }
+
+  private struct PreparedRollback: Sendable {
+    let changeCount: Int
+    let items: [[Representation]]
+  }
+
+  @MainActor
+  final class Pipeline {
+    private struct ActiveMaterialization {
+      let generation: UInt64
+      let task: Task<PreparedRollback?, Never>
+    }
+
+    private var generation: UInt64 = 0
+    private var activeMaterialization: ActiveMaterialization?
+
+    func cancel() {
+      generation &+= 1
+      activeMaterialization?.task.cancel()
+    }
+
+    func replace(
+      on pasteboard: NSPasteboard,
+      shouldWrite: @MainActor () -> Bool = { true },
+      write: @MainActor () -> Bool
+    ) async -> Bool {
+      cancel()
+      let requestGeneration = generation
+
+      if let previousMaterialization = activeMaterialization {
+        _ = await previousMaterialization.task.value
+        if activeMaterialization?.generation == previousMaterialization.generation {
+          activeMaterialization = nil
+        }
       }
-      return copy
+      guard requestGeneration == generation, !Task.isCancelled else { return false }
+
+      let expectedChangeCount = pasteboard.changeCount
+      let pasteboardName = pasteboard.name
+      let task = Task.detached(priority: .userInitiated) {
+        prepareRollback(
+          from: NSPasteboard(name: pasteboardName), expectedChangeCount: expectedChangeCount)
+      }
+      activeMaterialization = ActiveMaterialization(
+        generation: requestGeneration, task: task)
+      let previous = await task.value
+      if activeMaterialization?.generation == requestGeneration { activeMaterialization = nil }
+
+      guard requestGeneration == generation, !Task.isCancelled, let previous,
+        pasteboard.changeCount == previous.changeCount
+      else { return false }
+      guard let rollbackItems = makePasteboardItems(from: previous) else { return false }
+      guard shouldWrite() else { return false }
+
+      let ownedChangeCount = pasteboard.clearContents()
+      guard write() else {
+        guard pasteboard.changeCount == ownedChangeCount else { return false }
+        pasteboard.clearContents()
+        if !rollbackItems.isEmpty { _ = pasteboard.writeObjects(rollbackItems) }
+        return false
+      }
+      return true
     }
-    pasteboard.clearContents()
-    guard write() else {
-      pasteboard.clearContents()
-      if !previous.isEmpty { _ = pasteboard.writeObjects(previous) }
-      return false
+  }
+
+  /// NSPasteboard requires clearing before a write. Prepare a complete, bounded rollback first.
+  /// AppKit marks pasteboard access as sendable, so reading promised data and building the copies
+  /// happens away from the main actor. Type and item checks run before asking lazy providers for
+  /// bytes. Once materialization starts, every representation is required for an exact rollback.
+  @MainActor
+  static func replace(
+    on pasteboard: NSPasteboard,
+    shouldWrite: @MainActor () -> Bool = { true },
+    write: @MainActor () -> Bool
+  ) async -> Bool {
+    await Pipeline().replace(on: pasteboard, shouldWrite: shouldWrite, write: write)
+  }
+
+  private nonisolated static func prepareRollback(
+    from pasteboard: NSPasteboard, expectedChangeCount: Int
+  ) -> PreparedRollback? {
+    guard !Task.isCancelled, pasteboard.changeCount == expectedChangeCount else { return nil }
+    guard let sourceItems = pasteboard.pasteboardItems else { return nil }
+    guard !Task.isCancelled, sourceItems.count <= maximumItemCount else { return nil }
+
+    var typeCount = 0
+    for source in sourceItems {
+      guard !Task.isCancelled else { return nil }
+      guard !source.types.isEmpty, source.types.count <= maximumTypesPerItem else { return nil }
+      guard typeCount <= maximumTypeCount - source.types.count else { return nil }
+      typeCount += source.types.count
+      guard
+        source.types.allSatisfy({
+          $0.rawValue.lengthOfBytes(using: .utf8) <= maximumTypeIdentifierBytes
+        })
+      else { return nil }
     }
-    return true
+
+    var byteCount = 0
+    var rollbackItems: [[Representation]] = []
+    rollbackItems.reserveCapacity(sourceItems.count)
+    for source in sourceItems {
+      guard !Task.isCancelled else { return nil }
+      var representations: [Representation] = []
+      representations.reserveCapacity(source.types.count)
+      for type in source.types {
+        guard !Task.isCancelled else { return nil }
+        guard let data = source.data(forType: type),
+          !Task.isCancelled, data.count <= maximumSnapshotBytes - byteCount
+        else { return nil }
+        byteCount += data.count
+        representations.append(Representation(typeRawValue: type.rawValue, data: data))
+      }
+      rollbackItems.append(representations)
+    }
+    guard !Task.isCancelled, pasteboard.changeCount == expectedChangeCount else { return nil }
+    return PreparedRollback(changeCount: expectedChangeCount, items: rollbackItems)
+  }
+
+  @MainActor
+  private static func makePasteboardItems(from snapshot: PreparedRollback) -> [NSPasteboardItem]? {
+    var items: [NSPasteboardItem] = []
+    items.reserveCapacity(snapshot.items.count)
+    for representations in snapshot.items {
+      let item = NSPasteboardItem()
+      for representation in representations {
+        guard
+          item.setData(
+            representation.data,
+            forType: NSPasteboard.PasteboardType(rawValue: representation.typeRawValue))
+        else { return nil }
+      }
+      items.append(item)
+    }
+    return items
   }
 }
 
@@ -472,6 +1119,21 @@ final class ClipboardActivity: NotchActivity, ObservableObject {
         .font(.caption.weight(.semibold)).monospacedDigit().appThemeForeground(.clipboard))
   }
   var expandedView: AnyView { AnyView(ClipboardView(model: model)) }
+
+  var accessibilityPrimaryActionName: String? {
+    model.items.first.map { "Copied \($0.preview)" }
+  }
+
+  func performAccessibilityPrimaryAction() async -> Bool {
+    guard let item = model.items.first else { return false }
+    return await model.copyBack(item)
+  }
+
+  func dismissAccessibilityTransient() -> Bool {
+    guard model.lastWriteError != nil else { return false }
+    model.dismissWriteError()
+    return true
+  }
 }
 
 struct ClipboardView: View {
@@ -497,8 +1159,15 @@ struct ClipboardView: View {
           Image(systemName: model.isPaused ? "play.fill" : "pause.fill")
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-        .help("Clipboard privacy pause")
-        .accessibilityLabel("Clipboard privacy pause")
+        .help(
+          model.isPaused
+            ? String(localized: "Resume clipboard history")
+            : String(localized: "Pause and clear clipboard history")
+        )
+        .accessibilityLabel(
+          model.isPaused
+            ? String(localized: "Resume clipboard history")
+            : String(localized: "Pause and clear clipboard history"))
         if !model.items.isEmpty {
           Button {
             model.clear()
@@ -526,7 +1195,7 @@ struct ClipboardView: View {
             ForEach(model.items) { item in
               HStack(spacing: 4) {
                 Button {
-                  _ = model.copyBack(item)
+                  Task { _ = await model.copyBack(item) }
                 } label: {
                   HStack(spacing: 8) {
                     Image(systemName: item.icon).font(.caption2).appThemeForeground(.clipboard)
@@ -582,18 +1251,18 @@ struct ClipboardView: View {
       afterRemoving: item.id, from: model.items)
     model.remove(item)
     focusedItemID = replacementID
-    A11y.announce("Deleted clipboard item")
+    A11y.announce(String(localized: "Deleted clipboard item"))
   }
 
   private func copyLabel(for item: ClipboardItem) -> String {
     switch item.kind {
     case .text:
-      return "Copy text clipboard item"
+      return String(localized: "Copy text clipboard item")
     case .fileURLs:
-      let detail = item.detail ?? "files"
-      return "Copy \(detail) clipboard item"
+      let detail = item.detail ?? String(localized: "files")
+      return String(localized: "Copy \(detail) clipboard item")
     case .image:
-      return "Copy image clipboard item"
+      return String(localized: "Copy image clipboard item")
     }
   }
 }
