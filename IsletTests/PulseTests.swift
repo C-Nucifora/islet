@@ -1657,6 +1657,299 @@ final class PulseTests: XCTestCase {
     XCTAssertEqual(center.retainedItemCount, 0)
   }
 
+  func testWebActionDestinationCanonicalizesExternalAndLoopbackOrigins() throws {
+    let external = try PulseActionDestination.validate(
+      XCTUnwrap(URL(string: "HTTPS://EXAMPLE.COM:443/jobs/1")))
+    XCTAssertEqual(external.scheme, "https")
+    XCTAssertEqual(external.host, "example.com")
+    XCTAssertEqual(external.displayHost, "example.com")
+    XCTAssertEqual(external.canonicalOrigin, "https://example.com")
+    XCTAssertEqual(external.kind, .external)
+
+    let loopback = try PulseActionDestination.validate(
+      XCTUnwrap(URL(string: "http://[0:0:0:0:0:0:0:1]:8080/run")))
+    XCTAssertEqual(loopback.host, "::1")
+    XCTAssertEqual(loopback.displayHost, "[::1]:8080")
+    XCTAssertEqual(loopback.canonicalOrigin, "http://[::1]:8080")
+    XCTAssertEqual(loopback.kind, .loopback)
+
+    let mappedLoopback = try PulseActionDestination.validate(
+      XCTUnwrap(URL(string: "http://[::ffff:127.0.0.1]:9000/run")))
+    XCTAssertEqual(mappedLoopback.kind, .loopback)
+
+    let localhost = try PulseActionDestination.validate(
+      XCTUnwrap(URL(string: "http://LOCALHOST:3000/run")))
+    XCTAssertEqual(localhost.displayHost, "localhost:3000")
+    XCTAssertEqual(localhost.kind, .loopback)
+  }
+
+  func testRejectsMalformedCredentialBearingUnicodeControlAndDeceptiveWebURLs() throws {
+    let values = [
+      "file:///tmp/action", "https://user:secret@example.com/run",
+      "https://аррӏе.com/run", "https://xn--80ak6aa92e.com/run",
+      "https://example.com%2eattacker.test/run", "https://example.com./run",
+      "https://127.1/run", "https://2130706433/run", "https://0x7f.0.0.1/run",
+      "https://0x7f.1/run", "https://127.0.0.0x1/run", "https://example.com/%0aheader",
+      "https://example.com\\@attacker.test/run", "https://",
+    ]
+
+    for value in values {
+      let url = try XCTUnwrap(URL(string: value), "Foundation should retain test URL \(value)")
+      XCTAssertThrowsError(try PulseActionDestination.validate(url), value) { error in
+        XCTAssertEqual(error as? PulseValidationError, .unsafeActionURL, value)
+      }
+    }
+  }
+
+  @MainActor
+  func testNewTrustedChangedLoopbackAndCrossProviderDestinationsStayIsolated() throws {
+    let directory = try pulseActionTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let center = makeCenter()
+    let trustStore = PulseActionTrustStore(supportDirectory: directory)
+    let firstProvider = try PulseProviderIdentity(credentialID: "provider-one", source: "build")
+    let secondProvider = try PulseProviderIdentity(credentialID: "provider-two", source: "tests")
+    var opened: [URL] = []
+    let gate = PulseActionGate(
+      center: center, trustStore: trustStore, providerValidator: { _ in true },
+      opener: {
+        opened.append($0)
+        return true
+      })
+    let first = pulseWebPayload(
+      id: "job", source: "build", actionID: "open", url: "https://example.com/jobs/1")
+    XCTAssertTrue(center.apply(command(.show, first), providerIdentity: firstProvider).ok)
+
+    guard
+      case .confirmationRequired(let initial) = gate.requestOpen(
+        itemID: try PulseItem.ID(source: "build", providerIdentifier: "job"), actionID: "open")
+    else { return XCTFail("A new external origin must require confirmation") }
+    XCTAssertEqual(initial.destination.displayHost, "example.com")
+    XCTAssertEqual(opened, [])
+    XCTAssertEqual(gate.confirm(initial), .opened)
+    XCTAssertEqual(opened.map(\.absoluteString), ["https://example.com/jobs/1"])
+
+    var sameOrigin = first
+    sameOrigin.actions = [
+      PulseAction(id: "open", title: "Open", url: URL(string: "https://example.com/jobs/2")!)
+    ]
+    XCTAssertTrue(center.apply(command(.update, sameOrigin), providerIdentity: firstProvider).ok)
+    XCTAssertEqual(
+      gate.requestOpen(
+        itemID: try PulseItem.ID(source: "build", providerIdentifier: "job"), actionID: "open"),
+      .opened)
+
+    var changed = first
+    changed.actions = [
+      PulseAction(id: "open", title: "Open", url: URL(string: "https://other.example/run")!)
+    ]
+    XCTAssertTrue(center.apply(command(.update, changed), providerIdentity: firstProvider).ok)
+    guard
+      case .confirmationRequired(let changedConfirmation) = gate.requestOpen(
+        itemID: try PulseItem.ID(source: "build", providerIdentifier: "job"), actionID: "open")
+    else { return XCTFail("A changed origin must require confirmation") }
+    XCTAssertEqual(changedConfirmation.destination.displayHost, "other.example")
+
+    let second = pulseWebPayload(
+      id: "job", source: "tests", actionID: "open", url: "https://example.com/jobs/1")
+    XCTAssertTrue(center.apply(command(.show, second), providerIdentity: secondProvider).ok)
+    guard
+      case .confirmationRequired = gate.requestOpen(
+        itemID: try PulseItem.ID(source: "tests", providerIdentifier: "job"), actionID: "open")
+    else { return XCTFail("Trust must not cross provider credentials") }
+
+    let local = pulseWebPayload(
+      id: "local", source: "build", actionID: "open", url: "http://127.0.0.1:8080/run")
+    XCTAssertTrue(center.apply(command(.show, local), providerIdentity: firstProvider).ok)
+    guard
+      case .confirmationRequired(let localConfirmation) = gate.requestOpen(
+        itemID: try PulseItem.ID(source: "build", providerIdentifier: "local"), actionID: "open")
+    else { return XCTFail("A new loopback origin must require explicit confirmation") }
+    XCTAssertEqual(localConfirmation.destination.kind, .loopback)
+  }
+
+  @MainActor
+  func testTrustStoreMigratesVersionZeroAndPersistsNoPayloadContent() throws {
+    let directory = try pulseActionTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = PulseActionTrustStore(
+      supportDirectory: directory, now: { Date(timeIntervalSince1970: 1_000) })
+    let provider = try PulseProviderIdentity(credentialID: "provider", source: "build")
+    let destination = try PulseActionDestination.validate(
+      XCTUnwrap(URL(string: "https://Example.com/private/path?token=payload-secret")))
+    try store.trust(destination, for: provider)
+
+    var registry = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: Data(contentsOf: store.storeURL)) as? [String: Any])
+    registry["version"] = 0
+    try JSONSerialization.data(withJSONObject: registry).write(to: store.storeURL)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o600], ofItemAtPath: store.storeURL.path)
+
+    let migrated = PulseActionTrustStore(supportDirectory: directory)
+    try migrated.prepare()
+    XCTAssertTrue(migrated.isTrusted(destination, for: provider))
+    let persisted = try String(contentsOf: migrated.storeURL, encoding: .utf8)
+    XCTAssertTrue(persisted.contains("\"version\" : 1"))
+    XCTAssertTrue(persisted.contains("example.com"))
+    XCTAssertFalse(persisted.contains("private"))
+    XCTAssertFalse(persisted.contains("payload-secret"))
+  }
+
+  @MainActor
+  func testCorruptTrustStorageFailsClosedWithoutBeingReplaced() throws {
+    let directory = try pulseActionTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let initial = PulseActionTrustStore(supportDirectory: directory)
+    try initial.prepare()
+    let corrupt = Data("not-json-and-must-remain".utf8)
+    try corrupt.write(to: initial.storeURL)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o600], ofItemAtPath: initial.storeURL.path)
+    let reloaded = PulseActionTrustStore(supportDirectory: directory)
+    let provider = try PulseProviderIdentity(credentialID: "provider", source: "build")
+    let destination = try PulseActionDestination.validate(URL(string: "https://example.com")!)
+
+    XCTAssertThrowsError(try reloaded.prepare()) { error in
+      XCTAssertEqual(error as? PulseActionTrustError, .corruptStore)
+    }
+    XCTAssertFalse(reloaded.isTrusted(destination, for: provider))
+    XCTAssertEqual(try Data(contentsOf: initial.storeURL), corrupt)
+  }
+
+  @MainActor
+  func testRevokedTrustDoesNotReturnAfterReload() throws {
+    let directory = try pulseActionTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = PulseActionTrustStore(supportDirectory: directory)
+    let provider = try PulseProviderIdentity(credentialID: "provider", source: "build")
+    let destination = try PulseActionDestination.validate(URL(string: "https://example.com")!)
+    let trust = try store.trust(destination, for: provider)
+    XCTAssertTrue(store.isTrusted(destination, for: provider))
+
+    try store.revoke(trust)
+
+    XCTAssertFalse(store.isTrusted(destination, for: provider))
+    let reloaded = PulseActionTrustStore(supportDirectory: directory)
+    try reloaded.prepare()
+    XCTAssertFalse(reloaded.isTrusted(destination, for: provider))
+  }
+
+  @MainActor
+  func testTrustStoreReloadsInsideEachTransactionAndDoesNotResurrectRevokedTrust() throws {
+    let directory = try pulseActionTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let first = PulseActionTrustStore(supportDirectory: directory)
+    let stale = PulseActionTrustStore(supportDirectory: directory)
+    let provider = try PulseProviderIdentity(credentialID: "provider", source: "build")
+    let revoked = try PulseActionDestination.validate(URL(string: "https://revoked.example")!)
+    let retained = try PulseActionDestination.validate(URL(string: "https://retained.example")!)
+
+    let trust = try first.trust(revoked, for: provider)
+    try stale.prepare()
+    try first.revoke(trust)
+    XCTAssertFalse(stale.isTrusted(revoked, for: provider))
+    try stale.trust(retained, for: provider)
+
+    let reloaded = PulseActionTrustStore(supportDirectory: directory)
+    XCTAssertFalse(reloaded.isTrusted(revoked, for: provider))
+    XCTAssertTrue(reloaded.isTrusted(retained, for: provider))
+  }
+
+  @MainActor
+  func testOversizedTrustMutationRollsBackWithoutReplacingReadableStore() throws {
+    let directory = try pulseActionTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = PulseActionTrustStore(supportDirectory: directory, maximumStoreBytes: 256)
+    let provider = try PulseProviderIdentity(credentialID: "provider", source: "build")
+    let destination = try PulseActionDestination.validate(
+      URL(string: "https://a-very-long-destination-name-for-the-size-limit.example")!)
+
+    XCTAssertThrowsError(try store.trust(destination, for: provider)) { error in
+      XCTAssertEqual(error as? PulseActionTrustError, .corruptStore)
+    }
+    XCTAssertFalse(store.isTrusted(destination, for: provider))
+    XCTAssertLessThanOrEqual(
+      try Data(contentsOf: store.storeURL).count, 256,
+      "A failed mutation must leave the previous readable registry in place")
+  }
+
+  @MainActor
+  func testActionAndProviderReplacementBetweenPromptAndConfirmationAreRejected() throws {
+    let directory = try pulseActionTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let center = makeCenter()
+    let trustStore = PulseActionTrustStore(supportDirectory: directory)
+    let originalProvider = try PulseProviderIdentity(credentialID: "original", source: "build")
+    let replacementProvider = try PulseProviderIdentity(
+      credentialID: "replacement", source: "build")
+    var opened: [URL] = []
+    var providerAuthorized = true
+    let gate = PulseActionGate(
+      center: center, trustStore: trustStore,
+      providerValidator: { _ in providerAuthorized },
+      opener: {
+        opened.append($0)
+        return true
+      })
+    let original = pulseWebPayload(
+      id: "job", source: "build", actionID: "open", url: "https://example.com/old")
+    XCTAssertTrue(center.apply(command(.show, original), providerIdentity: originalProvider).ok)
+    let itemID = try PulseItem.ID(source: "build", providerIdentifier: "job")
+    guard
+      case .confirmationRequired(let pending) = gate.requestOpen(
+        itemID: itemID, actionID: "open")
+    else { return XCTFail("Expected confirmation") }
+
+    let replacement = pulseWebPayload(
+      id: "job", source: "build", actionID: "open", url: "https://example.com/new")
+    XCTAssertTrue(
+      center.apply(command(.update, replacement), providerIdentity: originalProvider).ok)
+    guard case .rejected(let message) = gate.confirm(pending) else {
+      return XCTFail("A replaced action must not open")
+    }
+    XCTAssertTrue(message.contains("changed"))
+    XCTAssertTrue(opened.isEmpty)
+    XCTAssertFalse(trustStore.isTrusted(pending.destination, for: originalProvider))
+
+    guard
+      case .confirmationRequired(let providerPending) = gate.requestOpen(
+        itemID: itemID, actionID: "open")
+    else { return XCTFail("Expected replacement confirmation") }
+    XCTAssertTrue(
+      center.apply(command(.update, replacement), providerIdentity: replacementProvider).ok)
+    guard case .rejected = gate.confirm(providerPending) else {
+      return XCTFail("A replaced provider identity must not open")
+    }
+
+    guard
+      case .confirmationRequired(let authorizationPending) = gate.requestOpen(
+        itemID: itemID, actionID: "open")
+    else { return XCTFail("Expected current-provider confirmation") }
+    providerAuthorized = false
+    guard case .rejected(let authorizationMessage) = gate.confirm(authorizationPending) else {
+      return XCTFail("Provider authorization must be checked again at confirmation time")
+    }
+    XCTAssertTrue(authorizationMessage.contains("no longer authorized"))
+    XCTAssertTrue(opened.isEmpty)
+  }
+
+  private func pulseWebPayload(
+    id: String, source: String, actionID: String, url: String
+  ) -> PulsePayload {
+    PulsePayload(
+      id: id, source: source, title: "Work", subtitle: nil, symbol: nil, accentHex: nil,
+      progress: nil, state: .needsAction, priority: .normal, expiresAt: nil,
+      actions: [PulseAction(id: actionID, title: "Open", url: URL(string: url)!)])
+  }
+
+  private func pulseActionTemporaryDirectory() throws -> URL {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "islet-pulse-action-tests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+    return url
+  }
+
   private func command(
     _ operation: PulseOperation, _ payload: PulsePayload, revision: UInt64? = nil
   ) -> PulseCommand {

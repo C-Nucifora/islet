@@ -197,6 +197,41 @@ final class PulseCredentialTests: XCTestCase {
   }
 
   @MainActor
+  func testServerRotationClearsRetainedItemsFromTheRotatedProvider() throws {
+    let directory = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let center = PulseCenter.shared
+    center.removeAll()
+    defer { center.removeAll() }
+    let server = PulseServer(
+      credentialStore: PulseCredentialStore(supportDirectory: directory),
+      actionTrustStore: PulseActionTrustStore(supportDirectory: directory))
+    let summary = try server.createProvider(
+      name: "Build", source: "build", permissions: [.persistentActivities, .webActions])
+    let previousPolicy = center.policy(for: summary.source)
+    center.setPolicy(.allowed, for: summary.source)
+    defer { center.setPolicy(previousPolicy, for: summary.source) }
+    let provider = try PulseProviderIdentity(credentialID: summary.id, source: summary.source)
+    let payload = PulsePayload(
+      id: "job", source: summary.source, title: "Old credential", subtitle: nil,
+      symbol: nil, accentHex: nil, progress: nil, state: .active, priority: .normal,
+      expiresAt: nil,
+      actions: [PulseAction(title: "Open", url: URL(string: "https://example.com")!)])
+    XCTAssertTrue(
+      center.apply(
+        PulseCommand(
+          token: "unused", operation: .show, activity: payload, id: nil,
+          requestID: "retained-before-rotation", source: summary.source),
+        providerIdentity: provider
+      ).ok)
+    XCTAssertEqual(center.retainedItemCount, 1)
+
+    try server.rotateCredential(summary.id)
+
+    XCTAssertEqual(center.retainedItemCount, 0)
+  }
+
+  @MainActor
   func testMetadataPersistsAgeLastUsePermissionsAndRevocationWithoutTokenMaterial() throws {
     let directory = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -428,6 +463,51 @@ final class PulseCredentialTests: XCTestCase {
     let thenClause = try XCTUnwrap(providerCondition["then"] as? [String: Any])
 
     XCTAssertEqual(thenClause["required"] as? [String], ["requestID"])
+  }
+
+  @MainActor
+  func testTrustCleanupFailureCannotKeepOrRestoreWebActionAuthorization() throws {
+    let credentialDirectory = try temporaryDirectory()
+    let trustDirectory = try temporaryDirectory()
+    defer {
+      try? FileManager.default.setAttributes(
+        [.posixPermissions: 0o700], ofItemAtPath: trustDirectory.path)
+      try? FileManager.default.removeItem(at: credentialDirectory)
+      try? FileManager.default.removeItem(at: trustDirectory)
+    }
+    let credentials = PulseCredentialStore(supportDirectory: credentialDirectory)
+    let trusts = PulseActionTrustStore(supportDirectory: trustDirectory)
+    let server = PulseServer(credentialStore: credentials, actionTrustStore: trusts)
+    let summary = try server.createProvider(
+      name: "Build", source: "build", permissions: [.events, .webActions])
+    let provider = try PulseProviderIdentity(credentialID: summary.id, source: summary.source)
+    let destination = try PulseActionDestination.validate(
+      XCTUnwrap(URL(string: "https://example.com/jobs")))
+    try trusts.trust(destination, for: provider)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o500], ofItemAtPath: trustDirectory.path)
+
+    XCTAssertThrowsError(try server.setPermissions([.events], for: summary.id))
+    XCTAssertFalse(
+      try XCTUnwrap(credentials.credentials.first { $0.id == summary.id })
+        .permissions.contains(.webActions))
+    XCTAssertFalse(credentials.isCurrentProvider(provider))
+    XCTAssertThrowsError(
+      try server.setPermissions([.events, .webActions], for: summary.id))
+    XCTAssertFalse(
+      try XCTUnwrap(credentials.credentials.first { $0.id == summary.id })
+        .permissions.contains(.webActions))
+
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o700], ofItemAtPath: trustDirectory.path)
+    try server.setPermissions([.events, .webActions], for: summary.id)
+    try trusts.trust(destination, for: provider)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o500], ofItemAtPath: trustDirectory.path)
+
+    XCTAssertThrowsError(try server.revokeCredential(summary.id))
+    XCTAssertNotNil(credentials.credentials.first { $0.id == summary.id }?.revokedAt)
+    XCTAssertFalse(credentials.isCurrentProvider(provider))
   }
 
   @MainActor
