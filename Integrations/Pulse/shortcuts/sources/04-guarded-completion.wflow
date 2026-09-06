@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>WFWorkflowActions</key>
+  <array>
+    <dict>
+      <key>WFWorkflowActionIdentifier</key><string>dev.islet.UpdatePulseProgressIntent</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>AppIntentDescriptor</key><dict><key>AppIntentIdentifier</key><string>UpdatePulseProgressIntent</string><key>BundleIdentifier</key><string>dev.islet</string><key>Name</key><string>Islet</string><key>TeamIdentifier</key><string></string></dict>
+        <key>UUID</key><string>98B6E08A-188D-40C7-B011-72430716D1C3</string>
+        <key>identifier</key><string>shortcuts.islet.guarded-sync</string>
+        <key>activityTitle</key><string>Syncing archive</string>
+        <key>details</key><string>Waiting for completion approval.</string>
+        <key>progress</key><real>0.8</real>
+        <key>activityPriority</key><string>normal</string>
+        <key>activityState</key><string>progress</string>
+        <key>expirySeconds</key><integer>300</integer>
+        <key>ShowWhenRun</key><false/>
+      </dict>
+    </dict>
+    <dict>
+      <key>WFWorkflowActionIdentifier</key><string>is.workflow.actions.ask</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key><string>78D871F2-9EF3-4123-BAE3-0DCB16F687DE</string>
+        <key>WFAskActionPrompt</key><string>Type Complete to finish the archive sync.</string>
+      </dict>
+    </dict>
+    <dict>
+      <key>WFWorkflowActionIdentifier</key><string>is.workflow.actions.conditional</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key><string>66ACCCD1-22CF-4300-BE84-63FBA5C752BA</string>
+        <key>UUID</key><string>8D37497B-B1BC-44C5-B4B6-2863F80F4330</string>
+        <key>WFCondition</key><integer>4</integer>
+        <key>WFConditionalActionString</key><string>Complete</string>
+        <key>WFControlFlowMode</key><integer>0</integer>
+        <key>WFInput</key>
+        <dict><key>Value</key><dict><key>OutputName</key><string>Provided Input</string><key>OutputUUID</key><string>78D871F2-9EF3-4123-BAE3-0DCB16F687DE</string><key>Type</key><string>ActionOutput</string></dict><key>WFSerializationType</key><string>WFTextTokenAttachment</string></dict>
+      </dict>
+    </dict>
+    <dict>
+      <key>WFWorkflowActionIdentifier</key><string>dev.islet.UpdatePulseProgressIntent</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>AppIntentDescriptor</key><dict><key>AppIntentIdentifier</key><string>UpdatePulseProgressIntent</string><key>BundleIdentifier</key><string>dev.islet</string><key>Name</key><string>Islet</string><key>TeamIdentifier</key><string></string></dict>
+        <key>UUID</key><string>4F85B6A0-905C-43B1-9074-AE185C29EE6E</string>
+        <key>identifier</key><string>shortcuts.islet.guarded-sync</string>
+        <key>activityTitle</key><string>Sync complete</string>
+        <key>details</key><string>The archive was confirmed.</string>
+        <key>progress</key><real>1</real>
+        <key>activityPriority</key><string>normal</string>
+        <key>activityState</key><string>succeeded</string>
+        <key>expirySeconds</key><integer>300</integer>
+        <key>ShowWhenRun</key><false/>
+      </dict>
+    </dict>
+    <dict><key>WFWorkflowActionIdentifier</key><string>is.workflow.actions.delay</string><key>WFWorkflowActionParameters</key><dict><key>WFDelayTime</key><real>5</real></dict></dict>
+    <dict>
+      <key>WFWorkflowActionIdentifier</key><string>dev.islet.EndPulseItemIntent</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>AppIntentDescriptor</key><dict><key>AppIntentIdentifier</key><string>EndPulseItemIntent</string><key>BundleIdentifier</key><string>dev.islet</string><key>Name</key><string>Islet</string><key>TeamIdentifier</key><string></string></dict>
+        <key>UUID</key><string>87AA092A-589D-42C6-830C-3D7F3DB3114B</string>
+        <key>identifier</key><string>shortcuts.islet.guarded-sync</string>
+        <key>ShowWhenRun</key><false/>
+      </dict>
+    </dict>
+    <dict>
+      <key>WFWorkflowActionIdentifier</key><string>is.workflow.actions.conditional</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict><key>GroupingIdentifier</key><string>66ACCCD1-22CF-4300-BE84-63FBA5C752BA</string><key>UUID</key><string>D587562F-0113-47BD-B724-87CFA80EFF08</string><key>WFControlFlowMode</key><integer>2</integer></dict>
+    </dict>
+  </array>
+  <key>WFWorkflowClientVersion</key><string>4018.0.4</string>
+  <key>WFWorkflowHasOutputFallback</key><false/>
+  <key>WFWorkflowHasShortcutInputVariables</key><false/>
+  <key>WFWorkflowIcon</key><dict><key>WFWorkflowIconGlyphNumber</key><integer>61699</integer><key>WFWorkflowIconStartColor</key><integer>946986751</integer></dict>
+  <key>WFWorkflowImportQuestions</key><array/>
+  <key>WFWorkflowInputContentItemClasses</key><array/>
+  <key>WFWorkflowMinimumClientVersion</key><integer>900</integer>
+  <key>WFWorkflowMinimumClientVersionString</key><string>900</string>
+  <key>WFWorkflowOutputContentItemClasses</key><array/>
+  <key>WFWorkflowTypes</key><array/>
+</dict>
+</plist>
