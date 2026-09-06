@@ -157,6 +157,24 @@ final class AdapterParserTests: XCTestCase {
     XCTAssertEqual(state.seekability, .unavailable)
   }
 
+  func testSnapshotDetailsDistinguishMissingElapsedFromExplicitZero() throws {
+    let missingLine =
+      #"{"title":"Cached","bundleIdentifier":"com.example.Player","playing":false}"#
+    let zeroLine =
+      #"{"title":"Cached","bundleIdentifier":"com.example.Player","playing":false,"elapsedTime":0}"#
+
+    let missing = try XCTUnwrap(AdapterParser.parseSnapshotDetails(line: missingLine))
+    let zero = try XCTUnwrap(AdapterParser.parseSnapshotDetails(line: zeroLine))
+
+    XCTAssertNil(missing.elapsedTime)
+    XCTAssertEqual(zero.elapsedTime, 0)
+    guard case .nowPlaying(_, let missingState) = missing.update,
+      case .nowPlaying(_, let zeroState) = zero.update
+    else { return XCTFail("expected nowPlaying snapshots") }
+    XCTAssertEqual(missingState.elapsed, 0)
+    XCTAssertEqual(zeroState.elapsed, 0)
+  }
+
   func testMalformedOneShotSnapshotIsIgnored() {
     XCTAssertEqual(AdapterParser.parseSnapshot(line: "not json"), .ignored)
   }

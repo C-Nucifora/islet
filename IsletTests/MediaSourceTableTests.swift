@@ -108,46 +108,22 @@ final class MediaSourceTableTests: XCTestCase {
     XCTAssertEqual(table.states.count, 1)
   }
 
-  func testMatchingCoreAudioOutputPresentsAStalePausedSourceAsPlaying() {
-    var table = MediaSourceTable(idleTimeout: 60)
-    let browser = key("company.thebrowser.Browser", 100)
-    let browserAudio = key(
-      "company.thebrowser.Browser.helper", 101, parent: "company.thebrowser.Browser")
-    table.upsert(browser, state("Video", playing: false), now: t0)
-
-    table.setActiveAudioSources([browserAudio], now: t0.addingTimeInterval(1))
-
-    XCTAssertFalse(table.states[browser]?.isPlaying ?? true)
-    XCTAssertTrue(table.presentationStates[browser]?.isPlaying ?? false)
-    XCTAssertNil(table.nextDeadline)
-  }
-
-  func testUnrelatedCoreAudioOutputDoesNotOverridePausedSource() {
+  func testPausedPresentationStateKeepsItsIdleDeadlineUntilExpiry() {
     var table = MediaSourceTable(idleTimeout: 60)
     let browser = key("company.thebrowser.Browser", 100)
     table.upsert(browser, state("Video", playing: false), now: t0)
-
-    table.setActiveAudioSources(
-      [key("com.hnc.Discord", 200)], now: t0.addingTimeInterval(1))
 
     XCTAssertFalse(table.presentationStates[browser]?.isPlaying ?? true)
     XCTAssertEqual(table.nextDeadline, t0.addingTimeInterval(60))
+    XCTAssertEqual(table.expire(now: t0.addingTimeInterval(60)), [browser])
   }
 
-  func testStoppingCoreAudioRestartsPausedSourceExpiry() {
+  func testPausedUpdatesDoNotMoveTheOriginalDeadline() {
     var table = MediaSourceTable(idleTimeout: 60)
     let browser = key("company.thebrowser.Browser", 100)
-    let browserAudio = key("company.thebrowser.Browser", 101)
-    table.setActiveAudioSources([browserAudio], now: t0)
     table.upsert(browser, state("Video", playing: false), now: t0)
-    XCTAssertNil(table.nextDeadline)
-
-    table.setActiveAudioSources([], now: t0.addingTimeInterval(10))
-
-    XCTAssertFalse(table.presentationStates[browser]?.isPlaying ?? true)
-    XCTAssertEqual(table.nextDeadline, t0.addingTimeInterval(70))
-    XCTAssertEqual(table.expire(now: t0.addingTimeInterval(69)), [])
-    XCTAssertEqual(table.expire(now: t0.addingTimeInterval(70)), [browser])
+    table.upsert(browser, state("Video", playing: false), now: t0.addingTimeInterval(10))
+    XCTAssertEqual(table.nextDeadline, t0.addingTimeInterval(60))
   }
 
   func testNextDeadlineIsTheEarliest() {

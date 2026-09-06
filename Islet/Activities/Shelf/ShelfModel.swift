@@ -225,7 +225,10 @@ final class ShelfModel: ObservableObject {
   private var importQueue: [ImportBatch] = []
   private var importWorker: Task<Void, Never>?
   private var importGeneration: UInt = 0
+  private var importCompletionWaiters: [CheckedContinuation<Void, Never>] = []
   private var usageMutationGeneration: UInt = 0
+  private var pendingUsageMeasurements = 0
+  private var usageMeasurementWaiters: [CheckedContinuation<Void, Never>] = []
   private var thumbnailVisibilityOwners: [UUID: Set<UUID>] = [:]
   private var queuedThumbnailWork: [ThumbnailWork] = []
   private var activeThumbnailWork: [UUID: ThumbnailWork] = [:]
@@ -233,6 +236,9 @@ final class ShelfModel: ObservableObject {
   private var thumbnailCache: [ThumbnailCacheKey: Data] = [:]
   private var cancelledThumbnailTokens: Set<UInt> = []
   private var thumbnailWorkToken: UInt = 0
+  private var thumbnailWorkWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
+  private var allThumbnailWorkWaiters: [CheckedContinuation<Void, Never>] = []
+  private var clearStartWaiters: [CheckedContinuation<Void, Never>] = []
   private(set) var isClearing = false
 
   init(
@@ -364,6 +370,38 @@ final class ShelfModel: ObservableObject {
       guard let self else { return }
       for item in leasedItems { self.endUsing(item) }
     }
+  }
+
+  /// Waits until every accepted drop in the current queue has resolved, including a worker that
+  /// Clear cancelled and is still cleaning up its staging file.
+  func waitForImportCompletion() async {
+    guard !isImportWorkerIdle else { return }
+    await withCheckedContinuation { importCompletionWaiters.append($0) }
+  }
+
+  /// Waits for Clear to become active, allowing callers to coordinate a copy-versus-clear race
+  /// without guessing how long the import worker needs to reach its cancellation point.
+  func waitForClearToStart() async {
+    guard !isClearing else { return }
+    await withCheckedContinuation { clearStartWaiters.append($0) }
+  }
+
+  /// Waits for every outstanding usage scan that was scheduled before this call to finish.
+  func waitForUsageMeasurement() async {
+    guard pendingUsageMeasurements > 0 else { return }
+    await withCheckedContinuation { usageMeasurementWaiters.append($0) }
+  }
+
+  /// Waits until the specified tile has no queued or active thumbnail request.
+  func waitForThumbnailWork(for item: ShelfItem) async {
+    guard hasThumbnailWork(for: item.id) else { return }
+    await withCheckedContinuation { thumbnailWorkWaiters[item.id, default: []].append($0) }
+  }
+
+  /// Waits until no visible Shelf tile has thumbnail work outstanding.
+  func waitForAllThumbnailWork() async {
+    guard !activeThumbnailWork.isEmpty || !queuedThumbnailWork.isEmpty else { return }
+    await withCheckedContinuation { allThumbnailWorkWaiters.append($0) }
   }
 
   func setDropTarget(_ id: UUID, active: Bool) {
@@ -669,11 +707,14 @@ final class ShelfModel: ObservableObject {
   private func scheduleUsageScan() {
     let urls = items.map(\.url)
     let generation = usageMutationGeneration
+    pendingUsageMeasurements += 1
     Task { [weak self] in
       guard let self else { return }
       let result = await self.measureUsage(of: urls)
-      guard generation == self.usageMutationGeneration else { return }
-      self.applyUsageMeasurement(result)
+      if generation == self.usageMutationGeneration {
+        self.applyUsageMeasurement(result)
+      }
+      self.finishUsageMeasurement()
     }
   }
 
@@ -706,6 +747,14 @@ final class ShelfModel: ObservableObject {
       currentUsageBytes = nil
       Log.app.error("Shelf usage measurement failed: \(error.localizedDescription)")
     }
+  }
+
+  private func finishUsageMeasurement() {
+    pendingUsageMeasurements = max(0, pendingUsageMeasurements - 1)
+    guard pendingUsageMeasurements == 0 else { return }
+    let waiters = usageMeasurementWaiters
+    usageMeasurementWaiters.removeAll()
+    for waiter in waiters { waiter.resume() }
   }
 
   private func cleanAbandonedStagingEntries(in found: [URL]) {
@@ -1163,6 +1212,9 @@ final class ShelfModel: ObservableObject {
   func clear() async {
     guard !isClearing else { return }
     isClearing = true
+    let clearWaiters = clearStartWaiters
+    clearStartWaiters.removeAll()
+    for waiter in clearWaiters { waiter.resume() }
     defer { isClearing = false }
     await cancelPendingImports()
     let current = items
@@ -1449,6 +1501,24 @@ final class ShelfModel: ObservableObject {
     items[idx].thumbnail = data
   }
 
+  private func hasThumbnailWork(for id: UUID) -> Bool {
+    activeThumbnailWork[id] != nil || queuedThumbnailWork.contains { $0.id == id }
+  }
+
+  private func notifyThumbnailCompletionIfNeeded(for id: UUID) {
+    guard !hasThumbnailWork(for: id) else { return }
+    let waiters = thumbnailWorkWaiters.removeValue(forKey: id) ?? []
+    for waiter in waiters { waiter.resume() }
+    notifyAllThumbnailWorkCompletionIfNeeded()
+  }
+
+  private func notifyAllThumbnailWorkCompletionIfNeeded() {
+    guard activeThumbnailWork.isEmpty, queuedThumbnailWork.isEmpty else { return }
+    let waiters = allThumbnailWorkWaiters
+    allThumbnailWorkWaiters.removeAll()
+    for waiter in waiters { waiter.resume() }
+  }
+
   /// Called by an item tile as it enters or leaves the horizontal viewport. There is deliberately
   /// no eager work on Shelf launch: `LazyHStack` asks for the visible tiles first.
   func setThumbnailVisibility(for item: ShelfItem, isVisible: Bool) {
@@ -1529,19 +1599,20 @@ final class ShelfModel: ObservableObject {
     let wasCancelled = cancelledThumbnailTokens.remove(work.token) != nil
     activeThumbnailWork.removeValue(forKey: work.id)
     thumbnailTasks.removeValue(forKey: work.id)
-    defer { startThumbnailWorkIfPossible() }
-    guard !wasCancelled,
+    if !wasCancelled,
       isThumbnailVisible(work.id),
       items.contains(where: { $0.id == work.id && $0.url == work.url }),
       thumbnailMetadata(work.url) == work.cacheKey.metadata,
       let data
-    else { return }
-
-    // Keep one version per URL. This bounds the in-memory cache to the Shelf item limit while
-    // invalidating an entry as soon as modification metadata changes.
-    thumbnailCache = thumbnailCache.filter { $0.key.url != work.url || $0.key == work.cacheKey }
-    thumbnailCache[work.cacheKey] = data
-    setThumbnail(data, id: work.id)
+    {
+      // Keep one version per URL. This bounds the in-memory cache to the Shelf item limit while
+      // invalidating an entry as soon as modification metadata changes.
+      thumbnailCache = thumbnailCache.filter { $0.key.url != work.url || $0.key == work.cacheKey }
+      thumbnailCache[work.cacheKey] = data
+      setThumbnail(data, id: work.id)
+    }
+    startThumbnailWorkIfPossible()
+    notifyThumbnailCompletionIfNeeded(for: work.id)
   }
 
   private func cancelThumbnailWork(
@@ -1554,15 +1625,19 @@ final class ShelfModel: ObservableObject {
       thumbnailVisibilityOwners.removeValue(forKey: id)
       thumbnailCache = thumbnailCache.filter { $0.key.url != url }
     }
+    notifyThumbnailCompletionIfNeeded(for: id)
   }
 
   private func cancelAllThumbnailWork() {
+    let cancelledIDs = Set(queuedThumbnailWork.map(\.id)).union(thumbnailTasks.keys)
     thumbnailVisibilityOwners.removeAll()
     queuedThumbnailWork.removeAll()
     for (id, task) in thumbnailTasks {
       if let work = activeThumbnailWork[id] { cancelledThumbnailTokens.insert(work.token) }
       task.cancel()
     }
+    for id in cancelledIDs { notifyThumbnailCompletionIfNeeded(for: id) }
+    notifyAllThumbnailWorkCompletionIfNeeded()
   }
 
   private static func thumbnailData(for url: URL) async -> Data? {
@@ -1604,6 +1679,23 @@ final class ShelfModel: ObservableObject {
     }
   }
 
+  private var isImportWorkerIdle: Bool {
+    importWorker == nil && importQueue.isEmpty && pendingImportCount == 0
+  }
+
+  private func finishImportWorker() {
+    importWorker = nil
+    startImportWorkerIfNeeded()
+    notifyImportCompletionIfIdle()
+  }
+
+  private func notifyImportCompletionIfIdle() {
+    guard isImportWorkerIdle else { return }
+    let waiters = importCompletionWaiters
+    importCompletionWaiters.removeAll()
+    for waiter in waiters { waiter.resume() }
+  }
+
   private func drainImportQueue(generation: UInt) async {
     var firstError: String?
     var firstRejectedBytes: Int64?
@@ -1628,8 +1720,7 @@ final class ShelfModel: ObservableObject {
     guard generation == importGeneration else { return }
     lastError = firstError
     lastRejectedImportBytes = firstRejectedBytes
-    importWorker = nil
-    startImportWorkerIfNeeded()
+    finishImportWorker()
   }
 
   private func cancelPendingImports() async {
@@ -1643,6 +1734,7 @@ final class ShelfModel: ObservableObject {
     await activeWorker?.value
     importWorker = nil
     startImportWorkerIfNeeded()
+    notifyImportCompletionIfIdle()
   }
 }
 
