@@ -1,0 +1,207 @@
+diff --git a/include/MediaRemoteAdapter.h b/include/MediaRemoteAdapter.h
+index d2dcafc..130ea98 100644
+--- a/include/MediaRemoteAdapter.h
++++ b/include/MediaRemoteAdapter.h
+@@ -39,5 +39,7 @@ extern NSString *kMRAGenre;
+ extern NSString *kMRAIsAdvertisement;
+ extern NSString *kMRAIsBanned;
++extern NSString *kMRAIsLive;
++extern NSString *kMRASupportsSeeking;
+ extern NSString *kMRAIsInWishList;
+ extern NSString *kMRAIsLiked;
+ extern NSString *kMRAIsMusicApp;
+diff --git a/src/adapter/get.m b/src/adapter/get.m
+index 7a582ee..e1d37ba 100644
+--- a/src/adapter/get.m
++++ b/src/adapter/get.m
+@@ -69,6 +69,34 @@ NSDictionary *internal_get(BOOL isTestMode) {
+           dispatch_group_leave(group);
+         });
+ 
++    // Seek capability. MediaRemote reports this independently of duration, so
++    // finite live windows and non-seekable streams are represented honestly.
++    if (g_mediaRemote.getSupportedCommands != nil &&
++        g_mediaRemote.commandInfoGetCommand != nil &&
++        g_mediaRemote.commandInfoGetEnabled != nil) {
++        __block NSNumber *supportsSeekingValue = nil;
++        dispatch_semaphore_t commandsReady = dispatch_semaphore_create(0);
++        g_mediaRemote.getSupportedCommands(
++            g_serialdispatchQueue, ^(NSArray *commands) {
++              BOOL supportsSeeking = NO;
++              for (id commandInfo in commands) {
++                  if (g_mediaRemote.commandInfoGetCommand(commandInfo) ==
++                          kMRSeekToPlaybackPosition &&
++                      g_mediaRemote.commandInfoGetEnabled(commandInfo)) {
++                      supportsSeeking = YES;
++                      break;
++                  }
++              }
++              supportsSeekingValue = @(supportsSeeking);
++              dispatch_semaphore_signal(commandsReady);
++            });
++        dispatch_time_t commandTimeout =
++            dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC);
++        if (dispatch_semaphore_wait(commandsReady, commandTimeout) == 0) {
++            liveData[kMRASupportsSeeking] = supportsSeekingValue;
++        }
++    }
++
+     dispatch_group_enter(group);
+     g_mediaRemote.getNowPlayingInfo(g_serialdispatchQueue, ^(
+                                         NSDictionary *information) {
+diff --git a/src/adapter/stream.m b/src/adapter/stream.m
+index bf8ece1..fdaf721 100644
+--- a/src/adapter/stream.m
++++ b/src/adapter/stream.m
+@@ -296,6 +296,30 @@ extern void adapter_stream() {
+           });
+     };
+
++    void (^requestSupportedCommands)() = ^{
++      if (g_mediaRemote.getSupportedCommands == nil ||
++          g_mediaRemote.commandInfoGetCommand == nil ||
++          g_mediaRemote.commandInfoGetEnabled == nil) {
++          [liveData removeObjectForKey:kMRASupportsSeeking];
++          handle();
++          return;
++      }
++      g_mediaRemote.getSupportedCommands(
++          g_serialdispatchQueue, ^(NSArray *commands) {
++            BOOL supportsSeeking = NO;
++            for (id commandInfo in commands) {
++                if (g_mediaRemote.commandInfoGetCommand(commandInfo) ==
++                        kMRSeekToPlaybackPosition &&
++                    g_mediaRemote.commandInfoGetEnabled(commandInfo)) {
++                    supportsSeeking = YES;
++                    break;
++                }
++            }
++            liveData[kMRASupportsSeeking] = @(supportsSeeking);
++            handle();
++          });
++    };
++
+     void (^requestNowPlayingInfo)() = ^{
+       g_mediaRemote.getNowPlayingInfo(g_serialdispatchQueue, ^(
+                                           NSDictionary *information) {
+@@ -323,6 +347,9 @@ extern void adapter_stream() {
+         if (liveData[kMRAPlaying] != nil) {
+             converted[kMRAPlaying] = liveData[kMRAPlaying];
+         }
++        if (liveData[kMRASupportsSeeking] != nil) {
++            converted[kMRASupportsSeeking] = liveData[kMRASupportsSeeking];
++        }
+         // Use the old artwork data, since often the MediaRemote framework
+         // unloads the artwork and then loads it again shortly after.
+         // Only do this when the items have the same identity.
+@@ -348,6 +375,7 @@ extern void adapter_stream() {
+       requestNowPlayingApplicationPID();
+       requestNowPlayingParentApplicationBundleIdentifier();
+       requestNowPlayingApplicationIsPlaying();
++      requestSupportedCommands();
+       requestNowPlayingInfo();
+     };
+
+diff --git a/src/adapter/keys.m b/src/adapter/keys.m
+index 3764cf6..23f1307 100644
+--- a/src/adapter/keys.m
++++ b/src/adapter/keys.m
+@@ -34,5 +34,7 @@ NSString *kMRAGenre = @"genre";
+ NSString *kMRAIsAdvertisement = @"isAdvertisement";
+ NSString *kMRAIsBanned = @"isBanned";
++NSString *kMRAIsLive = @"isLive";
++NSString *kMRASupportsSeeking = @"supportsSeeking";
+ NSString *kMRAIsInWishList = @"isInWishList";
+ NSString *kMRAIsLiked = @"isLiked";
+ NSString *kMRAIsMusicApp = @"isMusicApp";
+diff --git a/src/adapter/now_playing.m b/src/adapter/now_playing.m
+index 18a2bd3..322b945 100644
+--- a/src/adapter/now_playing.m
++++ b/src/adapter/now_playing.m
+@@ -142,6 +142,7 @@ NSMutableDictionary *convertNowPlayingInformation(NSDictionary *information,
+     setKey(kMRAGenre, kMRMediaRemoteNowPlayingInfoGenre);
+     setKey(kMRAIsAdvertisement, kMRMediaRemoteNowPlayingInfoIsAdvertisement);
+     setKey(kMRAIsBanned, kMRMediaRemoteNowPlayingInfoIsBanned);
++    setKey(kMRAIsLive, kMRMediaRemoteNowPlayingInfoIsAlwaysLive);
+     setKey(kMRAIsInWishList, kMRMediaRemoteNowPlayingInfoIsInWishList);
+     setKey(kMRAIsLiked, kMRMediaRemoteNowPlayingInfoIsLiked);
+     setKey(kMRAIsMusicApp, kMRMediaRemoteNowPlayingInfoIsMusicApp);
+diff --git a/src/private/MediaRemote.h b/src/private/MediaRemote.h
+index 18f173f..bdc8194 100644
+--- a/src/private/MediaRemote.h
++++ b/src/private/MediaRemote.h
+@@ -28,5 +28,6 @@ extern NSString *kMRMediaRemoteNowPlayingInfoGenre;
+ extern NSString *kMRMediaRemoteNowPlayingInfoIsAdvertisement;
+ extern NSString *kMRMediaRemoteNowPlayingInfoIsBanned;
++extern NSString *kMRMediaRemoteNowPlayingInfoIsAlwaysLive;
+ extern NSString *kMRMediaRemoteNowPlayingInfoIsInWishList;
+ extern NSString *kMRMediaRemoteNowPlayingInfoIsLiked;
+ extern NSString *kMRMediaRemoteNowPlayingInfoIsMusicApp;
+@@ -79,4 +80,5 @@ typedef enum {
+     kMRGoBackFifteenSeconds = 12,
+     kMRSkipFifteenSeconds = 13,
++    kMRSeekToPlaybackPosition = 24,
+ 
+     /*
+@@ -103,4 +105,7 @@ extern CFStringRef MRMediaRemoteGetNowPlayingClient;
+ extern CFStringRef MRMediaRemoteGetNowPlayingInfo;
+ extern CFStringRef MRMediaRemoteGetNowPlayingApplicationIsPlaying;
++extern CFStringRef MRMediaRemoteGetSupportedCommands;
++extern CFStringRef MRMediaRemoteCommandInfoGetCommand;
++extern CFStringRef MRMediaRemoteCommandInfoGetEnabled;
+ 
+ typedef void (*MRMediaRemoteRegisterForNowPlayingNotifications_t)(dispatch_queue_t queue);
+@@ -128,4 +133,8 @@ typedef void (*MRMediaRemoteGetNowPlayingClient_t)(dispatch_queue_t queue, MRMed
+ typedef void (*MRMediaRemoteGetNowPlayingInfo_t)(dispatch_queue_t queue, MRMediaRemoteGetNowPlayingInfoCompletion_t completion);
+ typedef void (*MRMediaRemoteGetNowPlayingApplicationIsPlaying_t)(dispatch_queue_t queue, MRMediaRemoteGetNowPlayingApplicationIsPlayingCompletion_t completion);
++typedef void (^MRMediaRemoteGetSupportedCommandsCompletion_t)(NSArray *commands);
++typedef void (*MRMediaRemoteGetSupportedCommands_t)(dispatch_queue_t queue, MRMediaRemoteGetSupportedCommandsCompletion_t completion);
++typedef MRCommand (*MRMediaRemoteCommandInfoGetCommand_t)(id commandInfo);
++typedef bool (*MRMediaRemoteCommandInfoGetEnabled_t)(id commandInfo);
+ 
+ #pragma mark Miscellaneous
+@@ -145,5 +156,8 @@ typedef void (*MRMediaRemoteGetNowPlayingApplicationIsPlaying_t)(dispatch_queue_t
+ @property(readonly) MRMediaRemoteGetNowPlayingClient_t getNowPlayingClient;
+ @property(readonly) MRMediaRemoteGetNowPlayingInfo_t getNowPlayingInfo;
+ @property(readonly) MRMediaRemoteGetNowPlayingApplicationIsPlaying_t getNowPlayingApplicationIsPlaying;
++@property(readonly) MRMediaRemoteGetSupportedCommands_t getSupportedCommands;
++@property(readonly) MRMediaRemoteCommandInfoGetCommand_t commandInfoGetCommand;
++@property(readonly) MRMediaRemoteCommandInfoGetEnabled_t commandInfoGetEnabled;
+ // Constructor
+ -(id)init;
+diff --git a/src/private/MediaRemote.m b/src/private/MediaRemote.m
+index 7c1d594..a788b04 100644
+--- a/src/private/MediaRemote.m
++++ b/src/private/MediaRemote.m
+@@ -26,5 +26,6 @@ NSString *kMRMediaRemoteNowPlayingInfoGenre = @"kMRMediaRemoteNowPlayingInfoGe
+ NSString *kMRMediaRemoteNowPlayingInfoIsAdvertisement = @"kMRMediaRemoteNowPlayingInfoIsAdvertisement";
+ NSString *kMRMediaRemoteNowPlayingInfoIsBanned = @"kMRMediaRemoteNowPlayingInfoIsBanned";
++NSString *kMRMediaRemoteNowPlayingInfoIsAlwaysLive = @"kMRMediaRemoteNowPlayingInfoIsAlwaysLive";
+ NSString *kMRMediaRemoteNowPlayingInfoIsInWishList = @"kMRMediaRemoteNowPlayingInfoIsInWishList";
+ NSString *kMRMediaRemoteNowPlayingInfoIsLiked = @"kMRMediaRemoteNowPlayingInfoIsLiked";
+ NSString *kMRMediaRemoteNowPlayingInfoIsMusicApp = @"kMRMediaRemoteNowPlayingInfoIsMusicApp";
+@@ -71,4 +72,7 @@ CFStringRef MRMediaRemoteGetNowPlayingApplicationPID = CFSTR("MRMediaRemoteGet
+ CFStringRef MRMediaRemoteGetNowPlayingClient = CFSTR("MRMediaRemoteGetNowPlayingClient");
+ CFStringRef MRMediaRemoteGetNowPlayingInfo = CFSTR("MRMediaRemoteGetNowPlayingInfo");
+ CFStringRef MRMediaRemoteGetNowPlayingApplicationIsPlaying = CFSTR("MRMediaRemoteGetNowPlayingApplicationIsPlaying");
++CFStringRef MRMediaRemoteGetSupportedCommands = CFSTR("MRMediaRemoteGetSupportedCommands");
++CFStringRef MRMediaRemoteCommandInfoGetCommand = CFSTR("MRMediaRemoteCommandInfoGetCommand");
++CFStringRef MRMediaRemoteCommandInfoGetEnabled = CFSTR("MRMediaRemoteCommandInfoGetEnabled");
+ 
+@@ -99,4 +103,7 @@ NSString *kMRNowPlayingClientUserInfoKey = @"kMRNowPlayingClientUserInfoKey";
+ @synthesize getNowPlayingClient;
+ @synthesize getNowPlayingInfo;
+ @synthesize getNowPlayingApplicationIsPlaying;
++@synthesize getSupportedCommands;
++@synthesize commandInfoGetCommand;
++@synthesize commandInfoGetEnabled;
+ -(id)init
+@@ -123,5 +130,8 @@ NSString *kMRNowPlayingClientUserInfoKey = @"kMRNowPlayingClientUserInfoKey";
+     getNowPlayingClient = (MRMediaRemoteGetNowPlayingClient_t)CFBundleGetFunctionPointerForName(bundle, MRMediaRemoteGetNowPlayingClient);
+     getNowPlayingInfo = (MRMediaRemoteGetNowPlayingInfo_t)CFBundleGetFunctionPointerForName(bundle, MRMediaRemoteGetNowPlayingInfo);
+     getNowPlayingApplicationIsPlaying = (MRMediaRemoteGetNowPlayingApplicationIsPlaying_t)CFBundleGetFunctionPointerForName(bundle, MRMediaRemoteGetNowPlayingApplicationIsPlaying);
++    getSupportedCommands = (MRMediaRemoteGetSupportedCommands_t)CFBundleGetFunctionPointerForName(bundle, MRMediaRemoteGetSupportedCommands);
++    commandInfoGetCommand = (MRMediaRemoteCommandInfoGetCommand_t)CFBundleGetFunctionPointerForName(bundle, MRMediaRemoteCommandInfoGetCommand);
++    commandInfoGetEnabled = (MRMediaRemoteCommandInfoGetEnabled_t)CFBundleGetFunctionPointerForName(bundle, MRMediaRemoteCommandInfoGetEnabled);
+     return self;
+ }

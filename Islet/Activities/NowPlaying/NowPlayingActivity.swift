@@ -261,6 +261,16 @@ final class NowPlayingActivity: NotchActivity, ObservableObject {
       targeting: MediaRemoteCommands.shared.targeting)
   }
 
+  /// A scrub can finish after SwiftUI has redrawn for another primary source. Check the source at
+  /// the command boundary so a stale completion cannot seek the newly selected player.
+  func seek(to position: TimeInterval, for source: SourceID) async {
+    guard primaryKey == source, let target = table.seek(source, to: position, now: Date()) else {
+      return
+    }
+    publish()
+    await perform(.seek(to: target), for: source)
+  }
+
   func artwork(for source: SourceID?) -> NSImage? {
     source.flatMap { artworkImages[$0] }
   }

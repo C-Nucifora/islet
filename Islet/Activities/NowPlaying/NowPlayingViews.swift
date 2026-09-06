@@ -47,6 +47,7 @@ struct ExpandedPlayerView: View {
   @ObservedObject var activity: NowPlayingActivity
   @State private var scrubbing = false
   @State private var scrubValue: Double = 0
+  @State private var scrubSession = PlaybackScrubSession()
 
   var body: some View {
     VStack(spacing: 6) {
@@ -60,6 +61,10 @@ struct ExpandedPlayerView: View {
       if !activity.strip.isEmpty { sourceStrip }
     }
     .foregroundStyle(.white)
+    .onChange(of: activity.primaryKey) { _, _ in
+      scrubbing = false
+      scrubSession.cancel()
+    }
   }
 
   private func hero(_ pb: PlaybackState, source: SourceID?) -> some View {
@@ -212,37 +217,61 @@ struct ExpandedPlayerView: View {
     .accessibilityHidden(true)
   }
 
+  @ViewBuilder
   private func scrubber(_ pb: PlaybackState, source: SourceID?) -> some View {
-    let canSeek = source.map { activity.canPerform(.seek(to: 0), for: $0) } ?? false
-    // Only tick while actually playing; a paused track's position is fixed, so no redraw is needed.
-    return TimelineView(.animation(minimumInterval: 0.5, paused: pb.isPlaying == false)) { _ in
-      let elapsedText = MediaDurationFormatter.string(
-        for: scrubbing ? scrubValue : pb.currentElapsed)
-      let durationText = MediaDurationFormatter.string(for: pb.duration)
-      VStack(spacing: 2) {
-        Slider(
-          value: Binding(
-            get: { scrubbing ? scrubValue : pb.currentElapsed },
-            set: { scrubValue = $0 }),
-          in: 0...max(pb.duration, 1)
-        ) { editing in
-          scrubbing = editing
-          if !editing, let source {
-            Task { await activity.perform(.seek(to: scrubValue), for: source) }
+    let canSeek =
+      pb.seekability == .seekable
+      && (source.map { activity.canPerform(.seek(to: 0), for: $0) } ?? false)
+    if canSeek {
+      // Only tick while actually playing; a paused track's position is fixed, so no redraw is needed.
+      TimelineView(.animation(minimumInterval: 0.5, paused: pb.isPlaying == false)) { _ in
+        let displayedElapsed =
+          scrubbing && scrubSession.source == activity.primaryKey
+          ? scrubValue : pb.currentElapsed()
+        let elapsedText = MediaDurationFormatter.string(for: displayedElapsed)
+        let durationText = MediaDurationFormatter.string(for: pb.duration)
+        VStack(spacing: 2) {
+          Slider(
+            value: Binding(
+              get: {
+                scrubbing && scrubSession.source == activity.primaryKey
+                  ? scrubValue : pb.currentElapsed()
+              },
+              set: { scrubValue = $0 }),
+            in: 0...pb.duration
+          ) { editing in
+            scrubbing = editing
+            if editing {
+              scrubValue = pb.currentElapsed()
+              scrubSession.begin(for: activity.primaryKey)
+            } else if let source = scrubSession.source,
+              let target = scrubSession.finish(
+                value: scrubValue, currentSource: activity.primaryKey)
+            {
+              Task { await activity.seek(to: target, for: source) }
+            }
           }
+          .accessibilityLabel("Playback position")
+          .accessibilityValue("\(elapsedText) of \(durationText)")
+          HStack {
+            Text(MediaDurationFormatter.string(for: pb.currentElapsed())).monospacedDigit()
+            Spacer()
+            Text(durationText).monospacedDigit()
+          }
+          .font(.caption2).foregroundStyle(.secondary)
         }
-        .accessibilityLabel("Playback position")
-        .accessibilityValue("\(elapsedText) of \(durationText)")
-        .disabled(!canSeek)
-        .opacity(canSeek ? 1 : 0.4)
-        HStack {
-          Text(elapsedText).monospacedDigit()
-          Spacer()
-          Text(durationText).monospacedDigit()
-        }
-        .font(.caption2).foregroundStyle(.secondary)
       }
+    } else {
+      seekUnavailable(pb.seekability == .seekable ? .unavailable : pb.seekability)
     }
+  }
+
+  private func seekUnavailable(_ seekability: PlaybackSeekability) -> some View {
+    Label(seekability.title, systemImage: seekability.symbol)
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .accessibilityLabel(seekability.accessibilityLabel)
   }
 
   private func controls(_ pb: PlaybackState, source: SourceID?) -> some View {
