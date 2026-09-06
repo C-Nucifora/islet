@@ -394,7 +394,7 @@ enum PulseSourcePolicy: String, CaseIterable, Identifiable, Sendable {
   }
 }
 
-enum PulseHistoryResult: String, Sendable {
+enum PulseHistoryResult: String, Codable, Sendable {
   case shown
   case updated
   case ended
@@ -422,11 +422,10 @@ enum PulseHistoryResult: String, Sendable {
   }
 }
 
-/// A bounded audit record. A validated provider-local identifier is retained so equal identifiers
-/// from different sources remain distinguishable. Titles, subtitles, action labels/URLs, tokens,
-/// unvalidated identifiers, and error text are never copied into history. The list is memory-only
-/// and disappears when Islet quits.
-struct PulseHistoryEntry: Identifiable, Equatable, Sendable {
+/// A bounded audit record. A validated provider-local identifier may be retained for session-only
+/// presentation, but persistence and export remove it. Titles, subtitles, action labels and URLs,
+/// tokens, unvalidated identifiers, and error text are never copied into history.
+struct PulseHistoryEntry: Codable, Identifiable, Equatable, Sendable {
   let id: UUID
   let date: Date
   let operation: PulseOperation
@@ -522,7 +521,7 @@ enum PulseProviderHealth: Equatable, Sendable {
     switch self {
     case .active(let count): "Active (\(count))"
     case .needsAttention(let count): "Needs attention (\(count))"
-    case .seen: "Seen this session"
+    case .seen: "Seen before"
     case .neverSeen: "Not connected yet"
     }
   }
