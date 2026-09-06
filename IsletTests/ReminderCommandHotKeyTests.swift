@@ -1,3 +1,4 @@
+import Carbon.HIToolbox
 import XCTest
 
 @testable import Islet
@@ -22,6 +23,24 @@ final class ReminderCommandHotKeyTests: XCTestCase {
     }
 
     @MainActor func fire() { handler?() }
+  }
+
+  func testReminderAndCommandPaletteHotKeysHaveDistinctVerifiedIdentities() {
+    XCTAssertNotEqual(
+      IsletGlobalHotKeyIdentity.reminderCommands,
+      IsletGlobalHotKeyIdentity.commandPalette)
+    XCTAssertTrue(
+      IsletGlobalHotKeyIdentity.matches(
+        EventHotKeyID(
+          signature: IsletGlobalHotKeyIdentity.signature,
+          id: IsletGlobalHotKeyIdentity.reminderCommands),
+        identifier: IsletGlobalHotKeyIdentity.reminderCommands))
+    XCTAssertFalse(
+      IsletGlobalHotKeyIdentity.matches(
+        EventHotKeyID(
+          signature: IsletGlobalHotKeyIdentity.signature,
+          id: IsletGlobalHotKeyIdentity.commandPalette),
+        identifier: IsletGlobalHotKeyIdentity.reminderCommands))
   }
 
   func testStartRegistersOnceAndStopUnregistersOnce() {

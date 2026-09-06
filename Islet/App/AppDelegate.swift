@@ -137,6 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       }
       HUDController.shared.startObserving()
       LaunchAtLogin.sync()
+      GlobalShortcutManager.shared.start()
       launchAtLoginObserver = LaunchAtLogin.observe()
       OnboardingOpener.openIfNeeded()
     }
@@ -173,6 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       ContextRuleCenter.shared.stop()
       EventMonitors.shared.stop()
       ScreenManager.shared.stop()
+      GlobalShortcutManager.shared.stop()
       activityLifecycleController?.stopObserving()
       activityLifecycleController = nil
       audioDeviceLifecycleCancellable = nil

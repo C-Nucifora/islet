@@ -199,6 +199,10 @@ enum ActivityEnablement {
 extension Defaults.Keys {
   static let onboardingVersion = Key<Int>("onboardingVersion", default: 0)
   static let appTheme = Key<AppTheme>("appTheme", default: .classic)
+  static let commandPaletteShortcut = Key<GlobalShortcut?>(
+    "commandPaletteShortcut", default: GlobalShortcut.default)
+  static let commandPaletteRecentResultIDs = Key<[String]>(
+    "commandPaletteRecentResultIDs", default: [])
   static let batteryGraphStyle = Key<BatteryGraphStyle>("batteryGraphStyle", default: .coloured)
   static let mediaSourceMode = Key<MediaSourceMode>("mediaSourceMode", default: .auto)
   static let mediaPriorityList = Key<[String]>(
