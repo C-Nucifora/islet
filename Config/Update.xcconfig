@@ -1,0 +1,6 @@
+// Public configuration only. Replace this sentinel with the base64 SUPublicEDKey printed by
+// Sparkle's generate_keys tool, then review and commit that public key. The matching private seed
+// belongs in the release environment secret SPARKLE_ED25519_PRIVATE_KEY and never in this file.
+// AppUpdateConfiguration and the release workflow reject this sentinel, malformed keys, and
+// non-HTTPS feeds instead of starting an updater without a complete trust configuration.
+ISLET_UPDATE_PUBLIC_ED_KEY = CONFIGURATION_REQUIRED

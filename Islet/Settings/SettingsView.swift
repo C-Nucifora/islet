@@ -37,7 +37,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
   var searchTerms: String {
     switch self {
     case .general:
-      "launch login displays fullscreen recording hover click haptics energy keep awake sleep battery"
+      "launch login displays fullscreen recording hover click haptics energy keep awake sleep battery updates version channel"
     case .activities:
       "tabs order battery calendar reminders clipboard ports audio hud timer shelf system media iphone continuity live activities"
     case .notifications:
@@ -61,6 +61,7 @@ private enum SystemMetricPreset: String, CaseIterable, Identifiable {
 
 enum SettingsDetailPage: String, CaseIterable, Identifiable {
   case startupDisplays
+  case updates
   case appearance
   case interaction
   case energy
@@ -85,6 +86,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
   var title: String {
     switch self {
     case .startupDisplays: "Startup and displays"
+    case .updates: "Updates"
     case .appearance: "Appearance"
     case .interaction: "Interaction"
     case .energy: "Energy"
@@ -109,6 +111,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
   var subtitle: String {
     switch self {
     case .startupDisplays: "Login item and display placement"
+    case .updates: "Signed automatic and manual updates"
     case .appearance: "Choose the colours used across Islet"
     case .interaction: "How the notch opens and closes"
     case .energy: "Refresh rates, sleep and battery protection"
@@ -133,6 +136,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
   var icon: String {
     switch self {
     case .startupDisplays: "macwindow.on.rectangle"
+    case .updates: "arrow.triangle.2.circlepath.circle"
     case .appearance: "paintpalette"
     case .interaction: "cursorarrow.motionlines"
     case .energy: "leaf"
@@ -156,7 +160,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
 
   var category: SettingsCategory {
     switch self {
-    case .startupDisplays, .appearance, .interaction, .energy, .contextRules: .general
+    case .startupDisplays, .updates, .appearance, .interaction, .energy, .contextRules: .general
     case .activityOrder, .calendarReminders, .nowPlaying, .continuity, .systemMetrics, .clipboard,
       .systemHUD:
       .activities
@@ -176,6 +180,12 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "Displays", "Show Islet on every display", "Preferred display",
         "Hide Islet while an app is fullscreen",
         "screen multiple monitors external dock clamshell closed lid reconnect",
+      ]
+    case .updates:
+      pageContent + [
+        "Updates", "Current version", "Channel", "Stable", "Last check", "Status",
+        "Automatically check for updates", "Check for Updates", "release notes", "download",
+        "restart install Sparkle signed feed package verification",
       ]
     case .appearance:
       pageContent + [
@@ -314,6 +324,8 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         "Launch Islet at login", "Run setup again", "Show Islet on every display",
         "Hide Islet while an app is fullscreen",
       ]
+    case .updates:
+      ["Automatically check for updates", "Check for Updates"]
     case .appearance:
       ["Choose theme", "Use coloured battery graph", "Use monochrome battery graph"]
     case .interaction:
@@ -472,6 +484,7 @@ struct SettingsView: View {
   @ObservedObject private var ports = PortMonitor.shared
   @ObservedObject private var keepAwake = KeepAwakeManager.shared
   @ObservedObject private var shortcutManager = GlobalShortcutManager.shared
+  @ObservedObject private var updates = AppUpdateController.shared
 
   @Default(.appTheme) private var appTheme
   @Default(.batteryGraphStyle) private var batteryGraphStyle
@@ -586,6 +599,12 @@ struct SettingsView: View {
         hapticStrength = value == .off ? .medium : value
         haptics = value != .off
       })
+  }
+
+  private var automaticallyChecksForUpdatesBinding: Binding<Bool> {
+    Binding(
+      get: { updates.automaticallyChecksForUpdates },
+      set: { updates.setAutomaticallyChecksForUpdates($0) })
   }
 
   private var hapticStrengthLevelBinding: Binding<Double> {
@@ -764,7 +783,10 @@ struct SettingsView: View {
     {
       _ in refreshPermissionState()
     }
-    .onAppear { updateWindowTitle() }
+    .onAppear {
+      updateWindowTitle()
+      updates.refresh()
+    }
     .onReceive(NotificationCenter.default.publisher(for: .isletSettingsDestination)) {
       notification in
       guard let rawValue = notification.object as? String,
@@ -839,7 +861,9 @@ struct SettingsView: View {
   @ViewBuilder private var categoryView: some View {
     switch selection ?? .general {
     case .general:
-      settingsLanding(pages: [.startupDisplays, .appearance, .interaction, .energy, .contextRules])
+      settingsLanding(pages: [
+        .startupDisplays, .updates, .appearance, .interaction, .energy, .contextRules,
+      ])
     case .activities:
       settingsLanding(pages: [
         .activityOrder, .calendarReminders, .nowPlaying, .continuity, .systemMetrics,
@@ -859,6 +883,7 @@ struct SettingsView: View {
   @ViewBuilder private func detailView(_ page: SettingsDetailPage) -> some View {
     switch page {
     case .startupDisplays: startupDisplaysForm
+    case .updates: updatesForm
     case .appearance: appearanceForm
     case .interaction: interactionForm
     case .energy: energyForm
@@ -968,6 +993,46 @@ struct SettingsView: View {
 
   private var unavailablePreferredDisplayName: String {
     preferredDisplayName.isEmpty ? "Preferred display" : preferredDisplayName
+  }
+
+  private var updatesForm: some View {
+    Form {
+      Section("Installed version") {
+        LabeledContent("Current version") {
+          Text(updates.currentVersion.text).foregroundStyle(.secondary)
+        }
+        LabeledContent("Channel") {
+          Text(updates.channel.title).foregroundStyle(.secondary)
+        }
+        LabeledContent("Last check") {
+          if let lastCheckDate = updates.lastCheckDate {
+            Text(lastCheckDate.formatted(date: .abbreviated, time: .shortened))
+              .foregroundStyle(.secondary)
+          } else {
+            Text("Never").foregroundStyle(.secondary)
+          }
+        }
+        LabeledContent("Status") {
+          Text(updates.state.summary)
+            .foregroundStyle(updates.state.isFailure ? .orange : .secondary)
+            .textSelection(.enabled)
+        }
+      }
+      Section("Update checks") {
+        Toggle(
+          "Automatically check for updates",
+          isOn: automaticallyChecksForUpdatesBinding
+        )
+        .disabled(!updates.isConfigured)
+        Button("Check for Updates…") { updates.checkForUpdates() }
+          .disabled(!updates.canCheckForUpdates)
+        Text(
+          "Islet asks before enabling automatic checks. Sparkle shows signed release notes, download and verification progress, then offers to restart and install."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+    .formStyle(.grouped)
   }
 
   private var appearanceForm: some View {
@@ -2153,6 +2218,7 @@ struct SettingsView: View {
     hud.refreshPermissionStatus()
     permissions.refresh()
     launchAtLoginStatus.refresh()
+    updates.refresh()
   }
 
   private func navigate(to page: SettingsDetailPage) {
@@ -2208,6 +2274,8 @@ struct SettingsView: View {
       + "\nPulse: \(pulseServer.isRunning ? "Running" : "Stopped")"
       + "\nPulse items: \(pulse.items.count) visible, \(pulse.hiddenItemCount) filtered"
       + "\nUSB reader: \(ports.readerHealth.summary)"
+      + "\nUpdate channel: \(updates.channel.title)"
+      + "\nUpdater: \(updates.state.summary)"
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(text, forType: .string)
   }
