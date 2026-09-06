@@ -10,6 +10,7 @@ private let usage = """
          islet-pulse <show|update|event> <id> <title> [subtitle] [options]
 
   options:
+    --credential-file PATH  Explicit provider credential file (or set ISLET_PULSE_CREDENTIAL_FILE)
     --source NAME            Stable provider source (default: cli; use with end)
     --revision NUMBER        Monotonic integer from 0 through \(maximumRevision)
     --progress NUMBER        Progress from 0 through 1
@@ -26,6 +27,7 @@ private struct Response: Decodable {
   let error: String?
   let errorCode: String?
   let requestID: String?
+  let retryAfter: Int?
 }
 
 /// Network callbacks run on a private serial queue. Completion is separately lock-protected so a
@@ -109,9 +111,11 @@ private final class PulseClient: @unchecked Sendable {
       var output = data
       output.append(0x0A)
       let prefix = response.errorCode.map { "[\($0)] " } ?? ""
+      let retry = response.retryAfter.map { " Retry-After: \($0) seconds." } ?? ""
       finish(
         response.ok ? 0 : 65,
-        error: response.ok ? nil : prefix + (response.error ?? "command rejected"), output: output)
+        error: response.ok ? nil : prefix + (response.error ?? "command rejected") + retry,
+        output: output)
     } catch {
       finish(65, error: "invalid response from Islet Pulse: \(error.localizedDescription)")
     }
@@ -132,7 +136,28 @@ private final class PulseClient: @unchecked Sendable {
   }
 }
 
-let arguments = Array(CommandLine.arguments.dropFirst())
+let rawArguments = Array(CommandLine.arguments.dropFirst())
+var arguments: [String] = []
+var credentialFileArgument: String?
+var rawIndex = 0
+while rawIndex < rawArguments.count {
+  if rawArguments[rawIndex] == "--credential-file" {
+    guard rawIndex + 1 < rawArguments.count, credentialFileArgument == nil else {
+      FileHandle.standardError.write(Data("--credential-file requires one path\n".utf8))
+      exit(64)
+    }
+    let value = rawArguments[rawIndex + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else {
+      FileHandle.standardError.write(Data("--credential-file requires one path\n".utf8))
+      exit(64)
+    }
+    credentialFileArgument = value
+    rawIndex += 2
+  } else {
+    arguments.append(rawArguments[rawIndex])
+    rawIndex += 1
+  }
+}
 if arguments == ["--help"] || arguments == ["-h"] {
   FileHandle.standardOutput.write(Data(usage.utf8))
   exit(0)
@@ -307,7 +332,6 @@ if operation == "end" {
 
 let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
   .appendingPathComponent("Islet", isDirectory: true)
-let tokenURL = support.appendingPathComponent("pulse-token")
 let activePortURL = support.appendingPathComponent("pulse-port")
 let storedPort = (try? String(contentsOf: activePortURL, encoding: .utf8)).flatMap {
   UInt16($0.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -315,20 +339,53 @@ let storedPort = (try? String(contentsOf: activePortURL, encoding: .utf8)).flatM
 let port =
   storedPort.flatMap { NWEndpoint.Port(rawValue: $0) }
   ?? NWEndpoint.Port(rawValue: 47_717)!
-var tokenInfo = stat()
-guard
-  lstat(tokenURL.path, &tokenInfo) == 0,
-  (tokenInfo.st_mode & S_IFMT) == S_IFREG,
-  tokenInfo.st_uid == getuid(),
-  (tokenInfo.st_mode & 0o077) == 0,
-  let token = try? String(contentsOf: tokenURL, encoding: .utf8)
-    .trimmingCharacters(in: .whitespacesAndNewlines),
-  let tokenData = Data(base64Encoded: token), tokenData.count == 32
-else {
+
+func secureData(at url: URL, maximumBytes: Int) -> Data? {
+  let descriptor = url.path.withCString {
+    Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+  }
+  guard descriptor >= 0 else { return nil }
+  defer { Darwin.close(descriptor) }
+  var info = stat()
+  guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
+    info.st_uid == getuid(), (info.st_mode & 0o077) == 0
+  else { return nil }
+  var result = Data()
+  var buffer = [UInt8](repeating: 0, count: 4_096)
+  while true {
+    let count = buffer.withUnsafeMutableBytes { bytes in
+      Darwin.read(descriptor, bytes.baseAddress, bytes.count)
+    }
+    if count == 0 { return result }
+    if count < 0 {
+      if errno == EINTR { continue }
+      return nil
+    }
+    guard result.count <= maximumBytes - count else { return nil }
+    result.append(contentsOf: buffer.prefix(count))
+  }
+}
+
+func secureString(at url: URL) -> String? {
+  guard let data = secureData(at: url, maximumBytes: 4_096) else { return nil }
+  return String(decoding: data, as: UTF8.self).trimmingCharacters(
+    in: .whitespacesAndNewlines)
+}
+
+let configuredCredentialPath =
+  credentialFileArgument ?? ProcessInfo.processInfo.environment["ISLET_PULSE_CREDENTIAL_FILE"]
+guard let configuredCredentialPath, !configuredCredentialPath.isEmpty else {
   FileHandle.standardError.write(
     Data(
-      "Islet Pulse token is missing, invalid, not owned by this user, or has unsafe permissions.\n"
+      "Set --credential-file or ISLET_PULSE_CREDENTIAL_FILE to one revealed provider credential.\n"
         .utf8))
+  exit(69)
+}
+let credentialURL = URL(
+  fileURLWithPath: (configuredCredentialPath as NSString).expandingTildeInPath)
+guard let token = secureString(at: credentialURL) else {
+  FileHandle.standardError.write(
+    Data("Could not read the configured Pulse credential safely.\n".utf8))
   exit(69)
 }
 command["token"] = token
