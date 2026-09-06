@@ -266,6 +266,8 @@ final class SettingsTransferTests: XCTestCase {
       systemAutoPresentMemoryPressure: true, systemAutoPresentLowDiskSpace: true,
       systemAutoPresentDiskThroughput: true, systemAutoPresentNetworkThroughput: true,
       metricStyles: [:],
+      processAttributionEnabled: true, processCPUThreshold: 0.8, processMemoryThreshold: 0.9,
+      processDiskThresholdMBPerSecond: 50, processNetworkThresholdMBPerSecond: 25,
       continuityAlwaysVisible: false, continuitySneaks: true, pulseStaleTimeout: 300)
   }
 
@@ -288,6 +290,8 @@ final class SettingsTransferTests: XCTestCase {
       systemAutoPresentMemoryPressure: false, systemAutoPresentLowDiskSpace: true,
       systemAutoPresentDiskThroughput: false, systemAutoPresentNetworkThroughput: true,
       metricStyles: ["cpu": "combined", "thermal": "number"],
+      processAttributionEnabled: false, processCPUThreshold: 0.95, processMemoryThreshold: 0.85,
+      processDiskThresholdMBPerSecond: 125, processNetworkThresholdMBPerSecond: 75,
       continuityAlwaysVisible: true, continuitySneaks: false, pulseStaleTimeout: 1_800)
   }
 }
