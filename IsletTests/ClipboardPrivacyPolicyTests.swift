@@ -3,6 +3,80 @@ import XCTest
 
 @testable import Islet
 
+private final class LazyClipboardDataProvider: NSObject, NSPasteboardItemDataProvider,
+  @unchecked Sendable
+{
+  private let lock = NSLock()
+  private let representations: [String: Data]
+  private var requestedTypes: [String] = []
+
+  init(representations: [String: Data]) { self.representations = representations }
+
+  nonisolated func pasteboard(
+    _ pasteboard: NSPasteboard?, item: NSPasteboardItem,
+    provideDataForType type: NSPasteboard.PasteboardType
+  ) {
+    lock.withLock { requestedTypes.append(type.rawValue) }
+    if let data = representations[type.rawValue] { item.setData(data, forType: type) }
+  }
+
+  func requests() -> [String] { lock.withLock { requestedTypes } }
+}
+
+private final class BlockingClipboardDataProvider: NSObject, NSPasteboardItemDataProvider,
+  @unchecked Sendable
+{
+  private let condition = NSCondition()
+  private let data: Data
+  private var requestedTypes: [String] = []
+  private var isReleased = false
+
+  init(data: Data) { self.data = data }
+
+  nonisolated func pasteboard(
+    _ pasteboard: NSPasteboard?, item: NSPasteboardItem,
+    provideDataForType type: NSPasteboard.PasteboardType
+  ) {
+    condition.lock()
+    requestedTypes.append(type.rawValue)
+    condition.broadcast()
+    while !isReleased { condition.wait() }
+    condition.unlock()
+    item.setData(data, forType: type)
+  }
+
+  func waitUntilRequested() async -> Bool {
+    await waitUntilRequestCount(1)
+  }
+
+  func waitUntilRequestCount(_ count: Int, timeout: TimeInterval = 5) async -> Bool {
+    await Task.detached { [self] in waitUntilRequestCountSynchronously(count, timeout: timeout) }
+      .value
+  }
+
+  func release() {
+    condition.lock()
+    isReleased = true
+    condition.broadcast()
+    condition.unlock()
+  }
+
+  func requests() -> [String] {
+    condition.withLock { requestedTypes }
+  }
+
+  private func waitUntilRequestCountSynchronously(_ count: Int, timeout: TimeInterval) -> Bool {
+    condition.lock()
+    defer { condition.unlock() }
+    let deadline = Date().addingTimeInterval(timeout)
+    while requestedTypes.count < count {
+      guard condition.wait(until: deadline) else { return false }
+    }
+    return true
+  }
+}
+
+@MainActor
 final class ClipboardPrivacyPolicyTests: XCTestCase {
   func testPrivacyIdentifiersAreNormalizedDeduplicatedAndBounded() {
     XCTAssertEqual(
@@ -284,7 +358,7 @@ final class ClipboardPrivacyPolicyTests: XCTestCase {
     XCTAssertEqual(payload.pasteboardTypeRawValue, "public.png")
   }
 
-  func testMultipleFileURLsRoundTripInOrder() throws {
+  func testMultipleFileURLsRoundTripInOrder() async throws {
     let source = NSPasteboard(name: NSPasteboard.Name("islet-tests-source-\(UUID().uuidString)"))
     let destination = NSPasteboard(
       name: NSPasteboard.Name("islet-tests-destination-\(UUID().uuidString)"))
@@ -301,10 +375,10 @@ final class ClipboardPrivacyPolicyTests: XCTestCase {
     XCTAssertTrue(ClipboardPrivacyPolicy.permits(fileURLs: capturedURLs))
 
     destination.clearContents()
-    XCTAssertTrue(
-      ClipboardPasteboardTransaction.replace(on: destination) {
-        ClipboardFileURLs.write(capturedURLs, to: destination)
-      })
+    let replaced = await ClipboardPasteboardTransaction.replace(on: destination) {
+      ClipboardFileURLs.write(capturedURLs, to: destination)
+    }
+    XCTAssertTrue(replaced)
     XCTAssertEqual(ClipboardFileURLs.read(from: destination), urls)
   }
 
@@ -348,25 +422,252 @@ final class ClipboardPrivacyPolicyTests: XCTestCase {
     XCTAssertFalse(ClipboardPrivacyPolicy.permits(fileURLs: capturedURLs))
   }
 
-  func testFailedHistoryWriteRestoresTheExistingClipboard() throws {
+  func testFailedHistoryWriteRestoresTheExistingClipboard() async throws {
     let pasteboard = NSPasteboard(name: NSPasteboard.Name("islet-tests-\(UUID().uuidString)"))
     pasteboard.clearContents()
     XCTAssertTrue(pasteboard.setString("keep me", forType: .string))
 
-    XCTAssertFalse(
-      ClipboardPasteboardTransaction.replace(on: pasteboard) {
-        _ = pasteboard.setString("replacement", forType: .string)
-        return false
-      })
+    let replaced = await ClipboardPasteboardTransaction.replace(on: pasteboard) {
+      return false
+    }
+    XCTAssertFalse(replaced)
     XCTAssertEqual(pasteboard.string(forType: .string), "keep me")
   }
 
-  @MainActor
+  func testFailedWriteDoesNotOverwriteNewerPasteboardContents() async {
+    let name = NSPasteboard.Name("islet-tests-external-write-\(UUID().uuidString)")
+    let pasteboard = NSPasteboard(name: name)
+    let externalPasteboard = NSPasteboard(name: name)
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.setString("original", forType: .string))
+
+    let replaced = await ClipboardPasteboardTransaction.replace(on: pasteboard) {
+      externalPasteboard.clearContents()
+      XCTAssertTrue(externalPasteboard.setString("newer external value", forType: .string))
+      return false
+    }
+
+    XCTAssertFalse(replaced)
+    XCTAssertEqual(pasteboard.string(forType: .string), "newer external value")
+  }
+
+  func testClearWinsWhileCopyBackIsPreparingRollback() async throws {
+    try await assertHistoryInvalidationWinsDuringCopyBack { model in
+      model.clear()
+    }
+  }
+
+  func testPauseWinsWhileCopyBackIsPreparingRollback() async throws {
+    try await assertHistoryInvalidationWinsDuringCopyBack { model in
+      model.setPaused(true)
+      XCTAssertTrue(model.isPaused)
+    }
+  }
+
+  func testRemoveWinsWhileCopyBackIsPreparingRollback() async throws {
+    try await assertHistoryInvalidationWinsDuringCopyBack { model in
+      model.remove(model.items[0])
+    }
+  }
+
+  func testStopWinsWhileCopyBackIsPreparingRollback() async throws {
+    try await assertHistoryInvalidationWinsDuringCopyBack(
+      prepare: { $0.start() },
+      invalidate: { $0.stop() })
+  }
+
+  func testNewerCopyBackWaitsForCancelledMaterializationToFinish() async throws {
+    let pasteboard = NSPasteboard(
+      name: NSPasteboard.Name("islet-tests-copy-back-serialization-\(UUID().uuidString)"))
+    let olderType = NSPasteboard.PasteboardType("com.islet.tests.blocked.older")
+    let olderProvider = BlockingClipboardDataProvider(data: Data([1, 2, 3]))
+    defer { olderProvider.release() }
+    let olderPasteboardItem = NSPasteboardItem()
+    XCTAssertTrue(olderPasteboardItem.setDataProvider(olderProvider, forTypes: [olderType]))
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.writeObjects([olderPasteboardItem]))
+
+    let model = ClipboardModel(pasteboard: pasteboard)
+    let olderItem = ClipboardItem(kind: .text("older"), date: .distantPast)
+    let newerItem = ClipboardItem(kind: .text("newer"), date: .distantPast)
+    let olderCopy = Task { await model.copyBack(olderItem) }
+    let olderMaterializationStarted = await olderProvider.waitUntilRequested()
+    XCTAssertTrue(olderMaterializationStarted)
+
+    let newerType = NSPasteboard.PasteboardType("com.islet.tests.blocked.newer")
+    let newerProvider = BlockingClipboardDataProvider(data: Data([4, 5, 6]))
+    defer { newerProvider.release() }
+    let newerPasteboardItem = NSPasteboardItem()
+    XCTAssertTrue(newerPasteboardItem.setDataProvider(newerProvider, forTypes: [newerType]))
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.writeObjects([newerPasteboardItem]))
+
+    let newerCopy = Task { await model.copyBack(newerItem) }
+    let newerMaterializedConcurrently = await newerProvider.waitUntilRequestCount(1, timeout: 0.25)
+    XCTAssertFalse(
+      newerMaterializedConcurrently,
+      "A superseding copy-back must wait for the cancelled materialization to leave the pipeline")
+    olderProvider.release()
+    let newerMaterializationStarted = await newerProvider.waitUntilRequested()
+    XCTAssertTrue(newerMaterializationStarted)
+    newerProvider.release()
+
+    let olderSucceeded = await olderCopy.value
+    let newerSucceeded = await newerCopy.value
+    XCTAssertFalse(olderSucceeded)
+    XCTAssertTrue(newerSucceeded)
+    XCTAssertEqual(pasteboard.string(forType: .string), "newer")
+  }
+
+  func testOversizedLazyRollbackLeavesClipboardUnchanged() async throws {
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("islet-tests-large-\(UUID().uuidString)"))
+    let type = NSPasteboard.PasteboardType("com.islet.tests.large")
+    let provider = LazyClipboardDataProvider(
+      representations: [
+        type.rawValue: Data(count: ClipboardPasteboardTransaction.maximumSnapshotBytes + 1)
+      ])
+    let item = NSPasteboardItem()
+    XCTAssertTrue(item.setDataProvider(provider, forTypes: [type]))
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.writeObjects([item]))
+    let originalChangeCount = pasteboard.changeCount
+    var attemptedWrite = false
+
+    let replaced = await ClipboardPasteboardTransaction.replace(on: pasteboard) {
+      attemptedWrite = true
+      return pasteboard.setString("replacement", forType: .string)
+    }
+
+    XCTAssertFalse(replaced)
+    XCTAssertFalse(attemptedWrite)
+    XCTAssertEqual(pasteboard.changeCount, originalChangeCount)
+    XCTAssertEqual(provider.requests(), [type.rawValue])
+    XCTAssertEqual(pasteboard.pasteboardItems?.first?.types, [type])
+  }
+
+  func testTypeLimitRejectsBeforeRequestingLazyRepresentations() async {
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("islet-tests-types-\(UUID().uuidString)"))
+    let types = (0...ClipboardPasteboardTransaction.maximumTypeCount).map {
+      NSPasteboard.PasteboardType("com.islet.tests.lazy.\($0)")
+    }
+    let provider = LazyClipboardDataProvider(
+      representations: Dictionary(uniqueKeysWithValues: types.map { ($0.rawValue, Data([1])) }))
+    let item = NSPasteboardItem()
+    XCTAssertTrue(item.setDataProvider(provider, forTypes: types))
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.writeObjects([item]))
+    let originalChangeCount = pasteboard.changeCount
+
+    let replaced = await ClipboardPasteboardTransaction.replace(on: pasteboard) {
+      XCTFail("An unsafe snapshot must not clear or write to the pasteboard")
+      return true
+    }
+    XCTAssertFalse(replaced)
+    XCTAssertEqual(pasteboard.changeCount, originalChangeCount)
+    XCTAssertTrue(provider.requests().isEmpty)
+  }
+
+  func testItemLimitLeavesClipboardUnchanged() async {
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("islet-tests-items-\(UUID().uuidString)"))
+    let items = (0...ClipboardPasteboardTransaction.maximumItemCount).map { index in
+      let item = NSPasteboardItem()
+      XCTAssertTrue(item.setString("item \(index)", forType: .string))
+      return item
+    }
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.writeObjects(items))
+    let originalChangeCount = pasteboard.changeCount
+
+    let replaced = await ClipboardPasteboardTransaction.replace(on: pasteboard) {
+      XCTFail("An unsafe snapshot must not clear or write to the pasteboard")
+      return true
+    }
+
+    XCTAssertFalse(replaced)
+    XCTAssertEqual(pasteboard.changeCount, originalChangeCount)
+    XCTAssertEqual(pasteboard.pasteboardItems?.count, items.count)
+  }
+
+  func testFailedWriteRestoresEveryRepresentationAndItemInOrder() async throws {
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("islet-tests-rich-\(UUID().uuidString)"))
+    let first = NSPasteboardItem()
+    let customType = NSPasteboard.PasteboardType("com.islet.tests.metadata")
+    let rtfType = NSPasteboard.PasteboardType.rtf
+    let expected: [(NSPasteboard.PasteboardType, Data)] = [
+      (.string, try XCTUnwrap("rich text".data(using: .utf8))),
+      (rtfType, Data([0x7b, 0x5c, 0x72, 0x74, 0x66, 0x7d])),
+      (customType, Data([0, 1, 2, 3, 255])),
+    ]
+    for (type, data) in expected { XCTAssertTrue(first.setData(data, forType: type)) }
+    let second = NSPasteboardItem()
+    XCTAssertTrue(second.setString("second item", forType: .string))
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.writeObjects([first, second]))
+    let original = try XCTUnwrap(pasteboard.pasteboardItems).map { item in
+      item.types.map { type in (type, item.data(forType: type)) }
+    }
+
+    let replaced = await ClipboardPasteboardTransaction.replace(on: pasteboard) {
+      _ = pasteboard.setString("replacement", forType: .string)
+      return false
+    }
+    XCTAssertFalse(replaced)
+
+    let restored = try XCTUnwrap(pasteboard.pasteboardItems)
+    XCTAssertEqual(restored.count, original.count)
+    for (restoredItem, originalRepresentations) in zip(restored, original) {
+      XCTAssertEqual(restoredItem.types, originalRepresentations.map(\.0))
+      for (type, data) in originalRepresentations {
+        XCTAssertEqual(restoredItem.data(forType: type), data)
+      }
+    }
+  }
+
+  private func assertHistoryInvalidationWinsDuringCopyBack(
+    prepare: (ClipboardModel) -> Void = { _ in },
+    invalidate: (ClipboardModel) -> Void
+  ) async throws {
+    let pasteboard = NSPasteboard(
+      name: NSPasteboard.Name("islet-tests-copy-back-race-\(UUID().uuidString)"))
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.setString("current", forType: .string))
+
+    let model = ClipboardModel(pasteboard: pasteboard)
+    prepare(model)
+    let historyItem = ClipboardItem(kind: .text("history"), date: .distantPast)
+    let initialCopySucceeded = await model.copyBack(historyItem)
+    XCTAssertTrue(initialCopySucceeded)
+    XCTAssertEqual(model.items, [historyItem])
+
+    let blockedType = NSPasteboard.PasteboardType("com.islet.tests.blocked")
+    let unrequestedType = NSPasteboard.PasteboardType("com.islet.tests.blocked.unrequested")
+    let provider = BlockingClipboardDataProvider(data: Data([1, 2, 3]))
+    defer { provider.release() }
+    let blockedItem = NSPasteboardItem()
+    XCTAssertTrue(
+      blockedItem.setDataProvider(provider, forTypes: [blockedType, unrequestedType]))
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.writeObjects([blockedItem]))
+
+    let copyTask = Task { await model.copyBack(historyItem) }
+    let requested = await provider.waitUntilRequested()
+    XCTAssertTrue(requested, "Copy-back never requested the blocked rollback representation")
+
+    invalidate(model)
+    provider.release()
+
+    let copySucceeded = await copyTask.value
+    XCTAssertFalse(copySucceeded)
+    XCTAssertNil(pasteboard.string(forType: .string))
+    XCTAssertEqual(pasteboard.data(forType: blockedType), Data([1, 2, 3]))
+    XCTAssertEqual(provider.requests(), [blockedType.rawValue])
+    XCTAssertTrue(model.items.isEmpty)
+  }
+
   private func testPasteboard() -> NSPasteboard {
     NSPasteboard(name: NSPasteboard.Name("islet-clipboard-privacy-\(UUID().uuidString)"))
   }
 
-  @MainActor
   private func write(_ value: String, to pasteboard: NSPasteboard) {
     pasteboard.clearContents()
     XCTAssertTrue(pasteboard.setString(value, forType: .string))
