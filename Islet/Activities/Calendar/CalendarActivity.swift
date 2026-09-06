@@ -437,6 +437,25 @@ final class CalendarActivity: NotchActivity, ObservableObject {
   }
 
   var expandedView: AnyView { AnyView(CalendarAgendaView(activity: self)) }
+
+  var accessibilityPrimaryActionName: String? {
+    primaryMeeting.map { "Opened meeting for \($0.event.title)" }
+  }
+
+  func performAccessibilityPrimaryAction() -> Bool {
+    guard let meeting = primaryMeeting else { return false }
+    return NSWorkspace.shared.open(meeting.link.url)
+  }
+
+  private var primaryMeeting: (event: AgendaEvent, link: CalendarMeetingLink)? {
+    for event in events {
+      guard let url = event.joinURL, let link = CalendarMeetingLinkPolicy.candidate(url),
+        !link.trust.requiresConfirmation
+      else { continue }
+      return (event, link)
+    }
+    return nil
+  }
 }
 
 struct CalendarCountdownView: View {
@@ -540,6 +559,16 @@ private struct CalendarAgendaEventRow: View {
         CalendarMeetingLinkButton(link: link, eventTitle: event.title)
       }
     }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(eventAccessibilityLabel)
+  }
+
+  private var eventAccessibilityLabel: String {
+    let time =
+      event.isAllDay
+      ? "All day"
+      : event.start.formatted(date: .omitted, time: .shortened)
+    return "\(time), \(event.title)"
   }
 }
 

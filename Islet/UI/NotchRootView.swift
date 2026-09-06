@@ -62,6 +62,7 @@ struct NotchRootView: View {
   @ObservedObject private var keepAwake = KeepAwakeManager.shared
   @Default(.appTheme) private var appTheme
   @Default(.batteryGraphStyle) private var batteryGraphStyle
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var compactLeadingWidth: CGFloat = 0
   @State private var compactTrailingWidth: CGFloat = 0
 
@@ -287,7 +288,9 @@ struct NotchRootView: View {
       // content so replacing the system OSD never produces an invisible change.
       if let snapshot = hud.hud {
         ExpandedHUDOverlay(snapshot: snapshot)
-          .transition(.opacity.combined(with: .scale(scale: 0.94)))
+          .transition(
+            reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.94))
+          )
           .zIndex(2)
       }
     }

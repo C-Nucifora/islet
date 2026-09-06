@@ -6,6 +6,18 @@ import XCTest
 
 @MainActor
 final class T3CodeTests: XCTestCase {
+  func testAgentAccessibilityLabelIncludesEveryVisibleProgressField() {
+    let agent = T3AgentSnapshot(
+      logicalEnvironmentID: "local", threadID: "thread", title: "Fix accessibility",
+      project: "Islet", providerInstance: "provider", model: "model", branch: "fix/a11y",
+      phase: .working, planStep: "Run tests", completedPlanSteps: 3, totalPlanSteps: 5,
+      updatedAt: Date())
+
+    XCTAssertEqual(
+      agent.accessibilityLabel,
+      "Fix accessibility, Working, provider, model, Islet, branch fix/a11y, 3 of 5 plan steps complete, current step Run tests"
+    )
+  }
   func testCredentialVaultUsesTheCanonicalService() {
     XCTAssertEqual(T3CredentialStore.service, "dev.islet")
   }

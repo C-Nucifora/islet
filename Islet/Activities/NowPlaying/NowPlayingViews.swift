@@ -20,10 +20,13 @@ struct CompactArtworkView: View {
 struct CompactBarsView: View {
   @ObservedObject var activity: NowPlayingActivity
   @Environment(\.appTheme) private var appTheme
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     TimelineView(
-      .animation(minimumInterval: 0.15, paused: activity.playback?.isPlaying != true)
+      .animation(
+        minimumInterval: 0.15,
+        paused: reduceMotion || activity.playback?.isPlaying != true)
     ) { context in
       let t = context.date.timeIntervalSinceReferenceDate
       HStack(spacing: 2) {
@@ -33,7 +36,7 @@ struct CompactBarsView: View {
             .fill(appTheme.color(for: .nowPlaying))
             .frame(
               width: 2.5,
-              height: activity.playback?.isPlaying == true
+              height: activity.playback?.isPlaying == true && !reduceMotion
                 ? 4 + 10 * abs(sin(phase)) : 4)
         }
       }
@@ -65,6 +68,8 @@ struct ExpandedPlayerView: View {
       scrubbing = false
       scrubSession.cancel()
     }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Now Playing")
   }
 
   private func hero(_ pb: PlaybackState, source: SourceID?) -> some View {
@@ -193,9 +198,9 @@ struct ExpandedPlayerView: View {
       } else {
         Image(systemName: "speaker.wave.2.fill").font(.caption2)
       }
-      Circle()
-        .fill(isPlaying ? Color.green : Color.secondary)
-        .frame(width: 5, height: 5)
+      Image(systemName: isPlaying ? "play.fill" : "pause.fill")
+        .font(.system(size: 7, weight: .bold))
+        .foregroundStyle(isPlaying ? Color.green : Color.secondary)
     }
     .padding(.horizontal, 6)
     .frame(height: 22)
@@ -282,12 +287,14 @@ struct ExpandedPlayerView: View {
       Button {
         if let source { Task { await activity.perform(.toggleShuffle, for: source) } }
       } label: {
-        Image(systemName: "shuffle").foregroundStyle(pb.isShuffleOn ? .green : .secondary)
+        toggleStateIcon("shuffle", enabled: pb.isShuffleOn)
       }
       .help(controlHelp(pb.isShuffleOn ? "Turn shuffle off" : "Turn shuffle on", source: source))
       .accessibilityLabel(
         activity.mediaControlAccessibilityLabel(
-          action: pb.isShuffleOn ? "Turn shuffle off" : "Turn shuffle on"))
+          action: pb.isShuffleOn ? "Turn shuffle off" : "Turn shuffle on")
+      )
+      .accessibilityValue(pb.isShuffleOn ? "On" : "Off")
       // Podcasts/audiobooks get ±15 s skip; music gets prev/next.
       Button {
         guard let source else { return }
@@ -333,15 +340,16 @@ struct ExpandedPlayerView: View {
       Button {
         if let source { Task { await activity.perform(.cycleRepeat, for: source) } }
       } label: {
-        Image(systemName: pb.repeatMode == 1 ? "repeat.1" : "repeat")
-          .foregroundStyle(pb.repeatMode != 0 ? .green : .secondary)
+        toggleStateIcon(pb.repeatMode == 1 ? "repeat.1" : "repeat", enabled: pb.repeatMode != 0)
       }
       .help(
         controlHelp(pb.repeatMode == 0 ? "Turn repeat on" : "Change repeat mode", source: source)
       )
       .accessibilityLabel(
         activity.mediaControlAccessibilityLabel(
-          action: pb.repeatMode == 0 ? "Turn repeat on" : "Change repeat mode"))
+          action: pb.repeatMode == 0 ? "Turn repeat on" : "Change repeat mode")
+      )
+      .accessibilityValue(repeatAccessibilityValue(pb.repeatMode))
     }
     .buttonStyle(.plain)
     .frame(maxWidth: .infinity)
@@ -352,6 +360,23 @@ struct ExpandedPlayerView: View {
   private func controlHelp(_ action: String, source: SourceID?) -> String {
     guard let source else { return action }
     return activity.mediaControlHelp(action: action, for: source)
+  }
+
+  private func toggleStateIcon(_ symbol: String, enabled: Bool) -> some View {
+    Image(systemName: symbol)
+      .foregroundStyle(enabled ? .green : .secondary)
+      .padding(4)
+      .background(
+        RoundedRectangle(cornerRadius: 5)
+          .stroke(enabled ? Color.white.opacity(0.85) : .clear, lineWidth: 1))
+  }
+
+  private func repeatAccessibilityValue(_ mode: Int) -> String {
+    switch mode {
+    case 1: "Repeat one"
+    case 2: "Repeat all"
+    default: "Off"
+    }
   }
 }
 

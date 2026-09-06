@@ -209,7 +209,7 @@ struct SystemExpandedView: View {
     scale: SparklineScale, @ViewBuilder detail: () -> Detail
   ) -> some View {
     let style = style(kind)
-    HStack(spacing: 8) {
+    let content = HStack(spacing: 8) {
       Text(label)
         .font(.system(size: 10, weight: .semibold))
         .appThemeForeground(.system)
@@ -240,6 +240,14 @@ struct SystemExpandedView: View {
       Spacer(minLength: 0)
     }
     .frame(height: 24)
+    if style == .sparkline {
+      content
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(text)
+    } else {
+      content
+    }
   }
 
   private func detail(_ text: String) -> some View {

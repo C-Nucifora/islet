@@ -7,6 +7,21 @@ import XCTest
 final class ShelfLogicTests: XCTestCase {
   private enum CopyFailure: Error { case expected }
 
+  @MainActor
+  func testOpenReportsFailureAndKeepsTheErrorVisible() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("blocked.txt")
+    try Data().write(to: url)
+    let model = ShelfModel(directory: directory, openItem: { _ in false })
+    let item = try XCTUnwrap(model.items.first)
+
+    XCTAssertFalse(model.open(item))
+    XCTAssertEqual(model.lastError, "Couldn’t open blocked.txt.")
+  }
+
   private final class RetryableStorage: @unchecked Sendable {
     private let lock = NSLock()
     private var available = false

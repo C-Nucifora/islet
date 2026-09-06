@@ -269,6 +269,29 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(vm.state, .expanded(pinned: true))
     XCTAssertEqual(vm.selectedActivityID, "timer")
     XCTAssertTrue(vm.isPresenting(activityID: "timer"))
+    XCTAssertEqual(vm.keyboardFocusRequestRevision, 0)
+  }
+
+  func testPointerAndFileDragExpansionDoNotRequestKeyboardFocus() {
+    let pointerVM = makeVM(mode: .clickToPin)
+    pointerVM.handleMouseDown(CGPoint(x: 864, y: 1110))
+    XCTAssertTrue(pointerVM.state.isExpanded)
+    XCTAssertEqual(pointerVM.keyboardFocusRequestRevision, 0)
+
+    let dragVM = makeVM()
+    dragVM.handleFileDragMoved(CGPoint(x: 864, y: 1110))
+    XCTAssertTrue(dragVM.state.isExpanded)
+    XCTAssertEqual(dragVM.keyboardFocusRequestRevision, 0)
+  }
+
+  func testFocusedInteractionOpensTheRequestedActivityAndRequestsFocus() {
+    let vm = makeVM(mode: .clickToPin)
+
+    vm.openForFocusedInteraction(activityID: "system")
+
+    XCTAssertEqual(vm.state, .expanded(pinned: true))
+    XCTAssertEqual(vm.selectedActivityID, "system")
+    XCTAssertEqual(vm.keyboardFocusRequestRevision, 1)
   }
 
   func testProgrammaticOpenCanTemporarilyPresentADisabledActivity() {
