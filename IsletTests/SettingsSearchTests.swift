@@ -11,6 +11,7 @@ final class SettingsSearchTests: XCTestCase {
       .interaction: "collapse after",
       .energy: "automatic low power",
       .contextRules: "wifi manual override",
+      .batteryWarnings: "slow charging keyboard threshold",
       .activityOrder: "file shelf",
       .calendarReminders: "calendars shown",
       .nowPlaying: "bundle identifier",

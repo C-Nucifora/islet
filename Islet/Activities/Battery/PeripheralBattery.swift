@@ -8,13 +8,92 @@ struct PeripheralBattery: Identifiable, Equatable, Sendable {
   let name: String
   let percent: Int
 
+  var deviceType: PeripheralDeviceType { PeripheralDeviceType(name: name) }
+
   var icon: String {
-    let n = name.lowercased()
-    if n.contains("mouse") { return "magicmouse.fill" }
-    if n.contains("trackpad") { return "trackpad.fill" }
-    if n.contains("keyboard") { return "keyboard.fill" }
-    if n.contains("pencil") { return "applepencil" }
-    return "dot.radiowaves.right"
+    deviceType.icon
+  }
+}
+
+enum PeripheralDeviceType: String, CaseIterable, Codable, Identifiable, Sendable {
+  case mouse
+  case trackpad
+  case keyboard
+  case pencil
+  case other
+
+  var id: String { rawValue }
+
+  init(name: String) {
+    let value = name.lowercased()
+    if value.contains("mouse") {
+      self = .mouse
+    } else if value.contains("trackpad") {
+      self = .trackpad
+    } else if value.contains("keyboard") {
+      self = .keyboard
+    } else if value.contains("pencil") {
+      self = .pencil
+    } else {
+      self = .other
+    }
+  }
+
+  var title: String {
+    switch self {
+    case .mouse: "Mouse"
+    case .trackpad: "Trackpad"
+    case .keyboard: "Keyboard"
+    case .pencil: "Pencil"
+    case .other: "Other devices"
+    }
+  }
+
+  var icon: String {
+    switch self {
+    case .mouse: "magicmouse.fill"
+    case .trackpad: "trackpad.fill"
+    case .keyboard: "keyboard.fill"
+    case .pencil: "applepencil"
+    case .other: "dot.radiowaves.right"
+    }
+  }
+}
+
+enum PeripheralBatteryAlert: Equatable, Sendable {
+  case warning(threshold: Int)
+  case critical
+}
+
+struct PeripheralBatteryAlertDetector: Sendable {
+  static let criticalThreshold = 10
+  private var lastLevels: [String: Int] = [:]
+
+  mutating func seed(_ peripherals: [PeripheralBattery]) {
+    lastLevels = peripherals.reduce(into: [:]) { levels, peripheral in
+      levels[peripheral.id] = peripheral.percent
+    }
+  }
+
+  mutating func evaluate(
+    _ peripherals: [PeripheralBattery], thresholds: [String: Int]
+  ) -> [(device: PeripheralBattery, alert: PeripheralBatteryAlert)] {
+    var alerts: [(device: PeripheralBattery, alert: PeripheralBatteryAlert)] = []
+    var current: [String: Int] = [:]
+    for device in peripherals {
+      current[device.id] = device.percent
+      guard let old = lastLevels[device.id] else { continue }
+      let configured = thresholds[device.deviceType.rawValue] ?? 20
+      if old > Self.criticalThreshold, device.percent <= Self.criticalThreshold {
+        alerts.append((device, .critical))
+      } else if configured > Self.criticalThreshold, old > configured,
+        device.percent <= configured
+      {
+        alerts.append((device, .warning(threshold: configured)))
+      }
+    }
+    lastLevels = current
+    return alerts
   }
 }
 
@@ -37,7 +116,8 @@ enum PeripheralBatteryReader {
         let name = strProp(service, "Product"),
         !name.localizedCaseInsensitiveContains("internal")
       {
-        result.append(PeripheralBattery(id: name, name: name, percent: percent))
+        result.append(
+          PeripheralBattery(id: stableIdentifier(service), name: name, percent: percent))
       }
       IOObjectRelease(service)
       service = IOIteratorNext(iterator)
@@ -53,6 +133,32 @@ enum PeripheralBatteryReader {
   private static func strProp(_ service: io_service_t, _ key: String) -> String? {
     IORegistryEntryCreateCFProperty(service, key as CFString, kCFAllocatorDefault, 0)?
       .takeRetainedValue() as? String
+  }
+
+  private static func stableIdentifier(_ service: io_service_t) -> String {
+    let address = ["DeviceAddress", "TransportAddress", "BD_ADDR"]
+      .lazy.compactMap { strProp(service, $0) }.first
+    var registryEntryID: UInt64 = 0
+    let hasRegistryEntryID =
+      IORegistryEntryGetRegistryEntryID(service, &registryEntryID) == KERN_SUCCESS
+    return stableIdentifier(
+      serialNumber: strProp(service, "SerialNumber"), deviceAddress: address,
+      registryEntryID: hasRegistryEntryID ? registryEntryID : UInt64(service))
+  }
+
+  static func stableIdentifier(
+    serialNumber: String?, deviceAddress: String?, registryEntryID: UInt64
+  ) -> String {
+    if let serialNumber = normalizedIdentity(serialNumber) { return "serial:\(serialNumber)" }
+    if let deviceAddress = normalizedIdentity(deviceAddress) { return "address:\(deviceAddress)" }
+    return "ioreg:\(String(registryEntryID, radix: 16))"
+  }
+
+  private static func normalizedIdentity(_ value: String?) -> String? {
+    guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+      !value.isEmpty
+    else { return nil }
+    return value
   }
 }
 
