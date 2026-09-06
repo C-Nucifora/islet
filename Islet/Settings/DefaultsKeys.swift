@@ -223,6 +223,8 @@ extension Defaults.Keys {
   /// battery after macOS first reports its low-battery state.
   static let keepAwakeLowBatteryThreshold = Key<Int>(
     "keepAwakeLowBatteryThreshold", default: 20)
+  static let contextRules = Key<[ContextRule]>("contextRules", default: [])
+  static let contextManualOverride = Key<ContextManualOverride?>("contextManualOverride")
   static let hideFromScreenRecording = Key<Bool>("hideFromScreenRecording", default: false)
   /// Retained only as input to the one-time activity enablement migration.
   static let legacyBatteryEnabled = Key<Bool>("batteryEnabled", default: true)

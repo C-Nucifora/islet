@@ -109,6 +109,11 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.restartMonitors(clearSnapshots: false) }
       .store(in: &cancellables)
+    ContextRuleCenter.shared.resolutionChanges
+      .sink { [weak self] _ in
+        Task { @MainActor in self?.restartMonitors(clearSnapshots: false) }
+      }
+      .store(in: &cancellables)
     NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
@@ -553,7 +558,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
       let expanded = ScreenManager.shared.viewModel?.state.isExpanded ?? false
       let interval = Self.pollInterval(
         busy: busy, expanded: expanded, lowPowerMode: lowPowerMode,
-        energyMode: Defaults[.energyMode])
+        energyMode: ContextRuleCenter.shared.effectiveEnergyMode(
+          baseline: Defaults[.energyMode]))
       try await Task.sleep(for: .seconds(Self.jitter(interval)))
     }
   }
@@ -904,6 +910,8 @@ final class T3CodeActivity: NotchActivity, ObservableObject {
   }
 
   private var energyPolicy: EnergyPolicy {
-    EnergyPolicy(mode: Defaults[.energyMode], systemLowPowerMode: lowPowerMode)
+    EnergyPolicy(
+      mode: ContextRuleCenter.shared.effectiveEnergyMode(baseline: Defaults[.energyMode]),
+      systemLowPowerMode: lowPowerMode)
   }
 }

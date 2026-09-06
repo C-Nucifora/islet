@@ -131,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       RemindersProvider.shared.start()
       for source in AppState.eventSources { SystemEventBus.shared.register(source) }
       if OnboardingState.isComplete { SystemEventBus.shared.startEnabled() }
+      ContextRuleCenter.shared.start()
       SneakQueue.shared.isSuspended = {
         ScreenManager.shared.viewModel?.state.isExpanded ?? false
       }
@@ -169,6 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       HUDController.shared.stop()
       SystemEventBus.shared.stopAll()
       EventSourcePreferences.shared.flush()
+      ContextRuleCenter.shared.stop()
       EventMonitors.shared.stop()
       ScreenManager.shared.stop()
       activityLifecycleController?.stopObserving()

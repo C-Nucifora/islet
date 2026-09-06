@@ -213,8 +213,9 @@ enum SettingsTransfer {
     "clipboardClearHistoryOnPause", "clipboardExcludedBundleIdentifiers",
     "clipboardManuallyPaused", "clipboardPausedFocusIdentifiers", "clipboardPausedLoginSession",
     "clipboardPausedUntil",
-    "continuityEnabled", "hiddenCalendarIDs", "onboardingVersion", "portsEnabled",
-    "pulseEnabled", "systemEnabled", "t3CodeEnabled", "t3RemoteEnvironments",
+    "contextManualOverride", "contextRules", "continuityEnabled", "hiddenCalendarIDs",
+    "onboardingVersion", "portsEnabled", "pulseEnabled", "systemEnabled", "t3CodeEnabled",
+    "t3RemoteEnvironments",
   ]
 
   static func exportData(

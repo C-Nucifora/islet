@@ -196,6 +196,8 @@ final class SettingsTransferTests: XCTestCase {
     XCTAssertFalse(text.localizedCaseInsensitiveContains("token"))
     XCTAssertFalse(text.contains("t3RemoteEnvironments"))
     XCTAssertFalse(text.contains("hiddenCalendarIDs"))
+    XCTAssertFalse(text.contains("contextRules"))
+    XCTAssertFalse(text.contains("contextManualOverride"))
   }
 
   private func document(settings: [String: Any]) throws -> Data {

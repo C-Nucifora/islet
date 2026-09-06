@@ -9,6 +9,7 @@ final class SettingsSearchTests: XCTestCase {
       .appearance: "catppuccin battery graph",
       .interaction: "collapse after",
       .energy: "automatic low power",
+      .contextRules: "wifi manual override",
       .activityOrder: "file shelf",
       .calendarReminders: "calendars shown",
       .nowPlaying: "bundle identifier",
