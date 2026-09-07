@@ -159,6 +159,9 @@ final class NotchViewModel: ObservableObject {
   }
 
   func selectActivity(_ id: String?) {
+    // An explicit tab choice must win over a transient Shelf presentation. This also recovers if
+    // AppKit never delivered the final drag-exit callback for an earlier file drag.
+    if id != "shelf", isShelfDropTargeted { isShelfDropTargeted = false }
     if temporarilyPresentedActivityID != id { temporarilyPresentedActivityID = nil }
     if selectedActivityID != id { selectedActivityID = id }
   }

@@ -272,6 +272,18 @@ final class NotchViewModelTests: XCTestCase {
     XCTAssertEqual(vm.keyboardFocusRequestRevision, 0)
   }
 
+  func testExplicitTabSelectionClearsStaleShelfDropPresentation() {
+    let vm = makeVM(mode: .clickToPin)
+    vm.setShelfDropTargeted(true)
+    XCTAssertTrue(vm.isShelfDropTargeted)
+    XCTAssertEqual(vm.selectedActivityID, "shelf")
+
+    vm.selectActivity("system")
+
+    XCTAssertFalse(vm.isShelfDropTargeted)
+    XCTAssertEqual(vm.selectedActivityID, "system")
+  }
+
   func testPointerAndFileDragExpansionDoNotRequestKeyboardFocus() {
     let pointerVM = makeVM(mode: .clickToPin)
     pointerVM.handleMouseDown(CGPoint(x: 864, y: 1110))
@@ -874,5 +886,17 @@ final class NotchViewModelTests: XCTestCase {
       EventMonitors.shouldForwardFileDrag(
         notch, screenFrames: [frame], shelfAvailable: true,
         wasInTopInteractionBand: false))
+  }
+
+  func testLocalMouseDragCannotReuseStaleExternalFilePayload() {
+    XCTAssertFalse(
+      EventMonitors.shouldHandleMonitoredFileDrag(
+        hasFileURLs: true, eventHasWindow: true))
+    XCTAssertTrue(
+      EventMonitors.shouldHandleMonitoredFileDrag(
+        hasFileURLs: true, eventHasWindow: false))
+    XCTAssertFalse(
+      EventMonitors.shouldHandleMonitoredFileDrag(
+        hasFileURLs: false, eventHasWindow: false))
   }
 }
