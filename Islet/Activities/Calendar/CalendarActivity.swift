@@ -180,8 +180,7 @@ final class CalendarActivity: NotchActivity, ObservableObject {
       .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
       .sink { [weak self] _ in Task { await self?.refreshAuthorization() } }
       .store(in: &cancellables)
-    NotificationCenter.default.publisher(for: .NSCalendarDayChanged)
-      .merge(with: NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange))
+    Self.dayBoundaryNotifications()
       .sink { [weak self] _ in Task { await self?.reload() } }
       .store(in: &cancellables)
     // Re-evaluate the countdown every 30 s, but only query EventKit every five minutes. Store
@@ -194,6 +193,15 @@ final class CalendarActivity: NotchActivity, ObservableObject {
         }
         self.objectWillChange.send()
       }
+  }
+
+  static func dayBoundaryNotifications(
+    center: NotificationCenter = .default
+  ) -> AnyPublisher<Notification, Never> {
+    center.publisher(for: .NSCalendarDayChanged)
+      .merge(with: center.publisher(for: .NSSystemTimeZoneDidChange))
+      .receive(on: DispatchQueue.main)
+      .eraseToAnyPublisher()
   }
 
   func stop() {
