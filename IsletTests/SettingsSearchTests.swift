@@ -13,7 +13,7 @@ final class SettingsSearchTests: XCTestCase {
       .contextRules: "wifi manual override",
       .batteryWarnings: "slow charging keyboard threshold",
       .activityOrder: "file shelf",
-      .calendarReminders: "calendars shown",
+      .calendarReminders: "scrollable home layout",
       .nowPlaying: "bundle identifier",
       .continuity: "keep iphone idle",
       .systemMetrics: "number bar",

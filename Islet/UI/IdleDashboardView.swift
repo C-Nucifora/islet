@@ -20,6 +20,7 @@ struct IdleDashboardView: View {
   @Default(.calendarEnabled) private var calendarEnabled
   @Default(.remindersEnabled) private var remindersEnabled
   @Default(.disabledActivities) private var disabledActivities
+  @Default(.homeLayoutMode) private var homeLayoutMode
 
   @State private var showsAll = false
   @State private var pendingPulseAction: PulseActionConfirmation?
@@ -60,6 +61,9 @@ struct IdleDashboardView: View {
       Button("OK") { pulseActionError = nil }
     } message: {
       Text(pulseActionError ?? "")
+    }
+    .onChange(of: homeLayoutMode) { _, _ in
+      showsAll = false
     }
   }
 
@@ -126,51 +130,49 @@ struct IdleDashboardView: View {
   @ViewBuilder private func dashboard(now: Date) -> some View {
     let allItems = sourceItems(now: now)
     let visibleItems = vm.visibleHomeAttentionItems(allItems, now: now)
-    let overflow = HomeAttentionOverflow.split(visibleItems)
-    let shownItems = showsAll ? visibleItems : overflow.primary
 
-    VStack(alignment: .leading, spacing: 6) {
+    Group {
+      switch homeLayoutMode {
+      case .compact, .scrollable:
+        rankedDashboard(items: visibleItems, now: now)
+      case .split:
+        splitDashboard
+      }
+    }
+    .onChange(of: allItems.map(\.id), initial: true) { _, _ in
+      vm.reconcileHomeAttention(with: allItems)
+    }
+  }
+
+  private func rankedDashboard(items: [HomeAttentionItem], now: Date) -> some View {
+    let presentation = HomeAttentionPresentation.make(
+      items: items, mode: homeLayoutMode, compactExpanded: showsAll)
+
+    return VStack(alignment: .leading, spacing: 6) {
       HStack(spacing: 7) {
         Label("Home", systemImage: "square.grid.2x2.fill")
           .font(.caption.weight(.semibold))
           .appThemeForeground(.interaction)
-        if let first = visibleItems.first {
+        if let first = items.first {
           Text("First because \(first.rankingReason.lowercased())")
             .font(.caption2.weight(.medium))
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .help(
               HomeAttentionRanking.explanation(
-                for: first, above: visibleItems.dropFirst().first))
+                for: first, above: items.dropFirst().first))
         }
         Spacer(minLength: 0)
-        Text("\(visibleItems.count)")
+        Text("\(items.count)")
           .font(.caption2.monospacedDigit())
           .foregroundStyle(.secondary)
-          .accessibilityLabel("\(visibleItems.count) items need attention")
-        if remindersEnabled, reminders.authorization.canRead {
-          Button {
-            ReminderEditorWindow.shared.presentEditor(provider: reminders, item: nil)
-          } label: {
-            Image(systemName: "plus")
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel("New reminder")
-          .accessibilityHint("Opens a keyboard-accessible reminder editor")
-          .disabled(reminderCommands.route(for: .create) == nil)
-          if reminders.completionUndo != nil {
-            Button("Undo") { reminders.undoLastCompletion() }
-              .buttonStyle(.link)
-              .font(.caption2)
-              .accessibilityLabel("Undo last reminder completion")
-              .disabled(reminderCommands.route(for: .undo) == nil)
-          }
-        }
-        if !overflow.overflow.isEmpty {
+          .accessibilityLabel("\(items.count) items need attention")
+        reminderActions
+        if presentation.showsDisclosure {
           Button(
             showsAll
               ? String(localized: "Show less")
-              : String(localized: "More (\(overflow.overflow.count))")
+              : String(localized: "More (\(presentation.overflowCount))")
           ) {
             withAnimation(Motion.gated(.snappy)) { showsAll.toggle() }
           }
@@ -179,33 +181,257 @@ struct IdleDashboardView: View {
           .accessibilityHint(
             showsAll
               ? "Shows the three highest-ranked items"
-              : "Shows all \(visibleItems.count) items in a scrollable list")
+              : "Shows all \(items.count) items in a scrollable list")
         }
       }
 
-      if shownItems.isEmpty {
+      if presentation.items.isEmpty {
         emptyState
       } else {
-        ScrollView(.vertical, showsIndicators: showsAll) {
+        ScrollView(.vertical, showsIndicators: presentation.showsScrollIndicators) {
           LazyVStack(spacing: 5) {
-            ForEach(Array(shownItems.enumerated()), id: \.element.id) { index, item in
-              HomeAttentionRow(
-                item: item,
-                rankExplanation: HomeAttentionRanking.explanation(
-                  for: item,
-                  above: visibleItems.dropFirst(index + 1).first),
-                action: { perform($0) },
-                dismiss: { dismiss($0) },
-                snooze: { snooze($0, now: now) })
+            ForEach(Array(presentation.items.enumerated()), id: \.element.id) { index, item in
+              attentionRow(item, above: items.dropFirst(index + 1).first, now: now)
             }
           }
           .padding(.bottom, 1)
         }
       }
     }
-    .onChange(of: allItems.map(\.id), initial: true) { _, _ in
-      vm.reconcileHomeAttention(with: allItems)
+  }
+
+  @ViewBuilder private var splitDashboard: some View {
+    if calendarEnabled || remindersEnabled {
+      HStack(alignment: .top, spacing: 14) {
+        if calendarEnabled {
+          splitColumn("Today", systemImage: "calendar") { splitAgenda }
+        }
+        if calendarEnabled && remindersEnabled {
+          Divider().overlay(Color.white.opacity(0.12))
+        }
+        if remindersEnabled {
+          splitColumn("Reminders", systemImage: "checklist") { splitReminders }
+        }
+      }
+    } else {
+      splitEnableHint
     }
+  }
+
+  private func splitColumn<Content: View>(
+    _ title: String, systemImage: String, @ViewBuilder content: () -> Content
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack {
+        Label(title, systemImage: systemImage)
+          .font(.caption.weight(.semibold))
+          .appThemeForeground(systemImage == "calendar" ? .calendar : .reminders)
+        if systemImage == "checklist" {
+          Spacer(minLength: 0)
+          reminderActions
+        }
+      }
+      content()
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  @ViewBuilder private var splitAgenda: some View {
+    if !calendar.authorization.canRead {
+      splitPermissionRow(
+        "Calendar: \(calendar.authorization.summary)", permission: "Calendar"
+      ) {
+        Task { await calendar.recoverAccess() }
+      }
+    } else if calendar.loadState == .loading {
+      ProgressView().controlSize(.small).accessibilityLabel("Loading calendar")
+    } else if case .failed(let message) = calendar.loadState {
+      HStack(spacing: 5) {
+        Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(2)
+        Button("Retry") { Task { await calendar.refreshAuthorization() } }
+          .buttonStyle(.link).font(.caption2)
+      }
+    } else if calendar.events.isEmpty {
+      splitEmptyRow("No events today")
+    } else {
+      ScrollView(.vertical, showsIndicators: false) {
+        VStack(alignment: .leading, spacing: 6) {
+          ForEach(calendar.events.prefix(6)) { event in
+            HStack(spacing: 6) {
+              Capsule()
+                .fill(Color(isletHex: event.calendarColorHex) ?? .secondary)
+                .frame(width: 3, height: 14)
+              if event.isAllDay {
+                Text("All day")
+                  .font(.caption2).foregroundStyle(.secondary)
+                  .lineLimit(1)
+                  .frame(width: 54, alignment: .leading)
+              } else {
+                Text(event.start, format: .dateTime.hour().minute())
+                  .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+                  .lineLimit(1)
+                  .frame(width: 54, alignment: .leading)
+              }
+              Text(event.title).font(.caption).lineLimit(1)
+              Spacer(minLength: 0)
+              if let url = event.joinURL, let link = CalendarMeetingLinkPolicy.candidate(url) {
+                CalendarMeetingLinkButton(link: link, eventTitle: event.title)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  @ViewBuilder private var splitReminders: some View {
+    if reminders.accessDenied {
+      splitPermissionRow(
+        "Reminders: \(reminders.authorization.summary)", permission: "Reminders"
+      ) {
+        Task { await reminders.recoverAccess() }
+      }
+    } else if reminders.loadState == .loading {
+      ProgressView().controlSize(.small).accessibilityLabel("Loading reminders")
+    } else if case .failed(let message) = reminders.loadState {
+      HStack(spacing: 5) {
+        Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(2)
+        Button("Retry") { Task { await reminders.reload() } }
+          .buttonStyle(.link).font(.caption2)
+      }
+    } else if reminders.reminders.isEmpty {
+      if reminders.hasMoreReminders {
+        VStack(alignment: .leading, spacing: 5) {
+          splitEmptyRow("No reminders due soon")
+          moreRemindersButton
+        }
+      } else {
+        splitEmptyRow("All clear")
+      }
+    } else {
+      ScrollView(.vertical, showsIndicators: false) {
+        VStack(alignment: .leading, spacing: 6) {
+          if let error = reminders.lastActionError {
+            HStack(spacing: 5) {
+              Text(error).font(.caption2).foregroundStyle(.orange).lineLimit(1)
+              Button("Dismiss") { reminders.dismissActionError() }
+                .buttonStyle(.link).font(.caption2)
+            }
+          }
+          ForEach(reminders.reminders) { item in
+            HStack(spacing: 6) {
+              Button {
+                withAnimation(Motion.gated(.snappy)) { reminders.complete(item) }
+              } label: {
+                Image(systemName: "circle")
+                  .foregroundStyle(Color(isletHex: item.listColorHex) ?? .secondary)
+                  .font(.caption)
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("Complete \(item.title)")
+              VStack(alignment: .leading, spacing: 0) {
+                Text(item.title).font(.caption).lineLimit(1)
+                if let due = item.dueDate {
+                  splitReminderDueText(item, due: due)
+                    .font(.caption2).monospacedDigit()
+                    .foregroundStyle(
+                      RemindersLogic.isOverdue(item, now: Date()) ? .red : .secondary)
+                }
+              }
+              Spacer(minLength: 0)
+              Menu {
+                ForEach(RemindersLogic.SnoozePreset.allCases, id: \.self) { preset in
+                  Button(preset.title) { _ = reminders.snooze(item, preset: preset) }
+                }
+              } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                  .font(.caption2).foregroundStyle(.secondary)
+              }
+              .menuStyle(.borderlessButton)
+              .menuIndicator(.hidden)
+              .fixedSize()
+              .accessibilityLabel("Snooze \(item.title)")
+            }
+          }
+          if reminders.hasMoreReminders { moreRemindersButton }
+        }
+      }
+    }
+  }
+
+  private var splitEnableHint: some View {
+    VStack(spacing: 6) {
+      Image(systemName: "calendar.badge.checkmark").font(.title2)
+      Text("Enable Calendar or Reminders in Settings")
+        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  private func splitEmptyRow(_ text: String) -> some View {
+    Text(text).font(.caption).foregroundStyle(.secondary)
+  }
+
+  private var moreRemindersButton: some View {
+    Button("More in Reminders") { reminders.openRemindersApp() }
+      .buttonStyle(.link)
+      .font(.caption2)
+      .accessibilityHint("Opens the Reminders app")
+  }
+
+  @ViewBuilder private func splitReminderDueText(_ item: ReminderItem, due: Date) -> some View {
+    if item.hasDueTime {
+      Text(due, format: .dateTime.hour().minute())
+    } else if Calendar.current.isDateInToday(due) {
+      Text("Today")
+    } else if Calendar.current.isDateInTomorrow(due) {
+      Text("Tomorrow")
+    } else {
+      Text(due, format: .dateTime.month(.abbreviated).day())
+    }
+  }
+
+  private func splitPermissionRow(
+    _ text: String, permission: String, action: @escaping () -> Void
+  ) -> some View {
+    HStack(spacing: 5) {
+      Text(text).font(.caption2).foregroundStyle(.orange)
+      Button("Review…", action: action)
+        .font(.caption2)
+        .buttonStyle(.link)
+        .accessibilityLabel("Review \(permission) permission")
+    }
+  }
+
+  @ViewBuilder private var reminderActions: some View {
+    if remindersEnabled, reminders.authorization.canRead {
+      Button {
+        ReminderEditorWindow.shared.presentEditor(provider: reminders, item: nil)
+      } label: {
+        Image(systemName: "plus")
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("New reminder")
+      .accessibilityHint("Opens a keyboard-accessible reminder editor")
+      .disabled(reminderCommands.route(for: .create) == nil)
+      if reminders.completionUndo != nil {
+        Button("Undo") { reminders.undoLastCompletion() }
+          .buttonStyle(.link)
+          .font(.caption2)
+          .accessibilityLabel("Undo last reminder completion")
+          .disabled(reminderCommands.route(for: .undo) == nil)
+      }
+    }
+  }
+
+  private func attentionRow(
+    _ item: HomeAttentionItem, above nextItem: HomeAttentionItem?, now: Date
+  ) -> some View {
+    HomeAttentionRow(
+      item: item,
+      rankExplanation: HomeAttentionRanking.explanation(for: item, above: nextItem),
+      action: { perform($0) }, dismiss: { dismiss($0) },
+      snooze: { snooze($0, now: now) })
   }
 
   private func sourceItems(now: Date) -> [HomeAttentionItem] {

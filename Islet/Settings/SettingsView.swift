@@ -252,6 +252,7 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
       ] + ActivityCatalog.orderable.flatMap { [$0.id, $0.name] }
     case .calendarReminders:
       pageContent + [
+        "Home layout", "Compact", "Scrollable", "Split", "More", "Show less",
         "Calendar", "Activity", "Upcoming-event countdown", "Calendars shown in Islet",
         "Manage Calendar permission", "Reminders", "Show incomplete reminders on Home",
         "Manage Reminders permission", "three day agenda add event title time location conference",
@@ -387,7 +388,9 @@ enum SettingsDetailPage: String, CaseIterable, Identifiable {
         + ActivityCatalog.orderable.map { "Configure \($0.name) activity" }
     case .calendarReminders:
       [
-        "Show Calendar activity", "Set upcoming-event countdown", "Choose calendars",
+        "Choose Home layout", "Show all Home items without pressing More",
+        "Use split Calendar and Reminders columns", "Show Calendar activity",
+        "Set upcoming-event countdown", "Choose calendars",
         "Show reminders on Home", "Manage Calendar permission", "Manage Reminders permission",
       ]
     case .nowPlaying:
@@ -560,6 +563,7 @@ struct SettingsView: View {
   @Default(.calendarLeadMinutes) private var calendarLeadMinutes
   @Default(.hiddenCalendarIDs) private var hiddenCalendarIDs
   @Default(.remindersEnabled) private var remindersEnabled
+  @Default(.homeLayoutMode) private var homeLayoutMode
   @Default(.showOnAllDisplays) private var showOnAllDisplays
   @Default(.preferredDisplayID) private var preferredDisplayID
   @Default(.preferredDisplayName) private var preferredDisplayName
@@ -1442,6 +1446,16 @@ struct SettingsView: View {
 
   private var calendarRemindersForm: some View {
     Form {
+      Section("Home") {
+        Picker("Layout", selection: $homeLayoutMode) {
+          ForEach(HomeLayoutMode.allCases) { mode in
+            Text(mode.title).tag(mode)
+          }
+        }
+        .pickerStyle(.segmented)
+        Text(homeLayoutMode.detail)
+          .font(.caption).foregroundStyle(.secondary)
+      }
       Section("Calendar") {
         LabeledContent("Activity") {
           Text(isActivityEnabled("calendar") ? String(localized: "On") : String(localized: "Off"))
@@ -2717,6 +2731,7 @@ struct SettingsView: View {
     barrierPushDistance = Double(Metrics.barrierPushDistance)
     sourceMode = .auto
     priorityList = ["com.spotify.client", "com.apple.Music"]
+    homeLayoutMode = .compact
     activityOrder = ActivityCatalog.defaultOrder
     systemAlwaysVisible = false
     systemAutoPresentCPU = true

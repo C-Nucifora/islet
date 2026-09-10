@@ -1,3 +1,4 @@
+import Defaults
 import XCTest
 
 @testable import Islet
@@ -74,6 +75,48 @@ final class ContextualHomeTests: XCTestCase {
     XCTAssertEqual(split.primary.count, 3)
     XCTAssertEqual(split.overflow.count, 6)
     XCTAssertEqual(split.primary + split.overflow, ranked)
+  }
+
+  func testCompactPresentationRequiresMoreBeforeShowingOverflow() {
+    let items = (0..<5).map {
+      item(id: "item-\($0)", source: .reminders, priority: .normal)
+    }
+
+    let collapsed = HomeAttentionPresentation.make(
+      items: items, mode: .compact, compactExpanded: false)
+    let expanded = HomeAttentionPresentation.make(
+      items: items, mode: .compact, compactExpanded: true)
+
+    XCTAssertEqual(collapsed.items.count, 3)
+    XCTAssertEqual(collapsed.overflowCount, 2)
+    XCTAssertTrue(collapsed.showsDisclosure)
+    XCTAssertFalse(collapsed.showsScrollIndicators)
+    XCTAssertEqual(expanded.items, items)
+    XCTAssertTrue(expanded.showsScrollIndicators)
+  }
+
+  func testScrollablePresentationShowsEveryItemWithoutDisclosure() {
+    let items = (0..<5).map {
+      item(id: "item-\($0)", source: .calendar, priority: .normal)
+    }
+
+    let presentation = HomeAttentionPresentation.make(
+      items: items, mode: .scrollable, compactExpanded: false)
+
+    XCTAssertEqual(presentation.items, items)
+    XCTAssertEqual(presentation.overflowCount, 0)
+    XCTAssertFalse(presentation.showsDisclosure)
+    XCTAssertTrue(presentation.showsScrollIndicators)
+  }
+
+  func testHomeLayoutPreferencePersistsEverySupportedMode() {
+    let saved = Defaults[.homeLayoutMode]
+    defer { Defaults[.homeLayoutMode] = saved }
+
+    for mode in HomeLayoutMode.allCases {
+      Defaults[.homeLayoutMode] = mode
+      XCTAssertEqual(Defaults[.homeLayoutMode], mode)
+    }
   }
 
   func testBuilderCombinesEveryRequiredSourceIntoNineReadableItems() throws {

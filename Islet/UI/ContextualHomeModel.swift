@@ -209,6 +209,31 @@ enum HomeAttentionOverflow {
   }
 }
 
+struct HomeAttentionPresentation: Equatable, Sendable {
+  let items: [HomeAttentionItem]
+  let overflowCount: Int
+  let showsDisclosure: Bool
+  let showsScrollIndicators: Bool
+
+  static func make(
+    items: [HomeAttentionItem], mode: HomeLayoutMode, compactExpanded: Bool
+  ) -> Self {
+    switch mode {
+    case .compact:
+      let split = HomeAttentionOverflow.split(items)
+      return Self(
+        items: compactExpanded ? items : split.primary,
+        overflowCount: split.overflow.count,
+        showsDisclosure: !split.overflow.isEmpty,
+        showsScrollIndicators: compactExpanded)
+    case .scrollable, .split:
+      return Self(
+        items: items, overflowCount: 0, showsDisclosure: false,
+        showsScrollIndicators: true)
+    }
+  }
+}
+
 struct HomeAttentionDisposition: Equatable, Sendable {
   private(set) var dismissedOccurrenceIDs: Set<String> = []
   private(set) var snoozedUntil: [String: Date] = [:]
