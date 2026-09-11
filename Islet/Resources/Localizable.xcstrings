@@ -2715,6 +2715,16 @@
         }
       }
     },
+    "All clear" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Åll çlëår ~~~~~］"
+          }
+        }
+      }
+    },
     "All day" : {
       "localizations" : {
         "en-XA" : {
@@ -3724,6 +3734,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Çålëñdår dåtå ålsø sûpplïës thë Hømë ågëñdå whëñ ïts åçtïvïtÿ ïs øff. ~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Calendar: %@" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Çålëñdår: %@ ~~~~~~］"
           }
         }
       }
@@ -9225,6 +9245,16 @@
         }
       }
     },
+    "No events today" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ñø ëvëñts tødåÿ ~~~~~~~］"
+          }
+        }
+      }
+    },
     "No fullscreen presentation" : {
       "localizations" : {
         "en-XA" : {
@@ -11639,6 +11669,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Rëmïñdërs årë dïsåblëd ïñ Ïslët Sëttïñgs. ~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Reminders: %@" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëmïñdërs: %@ ~~~~~~］"
           }
         }
       }
