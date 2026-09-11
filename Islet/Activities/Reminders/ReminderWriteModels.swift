@@ -34,6 +34,18 @@ struct ReminderDateValue: Equatable, Sendable {
     self.components = normalized
   }
 
+  static func semanticallyEqual(_ lhs: DateComponents?, _ rhs: DateComponents?) -> Bool {
+    guard let lhs, let rhs else { return lhs == nil && rhs == nil }
+    let lhsHasTime = lhs.hour != nil || lhs.minute != nil || lhs.second != nil
+    let rhsHasTime = rhs.hour != nil || rhs.minute != nil || rhs.second != nil
+    return lhsHasTime == rhsHasTime && lhs.timeZone == rhs.timeZone
+      && (lhs.era ?? 1) == (rhs.era ?? 1)
+      && lhs.year == rhs.year && lhs.month == rhs.month && lhs.day == rhs.day
+      && lhs.hour == rhs.hour && lhs.minute == rhs.minute
+      && (!lhsHasTime || (lhs.second ?? 0) == (rhs.second ?? 0))
+      && (lhs.calendar?.identifier ?? .gregorian) == (rhs.calendar?.identifier ?? .gregorian)
+  }
+
   func date(in calendar: Calendar) throws -> Date {
     guard calendar.identifier == .gregorian,
       let date = Self.resolvedDate(
@@ -103,13 +115,16 @@ struct ReminderEditableFields: Equatable, Sendable {
   var dueDate: ReminderDateValue?
   var priority: Int
   var completion: ReminderCompletionValue
+  var alarms: [ReminderAlarmValue] = []
+  var recurrenceRules: [ReminderRecurrenceValue] = []
 
   init(
     validating title: String, notes: String?, url: URL?, listID: String,
     startDate: ReminderDateValue?, dueDate: ReminderDateValue?, priority: Int,
-    completion: ReminderCompletionValue
+    completion: ReminderCompletionValue, alarms: [ReminderAlarmValue] = [],
+    recurrenceRules: [ReminderRecurrenceValue] = []
   ) throws {
-    guard [0, 1, 5, 9].contains(priority) else {
+    guard (0...9).contains(priority) else {
       throw ReminderWriteError.invalidPriority
     }
     self.title = title
@@ -120,6 +135,8 @@ struct ReminderEditableFields: Equatable, Sendable {
     self.dueDate = dueDate
     self.priority = priority
     self.completion = completion
+    self.alarms = alarms
+    self.recurrenceRules = recurrenceRules
   }
 }
 
@@ -132,6 +149,8 @@ struct ReminderPatch: Equatable, Sendable {
   var dueDate: ReminderFieldChange<ReminderDateValue?>
   var priority: ReminderFieldChange<Int>
   var completion: ReminderFieldChange<ReminderCompletionValue>
+  var alarms: ReminderFieldChange<[ReminderAlarmValue]>
+  var recurrenceRules: ReminderFieldChange<[ReminderRecurrenceValue]>
 
   init(from baseline: ReminderEditableFields, to edited: ReminderEditableFields) {
     title = Self.change(from: baseline.title, to: edited.title)
@@ -142,12 +161,14 @@ struct ReminderPatch: Equatable, Sendable {
     dueDate = Self.change(from: baseline.dueDate, to: edited.dueDate)
     priority = Self.change(from: baseline.priority, to: edited.priority)
     completion = Self.change(from: baseline.completion, to: edited.completion)
+    alarms = Self.change(from: baseline.alarms, to: edited.alarms)
+    recurrenceRules = Self.change(from: baseline.recurrenceRules, to: edited.recurrenceRules)
   }
 
   var isEmpty: Bool {
     title == .unchanged && notes == .unchanged && url == .unchanged && listID == .unchanged
       && startDate == .unchanged && dueDate == .unchanged && priority == .unchanged
-      && completion == .unchanged
+      && completion == .unchanged && alarms == .unchanged && recurrenceRules == .unchanged
   }
 
   private static func change<Value: Equatable & Sendable>(
@@ -158,7 +179,24 @@ struct ReminderPatch: Equatable, Sendable {
 }
 
 enum ReminderField: String, Equatable, Sendable {
-  case title, notes, url, list, startDate, dueDate, priority, completion
+  case title, notes, url, list, startDate, dueDate, priority, completion, alarms, recurrence,
+    nativeMetadata
+
+  var displayName: String {
+    switch self {
+    case .title: String(localized: "title")
+    case .notes: String(localized: "notes")
+    case .url: String(localized: "link")
+    case .list: String(localized: "list")
+    case .startDate: String(localized: "start date")
+    case .dueDate: String(localized: "due date")
+    case .priority: String(localized: "priority")
+    case .completion: String(localized: "completion")
+    case .alarms: String(localized: "alerts")
+    case .recurrence: String(localized: "repeat rules")
+    case .nativeMetadata: String(localized: "other reminder details")
+    }
+  }
 }
 
 struct ReminderNormalizationMismatch: Equatable, Sendable {

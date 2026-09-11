@@ -12,6 +12,8 @@ struct ReminderCoordinatorDraft: Equatable, Sendable {
   var priority: Int
   var isCompleted: Bool
   var completionDate: Date?
+  var alarms: [ReminderAlarmValue]
+  var recurrenceRules: [ReminderRecurrenceValue]
   var baseline: ReminderEditableFields?
   var baselineRecord: ReminderWriteRecord?
   var sourceRevision: ReminderWriteRecord.Revision?
@@ -32,7 +34,8 @@ struct ReminderCoordinatorDraft: Equatable, Sendable {
     sourceRevision: ReminderWriteRecord.Revision? = nil,
     normalizationMismatches: [ReminderNormalizationMismatch] = [],
     pendingCommitReceipt: ReminderCommitReceipt? = nil,
-    retryBlockedReason: String? = nil
+    retryBlockedReason: String? = nil,
+    alarms: [ReminderAlarmValue] = [], recurrenceRules: [ReminderRecurrenceValue] = []
   ) {
     self.reminderID = reminderID
     self.title = title
@@ -44,6 +47,8 @@ struct ReminderCoordinatorDraft: Equatable, Sendable {
     self.priority = priority
     self.isCompleted = isCompleted
     self.completionDate = completionDate
+    self.alarms = alarms
+    self.recurrenceRules = recurrenceRules
     self.baseline = baseline
     self.baselineRecord = baselineRecord
     self.sourceRevision = sourceRevision
@@ -617,7 +622,10 @@ final class ReminderWriteCoordinator {
       dueDate: try record.dueDateComponents.map(ReminderDateValue.init(validating:)),
       priority: record.priority,
       completion: ReminderCompletionValue(
-        validating: record.isCompleted, completionDate: record.completionDate))
+        validating: record.isCompleted, completionDate: record.completionDate),
+      alarms: record.alarmRevisions.compactMap(ReminderAdvancedCodec.alarmValue(from:)),
+      recurrenceRules: record.recurrenceRevisions.compactMap(
+        ReminderAdvancedCodec.recurrenceValue(from:)))
   }
 
   private func editableFields(
@@ -641,7 +649,8 @@ final class ReminderWriteCoordinator {
       validating: title, notes: draft.notes, url: url, listID: listID,
       startDate: draft.startDate, dueDate: draft.dueDate, priority: draft.priority,
       completion: ReminderCompletionValue(
-        validating: draft.isCompleted, completionDate: draft.completionDate))
+        validating: draft.isCompleted, completionDate: draft.completionDate),
+      alarms: draft.alarms, recurrenceRules: draft.recurrenceRules)
   }
 
   private func coordinatorDraft(
@@ -654,7 +663,8 @@ final class ReminderWriteCoordinator {
       startDate: fields.startDate, dueDate: fields.dueDate, priority: fields.priority,
       isCompleted: fields.completion.isCompleted,
       completionDate: fields.completion.completionDate, baseline: fields,
-      baselineRecord: record, sourceRevision: record.revision)
+      baselineRecord: record, sourceRevision: record.revision,
+      alarms: fields.alarms, recurrenceRules: fields.recurrenceRules)
   }
 
   private func submittedDraft(
@@ -670,6 +680,8 @@ final class ReminderWriteCoordinator {
     submitted.priority = fields.priority
     submitted.isCompleted = fields.completion.isCompleted
     submitted.completionDate = fields.completion.completionDate
+    submitted.alarms = fields.alarms
+    submitted.recurrenceRules = fields.recurrenceRules
     return submitted
   }
 
@@ -752,10 +764,34 @@ final class ReminderWriteCoordinator {
         priority: actualFields.priority,
         isCompleted: actualFields.completion.isCompleted,
         completionDate: actualFields.completion.completionDate, baseline: actualFields,
-        baselineRecord: actual, sourceRevision: actual.revision)
+        baselineRecord: actual, sourceRevision: actual.revision,
+        alarms: actualFields.alarms, recurrenceRules: actualFields.recurrenceRules)
     }
 
     var rebased = requested
+    // A retry owns only the fields changed in the original draft. Other fields may have
+    // changed in another client after our save and must adopt the authoritative values.
+    if let original = requested.baseline {
+      if requested.title == original.title { rebased.title = actualFields.title }
+      if requested.notes == original.notes { rebased.notes = actualFields.notes }
+      if requested.urlText == (original.url?.absoluteString ?? "") {
+        rebased.urlText = actualFields.url?.absoluteString ?? ""
+      }
+      if requested.listID == original.listID { rebased.listID = actualFields.listID }
+      if requested.startDate == original.startDate { rebased.startDate = actualFields.startDate }
+      if requested.dueDate == original.dueDate { rebased.dueDate = actualFields.dueDate }
+      if requested.priority == original.priority { rebased.priority = actualFields.priority }
+      if requested.isCompleted == original.completion.isCompleted,
+        requested.completionDate == original.completion.completionDate
+      {
+        rebased.isCompleted = actualFields.completion.isCompleted
+        rebased.completionDate = actualFields.completion.completionDate
+      }
+      if requested.alarms == original.alarms { rebased.alarms = actualFields.alarms }
+      if requested.recurrenceRules == original.recurrenceRules {
+        rebased.recurrenceRules = actualFields.recurrenceRules
+      }
+    }
     rebased.reminderID = actual.id
     rebased.baseline = actualFields
     rebased.baselineRecord = actual
@@ -792,12 +828,16 @@ final class ReminderWriteCoordinator {
     appendNormalizationMismatch(
       field: .startDate,
       wasRequested: baseline == nil || baseline?.startDate != requested.startDate,
-      matches: actualStartDate.isValid && actualStartDate.value == requested.startDate,
+      matches: actualStartDate.isValid
+        && ReminderDateValue.semanticallyEqual(
+          actualStartDate.value?.components, requested.startDate?.components),
       to: &mismatches)
     appendNormalizationMismatch(
       field: .dueDate,
       wasRequested: baseline == nil || baseline?.dueDate != requested.dueDate,
-      matches: actualDueDate.isValid && actualDueDate.value == requested.dueDate,
+      matches: actualDueDate.isValid
+        && ReminderDateValue.semanticallyEqual(
+          actualDueDate.value?.components, requested.dueDate?.components),
       to: &mismatches)
     appendNormalizationMismatch(
       field: .priority,
@@ -808,6 +848,87 @@ final class ReminderWriteCoordinator {
       wasRequested: baseline == nil || baseline?.completion != requested.completion,
       matches: actualCompletion.isValid && actualCompletion.value == requested.completion,
       to: &mismatches)
+    appendNormalizationMismatch(
+      field: .alarms,
+      wasRequested: baseline == nil || baseline?.alarms != requested.alarms,
+      matches: ReminderAdvancedCodec.sameValues(
+        actual.alarmRevisions.compactMap(ReminderAdvancedCodec.alarmValue(from:)), requested.alarms),
+      to: &mismatches)
+    appendNormalizationMismatch(
+      field: .recurrence,
+      wasRequested: baseline == nil || baseline?.recurrenceRules != requested.recurrenceRules,
+      matches: ReminderAdvancedCodec.sameValues(
+        actual.recurrenceRevisions.compactMap(ReminderAdvancedCodec.recurrenceValue(from:)),
+        requested.recurrenceRules),
+      to: &mismatches)
+    if let baseline, let original = draft.baselineRecord {
+      appendNormalizationMismatch(
+        field: .title,
+        wasRequested: baseline.title == requested.title,
+        matches: actual.title == original.title, to: &mismatches)
+      appendNormalizationMismatch(
+        field: .notes,
+        wasRequested: baseline.notes == requested.notes,
+        matches: actual.notes == original.notes, to: &mismatches)
+      appendNormalizationMismatch(
+        field: .url,
+        wasRequested: baseline.url == requested.url,
+        matches: actual.url == original.url, to: &mismatches)
+      appendNormalizationMismatch(
+        field: .list,
+        wasRequested: baseline.listID == requested.listID,
+        matches: actual.listID == original.listID, to: &mismatches)
+      appendNormalizationMismatch(
+        field: .startDate,
+        wasRequested: baseline.startDate == requested.startDate,
+        matches: ReminderDateValue.semanticallyEqual(
+          actual.startDateComponents, original.startDateComponents),
+        to: &mismatches)
+      appendNormalizationMismatch(
+        field: .dueDate,
+        wasRequested: baseline.dueDate == requested.dueDate,
+        matches: ReminderDateValue.semanticallyEqual(
+          actual.dueDateComponents, original.dueDateComponents),
+        to: &mismatches)
+      appendNormalizationMismatch(
+        field: .priority,
+        wasRequested: baseline.priority == requested.priority,
+        matches: actual.priority == original.priority, to: &mismatches)
+      appendNormalizationMismatch(
+        field: .completion,
+        wasRequested: baseline.completion == requested.completion,
+        matches: actual.isCompleted == original.isCompleted
+          && actual.completionDate == original.completionDate,
+        to: &mismatches)
+      let originalAlarms = original.alarmRevisions.filter {
+        baseline.alarms == requested.alarms || ReminderAdvancedCodec.alarmValue(from: $0) == nil
+      }
+      let actualAlarms = actual.alarmRevisions.filter {
+        baseline.alarms == requested.alarms || ReminderAdvancedCodec.alarmValue(from: $0) == nil
+      }
+      if !mismatches.contains(where: { $0.field == .alarms }) {
+        appendNormalizationMismatch(
+          field: .alarms, wasRequested: true,
+          matches: ReminderAdvancedCodec.sameValues(originalAlarms, actualAlarms), to: &mismatches)
+      }
+      let originalRules = original.recurrenceRevisions.filter {
+        baseline.recurrenceRules == requested.recurrenceRules
+          || ReminderAdvancedCodec.recurrenceValue(from: $0) == nil
+      }
+      let actualRules = actual.recurrenceRevisions.filter {
+        baseline.recurrenceRules == requested.recurrenceRules
+          || ReminderAdvancedCodec.recurrenceValue(from: $0) == nil
+      }
+      if !mismatches.contains(where: { $0.field == .recurrence }) {
+        appendNormalizationMismatch(
+          field: .recurrence, wasRequested: true,
+          matches: ReminderAdvancedCodec.sameValues(originalRules, actualRules), to: &mismatches)
+      }
+      appendNormalizationMismatch(
+        field: .nativeMetadata, wasRequested: true,
+        matches: actual.location == original.location && actual.timeZone == original.timeZone,
+        to: &mismatches)
+    }
     return mismatches
   }
 
@@ -844,7 +965,7 @@ final class ReminderWriteCoordinator {
     mismatches.append(
       ReminderNormalizationMismatch(
         field: field,
-        reason: "The reminder provider saved a different \(field.rawValue) value."))
+        reason: "The reminder provider saved a different \(field.displayName) value."))
   }
 
   private func record(from outcome: ReminderCoordinatorOutcome) -> ReminderWriteRecord? {

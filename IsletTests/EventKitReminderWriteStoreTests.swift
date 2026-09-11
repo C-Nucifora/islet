@@ -121,8 +121,8 @@ final class EventKitReminderWriteStoreTests: XCTestCase {
     guard case .saved = outcome else { return XCTFail("Expected an exact save") }
     XCTAssertEqual(reminder.notes, "Requested notes")
     XCTAssertEqual(reminder.url, originalURL)
-    XCTAssertEqual(reminder.startDateComponents, originalStart)
-    XCTAssertEqual(reminder.dueDateComponents, originalDue)
+    XCTAssertTrue(ReminderDateValue.semanticallyEqual(reminder.startDateComponents, originalStart))
+    XCTAssertTrue(ReminderDateValue.semanticallyEqual(reminder.dueDateComponents, originalDue))
     XCTAssertTrue(try XCTUnwrap(reminder.alarms?.first) === alarm)
     XCTAssertTrue(try XCTUnwrap(reminder.recurrenceRules?.first) === recurrence)
     XCTAssertEqual(backing.postCommitLookupCount, 1)
@@ -172,13 +172,70 @@ final class EventKitReminderWriteStoreTests: XCTestCase {
         reminderID: reminder.calendarItemIdentifier, patch: patch,
         expectedRevision: expectedRevision)
     ) { error in
-      XCTAssertEqual(
-        error as? ReminderWriteError,
-        .eventKit("The reminder provider could not stage the requested values."))
+      XCTAssertTrue(error.localizedDescription.contains("notes"))
     }
     XCTAssertEqual(backing.resetCount, 1)
     XCTAssertEqual(backing.commitCount, 0)
     XCTAssertEqual(backing.postCommitLookupCount, 0)
+  }
+
+  func testProviderCannotClearUntouchedDatesOrLocationWhileSavingTitle() throws {
+    for clearDate in [false, true] {
+      let backing = Backing()
+      let calendar = backing.addWritableCalendar(title: "Inbox")
+      let reminder = backing.addReminder(title: "Original", calendar: calendar)
+      reminder.location = "Building 4"
+      reminder.dueDateComponents = components(year: 2026, month: 9, day: 3)
+      let baseline = try ReminderEventKitCodec.editableFields(from: reminder)
+      let revision = ReminderEventKitCodec.revision(from: reminder)
+      var edited = baseline
+      edited.title = "Changed title"
+      backing.onStageSave = {
+        if clearDate { $0.dueDateComponents = nil } else { $0.location = nil }
+      }
+      let store = EventKitReminderWriteStore(backing: backing)
+      XCTAssertThrowsError(
+        try store.save(
+          reminderID: reminder.calendarItemIdentifier,
+          patch: ReminderPatch(from: baseline, to: edited), expectedRevision: revision))
+      XCTAssertEqual(backing.commitCount, 0)
+    }
+  }
+
+  func testProviderCannotDropAnOpaqueAlarmWhileSavingNotes() throws {
+    let backing = Backing()
+    let calendar = backing.addWritableCalendar(title: "Inbox")
+    let reminder = backing.addReminder(title: "Original", calendar: calendar)
+    let opaque = EKAlarm(relativeOffset: -30)
+    opaque.emailAddress = "alerts@example.com"
+    reminder.alarms = [opaque]
+    let revision = ReminderEventKitCodec.revision(from: reminder)
+    let patch = try notesPatch(for: reminder, notes: "Edited notes")
+    backing.onStageSave = { $0.alarms = [] }
+    let store = EventKitReminderWriteStore(backing: backing)
+    XCTAssertThrowsError(
+      try store.save(
+        reminderID: reminder.calendarItemIdentifier,
+        patch: patch, expectedRevision: revision))
+    XCTAssertEqual(backing.commitCount, 0)
+    XCTAssertEqual(backing.resetCount, 1)
+  }
+
+  func testAdvancedProviderNormalizationReportsAlertsAndRecurrence() throws {
+    let backing = Backing()
+    let calendar = backing.addWritableCalendar(title: "Inbox")
+    var requested = try fields(listID: calendar.calendarIdentifier)
+    requested.alarms = [.relative(-900)]
+    requested.recurrenceRules = [.init(frequency: .weekly)]
+    backing.onCommit = { committed in
+      committed.alarms = []
+      committed.recurrenceRules = []
+    }
+    let store = EventKitReminderWriteStore(backing: backing)
+    guard case .committedWithNormalization(_, let mismatches) = try store.create(requested) else {
+      return XCTFail("Expected the committed provider values to require review")
+    }
+    XCTAssertEqual(Set(mismatches.map(\.field)), [.alarms, .recurrence])
   }
 
   func testDeleteChecksRevisionBeforeRemoving() throws {
@@ -331,7 +388,7 @@ final class EventKitReminderWriteStoreTests: XCTestCase {
     XCTAssertEqual(backing.postCommitRefreshCount, 1)
   }
 
-  func testNormalizedPartialPatchReportsOnlyTheChangedField() throws {
+  func testNormalizedPartialPatchAlsoReportsChangesToPreservedFields() throws {
     let backing = Backing()
     let calendar = backing.addWritableCalendar(title: "Inbox")
     let reminder = backing.addReminder(title: "Original", calendar: calendar)
@@ -355,13 +412,7 @@ final class EventKitReminderWriteStoreTests: XCTestCase {
     XCTAssertEqual(actual.notes, "Provider normalized notes")
     XCTAssertEqual(reminder.title, "Original")
     XCTAssertEqual(reminder.notes, "Requested notes")
-    XCTAssertEqual(
-      mismatches,
-      [
-        ReminderNormalizationMismatch(
-          field: .notes,
-          reason: "The reminder provider saved a different notes value.")
-      ])
+    XCTAssertEqual(mismatches.map(\.field), [.notes, .title])
   }
 
   func testNilProviderTitleDoesNotEqualARequestedUntitledString() throws {
@@ -645,6 +696,7 @@ private final class Backing: ReminderEventKitStoreBacking {
     copied.calendar = reminder.calendar
     copied.startDateComponents = reminder.startDateComponents
     copied.dueDateComponents = reminder.dueDateComponents
+    if reminder.startDateComponents == nil { copied.startDateComponents = nil }
     copied.priority = reminder.priority
     copied.isCompleted = reminder.isCompleted
     copied.completionDate = reminder.completionDate

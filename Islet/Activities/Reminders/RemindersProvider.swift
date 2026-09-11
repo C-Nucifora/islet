@@ -26,6 +26,7 @@ final class RemindersProvider: ObservableObject {
   @Published private(set) var lastActionError: String?
   @Published private(set) var availableLists: [ReminderListItem] = []
   @Published private(set) var completionUndo: ReminderWriteCoordinator.CompletionUndo?
+  let listManager = ReminderListManager()
   @Published private(set) var editorSession: ReminderEditorSession?
 
   var accessDenied: Bool { !authorization.canRead }
@@ -238,6 +239,23 @@ final class RemindersProvider: ObservableObject {
     NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
     return true
   }
+
+  func reloadEditorReminder() {
+    guard var session = editorSession, !session.isPending,
+      let record = session.draft.baselineRecord
+    else { return }
+    switch writes.writeDraft(for: record.item) {
+    case .success(let draft):
+      session.draft = draft
+      session.fieldMessages = []
+      session.generalMessage = nil
+    case .failure(let error): session.generalMessage = error.localizedDescription
+    }
+    editorSession = session
+    availableLists = writes.lists()
+  }
+
+  func refreshEditorLists() { availableLists = writes.lists() }
 
   var hasEditorSession: Bool { editorSession != nil }
   var hasPendingEditorSession: Bool { editorSession?.isPending == true }
@@ -523,7 +541,7 @@ final class RemindersProvider: ObservableObject {
     _ item: ReminderItem, preset: RemindersLogic.SnoozePreset, now: Date = Date()
   ) -> Bool {
     guard let date = RemindersLogic.snoozeDate(preset, from: now) else {
-      lastActionError = "Couldn’t calculate a new due date."
+      lastActionError = String(localized: "Couldn’t calculate a new due date.")
       return false
     }
     return reschedule(item, to: date, hasTime: true)

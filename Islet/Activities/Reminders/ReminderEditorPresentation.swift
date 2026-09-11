@@ -195,7 +195,7 @@ enum ReminderEditorPresentation {
   }
 
   static func windowTitle(for draft: ReminderCoordinatorDraft) -> String {
-    draft.reminderID == nil ? "New reminder" : "Edit reminder"
+    draft.reminderID == nil ? String(localized: "New reminder") : String(localized: "Edit reminder")
   }
 
   static func handoffCompletion(

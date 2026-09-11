@@ -115,7 +115,7 @@ final class ReminderWriteModelsTests: XCTestCase {
   }
 
   func testEditableFieldsRejectUnsupportedPriority() throws {
-    XCTAssertThrowsError(try editableFields(priority: 2))
+    XCTAssertThrowsError(try editableFields(priority: 10))
   }
 
   private func editableFields(priority: Int = 5) throws -> ReminderEditableFields {

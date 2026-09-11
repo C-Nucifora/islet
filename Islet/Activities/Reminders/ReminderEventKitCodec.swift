@@ -27,7 +27,10 @@ enum ReminderEventKitCodec {
       dueDate: try reminder.dueDateComponents.map(ReminderDateValue.init(validating:)),
       priority: reminder.priority,
       completion: ReminderCompletionValue(
-        validating: reminder.isCompleted, completionDate: reminder.completionDate))
+        validating: reminder.isCompleted, completionDate: reminder.completionDate),
+      alarms: (reminder.alarms ?? []).compactMap(ReminderAdvancedCodec.alarmValue(from:)),
+      recurrenceRules: (reminder.recurrenceRules ?? []).compactMap(
+        ReminderAdvancedCodec.recurrenceValue(from:)))
   }
 
   static func revision(from reminder: EKReminder) -> ReminderWriteRecord.Revision {
@@ -38,9 +41,10 @@ enum ReminderEventKitCodec {
     _ patch: ReminderPatch, to reminder: EKReminder,
     resolveList: (String) -> EKCalendar?
   ) throws {
+    let selectedList: EKCalendar?
     switch patch.listID {
     case .unchanged:
-      break
+      selectedList = nil
     case .value(let listID):
       guard let calendar = resolveList(listID),
         calendar.calendarIdentifier == listID,
@@ -48,8 +52,38 @@ enum ReminderEventKitCodec {
       else {
         throw ReminderWriteError.missingList
       }
-      reminder.calendar = calendar
+      selectedList = calendar
     }
+    let alarms: [EKAlarm]?
+    if case .value(let values) = patch.alarms {
+      alarms = try ReminderAdvancedCodec.merging(
+        original: reminder.alarms ?? [], edited: values,
+        decode: ReminderAdvancedCodec.alarmValue(from:), encode: ReminderAdvancedCodec.alarm(from:))
+    } else {
+      alarms = nil
+    }
+    let recurrenceRules: [EKRecurrenceRule]?
+    if case .value(let values) = patch.recurrenceRules {
+      recurrenceRules = try ReminderAdvancedCodec.merging(
+        original: reminder.recurrenceRules ?? [], edited: values,
+        decode: ReminderAdvancedCodec.recurrenceValue(from:),
+        encode: ReminderAdvancedCodec.recurrence(from:))
+    } else {
+      recurrenceRules = nil
+    }
+    let resultingDue: DateComponents?
+    if case .value(let due) = patch.dueDate {
+      resultingDue = due?.components
+    } else {
+      resultingDue = reminder.dueDateComponents
+    }
+    if patch.recurrenceRules != .unchanged || patch.dueDate != .unchanged,
+      !(recurrenceRules ?? reminder.recurrenceRules ?? []).isEmpty, resultingDue == nil
+    {
+      throw ReminderWriteError.eventKit(
+        String(localized: "Repeating reminders need a due date. Add one before saving."))
+    }
+    if let selectedList { reminder.calendar = selectedList }
 
     switch patch.title {
     case .unchanged:
@@ -72,18 +106,24 @@ enum ReminderEventKitCodec {
       reminder.url = url
     }
 
-    switch patch.startDate {
-    case .unchanged:
-      break
-    case .value(let startDate):
-      reminder.startDateComponents = startDate?.components
-    }
-
-    switch patch.dueDate {
-    case .unchanged:
-      break
-    case .value(let dueDate):
-      reminder.dueDateComponents = dueDate?.components
+    if patch.startDate != .unchanged || patch.dueDate != .unchanged {
+      let start: DateComponents?
+      let due: DateComponents?
+      if case .value(let value) = patch.startDate {
+        start = value?.components
+      } else {
+        start = reminder.startDateComponents
+      }
+      if case .value(let value) = patch.dueDate {
+        due = value?.components
+      } else {
+        due = reminder.dueDateComponents
+      }
+      // Setting a date-only start can clear the due clock. Setting due can synthesize start.
+      // Apply a present start first, then due, and clear an absent start last.
+      if let start, reminder.startDateComponents != start { reminder.startDateComponents = start }
+      if reminder.dueDateComponents != due { reminder.dueDateComponents = due }
+      if start == nil, reminder.startDateComponents != nil { reminder.startDateComponents = nil }
     }
 
     switch patch.priority {
@@ -92,6 +132,9 @@ enum ReminderEventKitCodec {
     case .value(let priority):
       reminder.priority = priority
     }
+
+    if let alarms { reminder.alarms = alarms }
+    if let recurrenceRules { reminder.recurrenceRules = recurrenceRules }
 
     switch patch.completion {
     case .unchanged:
@@ -102,7 +145,7 @@ enum ReminderEventKitCodec {
     }
   }
 
-  private static func alarmRevision(from alarm: EKAlarm) -> ReminderAlarmRevision {
+  static func alarmRevision(from alarm: EKAlarm) -> ReminderAlarmRevision {
     let location = alarm.structuredLocation
     let coordinate = location?.geoLocation?.coordinate
     return ReminderAlarmRevision(
@@ -113,7 +156,7 @@ enum ReminderEventKitCodec {
       emailAddress: alarm.emailAddress, soundName: alarm.soundName, url: nil)
   }
 
-  private static func recurrenceRevision(from rule: EKRecurrenceRule)
+  static func recurrenceRevision(from rule: EKRecurrenceRule)
     -> ReminderRecurrenceRevision
   {
     let recurrenceEnd = rule.recurrenceEnd

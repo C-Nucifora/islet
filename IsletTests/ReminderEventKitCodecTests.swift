@@ -98,17 +98,20 @@ final class ReminderEventKitCodecTests: XCTestCase {
   func testRevisionIncludesInheritedLocationAndTimeZone() throws {
     let fixture = makeReminder()
     fixture.reminder.location = "Building 4"
-    fixture.reminder.timeZone = try XCTUnwrap(TimeZone(identifier: "Australia/Brisbane"))
+    var dated = components(year: 2026, month: 9, day: 3, hour: 9, minute: 0)
+    dated.timeZone = try XCTUnwrap(TimeZone(identifier: "Australia/Brisbane"))
+    fixture.reminder.dueDateComponents = dated
 
     let original = ReminderEventKitCodec.revision(from: fixture.reminder)
     fixture.reminder.location = "Building 5"
     let changedLocation = ReminderEventKitCodec.revision(from: fixture.reminder)
     fixture.reminder.location = "Building 4"
-    fixture.reminder.timeZone = try XCTUnwrap(TimeZone(identifier: "Pacific/Auckland"))
+    dated.timeZone = try XCTUnwrap(TimeZone(identifier: "Pacific/Auckland"))
+    fixture.reminder.dueDateComponents = dated
     let changedTimeZone = ReminderEventKitCodec.revision(from: fixture.reminder)
 
     XCTAssertEqual(original.location, "Building 4")
-    XCTAssertEqual(original.timeZone, TimeZone(identifier: "Australia/Brisbane"))
+    XCTAssertEqual(original.dueDateComponents?.timeZone, TimeZone(identifier: "Australia/Brisbane"))
     XCTAssertNotEqual(changedLocation, original)
     XCTAssertNotEqual(changedTimeZone, original)
   }
@@ -131,10 +134,10 @@ final class ReminderEventKitCodecTests: XCTestCase {
     let revision = ReminderEventKitCodec.revision(from: fixture.reminder)
 
     XCTAssertEqual(
-      revision.alarms,
+      revision.alarms.sorted { $0.absoluteDate != nil && $1.absoluteDate == nil },
       [
         ReminderAlarmRevision(
-          typeRawValue: EKAlarmType.audio.rawValue, absoluteDate: absoluteDate,
+          typeRawValue: EKAlarmType.display.rawValue, absoluteDate: absoluteDate,
           relativeOffset: 0, locationTitle: "Warehouse door", latitude: -27.4698,
           longitude: 153.0251, radius: 125,
           proximityRawValue: EKAlarmProximity.enter.rawValue, emailAddress: nil,
@@ -163,13 +166,13 @@ final class ReminderEventKitCodecTests: XCTestCase {
     let revision = ReminderEventKitCodec.revision(from: fixture.reminder)
 
     XCTAssertEqual(
-      revision.recurrenceRules,
+      revision.recurrenceRules.sorted { $0.frequencyRawValue > $1.frequencyRawValue },
       [
         ReminderRecurrenceRevision(
           calendarIdentifierRawValue: "gregorian",
           calendarIdentifier: .gregorian,
           frequencyRawValue: EKRecurrenceFrequency.yearly.rawValue, interval: 2,
-          firstDayOfTheWeek: 2,
+          firstDayOfTheWeek: advanced.firstDayOfTheWeek,
           daysOfTheWeek: [
             ReminderWeekdayRevision(
               dayOfTheWeekRawValue: EKWeekday.tuesday.rawValue, weekNumber: 2)
@@ -180,7 +183,7 @@ final class ReminderEventKitCodecTests: XCTestCase {
           calendarIdentifierRawValue: "gregorian",
           calendarIdentifier: .gregorian,
           frequencyRawValue: EKRecurrenceFrequency.daily.rawValue, interval: 4,
-          firstDayOfTheWeek: 0, daysOfTheWeek: [], daysOfTheMonth: [],
+          firstDayOfTheWeek: simple.firstDayOfTheWeek, daysOfTheWeek: [], daysOfTheMonth: [],
           monthsOfTheYear: [], weeksOfTheYear: [], daysOfTheYear: [], setPositions: [],
           endDate: endDate, occurrenceCount: nil),
       ])

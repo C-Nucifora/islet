@@ -35,7 +35,7 @@ final class ReminderCommandPresentationTests: XCTestCase {
     XCTAssertNil(presentation.route(for: .undo))
   }
 
-  func testNoWritableListsRejectEveryWriteRoute() {
+  func testNoWritableListsStillAllowsOpeningCreationToManageLists() {
     let item = ReminderItem(
       id: "shared", title: "Shared reminder", dueDate: nil, priority: 0, listColorHex: nil,
       listID: "read-only", listTitle: "Shared")
@@ -43,7 +43,7 @@ final class ReminderCommandPresentationTests: XCTestCase {
       reminders: [item], selectedReminderID: item.id, writableListIDs: [],
       hasCompletionUndo: true)
 
-    XCTAssertNil(presentation.route(for: .create))
+    XCTAssertEqual(presentation.route(for: .create), .create)
     XCTAssertNil(presentation.route(for: .complete))
     XCTAssertNil(presentation.route(for: .undo))
     XCTAssertNil(presentation.route(for: .edit))

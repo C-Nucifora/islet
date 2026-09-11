@@ -199,22 +199,6 @@
         }
       }
     },
-    "%@ exceeds %lld characters" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ exceeds %2$lld characters"
-          }
-        },
-        "en-XA" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "［%@ ëxçëëds %lld çhåråçtërs ~~~~~~~~~~］"
-          }
-        }
-      }
-    },
     "%@ exceeds %lld UTF-8 bytes" : {
       "localizations" : {
         "en" : {
@@ -227,6 +211,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［%@ ëxçëëds %lld ÛTF-8 bÿtës ~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "%@ exceeds %lld characters" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ exceeds %2$lld characters"
+          }
+        },
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［%@ ëxçëëds %lld çhåråçtërs ~~~~~~~~~~］"
           }
         }
       }
@@ -309,6 +309,16 @@
         }
       }
     },
+    "%@ minutes from due time" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［%@ mïñûtës frøm dûë tïmë ~~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "%@ mounted" : {
       "localizations" : {
         "en-XA" : {
@@ -371,6 +381,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［%@ prïørïtÿ ~~~~~］"
+          }
+        }
+      }
+    },
+    "%@ priority %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ priority %2$lld"
+          }
+        },
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［%@ prïørïtÿ %lld ~~~~~~~］"
           }
         }
       }
@@ -980,6 +1006,16 @@
         }
       }
     },
+    "%lld alerts require Reminders. Islet will preserve them." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［%lld ålërts rëqûïrë Rëmïñdërs. Ïslët wïll prësërvë thëm. ~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "%lld connected" : {
       "localizations" : {
         "en-XA" : {
@@ -1251,6 +1287,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［%lld rëmåïñïñg ~~~~~~］"
+          }
+        }
+      }
+    },
+    "%lld repeat rules require Reminders. Islet will preserve them." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［%lld rëpëåt rûlës rëqûïrë Rëmïñdërs. Ïslët wïll prësërvë thëm. ~~~~~~~~~~~~~~~~~~~~~~］"
           }
         }
       }
@@ -1643,6 +1689,16 @@
         }
       }
     },
+    "1 is Sunday, 7 is Saturday. Use day:ordinal for an ordinal weekday, such as 2:-1 for the last Monday." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［1 ïs Sûñdåÿ, 7 ïs Såtûrdåÿ. Ûsë dåÿ:ørdïñål før åñ ørdïñål wëëkdåÿ, sûçh ås 2:-1 før thë låst Møñdåÿ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "1 minute" : {
       "localizations" : {
         "en-XA" : {
@@ -1939,6 +1995,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Å fûllsçrëëñ prësëñtåtïøñ ïs åçtïvë ~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "A list save is still unconfirmed. Open Reminders to review it before making further list changes." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Å lïst såvë ïs stïll ûñçøñfïrmëd. Øpëñ Rëmïñdërs tø rëvïëw ït bëførë måkïñg fûrthër lïst çhåñgës. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
           }
         }
       }
@@ -2379,6 +2445,16 @@
         }
       }
     },
+    "Add alert" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ådd ålërt ~~~~~］"
+          }
+        }
+      }
+    },
     "Add application…" : {
       "localizations" : {
         "en-XA" : {
@@ -2445,6 +2521,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Ådd prøvïdër… ~~~~~~］"
+          }
+        }
+      }
+    },
+    "Add repeat rule" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ådd rëpëåt rûlë ~~~~~~~］"
           }
         }
       }
@@ -2625,6 +2711,16 @@
         }
       }
     },
+    "After occurrences" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Åftër øççûrrëñçës ~~~~~~~］"
+          }
+        }
+      }
+    },
     "Agenda, countdown and reminder options" : {
       "localizations" : {
         "en-XA" : {
@@ -2701,6 +2797,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［ÅïrDrøp shårë ïñ prøgrëss ~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Alert" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ålërt ~~~］"
+          }
+        }
+      }
+    },
+    "Alert date" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ålërt dåtë ~~~~~］"
+          }
+        }
+      }
+    },
+    "Alerts" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ålërts ~~~~］"
           }
         }
       }
@@ -3022,6 +3148,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Åpps wïth ïPhøñë Lïvë Åçtïvïtïës ~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Arrive at %@" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Årrïvë åt %@ ~~~~~~］"
+          }
+        }
+      }
+    },
+    "Arriving" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Årrïvïñg ~~~~］"
           }
         }
       }
@@ -4536,6 +4682,16 @@
         }
       }
     },
+    "Color" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Çølør ~~~］"
+          }
+        }
+      }
+    },
     "Coloured" : {
       "localizations" : {
         "en-XA" : {
@@ -4602,6 +4758,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Çømplëtë ~~~~］"
+          }
+        }
+      }
+    },
+    "Completed" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Çømplëtëd ~~~~~］"
+          }
+        }
+      }
+    },
+    "Completion date" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Çømplëtïøñ dåtë ~~~~~~~］"
           }
         }
       }
@@ -5037,6 +5213,26 @@
         }
       }
     },
+    "Create and edit plain lists here. Manage sharing, Smart Lists, groups, and list deletion in Reminders." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Çrëåtë åñd ëdït plåïñ lïsts hërë. Måñågë shårïñg, Smårt Lïsts, grøûps, åñd lïst dëlëtïøñ ïñ Rëmïñdërs. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Create list" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Çrëåtë lïst ~~~~~］"
+          }
+        }
+      }
+    },
     "Create, update, and end retained activities" : {
       "localizations" : {
         "en-XA" : {
@@ -5197,6 +5393,16 @@
         }
       }
     },
+    "Custom selectors" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Çûstøm sëlëçtørs ~~~~~~~］"
+          }
+        }
+      }
+    },
     "Customize individual metrics" : {
       "localizations" : {
         "en-XA" : {
@@ -5227,6 +5433,16 @@
         }
       }
     },
+    "Daily" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Dåïlÿ ~~~］"
+          }
+        }
+      }
+    },
     "Date" : {
       "localizations" : {
         "en-XA" : {
@@ -5237,12 +5453,52 @@
         }
       }
     },
+    "Date and time" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Dåtë åñd tïmë ~~~~~~］"
+          }
+        }
+      }
+    },
+    "Days of month, 1 to 31" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Dåÿs øf møñth, 1 tø 31 ~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Days of year, 1 to 366" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Dåÿs øf ÿëår, 1 tø 366 ~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "Default" : {
       "localizations" : {
         "en-XA" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Dëfåûlt ~~~~］"
+          }
+        }
+      }
+    },
+    "Delete" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Dëlëtë ~~~~］"
           }
         }
       }
@@ -5433,6 +5689,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Dïsåblëd ïñ Ïslët Sëttïñgs ~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Discard this draft and load the current reminder" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Dïsçård thïs dråft åñd løåd thë çûrrëñt rëmïñdër ~~~~~~~~~~~~~~~~~~］"
           }
         }
       }
@@ -5767,6 +6033,16 @@
         }
       }
     },
+    "Due time zone" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Dûë tïmë zøñë ~~~~~~］"
+          }
+        }
+      }
+    },
     "Due today" : {
       "localizations" : {
         "en-XA" : {
@@ -5907,6 +6183,16 @@
         }
       }
     },
+    "End date" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ëñd dåtë ~~~~］"
+          }
+        }
+      }
+    },
     "End override" : {
       "localizations" : {
         "en-XA" : {
@@ -6007,6 +6293,16 @@
         }
       }
     },
+    "Enter a list name." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ëñtër å lïst ñåmë. ~~~~~~~~］"
+          }
+        }
+      }
+    },
     "Enter a secure conference link, such as https://meet.example.com." : {
       "localizations" : {
         "en-XA" : {
@@ -6027,12 +6323,32 @@
         }
       }
     },
+    "Enter a valid alert date, offset, or location. Latitude must be between -90 and 90, longitude between -180 and 180, and radius cannot be negative." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ëñtër å vålïd ålërt dåtë, øffsët, ør løçåtïøñ. Låtïtûdë mûst bë bëtwëëñ -90 åñd 90, løñgïtûdë bëtwëëñ -180 åñd 180, åñd rådïûs çåññøt bë ñëgåtïvë. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "Enter a valid application bundle identifier up to 255 bytes." : {
       "localizations" : {
         "en-XA" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Ëñtër å vålïd åpplïçåtïøñ bûñdlë ïdëñtïfïër ûp tø 255 bÿtës. ~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Enter a valid repeat interval, selector, and end. This combination must be supported by EventKit." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ëñtër å vålïd rëpëåt ïñtërvål, sëlëçtør, åñd ëñd. Thïs çømbïñåtïøñ mûst bë sûppørtëd bÿ ËvëñtKït. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
           }
         }
       }
@@ -6109,6 +6425,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Ëvëñts ~~~~］"
+          }
+        }
+      }
+    },
+    "Every" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ëvërÿ ~~~］"
           }
         }
       }
@@ -6443,6 +6769,16 @@
         }
       }
     },
+    "Floating" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Fløåtïñg ~~~~］"
+          }
+        }
+      }
+    },
     "Focus" : {
       "localizations" : {
         "en-XA" : {
@@ -6619,6 +6955,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Førwård 15 sëçøñds ~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Frequency" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Frëqûëñçÿ ~~~~~］"
           }
         }
       }
@@ -7165,6 +7511,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Ïñ-mëmørÿ çøpÿ hïstørÿ ~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Include start time" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ïñçlûdë stårt tïmë ~~~~~~~~］"
           }
         }
       }
@@ -7875,6 +8231,16 @@
         }
       }
     },
+    "Latitude" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Låtïtûdë ~~~~］"
+          }
+        }
+      }
+    },
     "Launch Islet at login" : {
       "localizations" : {
         "en-XA" : {
@@ -7921,6 +8287,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Lëårñïñg ñørmål båttërÿ ûsë ~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Leave %@" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Lëåvë %@ ~~~~］"
+          }
+        }
+      }
+    },
+    "Leaving" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Lëåvïñg ~~~~］"
           }
         }
       }
@@ -8145,6 +8531,16 @@
         }
       }
     },
+    "Location name" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Løçåtïøñ ñåmë ~~~~~~］"
+          }
+        }
+      }
+    },
     "Locked" : {
       "localizations" : {
         "en-XA" : {
@@ -8171,6 +8567,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Løgïñ ïtëm ståtûs ~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Longitude" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Løñgïtûdë ~~~~~］"
           }
         }
       }
@@ -8361,6 +8767,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Måñågë Rëmïñdërs përmïssïøñ… ~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Manage lists" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Måñågë lïsts ~~~~~~］"
           }
         }
       }
@@ -8575,6 +8991,16 @@
         }
       }
     },
+    "Minutes from due time" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Mïñûtës frøm dûë tïmë ~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "Mode" : {
       "localizations" : {
         "en-XA" : {
@@ -8631,6 +9057,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Møñøçhrømë ~~~~~］"
+          }
+        }
+      }
+    },
+    "Monthly" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Møñthlÿ ~~~~］"
+          }
+        }
+      }
+    },
+    "Months, 1 to 12" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Møñths, 1 tø 12 ~~~~~~~］"
           }
         }
       }
@@ -8995,6 +9441,16 @@
         }
       }
     },
+    "New list" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ñëw lïst ~~~~］"
+          }
+        }
+      }
+    },
     "New reminder" : {
       "localizations" : {
         "en-XA" : {
@@ -9185,6 +9641,16 @@
         }
       }
     },
+    "No matching places. Try a street address or enter coordinates." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ñø måtçhïñg plåçës. Trÿ å strëët åddrëss ør ëñtër çøørdïñåtës. ~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "No process data was readable during this snapshot." : {
       "localizations" : {
         "en-XA" : {
@@ -9365,6 +9831,16 @@
         }
       }
     },
+    "Notes" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ñøtës ~~~］"
+          }
+        }
+      }
+    },
     "Nothing copied yet" : {
       "localizations" : {
         "en-XA" : {
@@ -9421,6 +9897,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Ñøtïfïçåtïøñs ~~~~~~］"
+          }
+        }
+      }
+    },
+    "Notify when" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ñøtïfÿ whëñ ~~~~~］"
           }
         }
       }
@@ -9521,6 +10007,16 @@
         }
       }
     },
+    "Occurrences" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Øççûrrëñçës ~~~~~］"
+          }
+        }
+      }
+    },
     "Ocean" : {
       "localizations" : {
         "en-XA" : {
@@ -9587,6 +10083,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Øñ båttërÿ ~~~~~］"
+          }
+        }
+      }
+    },
+    "On date" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Øñ dåtë ~~~~］"
           }
         }
       }
@@ -9791,6 +10297,16 @@
         }
       }
     },
+    "Open Reminders and Stop Waiting" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Øpëñ Rëmïñdërs åñd Støp Wåïtïñg ~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "Open Settings" : {
       "localizations" : {
         "en-XA" : {
@@ -9847,6 +10363,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Øpëñ ïPhøñë Mïrrørïñg ~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Open in Reminders" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Øpëñ ïñ Rëmïñdërs ~~~~~~~］"
           }
         }
       }
@@ -9927,6 +10453,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Øpëñs ÅïrDrøp før ëvërÿ ïtëm øñ thë Shëlf ~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Opens a confirmation. Return does not delete." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Øpëñs å çøñfïrmåtïøñ. Rëtûrñ døës ñøt dëlëtë. ~~~~~~~~~~~~~~~~~］"
           }
         }
       }
@@ -10397,6 +10933,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Përsïstëñt åçtïvïtïës ~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Place %lld" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Plåçë %lld ~~~~~］"
+          }
+        }
+      }
+    },
+    "Place search failed. Try again or enter coordinates. %@" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Plåçë sëårçh fåïlëd. Trÿ ågåïñ ør ëñtër çøørdïñåtës. %@ ~~~~~~~~~~~~~~~~~~~~］"
           }
         }
       }
@@ -11317,6 +11873,16 @@
         }
       }
     },
+    "Radius in meters" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rådïûs ïñ mëtërs ~~~~~~~］"
+          }
+        }
+      }
+    },
     "Ranges can cross midnight. The end time is not included." : {
       "localizations" : {
         "en-XA" : {
@@ -11473,12 +12039,42 @@
         }
       }
     },
+    "Relative to due time" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëlåtïvë tø dûë tïmë ~~~~~~~~］"
+          }
+        }
+      }
+    },
     "Relinking account" : {
       "localizations" : {
         "en-XA" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Rëlïñkïñg åççøûñt ~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Reload" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëløåd ~~~~］"
+          }
+        }
+      }
+    },
+    "Reload lists" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëløåd lïsts ~~~~~~］"
           }
         }
       }
@@ -11503,12 +12099,42 @@
         }
       }
     },
+    "Reminder URL" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëmïñdër ÛRL ~~~~~~］"
+          }
+        }
+      }
+    },
     "Reminder error: %@" : {
       "localizations" : {
         "en-XA" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Rëmïñdër ërrør: %@ ~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Reminder lists" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëmïñdër lïsts ~~~~~~］"
+          }
+        }
+      }
+    },
+    "Reminder notes" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëmïñdër ñøtës ~~~~~~］"
           }
         }
       }
@@ -11613,6 +12239,26 @@
         }
       }
     },
+    "Remove alert" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëmøvë ålërt ~~~~~~］"
+          }
+        }
+      }
+    },
+    "Remove alert %lld" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëmøvë ålërt %lld ~~~~~~~］"
+          }
+        }
+      }
+    },
     "Remove all Shelf items" : {
       "localizations" : {
         "en-XA" : {
@@ -11659,6 +12305,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Rëmøvë øñë mïñûtë ~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Remove repeat rule" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëmøvë rëpëåt rûlë ~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Remove repeat rule %lld" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëmøvë rëpëåt rûlë %lld ~~~~~~~~~］"
           }
         }
       }
@@ -11729,6 +12395,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Rëpëåt øñë ~~~~~］"
+          }
+        }
+      }
+    },
+    "Repeat rule" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëpëåt rûlë ~~~~~］"
+          }
+        }
+      }
+    },
+    "Repeating reminders need a due date." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëpëåtïñg rëmïñdërs ñëëd å dûë dåtë. ~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Repeating reminders need a due date. Add one before saving." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëpëåtïñg rëmïñdërs ñëëd å dûë dåtë. Ådd øñë bëførë såvïñg. ~~~~~~~~~~~~~~~~~~~~~］"
           }
         }
       }
@@ -12175,6 +12871,16 @@
         }
       }
     },
+    "Return adds a new line. Use the Save button to submit." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëtûrñ ådds å ñëw lïñë. Ûsë thë Såvë bûttøñ tø sûbmït. ~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "Return to the Everything profile" : {
       "localizations" : {
         "en-XA" : {
@@ -12545,6 +13251,16 @@
         }
       }
     },
+    "Save list" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Såvë lïst ~~~~~］"
+          }
+        }
+      }
+    },
     "Save rule" : {
       "localizations" : {
         "en-XA" : {
@@ -12755,6 +13471,16 @@
         }
       }
     },
+    "Search for a place" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Sëårçh før å plåçë ~~~~~~~~］"
+          }
+        }
+      }
+    },
     "Seconds" : {
       "localizations" : {
         "en-XA" : {
@@ -12815,6 +13541,16 @@
         }
       }
     },
+    "Separate numbers with commas. Negative numbers count back from the end." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Sëpåråtë ñûmbërs wïth çømmås. Ñëgåtïvë ñûmbërs çøûñt båçk frøm thë ëñd. ~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "Set Islet Pulse Delivery" : {
       "localizations" : {
         "en-XA" : {
@@ -12841,6 +13577,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Sët å fïvë-mïñûtë çøûñtdøwñ ~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Set positions, 1 to 366" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Sët pøsïtïøñs, 1 tø 366 ~~~~~~~~~］"
           }
         }
       }
@@ -13637,6 +14383,16 @@
         }
       }
     },
+    "Start date" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Stårt dåtë ~~~~~］"
+          }
+        }
+      }
+    },
     "Start focus session" : {
       "localizations" : {
         "en-XA" : {
@@ -13663,6 +14419,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Stårt øvërrïdë ~~~~~~］"
+          }
+        }
+      }
+    },
+    "Start time" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Stårt tïmë ~~~~~］"
+          }
+        }
+      }
+    },
+    "Start time zone" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Stårt tïmë zøñë ~~~~~~~］"
           }
         }
       }
@@ -14289,6 +15065,16 @@
         }
       }
     },
+    "That account is no longer available. Choose another account." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Thåt åççøûñt ïs ñø løñgër åvåïlåblë. Çhøøsë åñøthër åççøûñt. ~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "That application does not declare a bundle identifier." : {
       "localizations" : {
         "en-XA" : {
@@ -14359,22 +15145,22 @@
         }
       }
     },
-    "The Pulse provider registry is unreadable. It was left unchanged." : {
-      "localizations" : {
-        "en-XA" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "［Thë Pûlsë prøvïdër rëgïstrÿ ïs ûñrëådåblë. Ït wås lëft ûñçhåñgëd. ~~~~~~~~~~~~~~~~~~~~~~~］"
-          }
-        }
-      }
-    },
     "The Pulse provider registry exceeds its size limit." : {
       "localizations" : {
         "en-XA" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Thë Pûlsë prøvïdër rëgïstrÿ ëxçëëds ïts sïzë lïmït. ~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "The Pulse provider registry is unreadable. It was left unchanged." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Thë Pûlsë prøvïdër rëgïstrÿ ïs ûñrëådåblë. Ït wås lëft ûñçhåñgëd. ~~~~~~~~~~~~~~~~~~~~~~~］"
           }
         }
       }
@@ -14395,6 +15181,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Thë T3 Çødë çrëdëñtïål øpëråtïøñ fåïlëd åñd Këÿçhåïñ røllbåçk çøûld ñøt bë vërïfïëd. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "The account confirmed the list. Its saved values are shown here." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Thë åççøûñt çøñfïrmëd thë lïst. Ïts såvëd vålûës årë shøwñ hërë. ~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "The account did not confirm the list save. Open Reminders to check before creating or saving it again." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Thë åççøûñt dïd ñøt çøñfïrm thë lïst såvë. Øpëñ Rëmïñdërs tø çhëçk bëførë çrëåtïñg ør såvïñg ït ågåïñ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
           }
         }
       }
@@ -14659,6 +15465,36 @@
         }
       }
     },
+    "The list save is awaiting confirmation. Open Reminders to check it before trying again." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Thë lïst såvë ïs åwåïtïñg çøñfïrmåtïøñ. Øpëñ Rëmïñdërs tø çhëçk ït bëførë trÿïñg ågåïñ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "The list save is still unconfirmed. Check the account in Reminders, then reload again." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Thë lïst såvë ïs stïll ûñçøñfïrmëd. Çhëçk thë åççøûñt ïñ Rëmïñdërs, thëñ rëløåd ågåïñ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "The list was not saved. This account may not allow list creation or editing. %@" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Thë lïst wås ñøt såvëd. Thïs åççøûñt måÿ ñøt ålløw lïst çrëåtïøñ ør ëdïtïñg. %@ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "The listener did not report its active port." : {
       "localizations" : {
         "en-XA" : {
@@ -14815,6 +15651,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Thë rëmïñdër ïs øvërdûë ~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "The reminder provider saved a different %@ value." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Thë rëmïñdër prøvïdër såvëd å dïffërëñt %@ vålûë. ~~~~~~~~~~~~~~~~~~］"
           }
         }
       }
@@ -15095,6 +15941,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Thïs T3 Çødë çrëdëñtïål ïs ñø løñgër åûthørïzëd. ~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "This account could not save the requested alerts or repeat rules. Check the account's support in Reminders, then try again. %@" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Thïs åççøûñt çøûld ñøt såvë thë rëqûëstëd ålërts ør rëpëåt rûlës. Çhëçk thë åççøûñt's sûppørt ïñ Rëmïñdërs, thëñ trÿ ågåïñ. %@ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "This account does not allow changes to this list." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Thïs åççøûñt døës ñøt ålløw çhåñgës tø thïs lïst. ~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "This account does not allow changes to this list. Open Reminders to manage it." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Thïs åççøûñt døës ñøt ålløw çhåñgës tø thïs lïst. Øpëñ Rëmïñdërs tø måñågë ït. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "This account does not support the requested list name or color." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Thïs åççøûñt døës ñøt sûppørt thë rëqûëstëd lïst ñåmë ør çølør. ~~~~~~~~~~~~~~~~~~~~~~~］"
           }
         }
       }
@@ -15429,6 +16315,16 @@
         }
       }
     },
+    "Trigger" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Trïggër ~~~~］"
+          }
+        }
+      }
+    },
     "Trust %@ and Open" : {
       "localizations" : {
         "en-XA" : {
@@ -15555,6 +16451,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Tûrñïñg thïs øff støps rëådïñg rëmïñdërs. ~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "URL" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［ÛRL ~~~］"
           }
         }
       }
@@ -15949,6 +16855,26 @@
         }
       }
     },
+    "Use Open in Reminders for tags, flags, subtasks, attachments, and sharing." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ûsë Øpëñ ïñ Rëmïñdërs før tågs, flågs, sûbtåsks, åttåçhmëñts, åñd shårïñg. ~~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Use a negative number for an early alert, or 0 for the due time." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ûsë å ñëgåtïvë ñûmbër før åñ ëårlÿ ålërt, ør 0 før thë dûë tïmë. ~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "Use a stable source name from your local automation." : {
       "localizations" : {
         "en-XA" : {
@@ -15959,12 +16885,32 @@
         }
       }
     },
+    "Use alert" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ûsë ålërt ~~~~~］"
+          }
+        }
+      }
+    },
     "Use haptic feedback" : {
       "localizations" : {
         "en-XA" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Ûsë håptïç fëëdbåçk ~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Use repeat rule" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ûsë rëpëåt rûlë ~~~~~~~］"
           }
         }
       }
@@ -16229,6 +17175,36 @@
         }
       }
     },
+    "Weekdays" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Wëëkdåÿs ~~~~］"
+          }
+        }
+      }
+    },
+    "Weekly" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Wëëklÿ ~~~~］"
+          }
+        }
+      }
+    },
+    "Weeks of year, 1 to 53" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Wëëks øf ÿëår, 1 tø 53 ~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "Whatever is playing" : {
       "localizations" : {
         "en-XA" : {
@@ -16429,6 +17405,16 @@
         }
       }
     },
+    "Yearly" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ÿëårlÿ ~~~~］"
+          }
+        }
+      }
+    },
     "Your last known environments stay visible while T3 Connect is unavailable." : {
       "localizations" : {
         "en-XA" : {
@@ -16505,6 +17491,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［åçtïvë ~~~~］"
+          }
+        }
+      }
+    },
+    "alerts" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［ålërts ~~~~］"
           }
         }
       }
@@ -16609,12 +17605,12 @@
         }
       }
     },
-    "complete %@" : {
+    "completion" : {
       "localizations" : {
         "en-XA" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "［çømplëtë %@ ~~~~~］"
+            "value" : "［çømplëtïøñ ~~~~~］"
           }
         }
       }
@@ -16635,6 +17631,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［dïsplåÿ, mëmørÿ åñd øthër hårdwårë ~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "due date" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［dûë dåtë ~~~~］"
           }
         }
       }
@@ -16839,6 +17845,26 @@
         }
       }
     },
+    "link" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［lïñk ~~~］"
+          }
+        }
+      }
+    },
+    "list" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［lïst ~~~］"
+          }
+        }
+      }
+    },
     "load %@" : {
       "localizations" : {
         "en-XA" : {
@@ -16929,6 +17955,16 @@
         }
       }
     },
+    "notes" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［ñøtës ~~~］"
+          }
+        }
+      }
+    },
     "now" : {
       "localizations" : {
         "en-XA" : {
@@ -16945,6 +17981,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［øñë øf %@ ~~~~~］"
+          }
+        }
+      }
+    },
+    "other reminder details" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［øthër rëmïñdër dëtåïls ~~~~~~~~~］"
           }
         }
       }
@@ -16969,6 +18015,16 @@
         }
       }
     },
+    "priority" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［prïørïtÿ ~~~~］"
+          }
+        }
+      }
+    },
     "progress must be a finite number from 0 through 1" : {
       "localizations" : {
         "en-XA" : {
@@ -16989,6 +18045,16 @@
         }
       }
     },
+    "repeat rules" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［rëpëåt rûlës ~~~~~~］"
+          }
+        }
+      }
+    },
     "requestID is required for provider credentials." : {
       "localizations" : {
         "en-XA" : {
@@ -17005,16 +18071,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［rëqûëstÏD wås ålrëådÿ ûsëd wïth thïs çrëdëñtïål. ~~~~~~~~~~~~~~~~~~］"
-          }
-        }
-      }
-    },
-    "reschedule %@" : {
-      "localizations" : {
-        "en-XA" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "［rësçhëdûlë %@ ~~~~~~］"
           }
         }
       }
@@ -17109,6 +18165,16 @@
         }
       }
     },
+    "start date" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［stårt dåtë ~~~~~］"
+          }
+        }
+      }
+    },
     "stored in the system battery" : {
       "localizations" : {
         "en-XA" : {
@@ -17185,6 +18251,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［thë åçtïøñ prøvïdër ïdëñtïtÿ døës ñøt måtçh ïts søûrçë ~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "title" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［tïtlë ~~~］"
           }
         }
       }

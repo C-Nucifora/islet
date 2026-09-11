@@ -221,18 +221,32 @@ final class EventKitReminderWriteStore: ReminderWriteStore {
   private func stageCommitAndRead(
     _ reminder: EKReminder, requestedPatch: ReminderPatch
   ) throws -> ReminderWriteOutcome {
+    let expectedRecord = ReminderEventKitCodec.record(from: reminder)
+    let expectedAlarms = (reminder.alarms ?? []).map(ReminderEventKitCodec.alarmRevision(from:))
+    let expectedRules = (reminder.recurrenceRules ?? []).map(
+      ReminderEventKitCodec.recurrenceRevision(from:))
     do {
       try backing.stageSave(reminder)
     } catch {
       backing.reset()
+      if requestedPatch.alarms != .unchanged || requestedPatch.recurrenceRules != .unchanged {
+        throw ReminderWriteError.eventKit(
+          String(
+            localized:
+              "This account could not save the requested alerts or repeat rules. Check the account's support in Reminders, then try again. \(error.localizedDescription)"
+          ))
+      }
       throw error
     }
 
-    let stagedMismatches = Self.mismatches(for: requestedPatch, in: reminder)
+    let stagedMismatches = Self.mismatches(
+      for: requestedPatch, in: reminder, expectedAlarms: expectedAlarms,
+      expectedRules: expectedRules, expectedRecord: expectedRecord)
     guard stagedMismatches.isEmpty else {
       backing.reset()
       throw ReminderWriteError.eventKit(
-        "The reminder provider could not stage the requested values.")
+        "This account could not save the requested values. "
+          + stagedMismatches.map(\.reason).joined(separator: " "))
     }
 
     let stagedReceipt = Self.receipt(for: reminder)
@@ -253,7 +267,9 @@ final class EventKitReminderWriteStore: ReminderWriteStore {
     }
 
     let actual = ReminderEventKitCodec.record(from: committed)
-    let committedMismatches = Self.mismatches(for: requestedPatch, in: committed)
+    let committedMismatches = Self.mismatches(
+      for: requestedPatch, in: committed, expectedAlarms: expectedAlarms,
+      expectedRules: expectedRules, expectedRecord: expectedRecord)
     if committedMismatches.isEmpty {
       return .saved(actual)
     }
@@ -271,6 +287,8 @@ final class EventKitReminderWriteStore: ReminderWriteStore {
     patch.dueDate = .value(fields.dueDate)
     patch.priority = .value(fields.priority)
     patch.completion = .value(fields.completion)
+    patch.alarms = .value(fields.alarms)
+    patch.recurrenceRules = .value(fields.recurrenceRules)
     return patch
   }
 
@@ -286,7 +304,9 @@ final class EventKitReminderWriteStore: ReminderWriteStore {
   }
 
   private static func mismatches(
-    for patch: ReminderPatch, in reminder: EKReminder
+    for patch: ReminderPatch, in reminder: EKReminder,
+    expectedAlarms: [ReminderAlarmRevision], expectedRules: [ReminderRecurrenceRevision],
+    expectedRecord: ReminderWriteRecord
   ) -> [ReminderNormalizationMismatch] {
     var mismatches: [ReminderNormalizationMismatch] = []
 
@@ -298,12 +318,16 @@ final class EventKitReminderWriteStore: ReminderWriteStore {
     appendMismatch(
       patch.listID, actual: reminder.calendar?.calendarIdentifier ?? "", field: .list,
       to: &mismatches)
-    appendMismatch(
-      patch.startDate, actual: reminder.startDateComponents, field: .startDate,
-      requestedValue: { $0?.components }, to: &mismatches)
-    appendMismatch(
-      patch.dueDate, actual: reminder.dueDateComponents, field: .dueDate,
-      requestedValue: { $0?.components }, to: &mismatches)
+    if case .value(let requested) = patch.startDate,
+      !ReminderDateValue.semanticallyEqual(requested?.components, reminder.startDateComponents)
+    {
+      mismatches.append(mismatch(for: .startDate))
+    }
+    if case .value(let requested) = patch.dueDate,
+      !ReminderDateValue.semanticallyEqual(requested?.components, reminder.dueDateComponents)
+    {
+      mismatches.append(mismatch(for: .dueDate))
+    }
     appendMismatch(
       patch.priority, actual: reminder.priority, field: .priority, to: &mismatches)
 
@@ -318,6 +342,53 @@ final class EventKitReminderWriteStore: ReminderWriteStore {
       }
     }
 
+    if !ReminderAdvancedCodec.sameValues(
+      expectedAlarms,
+      (reminder.alarms ?? []).map(ReminderEventKitCodec.alarmRevision(from:)))
+    {
+      mismatches.append(mismatch(for: .alarms))
+    }
+    if !ReminderAdvancedCodec.sameValues(
+      expectedRules,
+      (reminder.recurrenceRules ?? []).map(ReminderEventKitCodec.recurrenceRevision(from:)))
+    {
+      mismatches.append(mismatch(for: .recurrence))
+    }
+    func preserved(_ unchanged: Bool, _ matches: Bool, field: ReminderField) {
+      if unchanged && !matches && !mismatches.contains(where: { $0.field == field }) {
+        mismatches.append(
+          ReminderNormalizationMismatch(
+            field: field,
+            reason:
+              "The account changed \(field.displayName) even though it was not edited. Review the saved reminder before retrying."
+          ))
+      }
+    }
+    preserved(patch.title == .unchanged, reminder.title == expectedRecord.title, field: .title)
+    preserved(patch.notes == .unchanged, reminder.notes == expectedRecord.notes, field: .notes)
+    preserved(patch.url == .unchanged, reminder.url == expectedRecord.url, field: .url)
+    preserved(
+      patch.listID == .unchanged, reminder.calendar?.calendarIdentifier == expectedRecord.listID,
+      field: .list)
+    preserved(
+      patch.startDate == .unchanged,
+      ReminderDateValue.semanticallyEqual(
+        reminder.startDateComponents, expectedRecord.startDateComponents), field: .startDate)
+    preserved(
+      patch.dueDate == .unchanged,
+      ReminderDateValue.semanticallyEqual(
+        reminder.dueDateComponents, expectedRecord.dueDateComponents), field: .dueDate)
+    preserved(
+      patch.priority == .unchanged, reminder.priority == expectedRecord.priority, field: .priority)
+    preserved(
+      patch.completion == .unchanged,
+      reminder.isCompleted == expectedRecord.isCompleted
+        && reminder.completionDate == expectedRecord.completionDate,
+      field: .completion)
+    preserved(
+      true,
+      reminder.location == expectedRecord.location && reminder.timeZone == expectedRecord.timeZone,
+      field: .nativeMetadata)
     return mismatches
   }
 
@@ -340,6 +411,8 @@ final class EventKitReminderWriteStore: ReminderWriteStore {
 
   private static func mismatch(for field: ReminderField) -> ReminderNormalizationMismatch {
     ReminderNormalizationMismatch(
-      field: field, reason: "The reminder provider saved a different \(field.rawValue) value.")
+      field: field,
+      reason: String(
+        localized: "The reminder provider saved a different \(field.displayName) value."))
   }
 }

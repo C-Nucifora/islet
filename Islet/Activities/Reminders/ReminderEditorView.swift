@@ -4,15 +4,19 @@ import SwiftUI
 struct ReminderEditorView: View {
   @Binding var draft: ReminderCoordinatorDraft
   @FocusState private var focusedField: ReminderEditorFocus?
-  @State private var detailsExpanded = true
+  @State private var detailsExpanded = false
+  @State private var showsListManager = false
 
   let heading: String
   let submitTitle: String
   let lists: [ReminderListItem]
+  let listManager: ReminderListManager
   let fieldMessages: [ReminderEditorFieldMessage]
   let generalMessage: String?
   let calendar: Calendar
   let displayTimeZone: TimeZone
+  let onReload: () -> Void
+  let onListsChanged: () -> Void
   let onCancel: () -> Void
   let onSubmit: () -> Void
   let onNew: () -> Void
@@ -43,6 +47,11 @@ struct ReminderEditorView: View {
             }
             .accessibilityHint("Choose the Reminders list")
             fieldMessages(for: .list)
+            Button("Manage lists") { showsListManager = true }
+              .sheet(isPresented: $showsListManager, onDismiss: onListsChanged) {
+                ReminderListManagerView(
+                  manager: listManager, onChange: onListsChanged, openReminders: onOpenReminders)
+              }
 
             Toggle("Due date", isOn: hasDueDate)
             if let dueDate = draft.dueDate {
@@ -66,6 +75,9 @@ struct ReminderEditorView: View {
               Text("High").tag(1)
               Text("Medium").tag(5)
               Text("Low").tag(9)
+              ForEach([2, 3, 4, 6, 7, 8], id: \.self) { priority in
+                Text("\(priority < 5 ? "High" : "Low") priority \(priority)").tag(priority)
+              }
             }
             fieldMessages(for: .priority)
           }
@@ -104,12 +116,13 @@ struct ReminderEditorView: View {
                   .environment(\.calendar, pickerCalendar(for: startDate))
                   .environment(\.timeZone, effectiveTimeZone(for: startDate))
                 }
-                timeZonePicker("Start time zone", value: startDate, field: .startDate)
+                timeZonePicker(
+                  String(localized: "Start time zone"), value: startDate, field: .startDate)
               }
               fieldMessages(for: .startDate)
 
               if let dueDate = draft.dueDate {
-                timeZonePicker("Due time zone", value: dueDate, field: .dueDate)
+                timeZonePicker(String(localized: "Due time zone"), value: dueDate, field: .dueDate)
               }
 
               Toggle("Completed", isOn: completion)
@@ -120,6 +133,14 @@ struct ReminderEditorView: View {
                   .environment(\.timeZone, displayTimeZone)
               }
               fieldMessages(for: .completion)
+              ReminderAdvancedEditorView(
+                alarms: $draft.alarms, recurrenceRules: $draft.recurrenceRules,
+                opaqueAlarmCount: (draft.baselineRecord?.alarmRevisions.count ?? 0)
+                  - (draft.baseline?.alarms.count ?? 0),
+                opaqueRecurrenceCount: (draft.baselineRecord?.recurrenceRevisions.count ?? 0)
+                  - (draft.baseline?.recurrenceRules.count ?? 0))
+              fieldMessages(for: .alarms)
+              fieldMessages(for: .recurrence)
             }
             .padding(.top, 8)
             .disabled(isReadOnly)
@@ -136,21 +157,30 @@ struct ReminderEditorView: View {
       }
 
       Divider()
-      HStack {
+      VStack(alignment: .leading, spacing: 8) {
         if ReminderEditorPresentation.offersOpenInReminders(for: draft) {
-          Button("Open in Reminders", action: onOpenReminders)
+          HStack {
+            Button("Open in Reminders", action: onOpenReminders)
+            if draft.pendingCommitReceipt == nil {
+              Button("Reload", action: onReload)
+                .help("Discard this draft and load the current reminder")
+            }
+          }
         }
         if draft.pendingCommitReceipt != nil {
           Button("Open Reminders and Stop Waiting", action: onStopWaiting)
-        } else if ReminderEditorPresentation.canDelete(draft) {
-          Button("Delete", role: .destructive, action: onDelete)
-            .accessibilityHint("Opens a confirmation. Return does not delete.")
         }
-        Spacer()
-        Button("Cancel", action: onCancel)
-          .keyboardShortcut(.cancelAction)
-        Button(submitTitle, action: onSubmit)
-          .disabled(!ReminderEditorPresentation.canSubmit(draft))
+        HStack {
+          if ReminderEditorPresentation.canDelete(draft) {
+            Button("Delete", role: .destructive, action: onDelete)
+              .accessibilityHint("Opens a confirmation. Return does not delete.")
+          }
+          Spacer()
+          Button("Cancel", action: onCancel)
+            .keyboardShortcut(.cancelAction)
+          Button(submitTitle, action: onSubmit)
+            .disabled(!ReminderEditorPresentation.canSubmit(draft))
+        }
       }
       .padding(16)
     }
@@ -406,12 +436,16 @@ private struct ReminderEditorWindowContent: View {
           get: { provider.editorSession?.draft ?? session.draft },
           set: { provider.updateEditorDraft($0) }),
         heading: ReminderEditorPresentation.windowTitle(for: session.draft),
-        submitTitle: session.draft.reminderID == nil ? "Add" : "Save",
+        submitTitle: session.draft.reminderID == nil
+          ? String(localized: "Add") : String(localized: "Save"),
         lists: provider.availableLists,
+        listManager: provider.listManager,
         fieldMessages: session.fieldMessages,
         generalMessage: session.generalMessage,
         calendar: session.calendar,
         displayTimeZone: session.displayTimeZone,
+        onReload: { provider.reloadEditorReminder() },
+        onListsChanged: { provider.refreshEditorLists() },
         onCancel: {
           provider.cancelEditorSession()
           close()

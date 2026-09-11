@@ -67,8 +67,9 @@ private struct ReminderCommandsView: View {
         Text("Reminder Commands").font(.headline)
         Spacer()
         Button("New Reminder") { perform(.create) }
+          .keyboardShortcut("n", modifiers: .command)
           .accessibilityHint("Opens a keyboard-accessible reminder editor")
-          .disabled(presentation.route(for: .create) == nil)
+          .disabled(!remindersEnabled || !provider.authorization.canRead)
       }
       Text(
         reminderCommandHotKey.isAvailable
@@ -186,6 +187,7 @@ private struct ReminderCommandsView: View {
   }
 
   private func perform(_ intent: ReminderCommandPresentation.Intent) {
+    guard remindersEnabled, provider.authorization.canRead else { return }
     guard let route = presentation.route(for: intent) else { return }
     switch route {
     case .create:

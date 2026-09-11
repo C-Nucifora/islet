@@ -440,8 +440,8 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
     XCTAssertEqual(store.saveCount, 0)
   }
 
-  func testOnlyNativePublicPriorityCategoriesAreAccepted() throws {
-    for priority in [0, 1, 5, 9] {
+  func testAllPublicPriorityValuesAreAccepted() throws {
+    for priority in 0...9 {
       let store = Store()
       let coordinator = ReminderWriteCoordinator(store: store)
       _ = try coordinator.createOutcome(
@@ -455,7 +455,7 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
     let coordinator = ReminderWriteCoordinator(store: store)
     XCTAssertEqual(
       coordinator.createOutcome(
-        ReminderCoordinatorDraft(title: "Invalid", listID: "inbox", priority: 2)
+        ReminderCoordinatorDraft(title: "Invalid", listID: "inbox", priority: 10)
       ).failure,
       .invalidPriority)
   }
@@ -834,10 +834,7 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
     _ = try updateCoordinator.updateOutcome(updateDraft).get()
 
     XCTAssertFalse(updateCoordinator.abandonPendingCommit())
-    XCTAssertNil(
-      try updateCoordinator.reconcilePendingCommit(
-        with: try XCTUnwrap(updateStore.records[updateItem.id])
-      ).get())
+    XCTAssertNil(try updateCoordinator.reconcilePendingCommit(with: nil).get())
     var committed = try XCTUnwrap(updateStore.records[updateItem.id])
     committed.title = "Requested update"
     committed.lastModified = Date(timeIntervalSince1970: 140)
@@ -894,12 +891,71 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
     XCTAssertNil(coordinator.pendingCommitReceipt)
   }
 
+  func testNormalizedRetryAdoptsConcurrentChangesToUneditedFields() throws {
+    let store = Store()
+    let item = store.addExisting()
+    let coordinator = ReminderWriteCoordinator(store: store)
+    var requested = try coordinator.writeDraft(for: item).get()
+    requested.title = "Requested title"
+    var actual = try XCTUnwrap(store.records[item.id])
+    actual.title = "Normalized title"
+    actual.notes = "Notes edited in another app"
+    actual.lastModified = Date(timeIntervalSince1970: 200)
+    store.saveOutcome = .committedWithNormalization(
+      actual: actual,
+      mismatches: [.init(field: .title, reason: "Changed by account")])
+    let saved = try coordinator.updateOutcome(requested).get()
+    XCTAssertEqual(saved.draft.title, "Requested title")
+    XCTAssertEqual(saved.draft.notes, "Notes edited in another app")
+    XCTAssertEqual(saved.draft.baseline?.notes, "Notes edited in another app")
+    store.records[item.id] = actual
+    store.saveOutcome = nil
+    _ = try coordinator.updateOutcome(saved.draft).get()
+    XCTAssertEqual(store.lastPatch?.notes, .unchanged)
+    XCTAssertEqual(store.records[item.id]?.notes, "Notes edited in another app")
+  }
+
+  func testPendingReconciliationReportsLostUntouchedLocationAndDueDate() throws {
+    let store = Store()
+    let item = store.addExisting()
+    store.records[item.id]?.location = "Desk"
+    let coordinator = ReminderWriteCoordinator(store: store)
+    var requested = try coordinator.writeDraft(for: item).get()
+    requested.title = "Requested title"
+    store.saveOutcome = .commitStatusUnknown(
+      .init(itemIdentifier: item.id, externalIdentifier: nil))
+    _ = try coordinator.updateOutcome(requested).get()
+    var actual = try XCTUnwrap(store.records[item.id])
+    actual.title = requested.title
+    actual.location = nil
+    actual.dueDateComponents = nil
+    let resolved = try XCTUnwrap(try coordinator.reconcilePendingCommit(with: actual).get())
+    XCTAssertEqual(Set(resolved.normalizationMismatches.map(\.field)), [.dueDate, .nativeMetadata])
+    XCTAssertNil(resolved.dueDate)
+  }
+
+  func testPendingReconciliationAdoptsConcurrentChangesToUneditedFields() throws {
+    let store = Store()
+    let item = store.addExisting()
+    let coordinator = ReminderWriteCoordinator(store: store)
+    var requested = try coordinator.writeDraft(for: item).get()
+    requested.title = "Requested title"
+    store.saveOutcome = .commitStatusUnknown(
+      .init(itemIdentifier: item.id, externalIdentifier: nil))
+    _ = try coordinator.updateOutcome(requested).get()
+    var actual = try XCTUnwrap(store.records[item.id])
+    actual.notes = "Notes edited in another app"
+    let resolved = try XCTUnwrap(try coordinator.reconcilePendingCommit(with: actual).get())
+    XCTAssertEqual(resolved.title, "Requested title")
+    XCTAssertEqual(resolved.notes, "Notes edited in another app")
+  }
+
   func testKnownNormalizedCreateWithUnsupportedActualValuesIsNonRetryable() throws {
     let invalidActuals: [(ReminderWriteRecord, ReminderField)] = [
       (
         Store().record(
           id: "priority-actual", title: "Requested", notes: nil, url: nil,
-          listID: "inbox", lastModified: 201, priority: 2),
+          listID: "inbox", lastModified: 201, priority: 10),
         .priority
       ),
       (
@@ -964,7 +1020,7 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
     let store = Store()
     let actual = store.record(
       id: "saved-invalid", title: "Requested", notes: nil, url: nil,
-      listID: "inbox", lastModified: 210, priority: 2)
+      listID: "inbox", lastModified: 210, priority: 10)
     store.createOutcome = .saved(actual)
     let coordinator = ReminderWriteCoordinator(store: store)
 
@@ -987,7 +1043,7 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
     let completionCoordinator = ReminderWriteCoordinator(store: completionStore)
     let now = Date(timeIntervalSince1970: 240)
     var unsafeCompleted = try XCTUnwrap(completionStore.records[completionItem.id])
-    unsafeCompleted.priority = 2
+    unsafeCompleted.priority = 10
     unsafeCompleted.isCompleted = true
     unsafeCompleted.completionDate = now
     unsafeCompleted.lastModified = Date(timeIntervalSince1970: 241)
@@ -1003,7 +1059,7 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
     let undoCoordinator = ReminderWriteCoordinator(store: undoStore)
     _ = try undoCoordinator.complete(undoItem, now: now).get()
     var unsafeUndone = try XCTUnwrap(undoStore.records[undoItem.id])
-    unsafeUndone.priority = 2
+    unsafeUndone.priority = 10
     unsafeUndone.isCompleted = false
     unsafeUndone.completionDate = nil
     unsafeUndone.lastModified = Date(timeIntervalSince1970: 242)
