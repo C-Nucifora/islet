@@ -234,6 +234,35 @@ struct HomeAttentionPresentation: Equatable, Sendable {
   }
 }
 
+enum HomeSplitAgenda {
+  static func events(
+    from events: [AgendaEvent], now: Date, calendar: Calendar = .current
+  ) -> [AgendaEvent] {
+    CalendarLogic.display(
+      events: events, now: now,
+      interval: CalendarLogic.agendaInterval(containing: now, days: 1, calendar: calendar))
+  }
+}
+
+enum HomeSplitReminderDuePresentation {
+  case time, dateAndTime, today, tomorrow, date
+
+  static func make(
+    due: Date, hasDueTime: Bool, now: Date, calendar: Calendar = .current
+  ) -> Self {
+    if hasDueTime {
+      return calendar.isDate(due, inSameDayAs: now) ? .time : .dateAndTime
+    }
+    if calendar.isDate(due, inSameDayAs: now) { return .today }
+    if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
+      calendar.isDate(due, inSameDayAs: tomorrow)
+    {
+      return .tomorrow
+    }
+    return .date
+  }
+}
+
 struct HomeAttentionDisposition: Equatable, Sendable {
   private(set) var dismissedOccurrenceIDs: Set<String> = []
   private(set) var snoozedUntil: [String: Date] = [:]

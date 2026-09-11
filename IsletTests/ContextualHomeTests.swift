@@ -119,6 +119,88 @@ final class ContextualHomeTests: XCTestCase {
     }
   }
 
+  func testSplitTimedRemindersIncludeTheDateOutsideToday() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+    let noon = Date(timeIntervalSince1970: 43_200)
+
+    XCTAssertEqual(
+      HomeSplitReminderDuePresentation.make(
+        due: noon + 3_600, hasDueTime: true, now: noon, calendar: calendar), .time)
+    for due in [noon - 86_400, noon + 86_400, noon + 30 * 86_400] {
+      XCTAssertEqual(
+        HomeSplitReminderDuePresentation.make(
+          due: due, hasDueTime: true, now: noon, calendar: calendar), .dateAndTime)
+    }
+  }
+
+  func testSplitDateOnlyRemindersKeepRelativeDayLabels() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+    let noon = Date(timeIntervalSince1970: 43_200)
+
+    XCTAssertEqual(
+      HomeSplitReminderDuePresentation.make(
+        due: noon, hasDueTime: false, now: noon, calendar: calendar), .today)
+    XCTAssertEqual(
+      HomeSplitReminderDuePresentation.make(
+        due: noon + 86_400, hasDueTime: false, now: noon, calendar: calendar), .tomorrow)
+    XCTAssertEqual(
+      HomeSplitReminderDuePresentation.make(
+        due: noon + 2 * 86_400, hasDueTime: false, now: noon, calendar: calendar), .date)
+  }
+
+  func testSplitAgendaExcludesFutureDaysAndEndedMeetings() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+    let noon = Date(timeIntervalSince1970: 43_200)
+    let events = [
+      AgendaEvent(
+        id: "ended", title: "Ended", start: noon - 7_200, end: noon - 3_600,
+        isAllDay: false, calendarColorHex: nil, joinURL: nil),
+      AgendaEvent(
+        id: "today", title: "Today", start: noon + 3_600, end: noon + 7_200,
+        isAllDay: false, calendarColorHex: nil, joinURL: nil),
+      AgendaEvent(
+        id: "tomorrow", title: "Tomorrow", start: noon + 86_400, end: noon + 90_000,
+        isAllDay: false, calendarColorHex: nil, joinURL: nil),
+    ]
+
+    XCTAssertEqual(
+      HomeSplitAgenda.events(from: events, now: noon, calendar: calendar).map(\.id),
+      ["today"])
+    XCTAssertTrue(
+      HomeSplitAgenda.events(from: [events[2]], now: noon, calendar: calendar).isEmpty)
+  }
+
+  func testSplitAgendaKeepsEveryEventIncludingAllDayAndOvernight() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+    let noon = Date(timeIntervalSince1970: 43_200)
+    let events =
+      [
+        AgendaEvent(
+          id: "all-day", title: "All day", start: noon - 43_200, end: noon + 43_200,
+          isAllDay: true, calendarColorHex: nil, joinURL: nil),
+        AgendaEvent(
+          id: "overnight", title: "Overnight", start: noon - 50_000, end: noon + 3_600,
+          isAllDay: false, calendarColorHex: nil, joinURL: nil),
+      ]
+      + (1...6).map { index in
+        AgendaEvent(
+          id: "meeting-\(index)", title: "Meeting \(index)",
+          start: noon + Double(index) * 3_600, end: noon + Double(index + 1) * 3_600,
+          isAllDay: false, calendarColorHex: nil, joinURL: nil)
+      }
+
+    XCTAssertEqual(
+      HomeSplitAgenda.events(from: events, now: noon, calendar: calendar).map(\.id),
+      [
+        "all-day", "overnight", "meeting-1", "meeting-2", "meeting-3", "meeting-4",
+        "meeting-5", "meeting-6",
+      ])
+  }
+
   func testBuilderCombinesEveryRequiredSourceIntoNineReadableItems() throws {
     let calendarEvents = [
       agenda(id: "event-1", title: "Design review", startsIn: 300),

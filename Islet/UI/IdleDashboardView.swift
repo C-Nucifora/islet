@@ -136,7 +136,7 @@ struct IdleDashboardView: View {
       case .compact, .scrollable:
         rankedDashboard(items: visibleItems, now: now)
       case .split:
-        splitDashboard
+        splitDashboard(now: now)
       }
     }
     .onChange(of: allItems.map(\.id), initial: true) { _, _ in
@@ -200,17 +200,17 @@ struct IdleDashboardView: View {
     }
   }
 
-  @ViewBuilder private var splitDashboard: some View {
+  @ViewBuilder private func splitDashboard(now: Date) -> some View {
     if calendarEnabled || remindersEnabled {
       HStack(alignment: .top, spacing: 14) {
         if calendarEnabled {
-          splitColumn("Today", systemImage: "calendar") { splitAgenda }
+          splitColumn("Today", systemImage: "calendar") { splitAgenda(now: now) }
         }
         if calendarEnabled && remindersEnabled {
           Divider().overlay(Color.white.opacity(0.12))
         }
         if remindersEnabled {
-          splitColumn("Reminders", systemImage: "checklist") { splitReminders }
+          splitColumn("Reminders", systemImage: "checklist") { splitReminders(now: now) }
         }
       }
     } else {
@@ -219,7 +219,7 @@ struct IdleDashboardView: View {
   }
 
   private func splitColumn<Content: View>(
-    _ title: String, systemImage: String, @ViewBuilder content: () -> Content
+    _ title: LocalizedStringKey, systemImage: String, @ViewBuilder content: () -> Content
   ) -> some View {
     VStack(alignment: .leading, spacing: 6) {
       HStack {
@@ -236,7 +236,8 @@ struct IdleDashboardView: View {
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  @ViewBuilder private var splitAgenda: some View {
+  @ViewBuilder private func splitAgenda(now: Date) -> some View {
+    let events = HomeSplitAgenda.events(from: calendar.events, now: now)
     if !calendar.authorization.canRead {
       splitPermissionRow(
         "Calendar: \(calendar.authorization.summary)", permission: "Calendar"
@@ -251,12 +252,12 @@ struct IdleDashboardView: View {
         Button("Retry") { Task { await calendar.refreshAuthorization() } }
           .buttonStyle(.link).font(.caption2)
       }
-    } else if calendar.events.isEmpty {
+    } else if events.isEmpty {
       splitEmptyRow("No events today")
     } else {
       ScrollView(.vertical, showsIndicators: false) {
         VStack(alignment: .leading, spacing: 6) {
-          ForEach(calendar.events.prefix(6)) { event in
+          ForEach(events) { event in
             HStack(spacing: 6) {
               Capsule()
                 .fill(Color(isletHex: event.calendarColorHex) ?? .secondary)
@@ -284,7 +285,7 @@ struct IdleDashboardView: View {
     }
   }
 
-  @ViewBuilder private var splitReminders: some View {
+  @ViewBuilder private func splitReminders(now: Date) -> some View {
     if reminders.accessDenied {
       splitPermissionRow(
         "Reminders: \(reminders.authorization.summary)", permission: "Reminders"
@@ -332,10 +333,10 @@ struct IdleDashboardView: View {
               VStack(alignment: .leading, spacing: 0) {
                 Text(item.title).font(.caption).lineLimit(1)
                 if let due = item.dueDate {
-                  splitReminderDueText(item, due: due)
+                  splitReminderDueText(item, due: due, now: now)
                     .font(.caption2).monospacedDigit()
                     .foregroundStyle(
-                      RemindersLogic.isOverdue(item, now: Date()) ? .red : .secondary)
+                      RemindersLogic.isOverdue(item, now: now) ? .red : .secondary)
                 }
               }
               Spacer(minLength: 0)
@@ -368,7 +369,7 @@ struct IdleDashboardView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
-  private func splitEmptyRow(_ text: String) -> some View {
+  private func splitEmptyRow(_ text: LocalizedStringKey) -> some View {
     Text(text).font(.caption).foregroundStyle(.secondary)
   }
 
@@ -379,20 +380,25 @@ struct IdleDashboardView: View {
       .accessibilityHint("Opens the Reminders app")
   }
 
-  @ViewBuilder private func splitReminderDueText(_ item: ReminderItem, due: Date) -> some View {
-    if item.hasDueTime {
+  @ViewBuilder private func splitReminderDueText(
+    _ item: ReminderItem, due: Date, now: Date
+  ) -> some View {
+    switch HomeSplitReminderDuePresentation.make(due: due, hasDueTime: item.hasDueTime, now: now) {
+    case .time:
       Text(due, format: .dateTime.hour().minute())
-    } else if Calendar.current.isDateInToday(due) {
+    case .dateAndTime:
+      Text(due, format: .dateTime.month(.abbreviated).day().hour().minute())
+    case .today:
       Text("Today")
-    } else if Calendar.current.isDateInTomorrow(due) {
+    case .tomorrow:
       Text("Tomorrow")
-    } else {
+    case .date:
       Text(due, format: .dateTime.month(.abbreviated).day())
     }
   }
 
   private func splitPermissionRow(
-    _ text: String, permission: String, action: @escaping () -> Void
+    _ text: LocalizedStringKey, permission: String, action: @escaping () -> Void
   ) -> some View {
     HStack(spacing: 5) {
       Text(text).font(.caption2).foregroundStyle(.orange)
