@@ -8,8 +8,8 @@
   "properties": {
     "token": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9+/]{43}=$",
-      "description": "The current 32-byte shared bearer token encoded as Base64."
+      "pattern": "^(?:[A-Za-z0-9+/]{43}=|islet-pulse-v1\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.[A-Za-z0-9_-]{43})$",
+      "description": "A provider-specific credential, or a limited legacy shared token during migration."
     },
     "operation": { "enum": ["show", "update", "end", "event"] },
     "id": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -17,21 +17,41 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 80,
-      "description": "Optional source guard for end. Providers should always include it."
+      "description": "Credential-bound provider namespace. Islet rejects a different source."
     },
     "requestID": {
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "description": "Optional correlation identifier echoed unchanged in the response."
+      "description": "Unique correlation identifier. Required for provider-specific credentials and echoed in the response."
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Optional monotonic ordering value scoped to source and activity id."
     },
     "activity": { "$ref": "#/$defs/activity" }
   },
   "allOf": [
     {
+      "if": {
+        "properties": { "token": { "pattern": "^islet-pulse-v1\\." } },
+        "required": ["token"]
+      },
+      "then": { "required": ["requestID"] }
+    },
+    {
       "if": { "properties": { "operation": { "const": "end" } }, "required": ["operation"] },
-      "then": { "required": ["id"] },
-      "else": { "required": ["activity"] }
+      "then": { "properties": { "id": true }, "required": ["id"] },
+      "else": { "properties": { "activity": true }, "required": ["activity"] }
+    },
+    {
+      "if": {
+        "properties": { "operation": { "const": "end" }, "revision": true },
+        "required": ["operation", "revision"]
+      },
+      "then": { "properties": { "source": true }, "required": ["source"] }
     }
   ],
   "$defs": {
@@ -82,20 +102,33 @@
         "ok": { "type": "boolean" },
         "id": { "type": "string" },
         "error": { "type": "string" },
+        "retryAfter": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Seconds to wait before retrying a rate-limited command, equivalent to HTTP Retry-After."
+        },
         "warning": { "type": "string" },
         "errorCode": {
           "enum": [
             "featureDisabled",
             "unauthorized",
+            "credentialRevoked",
+            "permissionDenied",
+            "requestIDRequired",
+            "replayedRequest",
             "invalidCommand",
             "validationFailed",
             "sourceRevoked",
             "identifierConflict",
             "sourceMismatch",
+            "ambiguousIdentifier",
             "messageTooLarge",
             "commandLimitExceeded",
             "rateLimited",
-            "capacityExceeded"
+            "capacityExceeded",
+            "staleRevision",
+            "revisionRequired",
+            "generationEnded"
           ]
         },
         "requestID": { "type": "string" }

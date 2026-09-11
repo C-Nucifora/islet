@@ -8,9 +8,8 @@ struct ExpandedContainerView: View {
   /// Size tiers are reported to the view model, whose screen-clamped maximum width is observed.
   @ObservedObject var vm: NotchViewModel
   @ObservedObject private var center = ActivityCenter.shared
-  @ObservedObject private var shelf = ShelfModel.shared
   @Environment(\.appTheme) private var appTheme
-  private static let homeTab = "\u{0000}home"  // sentinel id for the dashboard chip
+  private static let homeTab = ExpandedSelectionPolicy.homeID
 
   private var activities: [any NotchActivity] {
     center.expandedActivities(temporarilyIncluding: vm.temporarilyPresentedActivityID)
@@ -43,30 +42,31 @@ struct ExpandedContainerView: View {
   /// (the media player when playing, otherwise the dashboard).
   private var effectiveSelection: String {
     let ids = tabs.map(\.id)
-    // A file drag jumps straight to the shelf so you can drop onto it.
-    if shelf.isDropPresentationActive || shelf.presentationRequest != nil,
-      ids.contains("shelf")
-    {
-      return "shelf"
-    }
-    if let selection = vm.selectedActivityID, ids.contains(selection) { return selection }
-    // Default to a prominent active activity (running timer or media player); else the dashboard.
-    if let primary = center.primaryActivity, primary.id == "timer" || primary.id == "nowPlaying" {
-      return primary.id
-    }
-    return Self.homeTab
+    return ExpandedSelectionPolicy.effectiveSelection(
+      tabIDs: ids, storedSelection: vm.selectedActivityID,
+      shelfPresentationActive: vm.isShelfDropTargeted,
+      primaryActivityID: center.primaryActivity?.id)
   }
 
-  /// The height tier the selected tab wants. The dashboard always takes the base tier.
+  /// The height tier the selected tab wants. Home uses the tall tier so three ranked rows and the
+  /// overflow control remain clear of the physical notch.
   private var selectedHeight: CGFloat {
-    guard effectiveSelection != Self.homeTab,
-      let activity = activities.first(where: { $0.id == effectiveSelection })
+    guard effectiveSelection != Self.homeTab else { return Metrics.tallExpandedHeight }
+    guard let activity = activities.first(where: { $0.id == effectiveSelection })
     else { return Metrics.expandedSize.height }
     return activity.preferredExpandedHeight
   }
 
   var body: some View {
     ZStack(alignment: .top) {
+      // Declare the switcher before the selected content so native keyboard traversal follows the
+      // same top-to-bottom order as the visible island.
+      switcherBar
+        .frame(height: notchSize.height)
+        .padding(.horizontal, Self.rowPadding)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Activity switcher")
+        .accessibilitySortPriority(100)
       // Main content sits directly below the physical notch — reclaiming the space the switcher
       // row used to take.
       VStack(spacing: 0) {
@@ -76,24 +76,15 @@ struct ExpandedContainerView: View {
           .padding(.horizontal, 14)
           .padding(.bottom, 12)
       }
-      // Switcher tabs and controls live in the notch band, flanking
-      // the hardware notch.
-      switcherBar
-        .frame(height: notchSize.height)
-        .padding(.horizontal, Self.rowPadding)
     }
     .onChange(of: effectiveSelection, initial: true) { _, id in
       // Only the drawn island resizes; the panel already holds the tallest tier while expanded.
       // Making the panel follow this crashed the app — see NotchViewModel.targetPanelFrame.
+      guard vm.state.isExpanded else { return }
       vm.setExpandedHeight(selectedHeight)
     }
-    .onChange(of: shelf.isDropPresentationActive, initial: true) { _, active in
-      if active { vm.selectActivity("shelf") }
-    }
-    .onChange(of: shelf.presentationRequest, initial: true) { _, request in
-      guard let request else { return }
-      vm.selectActivity("shelf")
-      Task { @MainActor in shelf.consumePresentationRequest(request) }
+    .onChange(of: vm.state.isExpanded) { _, isExpanded in
+      if isExpanded { vm.setExpandedHeight(selectedHeight) }
     }
     .onChange(of: tabs.map(\.id), initial: true) { _, ids in
       vm.clearTemporaryPresentationIfUnavailable(
@@ -150,6 +141,7 @@ struct ExpandedContainerView: View {
           .fixedSize()
           .accessibilityLabel("More activities")
           .accessibilityHint("Shows \(overflowTabs.count) additional activities")
+          .accessibilitySortPriority(90)
         }
       }
       .frame(width: tabStripWidth, alignment: .leading)
@@ -165,6 +157,8 @@ struct ExpandedContainerView: View {
       }
       .buttonStyle(.plain)
       .accessibilityLabel("Quick Actions")
+      .accessibilityHint("Opens the searchable action list")
+      .accessibilitySortPriority(80)
       Button {
         SettingsOpener.open()
       } label: {
@@ -175,6 +169,7 @@ struct ExpandedContainerView: View {
       }
       .buttonStyle(.plain)
       .accessibilityLabel("Settings")
+      .accessibilitySortPriority(70)
     }
   }
 
@@ -190,22 +185,43 @@ struct ExpandedContainerView: View {
           RoundedRectangle(cornerRadius: 6)
             .fill(selected ? appTheme.accentColor.opacity(0.24) : .white.opacity(0.06))
         )
+        .overlay {
+          RoundedRectangle(cornerRadius: 6)
+            .stroke(selected ? Color.white.opacity(0.9) : .clear, lineWidth: 1)
+        }
         .foregroundStyle(selected ? appTheme.accentColor : .secondary)
     }
     .buttonStyle(.plain)
-    .accessibilityLabel(tab.id == Self.homeTab ? "Home" : ActivityCatalog.name(for: tab.id))
+    .accessibilityLabel(
+      tab.id == Self.homeTab
+        ? String(localized: "Home") : ActivityCatalog.name(for: tab.id)
+    )
+    .accessibilityValue(
+      selected ? String(localized: "Selected") : String(localized: "Not selected")
+    )
     .accessibilityAddTraits(selected ? .isSelected : [])
+    .accessibilitySortPriority(100)
   }
 
   @ViewBuilder private var content: some View {
-    if effectiveSelection == Self.homeTab {
-      IdleDashboardView()
-    } else if let activity = activities.first(where: {
-      $0.id == effectiveSelection
-    }) {
-      activity.expandedView
-    } else {
-      IdleDashboardView()
+    Group {
+      if effectiveSelection == Self.homeTab {
+        IdleDashboardView(vm: vm) { vm.selectActivity($0) }
+      } else if let activity = activities.first(where: {
+        $0.id == effectiveSelection
+      }) {
+        activity.expandedView
+          .environment(\.shelfDropTargeted, vm.isShelfDropTargeted)
+      } else {
+        IdleDashboardView(vm: vm) { vm.selectActivity($0) }
+      }
     }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(
+      effectiveSelection == Self.homeTab
+        ? String(localized: "Home")
+        : String(localized: "\(ActivityCatalog.name(for: effectiveSelection)) activity")
+    )
+    .accessibilitySortPriority(10)
   }
 }

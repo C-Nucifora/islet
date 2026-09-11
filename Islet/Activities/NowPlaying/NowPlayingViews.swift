@@ -20,10 +20,13 @@ struct CompactArtworkView: View {
 struct CompactBarsView: View {
   @ObservedObject var activity: NowPlayingActivity
   @Environment(\.appTheme) private var appTheme
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     TimelineView(
-      .animation(minimumInterval: 0.15, paused: activity.playback?.isPlaying != true)
+      .animation(
+        minimumInterval: 0.15,
+        paused: reduceMotion || activity.playback?.isPlaying != true)
     ) { context in
       let t = context.date.timeIntervalSinceReferenceDate
       HStack(spacing: 2) {
@@ -33,7 +36,7 @@ struct CompactBarsView: View {
             .fill(appTheme.color(for: .nowPlaying))
             .frame(
               width: 2.5,
-              height: activity.playback?.isPlaying == true
+              height: activity.playback?.isPlaying == true && !reduceMotion
                 ? 4 + 10 * abs(sin(phase)) : 4)
         }
       }
@@ -47,6 +50,7 @@ struct ExpandedPlayerView: View {
   @ObservedObject var activity: NowPlayingActivity
   @State private var scrubbing = false
   @State private var scrubValue: Double = 0
+  @State private var scrubSession = PlaybackScrubSession()
 
   var body: some View {
     VStack(spacing: 6) {
@@ -60,6 +64,12 @@ struct ExpandedPlayerView: View {
       if !activity.strip.isEmpty { sourceStrip }
     }
     .foregroundStyle(.white)
+    .onChange(of: activity.primaryKey) { _, _ in
+      scrubbing = false
+      scrubSession.cancel()
+    }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Now Playing")
   }
 
   private func hero(_ pb: PlaybackState, source: SourceID?) -> some View {
@@ -166,9 +176,13 @@ struct ExpandedPlayerView: View {
       }
       VStack(alignment: .leading, spacing: 1) {
         Text(activity.sourceName(for: source))
-        Text(playback.map { $0.isPlaying ? "Playing" : "Paused" } ?? "Audio detected")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+        Text(
+          playback.map {
+            $0.isPlaying ? String(localized: "Playing") : String(localized: "Paused")
+          } ?? String(localized: "Audio detected")
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
       }
       if isPrimary {
         Text("Primary")
@@ -188,9 +202,9 @@ struct ExpandedPlayerView: View {
       } else {
         Image(systemName: "speaker.wave.2.fill").font(.caption2)
       }
-      Circle()
-        .fill(isPlaying ? Color.green : Color.secondary)
-        .frame(width: 5, height: 5)
+      Image(systemName: isPlaying ? "play.fill" : "pause.fill")
+        .font(.system(size: 7, weight: .bold))
+        .foregroundStyle(isPlaying ? Color.green : Color.secondary)
     }
     .padding(.horizontal, 6)
     .frame(height: 22)
@@ -212,37 +226,61 @@ struct ExpandedPlayerView: View {
     .accessibilityHidden(true)
   }
 
+  @ViewBuilder
   private func scrubber(_ pb: PlaybackState, source: SourceID?) -> some View {
-    let canSeek = source.map { activity.canPerform(.seek(to: 0), for: $0) } ?? false
-    // Only tick while actually playing; a paused track's position is fixed, so no redraw is needed.
-    return TimelineView(.animation(minimumInterval: 0.5, paused: pb.isPlaying == false)) { _ in
-      let elapsedText = MediaDurationFormatter.string(
-        for: scrubbing ? scrubValue : pb.currentElapsed)
-      let durationText = MediaDurationFormatter.string(for: pb.duration)
-      VStack(spacing: 2) {
-        Slider(
-          value: Binding(
-            get: { scrubbing ? scrubValue : pb.currentElapsed },
-            set: { scrubValue = $0 }),
-          in: 0...max(pb.duration, 1)
-        ) { editing in
-          scrubbing = editing
-          if !editing, let source {
-            Task { await activity.perform(.seek(to: scrubValue), for: source) }
+    let canSeek =
+      pb.seekability == .seekable
+      && (source.map { activity.canPerform(.seek(to: 0), for: $0) } ?? false)
+    if canSeek {
+      // Only tick while actually playing; a paused track's position is fixed, so no redraw is needed.
+      TimelineView(.animation(minimumInterval: 0.5, paused: pb.isPlaying == false)) { _ in
+        let displayedElapsed =
+          scrubbing && scrubSession.source == activity.primaryKey
+          ? scrubValue : pb.currentElapsed()
+        let elapsedText = MediaDurationFormatter.string(for: displayedElapsed)
+        let durationText = MediaDurationFormatter.string(for: pb.duration)
+        VStack(spacing: 2) {
+          Slider(
+            value: Binding(
+              get: {
+                scrubbing && scrubSession.source == activity.primaryKey
+                  ? scrubValue : pb.currentElapsed()
+              },
+              set: { scrubValue = $0 }),
+            in: 0...pb.duration
+          ) { editing in
+            scrubbing = editing
+            if editing {
+              scrubValue = pb.currentElapsed()
+              scrubSession.begin(for: activity.primaryKey)
+            } else if let source = scrubSession.source,
+              let target = scrubSession.finish(
+                value: scrubValue, currentSource: activity.primaryKey)
+            {
+              Task { await activity.seek(to: target, for: source) }
+            }
           }
+          .accessibilityLabel("Playback position")
+          .accessibilityValue("\(elapsedText) of \(durationText)")
+          HStack {
+            Text(MediaDurationFormatter.string(for: pb.currentElapsed())).monospacedDigit()
+            Spacer()
+            Text(durationText).monospacedDigit()
+          }
+          .font(.caption2).foregroundStyle(.secondary)
         }
-        .accessibilityLabel("Playback position")
-        .accessibilityValue("\(elapsedText) of \(durationText)")
-        .disabled(!canSeek)
-        .opacity(canSeek ? 1 : 0.4)
-        HStack {
-          Text(elapsedText).monospacedDigit()
-          Spacer()
-          Text(durationText).monospacedDigit()
-        }
-        .font(.caption2).foregroundStyle(.secondary)
       }
+    } else {
+      seekUnavailable(pb.seekability == .seekable ? .unavailable : pb.seekability)
     }
+  }
+
+  private func seekUnavailable(_ seekability: PlaybackSeekability) -> some View {
+    Label(seekability.title, systemImage: seekability.symbol)
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .accessibilityLabel(seekability.accessibilityLabel)
   }
 
   private func controls(_ pb: PlaybackState, source: SourceID?) -> some View {
@@ -253,12 +291,20 @@ struct ExpandedPlayerView: View {
       Button {
         if let source { Task { await activity.perform(.toggleShuffle, for: source) } }
       } label: {
-        Image(systemName: "shuffle").foregroundStyle(pb.isShuffleOn ? .green : .secondary)
+        toggleStateIcon("shuffle", enabled: pb.isShuffleOn)
       }
-      .help(controlHelp(pb.isShuffleOn ? "Turn shuffle off" : "Turn shuffle on", source: source))
+      .help(
+        controlHelp(
+          pb.isShuffleOn
+            ? String(localized: "Turn shuffle off") : String(localized: "Turn shuffle on"),
+          source: source)
+      )
       .accessibilityLabel(
         activity.mediaControlAccessibilityLabel(
-          action: pb.isShuffleOn ? "Turn shuffle off" : "Turn shuffle on"))
+          action: pb.isShuffleOn
+            ? String(localized: "Turn shuffle off") : String(localized: "Turn shuffle on"))
+      )
+      .accessibilityValue(pb.isShuffleOn ? String(localized: "On") : String(localized: "Off"))
       // Podcasts/audiobooks get ±15 s skip; music gets prev/next.
       Button {
         guard let source else { return }
@@ -270,11 +316,14 @@ struct ExpandedPlayerView: View {
       }
       .help(
         controlHelp(
-          pb.supportsSkipBackward15 ? "Back 15 seconds" : "Previous track", source: source)
+          pb.supportsSkipBackward15
+            ? String(localized: "Back 15 seconds") : String(localized: "Previous track"),
+          source: source)
       )
       .accessibilityLabel(
         activity.mediaControlAccessibilityLabel(
-          action: pb.supportsSkipBackward15 ? "Back 15 seconds" : "Previous track")
+          action: pb.supportsSkipBackward15
+            ? String(localized: "Back 15 seconds") : String(localized: "Previous track"))
       )
       .disabled(source.map { activity.canPerform(backCommand, for: $0) } != true)
       Button {
@@ -282,9 +331,13 @@ struct ExpandedPlayerView: View {
       } label: {
         Image(systemName: pb.isPlaying ? "pause.fill" : "play.fill").font(.title2)
       }
-      .help(controlHelp(pb.isPlaying ? "Pause" : "Play", source: source))
+      .help(
+        controlHelp(
+          pb.isPlaying ? String(localized: "Pause") : String(localized: "Play"), source: source)
+      )
       .accessibilityLabel(
-        activity.mediaControlAccessibilityLabel(action: pb.isPlaying ? "Pause" : "Play"))
+        activity.mediaControlAccessibilityLabel(
+          action: pb.isPlaying ? String(localized: "Pause") : String(localized: "Play")))
       Button {
         guard let source else { return }
         Task {
@@ -294,25 +347,34 @@ struct ExpandedPlayerView: View {
         Image(systemName: pb.supportsSkipForward15 ? "goforward.15" : "forward.fill")
       }
       .help(
-        controlHelp(pb.supportsSkipForward15 ? "Forward 15 seconds" : "Next track", source: source)
+        controlHelp(
+          pb.supportsSkipForward15
+            ? String(localized: "Forward 15 seconds") : String(localized: "Next track"),
+          source: source)
       )
       .accessibilityLabel(
         activity.mediaControlAccessibilityLabel(
-          action: pb.supportsSkipForward15 ? "Forward 15 seconds" : "Next track")
+          action: pb.supportsSkipForward15
+            ? String(localized: "Forward 15 seconds") : String(localized: "Next track"))
       )
       .disabled(source.map { activity.canPerform(forwardCommand, for: $0) } != true)
       Button {
         if let source { Task { await activity.perform(.cycleRepeat, for: source) } }
       } label: {
-        Image(systemName: pb.repeatMode == 1 ? "repeat.1" : "repeat")
-          .foregroundStyle(pb.repeatMode != 0 ? .green : .secondary)
+        toggleStateIcon(pb.repeatMode == 1 ? "repeat.1" : "repeat", enabled: pb.repeatMode != 0)
       }
       .help(
-        controlHelp(pb.repeatMode == 0 ? "Turn repeat on" : "Change repeat mode", source: source)
+        controlHelp(
+          pb.repeatMode == 0
+            ? String(localized: "Turn repeat on") : String(localized: "Change repeat mode"),
+          source: source)
       )
       .accessibilityLabel(
         activity.mediaControlAccessibilityLabel(
-          action: pb.repeatMode == 0 ? "Turn repeat on" : "Change repeat mode"))
+          action: pb.repeatMode == 0
+            ? String(localized: "Turn repeat on") : String(localized: "Change repeat mode"))
+      )
+      .accessibilityValue(repeatAccessibilityValue(pb.repeatMode))
     }
     .buttonStyle(.plain)
     .frame(maxWidth: .infinity)
@@ -323,6 +385,23 @@ struct ExpandedPlayerView: View {
   private func controlHelp(_ action: String, source: SourceID?) -> String {
     guard let source else { return action }
     return activity.mediaControlHelp(action: action, for: source)
+  }
+
+  private func toggleStateIcon(_ symbol: String, enabled: Bool) -> some View {
+    Image(systemName: symbol)
+      .foregroundStyle(enabled ? .green : .secondary)
+      .padding(4)
+      .background(
+        RoundedRectangle(cornerRadius: 5)
+          .stroke(enabled ? Color.white.opacity(0.85) : .clear, lineWidth: 1))
+  }
+
+  private func repeatAccessibilityValue(_ mode: Int) -> String {
+    switch mode {
+    case 1: String(localized: "Repeat one")
+    case 2: String(localized: "Repeat all")
+    default: "Off"
+    }
   }
 }
 

@@ -74,6 +74,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Kept by the delegate for the entire app lifetime so notification responses still reach the
   /// timer when Islet has no normal application window.
   private let timerCompletionNotifications = TimerCompletionNotifications.shared
+  private var singleInstanceCoordinator: SingleInstanceCoordinator?
+  private var shouldStartServices = false
 
   /// True when the app is running only as XCTest's host process. Every monitor below talks to real
   /// hardware — CoreWLAN, IOBluetooth, Spotlight, the Downloads folder — and several of them prompt
@@ -81,6 +83,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// drive the pure logic directly and need none of it running.
   private var isRunningTests: Bool {
     NSClassFromString("XCTestCase") != nil
+  }
+
+  func applicationWillFinishLaunching(_ notification: Notification) {
+    guard !isRunningTests else { return }
+
+    let owner = SingleInstanceOwner.current()
+    do {
+      let coordinator = try SingleInstanceCoordinator(bundleIdentifier: owner.bundleIdentifier)
+      let resolution = try SingleInstanceLaunchResolver.resolve(
+        coordinator: coordinator,
+        owner: owner,
+        activate: {
+          ExistingInstanceActivator.activate(
+            owner: $0, bundleIdentifier: owner.bundleIdentifier)
+        })
+      switch resolution {
+      case .primary:
+        singleInstanceCoordinator = coordinator
+        shouldStartServices = true
+      case .activatedExisting:
+        Log.app.info("Activated the existing Islet process")
+      case .secondaryStillOwned:
+        Log.app.warning("Another Islet process owns the instance lock but is not yet activatable")
+      }
+    } catch {
+      // A lock setup failure should not make a single installed copy unusable. Fall back to the
+      // process list, which catches normal duplicate launches even though it cannot close a race.
+      if ExistingInstanceActivator.activate(
+        owner: nil,
+        bundleIdentifier: owner.bundleIdentifier)
+      {
+        Log.app.warning("Instance lock failed; activated an existing Islet process: \(error)")
+      } else {
+        shouldStartServices = true
+        Log.app.error("Instance lock failed; continuing without race protection: \(error)")
+      }
+    }
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
@@ -97,10 +136,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       Log.app.info("Launched as a test host; skipping monitor startup")
       return
     }
+    guard shouldStartServices else {
+      NSApp.terminate(nil)
+      return
+    }
     reminderCommandHotKey.start()
     timerCompletionNotifications.start()
     Task { @MainActor in
       ActivityEnablement.migrateLegacyPreferencesIfNeeded()
+      AppUpdateController.shared.start()
       // Bring a persisted activity order forward before anything renders from it: entries added to
       // the catalogue after the order was first written would otherwise be missing from Settings.
       let merged = ActivityCatalog.mergedOrder(Defaults[.activityOrder])
@@ -131,11 +175,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       RemindersProvider.shared.start()
       for source in AppState.eventSources { SystemEventBus.shared.register(source) }
       if OnboardingState.isComplete { SystemEventBus.shared.startEnabled() }
+      ContextRuleCenter.shared.start()
       SneakQueue.shared.isSuspended = {
-        ScreenManager.shared.viewModel?.state.isExpanded ?? false
+        ScreenManager.shared.isAnyPanelExpanded
       }
       HUDController.shared.startObserving()
       LaunchAtLogin.sync()
+      GlobalShortcutManager.shared.start()
       launchAtLoginObserver = LaunchAtLogin.observe()
       OnboardingOpener.openIfNeeded()
     }
@@ -148,12 +194,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationWillTerminate(_ notification: Notification) {
-    guard !isRunningTests else { return }
+    guard !isRunningTests, shouldStartServices else { return }
     // AppKit invokes this delegate on the main thread. Media shutdown is intentionally synchronous:
     // otherwise the app can exit before the watcher's serial queue terminates its helper process.
     MainActor.assumeIsolated {
       reminderCommandHotKey.stop()
       KeepAwakeManager.shared.stop(reason: .quit)
+      PulseCenter.shared.flushRevisionPersistence()
       AppState.nowPlaying.stop()
       AppState.battery.stop()
       AppState.calendar.stop()
@@ -163,14 +210,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       AppState.system.stop()
       AppState.t3Code.stop()
       AppState.pulse.stop()
+      PulseCenter.shared.flushHistoryPersistence()
       AppState.continuity.stop()
       RemindersProvider.shared.stop()
       AudioDeviceMonitor.shared.stop()
       HUDController.shared.stop()
       SystemEventBus.shared.stopAll()
       EventSourcePreferences.shared.flush()
+      ContextRuleCenter.shared.stop()
       EventMonitors.shared.stop()
       ScreenManager.shared.stop()
+      GlobalShortcutManager.shared.stop()
       activityLifecycleController?.stopObserving()
       activityLifecycleController = nil
       audioDeviceLifecycleCancellable = nil

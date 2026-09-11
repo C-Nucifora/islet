@@ -86,7 +86,7 @@ struct BurstCoalescer {
     return SystemEvent(
       sourceID: "burst",
       icon: "square.stack.3d.up.fill",
-      title: count == 1 ? "1 system event" : "\(count) system events",
+      title: String(localized: "\(count) system event", comment: "Coalesced event count"),
       subtitle: subtitle,
       accentHex: EventAccent.info,
       motion: .generic,

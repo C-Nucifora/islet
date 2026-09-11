@@ -3,27 +3,85 @@ import Combine
 import Defaults
 import SwiftUI
 
+/// Schedules the view model's delayed state transitions. Production uses the wall clock; tests
+/// supply a virtual scheduler and advance it without waiting for an animation to elapse.
+@MainActor
+protocol NotchDelayScheduler: AnyObject {
+  func schedule(
+    after delay: Duration,
+    action: @escaping @MainActor () -> Void
+  ) -> any NotchScheduledOperation
+}
+
+@MainActor
+protocol NotchScheduledOperation: AnyObject {
+  func cancel()
+}
+
+@MainActor
+private final class WallClockNotchDelayScheduler: NotchDelayScheduler {
+  static let shared = WallClockNotchDelayScheduler()
+
+  private init() {}
+
+  func schedule(
+    after delay: Duration,
+    action: @escaping @MainActor () -> Void
+  ) -> any NotchScheduledOperation {
+    WallClockNotchScheduledOperation(after: delay, action: action)
+  }
+}
+
+@MainActor
+private final class WallClockNotchScheduledOperation: NotchScheduledOperation {
+  private var task: Task<Void, Never>?
+
+  init(after delay: Duration, action: @escaping @MainActor () -> Void) {
+    task = Task { @MainActor in
+      do {
+        try await Task.sleep(for: delay)
+      } catch {
+        return
+      }
+      guard !Task.isCancelled else { return }
+      action()
+    }
+  }
+
+  func cancel() {
+    task?.cancel()
+    task = nil
+  }
+}
+
 @MainActor
 final class NotchViewModel: ObservableObject {
   @Published private(set) var state: NotchState = .closed
   /// The expanded switcher's explicit choice. A nil value lets the view choose its normal default.
   @Published private(set) var selectedActivityID: String?
   @Published private(set) var temporarilyPresentedActivityID: String?
-  /// Screen-coordinate footprint the visible island should occupy right now. The AppKit panel is
-  /// permanently reserved at `reservedPanelFrame`; keeping this logical footprint separate lets
-  /// pointer passthrough and alignment follow only the pixels the island actually draws.
+  /// File-drop targeting belongs to this panel. Shelf contents are shared, but entering the Shelf
+  /// on one display must not retarget an already-expanded island on another display.
+  @Published private(set) var isShelfDropTargeted = false
+  /// Screen-coordinate frame the panel should occupy right now. Growth is published before the
+  /// island animates into it. Shrinkage waits for that animation to finish.
   @Published private(set) var panelFrame: CGRect
-  /// The frame the reserved window really occupies, read back from AppKit after placement or
-  /// reassertion. Anything positioning drawn content on screen uses this because the compact
-  /// island is aligned within that larger transparent host.
+  /// The frame the window really occupies, read back after every AppKit frame transaction. This
+  /// exposes any placement divergence and keeps the renderer's clipping alignment measurable.
   @Published private(set) var actualPanelFrame: CGRect
   /// Height tier the currently selected tab asked for. Reported by `ExpandedContainerView`; drives
   /// the drawn island, hover region and click-inside test.
   @Published private(set) var expandedHeight: CGFloat = Metrics.expandedSize.height
-  /// Drawn island width for the live tab count. The expanded panel reserves the maximum supported
-  /// width up front, so changing this value animates only SwiftUI content and never resizes AppKit.
+  /// Drawn island width for the live tab count.
   @Published private(set) var expandedWidth: CGFloat = Metrics.expandedSize.width
   @Published private(set) var compactTargetRevision: UInt = 0
+  /// Incremented only by explicit keyboard or accessibility entry paths. Panel instances observe
+  /// this separately from presentation state so pointer and programmatic expansion never take key
+  /// status from the foreground application.
+  @Published private(set) var keyboardFocusRequestRevision: UInt = 0
+  /// Home dismissal and snooze state belongs to the panel model, not the expanded view. The model
+  /// survives tab changes and collapse/reopen cycles, while `IdleDashboardView` does not.
+  @Published private(set) var homeAttentionDisposition = HomeAttentionDisposition()
   /// Live 0...1 pressure against the hover barrier. The view turns this into elastic stretch.
   @Published private(set) var barrierProgress: CGFloat = 0
   var preventAutoClose = false
@@ -31,6 +89,7 @@ final class NotchViewModel: ObservableObject {
   let geometry: NotchGeometry
   private let modeOverride: InteractionMode?
   private let barrierPushDistanceOverride: CGFloat?
+  private let scheduler: any NotchDelayScheduler
   private var mode: InteractionMode { modeOverride ?? Defaults[.interactionMode] }
   private var barrierPushDistance: CGFloat {
     barrierPushDistanceOverride
@@ -47,18 +106,22 @@ final class NotchViewModel: ObservableObject {
   private var barrierTravel: CGFloat = 0
   private var upwardDeviceDeltaSign: CGFloat?
   private var didPlayBarrierContactHaptic = false
-  private var collapseTask: Task<Void, Never>?
-  private var shrinkTask: Task<Void, Never>?
+  private var collapseTask: (any NotchScheduledOperation)?
+  private var shrinkTask: (any NotchScheduledOperation)?
+  private var collapseTaskGeneration: UInt = 0
+  private var shrinkTaskGeneration: UInt = 0
   private var cancellables: Set<AnyCancellable> = []
 
   init(
     geometry: NotchGeometry, modeOverride: InteractionMode? = nil,
     barrierPushDistanceOverride: CGFloat? = nil,
-    initialPresentation: PanelPresentationState = .initial
+    initialPresentation: PanelPresentationState = .initial,
+    scheduler: (any NotchDelayScheduler)? = nil
   ) {
     self.geometry = geometry
     self.modeOverride = modeOverride
     self.barrierPushDistanceOverride = barrierPushDistanceOverride
+    self.scheduler = scheduler ?? WallClockNotchDelayScheduler.shared
     let initialFrame = geometry.collapsedPanelFrame()
     self.panelFrame = initialFrame
     self.actualPanelFrame = initialFrame
@@ -108,6 +171,16 @@ final class NotchViewModel: ObservableObject {
     if !state.isExpanded { apply(.clickedNotch) }
   }
 
+  /// Opens the island for a command-palette or accessibility interaction and asks its panel to
+  /// accept keyboard navigation. Ordinary pointer, drag, notification and programmatic opens use
+  /// `apply(_:)` or `open(activityID:)` and do not request focus.
+  func openForFocusedInteraction(activityID: String? = nil) {
+    if let activityID { selectActivity(activityID) }
+    if !state.isExpanded { apply(.clickedNotch) }
+    guard state.isExpanded else { return }
+    keyboardFocusRequestRevision &+= 1
+  }
+
   func clearTemporaryPresentationIfUnavailable(availableActivityIDs: [String]) {
     guard let activityID = temporarilyPresentedActivityID,
       !availableActivityIDs.contains(activityID)
@@ -123,6 +196,27 @@ final class NotchViewModel: ObservableObject {
         || ActivityEnablement.isEnabled(activityID)
     }
     return selectedActivityID == nil && ActivityCenter.shared.primaryActivity?.id == activityID
+  }
+
+  func visibleHomeAttentionItems(_ items: [HomeAttentionItem], now: Date) -> [HomeAttentionItem] {
+    homeAttentionDisposition.visible(items, now: now)
+  }
+
+  func reconcileHomeAttention(with items: [HomeAttentionItem]) {
+    homeAttentionDisposition.reconcile(with: items)
+  }
+
+  func dismissHomeAttention(_ item: HomeAttentionItem) {
+    homeAttentionDisposition.dismiss(item)
+  }
+
+  func snoozeHomeAttention(_ item: HomeAttentionItem, until: Date) {
+    homeAttentionDisposition.snooze(item, until: until)
+  }
+
+  func setShelfDropTargeted(_ targeted: Bool) {
+    if isShelfDropTargeted != targeted { isShelfDropTargeted = targeted }
+    if targeted { selectActivity("shelf") }
   }
 
   /// Resumes hover bookkeeping after ScreenManager restores an expanded presentation. Without
@@ -152,9 +246,10 @@ final class NotchViewModel: ObservableObject {
       minimumWidth: Metrics.expandedSize.width, maximumWidth: screenLimit)
   }
 
-  /// The one AppKit frame used for this panel's whole lifetime. SwiftUI animates the island inside
-  /// it; AppKit never resizes an NSHostingView while that view is updating constraints.
-  var reservedPanelFrame: CGRect {
+  /// Stable screen frame for the SwiftUI renderer. The AppKit window clips this renderer to
+  /// `panelFrame`, so the window-server footprint can adapt without changing NSHostingView's
+  /// proposed size during a display-cycle constraint pass.
+  var renderingFrame: CGRect {
     geometry.panelFrame(width: maximumExpandedWidth, height: Metrics.tallExpandedHeight)
   }
 
@@ -163,26 +258,30 @@ final class NotchViewModel: ObservableObject {
     geometry.expandedRect(width: expandedWidth, height: expandedHeight)
   }
 
-  /// The reserved window has transparent margins that must pass pointer events through. Expanded
-  /// content can straddle those margins as the pointer moves, so only that state needs the global
-  /// passthrough monitor. Collapsed content is always mouse-transparent and opens through the
-  /// separate global click or hover monitors.
+  /// Bounding box of the visible expanded shape. `expandedRect` is the body size used for layout;
+  /// the top corners flare outward by their radius and remain part of the interactive island.
+  var expandedInteractionRect: CGRect {
+    expandedRect.insetBy(dx: -Metrics.expandedRadii.top, dy: 0)
+  }
+
+  /// Expanded hosts retain small margins for their corner flare and shadow. A global movement
+  /// monitor keeps those transparent pixels from swallowing input intended for the menu bar.
   var needsPointerPassthroughMonitoring: Bool {
     state.isExpanded
   }
 
   /// The region that counts as "hovering" for the current state.
   private var hoverRegion: CGRect {
-    state.isExpanded ? expandedRect.union(geometry.hitRect) : geometry.hitRect
+    state.isExpanded ? expandedInteractionRect.union(geometry.hitRect) : geometry.hitRect
   }
 
-  /// The AppKit window is deliberately fixed at its maximum size. Only the rendered island inside
-  /// it should take mouse events; transparent margins behave like the menu bar or app beneath them.
+  /// Only the rendered island inside the host should take mouse events. The host still carries
+  /// room for corner flare and shadow, and those transparent margins must pass through.
   func shouldIgnorePanelMouseEvents(
     at location: CGPoint, allowingCompactFileDrag: Bool = false
   ) -> Bool {
     guard state.isExpanded || allowingCompactFileDrag else { return true }
-    let interactiveRect = state.isExpanded ? expandedRect : targetPanelFrame(for: state)
+    let interactiveRect = state.isExpanded ? expandedInteractionRect : targetPanelFrame(for: state)
     return !region(interactiveRect, contains: location)
   }
 
@@ -210,7 +309,7 @@ final class NotchViewModel: ObservableObject {
     guard inside != wasInside else { return }
     wasInside = inside
     if inside {
-      collapseTask?.cancel()
+      cancelScheduledCollapse()
       apply(.hoverEntered)
       beginBarrier(at: location)
     } else {
@@ -227,10 +326,12 @@ final class NotchViewModel: ObservableObject {
     let inside = region(hoverRegion, contains: location)
     if inside {
       wasInside = true
-      collapseTask?.cancel()
+      cancelScheduledCollapse()
+      setShelfDropTargeted(true)
       if !state.isExpanded { apply(.fileDragEntered) }
       return
     }
+    setShelfDropTargeted(false)
     guard wasInside else { return }
     wasInside = false
     resetBarrier()
@@ -242,7 +343,7 @@ final class NotchViewModel: ObservableObject {
     lastMouseLocation = location
     if region(geometry.hitRect, contains: location) {
       apply(.clickedNotch)
-    } else if state.isExpanded, expandedRect.contains(location) {
+    } else if state.isExpanded, expandedInteractionRect.contains(location) {
       apply(.clickedInsideExpanded)
     } else if state.isExpanded {
       apply(.clickedOutside)
@@ -259,19 +360,17 @@ final class NotchViewModel: ObservableObject {
     updatePanelFrame(for: state)
   }
 
-  /// Records where AppKit actually put the reserved host window. Drawing offsets use it to keep
-  /// the visible island aligned with the hardware notch.
+  /// Records where AppKit actually put the clipped host window for diagnostics, passthrough
+  /// updates and renderer-alignment checks.
   func setActualPanelFrame(_ frame: CGRect) {
     guard frame != actualPanelFrame else { return }
     actualPanelFrame = frame
   }
 
   private func targetPanelFrame(for state: NotchState) -> CGRect {
-    // This is the visible footprint, not the reserved AppKit window. The expanded footprint uses
-    // the tallest and widest supported island; compact footprints follow their measured slots.
     switch state {
     case .expanded:
-      geometry.panelFrame(width: maximumExpandedWidth, height: Metrics.tallExpandedHeight)
+      geometry.panelFrame(width: expandedWidth, height: expandedHeight)
     case .peek where mode == .hover:
       geometry.collapsedPanelFrame(
         compactLeading: compactLeadingWidth, compactTrailing: compactTrailingWidth,
@@ -285,21 +384,34 @@ final class NotchViewModel: ObservableObject {
     }
   }
 
-  /// The selected tab's height tier, reported by `ExpandedContainerView`. Only the drawn island
-  /// and the hit region follow it — deliberately NOT the panel, which stays at the tallest tier
-  /// for the whole expanded state. See `targetPanelFrame` for the crash this avoids.
+  /// The selected tab's height tier, reported by `ExpandedContainerView`.
   func setExpandedHeight(_ height: CGFloat) {
     guard height != expandedHeight else { return }
+    let oldHeight = expandedHeight
+    if state.isExpanded, height > oldHeight {
+      updatePanelFrame(
+        toward: geometry.panelFrame(width: expandedWidth, height: height))
+    }
     withAnimation(Motion.gated(Motion.opening)) { expandedHeight = height }
+    if state.isExpanded, height < oldHeight {
+      updatePanelFrame(toward: targetPanelFrame(for: state), restartingShrinkDelay: true)
+    }
     reconcileHoverContainment()
   }
 
-  /// Sets the width requested by the current tab count. The panel already reserves
-  /// `maximumExpandedWidth`, so this changes only the drawn island and its hit region.
+  /// Sets the width requested by the current tab count.
   func setExpandedWidth(_ width: CGFloat) {
     let clamped = min(maximumExpandedWidth, max(Metrics.expandedSize.width, ceil(width)))
     guard clamped != expandedWidth else { return }
+    let oldWidth = expandedWidth
+    if state.isExpanded, clamped > oldWidth {
+      updatePanelFrame(
+        toward: geometry.panelFrame(width: clamped, height: expandedHeight))
+    }
     withAnimation(Motion.gated(Motion.opening)) { expandedWidth = clamped }
+    if state.isExpanded, clamped < oldWidth {
+      updatePanelFrame(toward: targetPanelFrame(for: state), restartingShrinkDelay: true)
+    }
     reconcileHoverContainment()
   }
 
@@ -310,36 +422,37 @@ final class NotchViewModel: ObservableObject {
     guard inside != wasInside else { return }
     wasInside = inside
     if inside {
-      collapseTask?.cancel()
+      cancelScheduledCollapse()
     } else if case .expanded(false) = state {
       scheduleCollapse()
     }
   }
 
-  /// Grows the logical visible footprint immediately, then lets it settle after the closing
-  /// animation. The AppKit host itself remains at `reservedPanelFrame` throughout.
   private func updatePanelFrame(for state: NotchState) {
-    let target = targetPanelFrame(for: state)
+    updatePanelFrame(toward: targetPanelFrame(for: state))
+  }
+
+  /// Grows before a matching content change can draw outside the window. Shrinks share one timer
+  /// and re-read the current target when it fires, so rapid tier and state changes cannot leave a
+  /// stale frame behind.
+  private func updatePanelFrame(toward target: CGRect, restartingShrinkDelay: Bool = false) {
     let grown = panelFrame.union(target)
     if grown != panelFrame { panelFrame = grown }
-    // A pending shrink is deliberately left running rather than restarted: hover dithering on the
-    // notch boundary, or a compact slot re-measuring, would otherwise push its deadline back
-    // forever and strand the panel at expanded size. It re-reads the target when it fires, so a
-    // single timer always settles on the current frame.
-    guard target != panelFrame, shrinkTask == nil else { return }
-    shrinkTask = Self.debounce(
-      for: Motion.panelShrinkDelay,
-      cleanup: { [weak self] in self?.shrinkTask = nil },
-      body: { [weak self] in
-        guard let self else { return }
-        let settled = self.targetPanelFrame(for: self.state)
-        if settled != self.panelFrame { self.panelFrame = settled }
-      })
+    // Hover dithering and compact slot re-measurement do not restart a pending shrink, which stops
+    // them from pushing its deadline back forever. A real content-tier shrink restarts the delay so
+    // the outgoing animation is never clipped. Every timer re-reads the current target when it
+    // fires.
+    guard target != panelFrame else { return }
+    if shrinkTask != nil {
+      guard restartingShrinkDelay else { return }
+      cancelScheduledShrink()
+    }
+    schedulePanelShrink()
   }
 
   /// Cancels a pending shrink without scheduling a replacement. Exposed for tests: nothing in the
   /// app cancels it today, and the point of the test is that the gating handle survives a cancel.
-  func cancelPendingShrink() { shrinkTask?.cancel() }
+  func cancelPendingShrink() { cancelScheduledShrink() }
 
   func apply(_ event: NotchEvent) {
     let next = NotchStateMachine.transition(
@@ -376,26 +489,28 @@ final class NotchViewModel: ObservableObject {
     }
   }
 
-  /// Runs `body` after `delay`, cancelling any timer passed as `cancelling`. Omitting it schedules
-  /// without disturbing what's already in flight.
-  ///
-  /// `cleanup` runs on EVERY path, cancellation included. A handle that gates future scheduling —
-  /// `shrinkTask`, whose non-nil-ness blocks the next shrink — has to be released even when the
-  /// timer never fires, or the first cancel blocks that path for the rest of the process. Nilling
-  /// the handle here is safe against clobbering a newer one: no replacement can be scheduled while
-  /// the old handle is still non-nil.
-  private static func debounce(
-    cancelling existing: Task<Void, Never>? = nil, for delay: Duration,
-    cleanup: (@MainActor () -> Void)? = nil,
-    body: @escaping @MainActor () -> Void
-  ) -> Task<Void, Never> {
-    existing?.cancel()
-    return Task { @MainActor in
-      try? await Task.sleep(for: delay)
-      cleanup?()
-      guard !Task.isCancelled else { return }
-      body()
+  private func schedulePanelShrink() {
+    guard shrinkTask == nil else { return }
+    shrinkTaskGeneration &+= 1
+    let generation = shrinkTaskGeneration
+    shrinkTask = scheduler.schedule(after: Motion.panelShrinkDelay) { [weak self] in
+      guard let self, self.shrinkTaskGeneration == generation else { return }
+      self.shrinkTask = nil
+      let settled = self.targetPanelFrame(for: self.state)
+      if settled != self.panelFrame { self.panelFrame = settled }
     }
+  }
+
+  private func cancelScheduledShrink() {
+    shrinkTaskGeneration &+= 1
+    shrinkTask?.cancel()
+    shrinkTask = nil
+  }
+
+  private func cancelScheduledCollapse() {
+    collapseTaskGeneration &+= 1
+    collapseTask?.cancel()
+    collapseTask = nil
   }
 
   private func beginBarrier(at location: CGPoint) {
@@ -451,11 +566,15 @@ final class NotchViewModel: ObservableObject {
   }
 
   private func scheduleCollapse() {
-    collapseTask = Self.debounce(
-      cancelling: collapseTask, for: .seconds(Defaults[.hoverCollapseTimeout]),
-      body: { [weak self] in
-        guard let self, !self.wasInside else { return }
-        self.apply(.collapseTimeoutElapsed)
-      })
+    cancelScheduledCollapse()
+    collapseTaskGeneration &+= 1
+    let generation = collapseTaskGeneration
+    collapseTask = scheduler.schedule(after: .seconds(Defaults[.hoverCollapseTimeout])) {
+      [weak self] in
+      guard let self, self.collapseTaskGeneration == generation else { return }
+      self.collapseTask = nil
+      guard !self.wasInside else { return }
+      self.apply(.collapseTimeoutElapsed)
+    }
   }
 }

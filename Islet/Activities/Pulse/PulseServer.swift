@@ -2,7 +2,6 @@ import Combine
 import Darwin
 import Foundation
 import Network
-import Security
 
 enum PulsePaths {
   static let defaultPort = NWEndpoint.Port(rawValue: 47_717)!
@@ -13,8 +12,6 @@ enum PulsePaths {
     let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     return root.appendingPathComponent("Islet", isDirectory: true)
   }
-
-  static var tokenURL: URL { supportDirectory.appendingPathComponent("pulse-token") }
   static var activePortURL: URL { supportDirectory.appendingPathComponent("pulse-port") }
 }
 
@@ -75,46 +72,50 @@ final class PulseServer: ObservableObject {
   private var commandPipelines: [ObjectIdentifier: PulseCommandPipeline] = [:]
   private var commandTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
   private var authenticationTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+  private var authenticatedCredentials: [ObjectIdentifier: String] = [:]
   private let queue = DispatchQueue(label: "dev.islet.pulse", qos: .utility)
   @Published private(set) var isRunning = false
   @Published private(set) var lastError: String?
   @Published private(set) var activePort: UInt16?
   @Published private(set) var portRecoveryMessage: String?
-  @Published private(set) var tokenRotatedAt: Date?
   @Published private(set) var nextRetryAt: Date?
-  private(set) var token: String?
-  private var rateLimiter = PulseRateLimiter()
+  let credentialStore: PulseCredentialStore
+  let actionTrustStore: PulseActionTrustStore
+  private var rateLimiters = PulseProviderRateLimiters()
   private var candidateIndex = 0
   private var retryTask: (any PulseRetryCancellable)?
   private var stableReadyTask: (any PulseRetryCancellable)?
   private var retryAttempt = 0
   private var lifecycleGeneration = 0
   private let listenerFactory: ListenerFactory
-  private let tokenLoader: () throws -> String
-  private let tokenRotator: () throws -> String
   private let activePortWriter: (UInt16) throws -> Void
   private let activePortRemover: () -> Void
+  private let removeItemsForSource: (String) -> Void
   private let now: () -> Date
   private let retryScheduler: RetryScheduler
 
   init(
+    credentialStore: PulseCredentialStore = PulseCredentialStore(),
+    actionTrustStore: PulseActionTrustStore = PulseActionTrustStore(),
     listenerFactory: @escaping ListenerFactory = { parameters, port in
       try NWListener(using: parameters, on: port)
     },
-    tokenLoader: (() throws -> String)? = nil,
-    tokenRotator: (() throws -> String)? = nil,
     activePortWriter: ((UInt16) throws -> Void)? = nil,
     activePortRemover: (() -> Void)? = nil,
+    removeItemsForSource: @escaping (String) -> Void = {
+      PulseCenter.shared.removeItems(forSource: $0)
+    },
     now: @escaping () -> Date = Date.init,
     retryScheduler: @escaping RetryScheduler = { delay, action in
       PulseRetryTask(after: delay, action: action)
     }
   ) {
+    self.credentialStore = credentialStore
+    self.actionTrustStore = actionTrustStore
     self.listenerFactory = listenerFactory
-    self.tokenLoader = tokenLoader ?? Self.loadOrCreateToken
-    self.tokenRotator = tokenRotator ?? { try Self.createToken(replacingExisting: true) }
     self.activePortWriter = activePortWriter ?? Self.writeActivePort
     self.activePortRemover = activePortRemover ?? Self.removeActivePort
+    self.removeItemsForSource = removeItemsForSource
     self.now = now
     self.retryScheduler = retryScheduler
   }
@@ -132,8 +133,7 @@ final class PulseServer: ObservableObject {
 
   private func startFreshAttempt() {
     do {
-      let token = try tokenLoader()
-      self.token = token
+      try credentialStore.prepare()
       candidateIndex = 0
       lastError = nil
       portRecoveryMessage = nil
@@ -238,7 +238,7 @@ final class PulseServer: ObservableObject {
       nextRetryAt = nil
       stableReadyTask?.cancel()
       stableReadyTask = nil
-      lastError = "The Pulse listener stopped. Retry it from Settings."
+      lastError = String(localized: "The Pulse listener stopped. Retry it from Settings.")
     case .setup:
       break
     @unknown default:
@@ -283,7 +283,7 @@ final class PulseServer: ObservableObject {
     stableReadyTask?.cancel()
     stableReadyTask = nil
     activePortRemover()
-    lastError = "Pulse could not start: \(error.localizedDescription)"
+    lastError = String(localized: "Pulse could not start: \(error.localizedDescription)")
     Log.app.error("Pulse server failed: \(error.localizedDescription, privacy: .public)")
   }
 
@@ -387,6 +387,7 @@ final class PulseServer: ObservableObject {
     commandPipelines.removeAll()
     commandTasks.removeAll()
     authenticationTasks.removeAll()
+    authenticatedCredentials.removeAll()
   }
 
   func retryDefaultPort() {
@@ -394,19 +395,77 @@ final class PulseServer: ObservableObject {
     start()
   }
 
-  /// Invalidates the one shared provider credential, disconnects every current client, and
-  /// atomically replaces the token before optionally restoring the listener.
-  func rotateToken() throws {
-    let shouldRestart = !listeners.isEmpty || retryTask != nil
-    stop()
+  @discardableResult
+  func createProvider(
+    name: String, source: String, permissions: Set<PulseCredentialPermission>
+  ) throws -> PulseCredentialSummary {
+    try credentialStore.createProvider(name: name, source: source, permissions: permissions)
+  }
+
+  func setPermissions(_ permissions: Set<PulseCredentialPermission>, for id: String) throws {
+    let previous = credentialStore.credentials.first { $0.id == id }
+    let previouslyAllowedWebActions = previous?.permissions.contains(.webActions) == true
+    let allowsWebActions = permissions.contains(.webActions)
+    if !previouslyAllowedWebActions, allowsWebActions {
+      // A failed cleanup must block re-enabling web actions. Otherwise an old allowlist left by a
+      // previous removal failure could silently become active again for this credential.
+      try actionTrustStore.revokeAll(forCredentialID: id)
+    }
+    try credentialStore.setPermissions(permissions, for: id)
+    var trustRemovalError: Error?
+    if previouslyAllowedWebActions, !allowsWebActions {
+      do {
+        try actionTrustStore.revokeAll(forCredentialID: id)
+      } catch {
+        // Permission removal has already made every stored trust inert. Finish disconnecting the
+        // provider before surfacing the cleanup error so revocation cannot be blocked by storage.
+        trustRemovalError = error
+      }
+    }
+    if previous?.permissions.contains(.persistentActivities) == true,
+      !permissions.contains(.persistentActivities), let source = previous?.source
+    {
+      removeItemsForSource(source)
+    }
+    disconnectProvider(id)
+    if let trustRemovalError { throw trustRemovalError }
+  }
+
+  func rotateCredential(_ id: String) throws {
+    let source = credentialStore.credentials.first { $0.id == id }?.source
+    try credentialStore.rotate(id)
+    rateLimiters.removeProvider(id)
+    if let source { removeItemsForSource(source) }
+    disconnectProvider(id)
+  }
+
+  func revokeCredential(_ id: String) throws {
+    let source = credentialStore.credentials.first { $0.id == id }?.source
+    defer {
+      if credentialStore.credentials.first(where: { $0.id == id })?.isRevoked == true {
+        rateLimiters.removeProvider(id)
+        if let source { removeItemsForSource(source) }
+        disconnectProvider(id)
+      }
+    }
+    try credentialStore.revoke(id)
+    var trustRemovalError: Error?
     do {
-      token = try tokenRotator()
-      rateLimiter = PulseRateLimiter()
-      tokenRotatedAt = Date()
-      if shouldRestart { start() }
+      try actionTrustStore.revokeAll(forCredentialID: id)
     } catch {
-      if shouldRestart { start() }
-      throw error
+      // The revoked credential cannot authorize an action even if cleanup needs a later retry.
+      trustRemovalError = error
+    }
+    if let trustRemovalError { throw trustRemovalError }
+  }
+
+  private func disconnectProvider(_ credentialID: String) {
+    let ids = authenticatedCredentials.compactMap { entry in
+      entry.value == credentialID ? entry.key : nil
+    }
+    for id in ids {
+      connections[id]?.cancel()
+      removeConnection(id)
     }
   }
 
@@ -470,6 +529,7 @@ final class PulseServer: ObservableObject {
     commandPipelines.removeValue(forKey: id)?.finish()
     commandTasks[id] = nil
     authenticationTasks.removeValue(forKey: id)?.cancel()
+    authenticatedCredentials[id] = nil
   }
 
   private func markAuthenticated(_ id: ObjectIdentifier) {
@@ -545,24 +605,43 @@ final class PulseServer: ObservableObject {
   ) -> Bool {
     do {
       try PulseWireValidator.validate(data)
-      let command = try PulseWireCodec.decoder().decode(PulseCommand.self, from: data)
-      guard Self.securelyMatches(command.token, token) else {
-        send(
-          .failure("unauthorized", code: .unauthorized, requestID: command.requestID),
-          on: connection)
-        return false
+      let incoming = try PulseWireCodec.decoder().decode(PulseCommand.self, from: data)
+      let provider = try credentialStore.authenticate(incoming.token)
+      if let pinnedCredential = authenticatedCredentials[id],
+        pinnedCredential != provider.credentialID
+      {
+        throw PulseCredentialError.unauthorized
       }
+      authenticatedCredentials[id] = provider.credentialID
       markAuthenticated(id)
-      guard rateLimiter.accepts(ProcessInfo.processInfo.systemUptime) else {
+      switch rateLimiters.admit(
+        providerID: provider.credentialID, at: ProcessInfo.processInfo.systemUptime)
+      {
+      case .accepted:
+        break
+      case .rateLimited(let scope, let retryAfter):
+        let subject = scope == .provider ? "provider" : "Pulse process"
         send(
           .failure(
-            "provider command rate exceeded; retry later", code: .rateLimited,
-            requestID: command.requestID),
+            "\(subject) command rate exceeded",
+            code: .rateLimited, requestID: incoming.requestID, retryAfter: retryAfter),
           on: connection)
         return false
       }
-      send(PulseCenter.shared.applyIfEnabled(command), on: connection)
+      let (command, authorizedProvider) = try credentialStore.authorize(incoming, as: provider)
+      let providerIdentity = try PulseProviderIdentity(
+        credentialID: authorizedProvider.credentialID, source: authorizedProvider.source)
+      send(
+        PulseCenter.shared.applyIfEnabled(command, providerIdentity: providerIdentity),
+        on: connection)
       return true
+    } catch let error as PulseCredentialError {
+      send(
+        .failure(
+          error.localizedDescription, code: Self.errorCode(for: error),
+          requestID: Self.requestID(in: data)),
+        on: connection)
+      return false
     } catch {
       send(
         .failure("invalid command: \(error.localizedDescription)", code: .invalidCommand),
@@ -589,62 +668,21 @@ final class PulseServer: ObservableObject {
       })
   }
 
-  private static func loadOrCreateToken() throws -> String {
-    let manager = FileManager.default
-    try manager.createDirectory(
-      at: PulsePaths.supportDirectory, withIntermediateDirectories: true,
-      attributes: [.posixPermissions: 0o700])
-    try manager.setAttributes(
-      [.posixPermissions: 0o700], ofItemAtPath: PulsePaths.supportDirectory.path)
-    var info = stat()
-    if lstat(PulsePaths.tokenURL.path, &info) == 0,
-      (info.st_mode & S_IFMT) == S_IFREG,
-      info.st_uid == getuid(),
-      let value = try? String(contentsOf: PulsePaths.tokenURL, encoding: .utf8)
-        .trimmingCharacters(in: .whitespacesAndNewlines),
-      let decoded = Data(base64Encoded: value), decoded.count == 32
-    {
-      try manager.setAttributes(
-        [.posixPermissions: 0o600], ofItemAtPath: PulsePaths.tokenURL.path)
-      return value
-    }
-    return try createToken(replacingExisting: true)
+  nonisolated private static func requestID(in data: Data) -> String? {
+    (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["requestID"] as? String
   }
 
-  private static func createToken(replacingExisting: Bool) throws -> String {
-    let manager = FileManager.default
-    try manager.createDirectory(
-      at: PulsePaths.supportDirectory, withIntermediateDirectories: true,
-      attributes: [.posixPermissions: 0o700])
-    try manager.setAttributes(
-      [.posixPermissions: 0o700], ofItemAtPath: PulsePaths.supportDirectory.path)
-    var bytes = [UInt8](repeating: 0, count: 32)
-    let randomStatus = bytes.withUnsafeMutableBytes { buffer in
-      SecRandomCopyBytes(kSecRandomDefault, buffer.count, buffer.baseAddress!)
+  nonisolated private static func errorCode(for error: PulseCredentialError) -> PulseErrorCode {
+    switch error {
+    case .revoked: .credentialRevoked
+    case .requestIDRequired: .requestIDRequired
+    case .replayedRequest: .replayedRequest
+    case .sourceSpoofing: .sourceMismatch
+    case .permissionDenied: .permissionDenied
+    case .unauthorized, .notFound, .unsafeCredentialFile, .corruptRegistry, .registryTooLarge,
+      .duplicateSource, .providerLimitReached, .invalidName, .invalidSource:
+      .unauthorized
     }
-    guard randomStatus == errSecSuccess else {
-      throw CocoaError(.fileWriteUnknown)
-    }
-    let value = Data(bytes).base64EncodedString()
-    let temporaryURL = PulsePaths.supportDirectory.appendingPathComponent(
-      ".pulse-token-\(UUID().uuidString).tmp")
-    guard
-      manager.createFile(
-        atPath: temporaryURL.path, contents: Data("\(value)\n".utf8),
-        attributes: [.posixPermissions: 0o600])
-    else { throw CocoaError(.fileWriteUnknown) }
-    defer { try? manager.removeItem(at: temporaryURL) }
-    try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporaryURL.path)
-    if !replacingExisting, manager.fileExists(atPath: PulsePaths.tokenURL.path) {
-      throw CocoaError(.fileWriteFileExists)
-    }
-    let renameResult = temporaryURL.path.withCString { source in
-      PulsePaths.tokenURL.path.withCString { destination in Darwin.rename(source, destination) }
-    }
-    guard renameResult == 0 else {
-      throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-    }
-    return value
   }
 
   private static func writeActivePort(_ port: UInt16) throws {
@@ -656,15 +694,6 @@ final class PulseServer: ObservableObject {
   private static func removeActivePort() {
     try? FileManager.default.removeItem(at: PulsePaths.activePortURL)
   }
-
-  nonisolated private static func securelyMatches(_ supplied: String, _ expected: String?) -> Bool {
-    guard let expected, let left = Data(base64Encoded: supplied),
-      let right = Data(base64Encoded: expected), left.count == right.count, left.count == 32
-    else { return false }
-    var difference: UInt8 = 0
-    for index in left.indices { difference |= left[index] ^ right[index] }
-    return difference == 0
-  }
 }
 
 private enum PulseServerError: LocalizedError {
@@ -672,7 +701,7 @@ private enum PulseServerError: LocalizedError {
 
   var errorDescription: String? {
     switch self {
-    case .missingActivePort: "The listener did not report its active port."
+    case .missingActivePort: String(localized: "The listener did not report its active port.")
     }
   }
 }

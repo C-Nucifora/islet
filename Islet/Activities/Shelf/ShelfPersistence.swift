@@ -7,8 +7,8 @@ enum ShelfSameFileDuplicatePolicy: String, CaseIterable, Codable, Identifiable, 
   var id: Self { self }
   var title: String {
     switch self {
-    case .reuseExisting: "Reuse existing copy"
-    case .keepBoth: "Keep both"
+    case .reuseExisting: String(localized: "Reuse existing copy")
+    case .keepBoth: String(localized: "Keep both")
     }
   }
 }
@@ -20,8 +20,8 @@ enum ShelfSameNameDuplicatePolicy: String, CaseIterable, Codable, Identifiable, 
   var id: Self { self }
   var title: String {
     switch self {
-    case .keepBoth: "Keep both with a number"
-    case .reuseExisting: "Reuse existing name"
+    case .keepBoth: String(localized: "Keep both with a number")
+    case .reuseExisting: String(localized: "Reuse existing name")
     }
   }
 }
@@ -35,10 +35,10 @@ enum ShelfExpiryRule: String, CaseIterable, Codable, Identifiable, Sendable {
   var id: Self { self }
   var title: String {
     switch self {
-    case .never: "Never"
-    case .oneHour: "After 1 hour"
-    case .oneDay: "After 1 day"
-    case .oneWeek: "After 1 week"
+    case .never: String(localized: "Never")
+    case .oneHour: String(localized: "After 1 hour")
+    case .oneDay: String(localized: "After 1 day")
+    case .oneWeek: String(localized: "After 1 week")
     }
   }
 

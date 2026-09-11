@@ -13,12 +13,12 @@ enum FocusEventSourceHealth: Equatable {
 
   var summary: String {
     switch self {
-    case .stopped: "Stopped"
-    case .missingFile: "Assertions file missing"
-    case .permissionDenied: "Cannot read assertions file"
-    case .parseFailed: "Assertions format not recognised"
-    case .watching: "Watching"
-    case .healthyEmpty: "Watching, no Focus active"
+    case .stopped: String(localized: "Stopped")
+    case .missingFile: String(localized: "Assertions file missing")
+    case .permissionDenied: String(localized: "Cannot read assertions file")
+    case .parseFailed: String(localized: "Assertions format not recognised")
+    case .watching: String(localized: "Watching")
+    case .healthyEmpty: String(localized: "Watching, no Focus active")
     }
   }
 
@@ -53,7 +53,7 @@ private enum FocusReadResult {
 @MainActor
 final class FocusEventSource: SystemEventSource, ObservableObject {
   let id = "focus"
-  let displayName = "Focus mode"
+  let displayName = String(localized: "Focus mode")
   let tier = SystemEventTier.heuristic
 
   @Published private(set) var health: FocusEventSourceHealth = .stopped
@@ -186,15 +186,16 @@ final class FocusEventSource: SystemEventSource, ObservableObject {
     if let active {
       SystemEventBus.shared.emit(
         SystemEvent(
-          sourceID: id, icon: "moon.circle.fill", title: "Focus on", subtitle: active,
+          sourceID: id, icon: "moon.circle.fill", title: String(localized: "Focus on"),
+          subtitle: active,
           accentHex: EventAccent.info, motion: .focus, urgency: .ambient,
-          announcement: "Focus on, \(active)"))
+          announcement: String(localized: "Focus on, \(active)")))
     } else if previous != nil {
       SystemEventBus.shared.emit(
         SystemEvent(
-          sourceID: id, icon: "moon.circle", title: "Focus off",
+          sourceID: id, icon: "moon.circle", title: String(localized: "Focus off"),
           accentHex: EventAccent.neutral, motion: .focus, urgency: .ambient,
-          announcement: "Focus off"))
+          announcement: String(localized: "Focus off")))
     }
   }
 

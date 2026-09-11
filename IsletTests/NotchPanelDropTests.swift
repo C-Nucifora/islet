@@ -79,4 +79,51 @@ final class NotchPanelDropTests: XCTestCase {
     XCTAssertFalse(handedOff)
     panel.close()
   }
+
+  func testAdaptiveResizePreservesCaptureAndFullscreenPolicy() {
+    let panel = NotchPanel(frame: CGRect(x: 200, y: 900, width: 300, height: 50))
+    panel.sharingType = .none
+    let collectionBehavior = panel.collectionBehavior
+
+    panel.setFrame(CGRect(x: 50, y: 600, width: 900, height: 280), display: false)
+
+    XCTAssertEqual(panel.sharingType, .none)
+    XCTAssertEqual(panel.collectionBehavior, collectionBehavior)
+    XCTAssertTrue(panel.collectionBehavior.contains(.fullScreenAuxiliary))
+    XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllSpaces))
+    panel.close()
+  }
+
+  func testEveryPanelRoutesDropsToTheSameShelfHandlerWithoutTakingFocus() throws {
+    let first = NotchPanel(frame: CGRect(x: 0, y: 0, width: 300, height: 50))
+    let second = NotchPanel(frame: CGRect(x: 500, y: 0, width: 300, height: 50))
+    defer {
+      first.close()
+      second.close()
+    }
+    let source = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "shared-shelf-\(UUID().uuidString).txt")
+    try Data("drop".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: source) }
+    let pasteboard = try pasteboard(containing: [source])
+    var sharedShelfImports: [[URL]] = []
+    let routeToSharedShelf: ([URL]) -> Bool = { urls in
+      sharedShelfImports.append(urls)
+      return true
+    }
+    first.fileURLsDropped = routeToSharedShelf
+    second.fileURLsDropped = routeToSharedShelf
+
+    XCTAssertFalse(first.isKeyWindow)
+    XCTAssertFalse(first.isMainWindow)
+    XCTAssertFalse(second.isKeyWindow)
+    XCTAssertFalse(second.isMainWindow)
+    XCTAssertTrue(first.performFileDrop(from: pasteboard))
+    XCTAssertTrue(second.performFileDrop(from: pasteboard))
+    XCTAssertFalse(first.isKeyWindow)
+    XCTAssertFalse(first.isMainWindow)
+    XCTAssertFalse(second.isKeyWindow)
+    XCTAssertFalse(second.isMainWindow)
+    XCTAssertEqual(sharedShelfImports, [[source], [source]])
+  }
 }

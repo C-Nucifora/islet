@@ -1,3 +1,4 @@
+import AppKit
 import Defaults
 import SwiftUI
 
@@ -14,17 +15,32 @@ enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
 
   var title: String {
     switch self {
-    case .classic: "Classic"
-    case .mono: "Mono"
-    case .ocean: "Ocean"
-    case .violet: "Violet"
-    case .sunset: "Sunset"
-    case .forest: "Forest"
-    case .catppuccin: "Catppuccin"
+    case .classic: String(localized: "Classic")
+    case .mono: String(localized: "Mono")
+    case .ocean: String(localized: "Ocean")
+    case .violet: String(localized: "Violet")
+    case .sunset: String(localized: "Sunset")
+    case .forest: String(localized: "Forest")
+    case .catppuccin: String(localized: "Catppuccin")
     }
   }
 
   var accentColor: Color { color(for: .interaction) }
+
+  private static let readableIndigo = Color(red: 0.48, green: 0.44, blue: 1)
+
+  /// Settings uses the system window background instead of the island's black surface. Keep the
+  /// Mono palette adaptive there so controls never render white on a light background.
+  func settingsAccentColor(for colorScheme: ColorScheme) -> Color {
+    guard self == .mono else { return accentColor }
+    return colorScheme == .light ? .black : .white
+  }
+
+  /// Foreground content drawn on top of the Settings accent, such as navigation glyphs.
+  func settingsAccentForegroundColor(for colorScheme: ColorScheme) -> Color {
+    guard self == .mono else { return .white }
+    return colorScheme == .light ? .white : .black
+  }
 
   func powerFlowColor(for role: BatteryFlowRole) -> Color {
     switch (self, role) {
@@ -33,18 +49,18 @@ enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
     case (.classic, .externalPower), (.classic, .batteryCharge): .green
     case (.classic, .batterySupplement): .orange
     case (.classic, .systemLoad): .cyan
-    case (.classic, .usbOutput): .purple
+    case (.classic, .usbOutput): Color(red: 0.72, green: 0.48, blue: 1)
 
     case (.ocean, .externalPower), (.ocean, .batteryCharge): .cyan
     case (.ocean, .batterySupplement): .blue
     case (.ocean, .systemLoad): .teal
-    case (.ocean, .usbOutput): .indigo
+    case (.ocean, .usbOutput): Self.readableIndigo
 
     case (.violet, .externalPower), (.violet, .batteryCharge):
       Color(red: 0.72, green: 0.48, blue: 1)
     case (.violet, .batterySupplement): .pink
-    case (.violet, .systemLoad): .purple
-    case (.violet, .usbOutput): .indigo
+    case (.violet, .systemLoad): Color(red: 0.72, green: 0.48, blue: 1)
+    case (.violet, .usbOutput): Self.readableIndigo
 
     case (.sunset, .externalPower), (.sunset, .batteryCharge): .yellow
     case (.sunset, .batterySupplement): .orange
@@ -62,6 +78,10 @@ enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
     case (.catppuccin, .systemLoad): Color(red: 0.45, green: 0.78, blue: 0.93)
     case (.catppuccin, .usbOutput): Color(red: 0.80, green: 0.65, blue: 0.97)
     }
+  }
+
+  func powerFlowColor(for role: BatteryFlowRole, style: BatteryGraphStyle) -> Color {
+    style == .monochrome ? .white : powerFlowColor(for: role)
   }
 
   func color(for role: AppThemeRole) -> Color {
@@ -88,14 +108,15 @@ enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
     case (.ocean, .calendar), (.ocean, .system), (.ocean, .timer), (.ocean, .battery),
       (.ocean, .pulse):
       .cyan
-    case (.ocean, .clipboard): .indigo
+    case (.ocean, .clipboard): Self.readableIndigo
     case (.ocean, .ports), (.ocean, .reminders), (.ocean, .nowPlaying): .teal
 
     case (.violet, .interaction), (.violet, .clipboard), (.violet, .nowPlaying),
       (.violet, .t3Code):
       .purple
     case (.violet, .calendar), (.violet, .reminders), (.violet, .pulse): .pink
-    case (.violet, .ports), (.violet, .shelf), (.violet, .continuity): .indigo
+    case (.violet, .ports), (.violet, .shelf), (.violet, .continuity):
+      Self.readableIndigo
     case (.violet, .system), (.violet, .timer), (.violet, .battery):
       Color(red: 0.72, green: 0.48, blue: 1)
 
@@ -141,20 +162,62 @@ enum BatteryGraphStyle: String, CaseIterable, Codable, Identifiable, Sendable {
 
   var title: String {
     switch self {
-    case .coloured: "Coloured"
-    case .monochrome: "Monochrome"
+    case .coloured: String(localized: "Coloured")
+    case .monochrome: String(localized: "Monochrome")
     }
   }
 }
 
 extension BatteryGraphStyle: Defaults.Serializable {}
 
-enum BatteryFlowRole: Sendable {
+enum BatteryFlowRole: CaseIterable, Sendable {
   case externalPower
   case batterySupplement
   case systemLoad
   case usbOutput
   case batteryCharge
+}
+
+enum AppThemeContrast {
+  static let minimumTextRatio = 4.5
+  static let minimumGraphicalRatio = 3.0
+
+  static func ratio(foreground: Color, background: Color = .black) -> Double? {
+    guard let foreground = NSColor(foreground).usingColorSpace(.sRGB),
+      let background = NSColor(background).usingColorSpace(.sRGB)
+    else { return nil }
+    let lighter = max(relativeLuminance(foreground), relativeLuminance(background))
+    let darker = min(relativeLuminance(foreground), relativeLuminance(background))
+    return (lighter + 0.05) / (darker + 0.05)
+  }
+
+  static func ratio(
+    foreground: Color, opacity: Double, background: Color = .black
+  ) -> Double? {
+    guard let foreground = NSColor(foreground).usingColorSpace(.sRGB),
+      let background = NSColor(background).usingColorSpace(.sRGB)
+    else { return nil }
+    let alpha = min(1, max(0, foreground.alphaComponent * opacity))
+    let composited = NSColor(
+      red: foreground.redComponent * alpha + background.redComponent * (1 - alpha),
+      green: foreground.greenComponent * alpha + background.greenComponent * (1 - alpha),
+      blue: foreground.blueComponent * alpha + background.blueComponent * (1 - alpha),
+      alpha: 1)
+    let lighter = max(relativeLuminance(composited), relativeLuminance(background))
+    let darker = min(relativeLuminance(composited), relativeLuminance(background))
+    return (lighter + 0.05) / (darker + 0.05)
+  }
+
+  private static func relativeLuminance(_ color: NSColor) -> Double {
+    func linear(_ component: CGFloat) -> Double {
+      let value = Double(component)
+      return value <= 0.04045
+        ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * linear(color.redComponent)
+      + 0.7152 * linear(color.greenComponent)
+      + 0.0722 * linear(color.blueComponent)
+  }
 }
 
 enum AppThemeRole: CaseIterable, Hashable, Sendable {

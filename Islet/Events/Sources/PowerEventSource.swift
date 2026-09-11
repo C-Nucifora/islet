@@ -9,7 +9,7 @@ import Foundation
 @MainActor
 final class PowerEventSource: SystemEventSource {
   let id = "power"
-  let displayName = "Charging and Low Power Mode"
+  let displayName = String(localized: "Charging and Low Power Mode")
   let tier = SystemEventTier.core
 
   private var cancellables: Set<AnyCancellable> = []
@@ -38,11 +38,13 @@ final class PowerEventSource: SystemEventSource {
       SystemEvent(
         sourceID: id,
         icon: on ? "battery.25percent" : "battery.100percent",
-        title: on ? "Low Power Mode on" : "Low Power Mode off",
+        title: on
+          ? String(localized: "Low Power Mode on") : String(localized: "Low Power Mode off"),
         accentHex: on ? EventAccent.warning : EventAccent.neutral,
         motion: .lowPower,
         urgency: .ambient,
-        announcement: on ? "Low Power Mode on" : "Low Power Mode off"))
+        announcement: on
+          ? String(localized: "Low Power Mode on") : String(localized: "Low Power Mode off")))
   }
 }
 
@@ -51,7 +53,7 @@ final class PowerEventSource: SystemEventSource {
 @MainActor
 final class SleepEventSource: SystemEventSource {
   let id = "sleep"
-  let displayName = "Sleep and wake"
+  let displayName = String(localized: "Sleep and wake")
   let tier = SystemEventTier.core
 
   private var cancellables: Set<AnyCancellable> = []
@@ -75,10 +77,10 @@ final class SleepEventSource: SystemEventSource {
       SystemEvent(
         sourceID: id,
         icon: waking ? "sun.max.fill" : "moon.fill",
-        title: waking ? "Awake" : "Going to sleep",
+        title: waking ? String(localized: "Awake") : String(localized: "Going to sleep"),
         accentHex: waking ? EventAccent.warning : EventAccent.neutral,
         motion: .sleepWake,
         urgency: .ambient,
-        announcement: waking ? "Awake" : "Going to sleep"))
+        announcement: waking ? String(localized: "Awake") : String(localized: "Going to sleep")))
   }
 }

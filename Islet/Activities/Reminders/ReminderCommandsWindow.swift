@@ -22,7 +22,7 @@ final class ReminderCommandsWindow: NSObject, NSWindowDelegate {
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 440, height: 360),
       styleMask: [.titled, .closable], backing: .buffered, defer: false)
-    window.title = "Reminder Commands"
+    window.title = String(localized: "Reminder Commands")
     window.isReleasedWhenClosed = false
     window.delegate = self
     window.contentView = NSHostingView(rootView: content)
@@ -147,11 +147,13 @@ private struct ReminderCommandsView: View {
   }
 
   private var availabilityMessage: String? {
-    if !remindersEnabled { return "Reminders are disabled in Islet Settings." }
+    if !remindersEnabled { return String(localized: "Reminders are disabled in Islet Settings.") }
     if !provider.authorization.canRead {
-      return "Reminders access: \(provider.authorization.summary)."
+      return String(localized: "Reminders access: \(provider.authorization.summary).")
     }
-    if writableLists.isEmpty { return "No writable reminder lists are available." }
+    if writableLists.isEmpty {
+      return String(localized: "No writable reminder lists are available.")
+    }
     return nil
   }
 
@@ -163,7 +165,8 @@ private struct ReminderCommandsView: View {
     {
       Button(
         provider.authorization == .notDetermined
-          ? "Allow Reminders Access" : "Open Reminders Settings"
+          ? String(localized: "Allow Reminders Access")
+          : String(localized: "Open Reminders Settings")
       ) {
         Task { await provider.recoverAccess() }
       }

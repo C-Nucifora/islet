@@ -10,9 +10,14 @@ packages:
   Defaults:
     url: https://github.com/sindresorhus/Defaults
     from: 9.0.0
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.9.6
 settings:
   base:
     SWIFT_VERSION: "6.0"
+    DEVELOPMENT_LANGUAGE: en
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
     MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
     # A stable signing identity, not ad-hoc. TCC keys every grant on the app's designated
@@ -40,6 +45,7 @@ targets:
         buildPhase: resources
     dependencies:
       - package: Defaults
+      - package: Sparkle
       - framework: Vendor/MediaRemoteAdapter.framework
         embed: true
         codeSign: true
@@ -55,13 +61,23 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSUIElement: true
         NSHumanReadableCopyright: ""
-        NSCalendarsUsageDescription: "Islet shows your next event and today's agenda in the notch."
-        NSCalendarsFullAccessUsageDescription: "Islet shows your next event and today's agenda in the notch."
+        NSCalendarsUsageDescription: "Islet shows a three-day agenda and lets you add events from the notch."
+        NSCalendarsFullAccessUsageDescription: "Islet shows a three-day agenda and lets you add events from the notch."
         NSRemindersUsageDescription: "Islet shows and manages your reminders in the notch."
         NSRemindersFullAccessUsageDescription: "Islet shows and manages your reminders in the notch."
         NSBluetoothAlwaysUsageDescription: "Islet shows a brief animation when a Bluetooth device connects or disconnects, and reads the battery level of connected Apple peripherals."
         NSLocationWhenInUseUsageDescription: "Islet shows the name of the Wi-Fi network you join. macOS requires location access to read network names; deny this and Islet will simply say 'Wi-Fi connected'."
         NSLocalNetworkUsageDescription: "Islet connects to T3 Code on your Macs to show active agents in the notch."
+        # The stable feed is a release asset. GitHub's latest-release redirect keeps the URL fixed,
+        # while each signed appcast points at an archive under its immutable version tag.
+        SUFeedURL: "https://github.com/C-Nucifora/islet/releases/latest/download/appcast.xml"
+        SUPublicEDKey: "$(ISLET_UPDATE_PUBLIC_ED_KEY)"
+        SURequireSignedFeed: true
+        SUVerifyUpdateBeforeExtraction: true
+        SUSignedFeedFailureExpirationInterval: 0
+        SUAutomaticallyUpdate: false
+        SUShowReleaseNotes: true
+        IsletUpdateChannel: stable
         # Remote HTTP must be approved twice in a reviewed build. Add its exact origin here, then
         # add its host to NSExceptionDomains with NSExceptionAllowsInsecureHTTPLoads set to true.
         # Islet still asks the user to approve plain HTTP when they pair that exact origin.
@@ -86,6 +102,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - target: Islet
+      - package: Sparkle
 schemes:
   Islet:
     build:

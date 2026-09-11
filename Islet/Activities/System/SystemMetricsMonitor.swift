@@ -17,6 +17,7 @@ final class SystemMetricsMonitor: ObservableObject {
 
   @Published private(set) var sample = SystemMetricsSample()
   @Published private(set) var rings: [SystemMetricKind: MetricRing] = [:]
+  let attribution = ProcessAttributionMonitor()
 
   /// Retained by `SystemExpandedView` via `.liveSampling(_:)`.
   private(set) lazy var liveGate = LiveSamplingGate { [weak self] live in
@@ -36,6 +37,7 @@ final class SystemMetricsMonitor: ObservableObject {
   private var energyCancellable: AnyCancellable?
   private let now: () -> Date
   private let cpuPowerSamplingService: CPUPowerSamplingService
+  private var contextRuleCancellable: AnyCancellable?
 
   init(
     now: @escaping () -> Date = Date.init,
@@ -59,6 +61,9 @@ final class SystemMetricsMonitor: ObservableObject {
       .dropFirst()
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.energyPolicyDidChange() }
+    contextRuleCancellable = ContextRuleCenter.shared.resolutionChanges
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.energyPolicyDidChange() }
     restartTimer()
     tick()
   }
@@ -71,14 +76,17 @@ final class SystemMetricsMonitor: ObservableObject {
     timer = nil
     powerCancellable = nil
     energyCancellable = nil
+    contextRuleCancellable = nil
     previous = nil
     previousDate = nil
     isSampling = false
+    attribution.stop()
   }
 
   private func setLive(_ live: Bool) {
     guard live != isLive else { return }
     isLive = live
+    attribution.setVisible(live)
     guard isRunning else { return }
     restartTimer()
     tick()  // don't make the user wait a whole interval for the first fast sample
@@ -117,12 +125,13 @@ final class SystemMetricsMonitor: ObservableObject {
     previousDate = now
     sample = next
     pushRings(next, at: now)
+    attribution.observe(next)
     isSampling = false
   }
 
   private var energyPolicy: EnergyPolicy {
     EnergyPolicy(
-      mode: Defaults[.energyMode],
+      mode: ContextRuleCenter.shared.effectiveEnergyMode(baseline: Defaults[.energyMode]),
       systemLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
   }
 

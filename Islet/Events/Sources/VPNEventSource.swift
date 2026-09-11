@@ -180,7 +180,7 @@ private final class TunnelDynamicStoreMonitor: TunnelNetworkChangeMonitoring {
 @MainActor
 final class VPNEventSource: SystemEventSource {
   let id = "vpn"
-  let displayName = "Network tunnel"
+  let displayName = String(localized: "Network tunnel")
   let tier = SystemEventTier.heuristic
 
   private let interfaceReader: () -> [String]
@@ -216,6 +216,9 @@ final class VPNEventSource: SystemEventSource {
     Defaults.publisher(.energyMode)
       .dropFirst()
       .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.restartRecoveryTimer() }
+      .store(in: &cancellables)
+    ContextRuleCenter.shared.resolutionChanges
       .sink { [weak self] _ in self?.restartRecoveryTimer() }
       .store(in: &cancellables)
     NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)
@@ -298,7 +301,7 @@ final class VPNEventSource: SystemEventSource {
 
   private func restartRecoveryTimer() {
     let policy = EnergyPolicy(
-      mode: Defaults[.energyMode],
+      mode: ContextRuleCenter.shared.effectiveEnergyMode(baseline: Defaults[.energyMode]),
       systemLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
     recoveryTimer = Timer.publish(
       every: cadence.interval(for: policy), on: .main, in: .common
@@ -313,11 +316,13 @@ final class VPNEventSource: SystemEventSource {
       SystemEvent(
         sourceID: id,
         icon: up ? "lock.shield.fill" : "lock.shield",
-        title: up ? "Network tunnel up" : "Network tunnel down",
+        title: up
+          ? String(localized: "Network tunnel up") : String(localized: "Network tunnel down"),
         subtitle: (up ? change.added : change.removed).first,
         accentHex: up ? EventAccent.info : EventAccent.neutral,
         motion: .vpn,
         urgency: .ambient,
-        announcement: up ? "Network tunnel up" : "Network tunnel down"))
+        announcement: up
+          ? String(localized: "Network tunnel up") : String(localized: "Network tunnel down")))
   }
 }

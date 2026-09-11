@@ -38,6 +38,23 @@ final class AppThemeTests: XCTestCase {
     }
   }
 
+  func testMonoSettingsColorsAdaptToAppearance() throws {
+    XCTAssertEqual(try rgba(AppTheme.mono.settingsAccentColor(for: .light)), [0, 0, 0, 1])
+    XCTAssertEqual(
+      try rgba(AppTheme.mono.settingsAccentForegroundColor(for: .light)), [1, 1, 1, 1])
+    XCTAssertEqual(try rgba(AppTheme.mono.settingsAccentColor(for: .dark)), [1, 1, 1, 1])
+    XCTAssertEqual(
+      try rgba(AppTheme.mono.settingsAccentForegroundColor(for: .dark)), [0, 0, 0, 1])
+  }
+
+  func testNonMonoSettingsColorsKeepTheirThemeAccent() throws {
+    for theme in AppTheme.allCases where theme != .mono {
+      let accent = try rgba(theme.accentColor)
+      XCTAssertEqual(try rgba(theme.settingsAccentColor(for: .light)), accent)
+      XCTAssertEqual(try rgba(theme.settingsAccentColor(for: .dark)), accent)
+    }
+  }
+
   func testBatteryGraphStylesHaveStableNamesAndRoundTrip() {
     XCTAssertEqual(BatteryGraphStyle.allCases.map(\.rawValue), ["coloured", "monochrome"])
     XCTAssertEqual(BatteryGraphStyle.allCases.map(\.title), ["Coloured", "Monochrome"])
@@ -49,5 +66,13 @@ final class AppThemeTests: XCTestCase {
       Defaults[.batteryGraphStyle] = style
       XCTAssertEqual(Defaults[.batteryGraphStyle], style)
     }
+  }
+
+  private func rgba(_ color: Color) throws -> [CGFloat] {
+    let resolved = try XCTUnwrap(NSColor(color).usingColorSpace(.sRGB))
+    return [
+      resolved.redComponent, resolved.greenComponent, resolved.blueComponent,
+      resolved.alphaComponent,
+    ]
   }
 }

@@ -11,10 +11,10 @@ enum HapticStrength: String, CaseIterable, Codable, Sendable {
 
   var title: String {
     switch self {
-    case .off: "Off"
-    case .light: "Light"
-    case .medium: "Medium"
-    case .strong: "Strong"
+    case .off: String(localized: "Off")
+    case .light: String(localized: "Light")
+    case .medium: String(localized: "Medium")
+    case .strong: String(localized: "Strong")
     }
   }
 }
@@ -52,6 +52,10 @@ enum EnergyMode: String, CaseIterable, Codable, Sendable {
   case automatic
   case lowEnergy
   case live
+}
+
+enum DisplayPlacementDefaults {
+  static let showOnAllDisplays = false
 }
 
 /// Pure cadence policy shared by the battery, system and T3 monitors. Keeping these decisions in
@@ -128,6 +132,8 @@ extension HUDStyle: Defaults.Serializable {}
 extension EnergyMode: Defaults.Serializable {}
 extension HapticStrength: Defaults.Serializable {}
 extension PulseDeliveryProfile: Defaults.Serializable {}
+extension BatteryDrainBaselinePoint: Defaults.Serializable {}
+extension BatteryCapacityPoint: Defaults.Serializable {}
 
 /// The persisted activity switch. `disabledActivities` is an exclusion list so activities added by
 /// a newer build start enabled, and an older build can retain ids it does not understand.
@@ -199,6 +205,10 @@ enum ActivityEnablement {
 extension Defaults.Keys {
   static let onboardingVersion = Key<Int>("onboardingVersion", default: 0)
   static let appTheme = Key<AppTheme>("appTheme", default: .classic)
+  static let commandPaletteShortcut = Key<GlobalShortcut?>(
+    "commandPaletteShortcut", default: GlobalShortcut.default)
+  static let commandPaletteRecentResultIDs = Key<[String]>(
+    "commandPaletteRecentResultIDs", default: [])
   static let batteryGraphStyle = Key<BatteryGraphStyle>("batteryGraphStyle", default: .coloured)
   static let mediaSourceMode = Key<MediaSourceMode>("mediaSourceMode", default: .auto)
   static let mediaPriorityList = Key<[String]>(
@@ -223,9 +233,23 @@ extension Defaults.Keys {
   /// battery after macOS first reports its low-battery state.
   static let keepAwakeLowBatteryThreshold = Key<Int>(
     "keepAwakeLowBatteryThreshold", default: 20)
+  static let contextRules = Key<[ContextRule]>("contextRules", default: [])
+  static let contextManualOverride = Key<ContextManualOverride?>("contextManualOverride")
   static let hideFromScreenRecording = Key<Bool>("hideFromScreenRecording", default: false)
   /// Retained only as input to the one-time activity enablement migration.
   static let legacyBatteryEnabled = Key<Bool>("batteryEnabled", default: true)
+  static let unusualBatteryDrainWarnings = Key<Bool>("unusualBatteryDrainWarnings", default: true)
+  static let chargerCapacityWarnings = Key<Bool>("chargerCapacityWarnings", default: true)
+  static let peripheralBatteryWarningThresholds = Key<[String: Int]>(
+    "peripheralBatteryWarningThresholds",
+    default: Dictionary(
+      uniqueKeysWithValues: PeripheralDeviceType.allCases.map { ($0.rawValue, 20) }))
+  static let batteryDrainBaseline = Key<[BatteryDrainBaselinePoint]>(
+    "batteryDrainBaseline", default: [])
+  static let batteryCapacityHistory = Key<[BatteryCapacityPoint]>(
+    "batteryCapacityHistory", default: [])
+  static let batteryInsightLastAlertDates = Key<[String: Date]>(
+    "batteryInsightLastAlertDates", default: [:])
   static let hudEnabled = Key<Bool>("hudEnabled", default: false)
   static let hudStyle = Key<HUDStyle>("hudStyle", default: .bar)
   /// Stable Core Graphics display UUIDs for monitors whose DDC control the user disabled.
@@ -236,7 +260,8 @@ extension Defaults.Keys {
   static let calendarLeadMinutes = Key<Int>("calendarLeadMinutes", default: 10)
   static let hiddenCalendarIDs = Key<[String]>("hiddenCalendarIDs", default: [])
   static let remindersEnabled = Key<Bool>("remindersEnabled", default: true)
-  static let showOnAllDisplays = Key<Bool>("showOnAllDisplays", default: false)
+  static let showOnAllDisplays = Key<Bool>(
+    "showOnAllDisplays", default: DisplayPlacementDefaults.showOnAllDisplays)
   /// The display's Quartz UUID. This remains set while the display is disconnected so Islet can
   /// return to it on reconnect instead of turning a temporary fallback into a new preference.
   static let preferredDisplayID = Key<String>("preferredDisplayID", default: "")
@@ -277,6 +302,13 @@ extension Defaults.Keys {
     "systemAutoPresentDiskThroughput", default: true)
   static let systemAutoPresentNetworkThroughput = Key<Bool>(
     "systemAutoPresentNetworkThroughput", default: true)
+  static let processAttributionEnabled = Key<Bool>("processAttributionEnabled", default: true)
+  static let processCPUThreshold = Key<Double>("processCPUThreshold", default: 0.8)
+  static let processMemoryThreshold = Key<Double>("processMemoryThreshold", default: 0.9)
+  static let processDiskThresholdMBPerSecond = Key<Double>(
+    "processDiskThresholdMBPerSecond", default: 50)
+  static let processNetworkThresholdMBPerSecond = Key<Double>(
+    "processNetworkThresholdMBPerSecond", default: 25)
   /// Keyed by `SystemMetricKind.rawValue`, valued by `MetricDisplayStyle.rawValue`. Stored as
   /// strings so an unknown value from a future build resolves to the fallback instead of failing
   /// to decode the whole dictionary.
@@ -298,6 +330,16 @@ extension Defaults.Keys {
   /// strings so a newer policy value cannot prevent older Islet versions from restoring the
   /// policies they understand.
   static let pulseSourcePolicies = Key<[String: String]>("pulseSourcePolicies", default: [:])
+  static let pulseStaleTimeout = Key<Double>(
+    "pulseStaleTimeout", default: PulseStalenessPolicy.defaultTimeout)
+  static let pulseRevisionStateData = Key<Data?>("pulseRevisionStateData")
+  /// Pulse history stays memory-only unless the user opts in to saving its limited metadata.
+  static let pulseHistoryPersistenceEnabled = Key<Bool>(
+    "pulseHistoryPersistenceEnabled", default: false)
+  static let pulseHistoryRetentionDays = Key<Int>(
+    "pulseHistoryRetentionDays", default: PulseHistoryConfiguration.defaultRetentionDays)
+  static let pulseHistoryMaximumEntries = Key<Int>(
+    "pulseHistoryMaximumEntries", default: PulseHistoryConfiguration.defaultMaximumEntries)
   static let t3RemoteEnvironments = Key<[T3EnvironmentProfile]>(
     "t3RemoteEnvironments", default: [])
   static let timerSessionData = Key<Data?>("timerSessionData")

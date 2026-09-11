@@ -495,6 +495,38 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertEqual(flow.proportion(of: 30), 0.5, accuracy: 0.0001)
   }
 
+  func testConfirmedExternalChargingOverridesContradictoryPowerTelemetry() throws {
+    var metrics = BatteryMetrics()
+    metrics.systemPowerInWatts = 70.2
+    metrics.systemLoadWatts = 94.8
+    metrics.batteryPowerWatts = -24.6
+    metrics.cpuPowerWatts = 12.1
+    metrics.externalConnected = true
+    metrics.isCharging = true
+    metrics.timeToFullMinutes = 78
+
+    let flow = PowerFlowSnapshot(metrics: metrics)
+    XCTAssertEqual(flow.batteryDirection, .charging)
+    XCTAssertEqual(try XCTUnwrap(flow.adapterInputWatts), 70.2, accuracy: 0.0001)
+    XCTAssertNil(flow.batteryInputWatts)
+    XCTAssertEqual(try XCTUnwrap(flow.batteryChargeWatts), 24.6, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(flow.macUseWatts), 45.6, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(flow.cpuUseWatts), 12.1, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(flow.restOfMacWatts), 33.5, accuracy: 0.0001)
+    XCTAssertEqual(flow.scaleWatts, 70.2, accuracy: 0.0001)
+
+    let incoming = (flow.adapterInputWatts ?? 0) + (flow.batteryInputWatts ?? 0)
+    let outgoing =
+      (flow.macUseWatts ?? 0) + flow.usbOutputWatts + (flow.batteryChargeWatts ?? 0)
+    XCTAssertEqual(incoming, outgoing, accuracy: 0.0001)
+
+    XCTAssertEqual(
+      PowerStatus.text(
+        onAC: true, isCharging: true, fullyCharged: false,
+        batteryDirection: flow.batteryDirection, notChargingReason: 0),
+      "Charging")
+  }
+
   func testPowerFlowFallsBackToWholeMacWithoutCPUTelemetry() throws {
     var m = BatteryMetrics()
     m.systemLoadWatts = 20
@@ -529,13 +561,50 @@ final class BatteryMetricsTests: XCTestCase {
     m.systemPowerInWatts = 28.407
     m.systemLoadWatts = 34.122
     m.batteryPowerWatts = -5.715
+    m.externalConnected = true
+    m.isCharging = true
 
     let flow = PowerFlowSnapshot(metrics: m)
+    XCTAssertEqual(flow.batteryDirection, .supplementing)
     XCTAssertEqual(try XCTUnwrap(flow.adapterInputWatts), 28.407, accuracy: 0.0001)
     XCTAssertEqual(try XCTUnwrap(flow.batteryInputWatts), 5.715, accuracy: 0.0001)
     XCTAssertEqual(try XCTUnwrap(flow.macUseWatts), 34.122, accuracy: 0.0001)
     XCTAssertNil(flow.batteryChargeWatts)
     XCTAssertEqual(flow.scaleWatts, 34.122, accuracy: 0.0001)
+    let incoming = (flow.adapterInputWatts ?? 0) + (flow.batteryInputWatts ?? 0)
+    let outgoing =
+      (flow.macUseWatts ?? 0) + flow.usbOutputWatts + (flow.batteryChargeWatts ?? 0)
+    XCTAssertEqual(incoming, outgoing, accuracy: 0.0001)
+  }
+
+  func testTimeToFullAloneDoesNotOverrideBatterySupplementing() throws {
+    var metrics = BatteryMetrics()
+    metrics.systemPowerInWatts = 28.407
+    metrics.systemLoadWatts = 34.122
+    metrics.batteryPowerWatts = -5.715
+    metrics.externalConnected = true
+    metrics.isCharging = false
+    metrics.timeToFullMinutes = 78
+
+    let flow = PowerFlowSnapshot(metrics: metrics)
+    XCTAssertEqual(flow.batteryDirection, .supplementing)
+    XCTAssertEqual(try XCTUnwrap(flow.batteryInputWatts), 5.715, accuracy: 0.0001)
+    XCTAssertNil(flow.batteryChargeWatts)
+  }
+
+  func testChargingSignalsDoNotOverrideBatterySupplementWithoutExternalPower() throws {
+    var metrics = BatteryMetrics()
+    metrics.systemPowerInWatts = 28.407
+    metrics.systemLoadWatts = 34.122
+    metrics.batteryPowerWatts = -5.715
+    metrics.externalConnected = false
+    metrics.isCharging = true
+    metrics.timeToFullMinutes = 78
+
+    let flow = PowerFlowSnapshot(metrics: metrics)
+    XCTAssertEqual(flow.batteryDirection, .supplementing)
+    XCTAssertEqual(try XCTUnwrap(flow.batteryInputWatts), 5.715, accuracy: 0.0001)
+    XCTAssertNil(flow.batteryChargeWatts)
   }
 
   func testPowerInputKindUsesTheMeasuredPortBeforeAdapterFallbacks() {
@@ -807,6 +876,17 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertEqual(empty?.value, "2h 22m")
 
     XCTAssertNil(PowerFormat.remaining(timeToFull: nil, timeToEmpty: nil))
+  }
+
+  func testRemainingTimeFollowsResolvedBatteryDirection() {
+    let charging = PowerFormat.remaining(
+      batteryDirection: .charging, timeToFull: 78, timeToEmpty: nil)
+    XCTAssertEqual(charging?.label, "Full in")
+    XCTAssertEqual(charging?.value, "1h 18m")
+
+    XCTAssertNil(
+      PowerFormat.remaining(
+        batteryDirection: .supplementing, timeToFull: 78, timeToEmpty: nil))
   }
 
   // MARK: - Smoothing

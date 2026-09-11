@@ -1,38 +1,66 @@
+import AppKit
 import Defaults
 import SwiftUI
 
-/// The expanded view shown when nothing is playing: today's agenda plus reminders you can complete.
+/// A ranked view of current work across the built-in activities and Pulse. Home deliberately owns
+/// no source data. It reduces the live activity models into `HomeAttentionItem` values, then sends
+/// actions back to the source that supplied them.
 struct IdleDashboardView: View {
-  @ObservedObject var calendar = AppState.calendar
-  @ObservedObject var reminders = RemindersProvider.shared
+  @ObservedObject var vm: NotchViewModel
+  let onOpenActivity: (String) -> Void
+
+  @ObservedObject private var calendar = AppState.calendar
+  @ObservedObject private var reminders = RemindersProvider.shared
+  @ObservedObject private var timer = AppState.timer
+  @ObservedObject private var t3Code = AppState.t3Code
+  @ObservedObject private var pulse = PulseCenter.shared
+  @ObservedObject private var battery = AppState.battery
+  @ObservedObject private var shelf = ShelfModel.shared
   @ObservedObject private var keepAwake = KeepAwakeManager.shared
   @Default(.calendarEnabled) private var calendarEnabled
   @Default(.remindersEnabled) private var remindersEnabled
+  @Default(.disabledActivities) private var disabledActivities
+
+  @State private var showsAll = false
+  @State private var pendingPulseAction: PulseActionConfirmation?
+  @State private var pulseActionError: String?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       keepAwakeControls
       Divider().overlay(Color.white.opacity(0.12))
-      Group {
-        if calendarEnabled || remindersEnabled {
-          HStack(alignment: .top, spacing: 14) {
-            if calendarEnabled {
-              column("Today", systemImage: "calendar") { agenda }
-            }
-            if calendarEnabled && remindersEnabled {
-              Divider().overlay(Color.white.opacity(0.12))
-            }
-            if remindersEnabled {
-              column("Reminders", systemImage: "checklist") { remindersList }
-            }
-          }
-        } else {
-          enableHint
-        }
+      TimelineView(.periodic(from: .now, by: 10)) { context in
+        dashboard(now: context.date)
       }
     }
     .foregroundStyle(.white)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .confirmationDialog(
+      "Open Pulse web destination?",
+      isPresented: Binding(
+        get: { pendingPulseAction != nil },
+        set: { if !$0 { pendingPulseAction = nil } }),
+      titleVisibility: .visible,
+      presenting: pendingPulseAction
+    ) { confirmation in
+      Button("Trust \(confirmation.destination.displayHost) and Open") {
+        pendingPulseAction = nil
+        handlePulseAction(PulseActionGate.shared.confirm(confirmation))
+      }
+      Button("Cancel", role: .cancel) { pendingPulseAction = nil }
+    } message: { confirmation in
+      Text(pulseConfirmationMessage(for: confirmation))
+    }
+    .alert(
+      "Pulse action blocked",
+      isPresented: Binding(
+        get: { pulseActionError != nil },
+        set: { if !$0 { pulseActionError = nil } })
+    ) {
+      Button("OK") { pulseActionError = nil }
+    } message: {
+      Text(pulseActionError ?? "")
+    }
   }
 
   private var keepAwakeControls: some View {
@@ -40,8 +68,11 @@ struct IdleDashboardView: View {
       Image(systemName: keepAwake.isActive ? "cup.and.heat.waves.fill" : "cup.and.heat.waves")
         .appThemeForeground(.interaction)
       VStack(alignment: .leading, spacing: 1) {
-        Text(keepAwake.isActive ? "Mac stays awake" : "Keep Mac awake")
-          .font(.caption.weight(.semibold))
+        Text(
+          keepAwake.isActive
+            ? String(localized: "Mac stays awake") : String(localized: "Keep Mac awake")
+        )
+        .font(.caption.weight(.semibold))
         if keepAwake.isActive {
           Text(keepAwake.lastError ?? keepAwake.statusText)
             .font(.caption2.monospacedDigit())
@@ -92,243 +123,381 @@ struct IdleDashboardView: View {
     .accessibilityElement(children: .contain)
   }
 
-  private func column<Content: View>(
-    _ title: String, systemImage: String, @ViewBuilder content: () -> Content
-  ) -> some View {
+  @ViewBuilder private func dashboard(now: Date) -> some View {
+    let allItems = sourceItems(now: now)
+    let visibleItems = vm.visibleHomeAttentionItems(allItems, now: now)
+    let overflow = HomeAttentionOverflow.split(visibleItems)
+    let shownItems = showsAll ? visibleItems : overflow.primary
+
     VStack(alignment: .leading, spacing: 6) {
-      Label(title, systemImage: systemImage)
-        .font(.caption.weight(.semibold))
-        .appThemeForeground(systemImage == "calendar" ? .calendar : .reminders)
-      content()
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  // MARK: - Agenda
-
-  @ViewBuilder private var agenda: some View {
-    if !calendar.authorization.canRead {
-      permissionRow("Calendar: \(calendar.authorization.summary)", permission: "Calendar") {
-        Task { await calendar.recoverAccess() }
-      }
-    } else if calendar.loadState == .loading {
-      ProgressView().controlSize(.small).accessibilityLabel("Loading calendar")
-    } else if case .failed(let message) = calendar.loadState {
-      HStack(spacing: 5) {
-        Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(2)
-        Button("Retry") { Task { await calendar.refreshAuthorization() } }
-          .buttonStyle(.link).font(.caption2)
-      }
-    } else if calendar.events.isEmpty {
-      emptyRow("No events today")
-    } else {
-      ScrollView(.vertical, showsIndicators: false) {
-        VStack(alignment: .leading, spacing: 6) {
-          ForEach(calendar.events.prefix(6)) { event in
-            HStack(spacing: 6) {
-              // Vertical bar tinted with the event's calendar colour (like Calendar.app).
-              Capsule()
-                .fill(Color(isletHex: event.calendarColorHex) ?? .secondary)
-                .frame(width: 3, height: 14)
-              // Wide enough for "12:00 pm" — monospacedDigit only pins the digits, and the pm/am
-              // pair is the widest suffix, so a tighter frame wraps the label onto two lines.
-              if event.isAllDay {
-                Text("All day")
-                  .font(.caption2).foregroundStyle(.secondary)
-                  .lineLimit(1)
-                  .frame(width: 54, alignment: .leading)
-              } else {
-                Text(event.start, format: .dateTime.hour().minute())
-                  .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
-                  .lineLimit(1)
-                  .frame(width: 54, alignment: .leading)
-              }
-              Text(event.title).font(.caption).lineLimit(1)
-              Spacer(minLength: 0)
-              if let url = event.joinURL, let link = CalendarMeetingLinkPolicy.candidate(url) {
-                CalendarMeetingLinkButton(link: link, eventTitle: event.title)
-              }
-            }
-          }
+      HStack(spacing: 7) {
+        Label("Home", systemImage: "square.grid.2x2.fill")
+          .font(.caption.weight(.semibold))
+          .appThemeForeground(.interaction)
+        if let first = visibleItems.first {
+          Text("First because \(first.rankingReason.lowercased())")
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .help(
+              HomeAttentionRanking.explanation(
+                for: first, above: visibleItems.dropFirst().first))
         }
-      }
-    }
-  }
-
-  // MARK: - Reminders
-
-  @ViewBuilder private var remindersList: some View {
-    if reminders.accessDenied {
-      permissionRow(
-        "Reminders: \(reminders.authorization.summary)", permission: "Reminders"
-      ) {
-        Task { await reminders.recoverAccess() }
-      }
-    } else {
-      let presentation = ReminderDashboardPresentation.make(
-        loadState: reminders.loadState,
-        reminderCount: reminders.reminders.count,
-        hasMoreReminders: reminders.hasMoreReminders,
-        hasCompletionUndo: reminders.completionUndo != nil)
-
-      VStack(alignment: .leading, spacing: 6) {
-        if presentation.actions.contains(.create) {
-          HStack {
-            Spacer()
-            Button {
-              ReminderEditorWindow.shared.presentEditor(provider: reminders, item: nil)
-            } label: {
-              Label("New reminder", systemImage: "plus")
-            }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.plain)
-            .keyboardShortcut("n", modifiers: .command)
-            .accessibilityLabel("New reminder")
-            .disabled(reminders.availableLists.isEmpty)
+        Spacer(minLength: 0)
+        Text("\(visibleItems.count)")
+          .font(.caption2.monospacedDigit())
+          .foregroundStyle(.secondary)
+          .accessibilityLabel("\(visibleItems.count) items need attention")
+        if remindersEnabled, reminders.authorization.canRead {
+          Button {
+            ReminderEditorWindow.shared.presentEditor(provider: reminders, item: nil)
+          } label: {
+            Image(systemName: "plus")
           }
-        }
-        if let error = reminders.lastActionError {
-          HStack(spacing: 5) {
-            Text(error).font(.caption2).foregroundStyle(.orange).lineLimit(2)
-            Button("Dismiss") { reminders.dismissActionError() }
-              .buttonStyle(.link).font(.caption2)
-          }
-        }
-        if presentation.actions.contains(.undo), let undo = reminders.completionUndo {
-          HStack(spacing: 5) {
-            Text("Completed \(undo.title)").font(.caption2).lineLimit(1)
+          .buttonStyle(.plain)
+          .accessibilityLabel("New reminder")
+          .accessibilityHint("Opens a keyboard-accessible reminder editor")
+          .disabled(reminderCommands.route(for: .create) == nil)
+          if reminders.completionUndo != nil {
             Button("Undo") { reminders.undoLastCompletion() }
-              .buttonStyle(.link).font(.caption2)
-              .keyboardShortcut("z", modifiers: .command)
-              .accessibilityLabel("Undo completing \(undo.title)")
+              .buttonStyle(.link)
+              .font(.caption2)
+              .accessibilityLabel("Undo last reminder completion")
+              .disabled(reminderCommands.route(for: .undo) == nil)
           }
         }
-        switch presentation.content {
-        case .loading:
-          ProgressView().controlSize(.small).accessibilityLabel("Loading reminders")
-        case .failed(let message):
-          HStack(spacing: 5) {
-            Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(2)
-            Button("Retry") { Task { await reminders.reload() } }
-              .buttonStyle(.link).font(.caption2)
+        if !overflow.overflow.isEmpty {
+          Button(
+            showsAll
+              ? String(localized: "Show less")
+              : String(localized: "More (\(overflow.overflow.count))")
+          ) {
+            withAnimation(Motion.gated(.snappy)) { showsAll.toggle() }
           }
-        case .empty(let message, let showsMore):
-          emptyRow(message)
-          if showsMore {
-            moreRemindersButton
-          }
-        case .items:
-          ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 6) {
-              ForEach(reminders.reminders) { item in
-                HStack(spacing: 6) {
-                  Button {
-                    withAnimation(Motion.gated(.snappy)) { reminders.complete(item) }
-                  } label: {
-                    // Circle tinted with the reminder list's colour (like Reminders.app).
-                    Image(systemName: "circle")
-                      .foregroundStyle(Color(isletHex: item.listColorHex) ?? .secondary)
-                      .font(.caption)
-                  }
-                  .buttonStyle(.plain)
-                  .accessibilityLabel("Complete \(item.title)")
-                  VStack(alignment: .leading, spacing: 0) {
-                    Text(item.title).font(.caption).lineLimit(1)
-                    if let due = item.dueDate {
-                      reminderDueText(item, due: due)
-                        .font(.caption2).monospacedDigit()
-                        .foregroundStyle(
-                          RemindersLogic.isOverdue(item, now: Date())
-                            ? .red : .secondary)
-                    }
-                  }
-                  Spacer(minLength: 0)
-                  reminderActions(item)
-                }
-              }
+          .buttonStyle(.link)
+          .font(.caption2)
+          .accessibilityHint(
+            showsAll
+              ? "Shows the three highest-ranked items"
+              : "Shows all \(visibleItems.count) items in a scrollable list")
+        }
+      }
+
+      if shownItems.isEmpty {
+        emptyState
+      } else {
+        ScrollView(.vertical, showsIndicators: showsAll) {
+          LazyVStack(spacing: 5) {
+            ForEach(Array(shownItems.enumerated()), id: \.element.id) { index, item in
+              HomeAttentionRow(
+                item: item,
+                rankExplanation: HomeAttentionRanking.explanation(
+                  for: item,
+                  above: visibleItems.dropFirst(index + 1).first),
+                action: { perform($0) },
+                dismiss: { dismiss($0) },
+                snooze: { snooze($0, now: now) })
             }
           }
-          if reminders.hasMoreReminders {
-            moreRemindersButton
-          }
+          .padding(.bottom, 1)
         }
       }
     }
-  }
-
-  private func reminderActions(_ item: ReminderItem) -> some View {
-    Menu {
-      Section("Snooze") {
-        ForEach(RemindersLogic.SnoozePreset.allCases, id: \.self) { preset in
-          Button(preset.title) { _ = reminders.snooze(item, preset: preset) }
-        }
-        Button("Choose Date and Time…") {
-          ReminderEditorWindow.shared.presentSnooze(provider: reminders, item: item)
-        }
-      }
-      Button("Edit…") {
-        ReminderEditorWindow.shared.presentEditor(provider: reminders, item: item)
-      }
-      if reminders.availableLists.count > 1 {
-        Menu("Move to List") {
-          ForEach(reminders.availableLists.filter { $0.id != item.listID }) { list in
-            Button(list.title) { _ = reminders.move(item, toListWithID: list.id) }
-          }
-        }
-      }
-    } label: {
-      Image(systemName: "ellipsis.circle")
-        .font(.caption2).foregroundStyle(.secondary)
+    .onChange(of: allItems.map(\.id), initial: true) { _, _ in
+      vm.reconcileHomeAttention(with: allItems)
     }
-    .menuStyle(.borderlessButton)
-    .menuIndicator(.hidden)
-    .fixedSize()
-    .accessibilityLabel("Actions for \(item.title)")
   }
 
-  // MARK: - Fallbacks
+  private func sourceItems(now: Date) -> [HomeAttentionItem] {
+    var items = HomeAttentionBuilder.items(
+      calendarEvents: calendarEnabled ? calendar.events : [],
+      reminders: remindersEnabled ? reminders.reminders : [],
+      timer: timerSnapshot,
+      t3Agents: t3Code.agents,
+      pulseItems: pulse.items,
+      battery: battery.currentState,
+      pendingTransfers: shelf.pendingImportCount,
+      disabledActivities: disabledActivities,
+      now: now)
+    items += serviceIssues
+    return HomeAttentionRanking.ranked(items, now: now)
+  }
 
-  private var enableHint: some View {
+  private var reminderCommands: ReminderCommandPresentation {
+    ReminderCommandPresentation(
+      reminders: reminders.reminders,
+      selectedReminderID: nil,
+      writableListIDs: Set(reminders.availableLists.filter(\.isWritable).map(\.id)),
+      hasCompletionUndo: reminders.completionUndo != nil)
+  }
+
+  private var serviceIssues: [HomeAttentionItem] {
+    var issues: [HomeAttentionItem] = []
+    if calendarEnabled, !calendar.authorization.canRead {
+      issues.append(
+        HomeAttentionBuilder.serviceIssue(
+          id: "permission", source: .calendar, title: "Calendar access is off",
+          detail: calendar.authorization.summary, state: "Needs access",
+          action: HomeAttentionAction(
+            title: "Review access", symbol: "gearshape.fill", kind: .recoverCalendarAccess)))
+    } else if calendarEnabled, case .failed(let message) = calendar.loadState {
+      issues.append(
+        HomeAttentionBuilder.serviceIssue(
+          id: "load", source: .calendar, title: "Calendar could not refresh", detail: message,
+          state: "Unavailable",
+          action: HomeAttentionAction(
+            title: "Retry", symbol: "arrow.clockwise", kind: .retryCalendar)))
+    }
+    if remindersEnabled, !reminders.authorization.canRead {
+      issues.append(
+        HomeAttentionBuilder.serviceIssue(
+          id: "permission", source: .reminders, title: "Reminders access is off",
+          detail: reminders.authorization.summary, state: "Needs access",
+          action: HomeAttentionAction(
+            title: "Review access", symbol: "gearshape.fill", kind: .recoverRemindersAccess)))
+    } else if remindersEnabled, case .failed(let message) = reminders.loadState {
+      issues.append(
+        HomeAttentionBuilder.serviceIssue(
+          id: "load", source: .reminders, title: "Reminders could not refresh", detail: message,
+          state: "Unavailable",
+          action: HomeAttentionAction(
+            title: "Retry", symbol: "arrow.clockwise", kind: .retryReminders)))
+    }
+    return issues
+  }
+
+  private var timerSnapshot: HomeTimerSnapshot? {
+    guard timer.isActive else { return nil }
+    let occurrence =
+      timer.activationDate?.timeIntervalSinceReferenceDate
+      ?? timer.endDate?.timeIntervalSinceReferenceDate
+      ?? 0
+    return HomeTimerSnapshot(
+      occurrenceID: String(occurrence), label: timer.label ?? "Timer", endDate: timer.endDate,
+      remaining: timer.remainingNow, isPaused: timer.isPaused, finished: timer.finished)
+  }
+
+  private var emptyState: some View {
     VStack(spacing: 6) {
-      Image(systemName: "calendar.badge.checkmark").font(.title2)
-      Text("Enable Calendar or Reminders in Settings")
-        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+      Image(systemName: "checkmark.circle")
+        .font(.title2)
+        .foregroundStyle(.green)
+      Text("Nothing needs attention")
+        .font(.caption.weight(.medium))
+      Text(
+        "New events, reminders, timers, agents, Pulse updates, battery warnings, and transfers will appear here."
+      )
+      .font(.caption2)
+      .foregroundStyle(.secondary)
+      .multilineTextAlignment(.center)
+      .frame(maxWidth: 300)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .accessibilityElement(children: .combine)
   }
 
-  private func emptyRow(_ text: String) -> some View {
-    Text(text).font(.caption).foregroundStyle(.secondary)
-  }
-
-  private var moreRemindersButton: some View {
-    Button("More in Reminders") { reminders.openRemindersApp() }
-      .buttonStyle(.link)
-      .font(.caption2)
-      .accessibilityHint("Opens the Reminders app")
-  }
-
-  @ViewBuilder private func reminderDueText(_ item: ReminderItem, due: Date) -> some View {
-    if item.hasDueTime {
-      Text(due, format: .dateTime.hour().minute())
-    } else if Calendar.current.isDateInToday(due) {
-      Text("Today")
-    } else if Calendar.current.isDateInTomorrow(due) {
-      Text("Tomorrow")
-    } else {
-      Text(due, format: .dateTime.month(.abbreviated).day())
+  private func perform(_ action: HomeAttentionAction) {
+    switch action.kind {
+    case .openActivity(let id):
+      onOpenActivity(id)
+    case .openURL(let url):
+      NSWorkspace.shared.open(url)
+    case .openPulseAction(let itemID, let actionID):
+      handlePulseAction(PulseActionGate.shared.requestOpen(itemID: itemID, actionID: actionID))
+    case .openMeetingLink(let link):
+      guard !link.trust.requiresConfirmation else { return }
+      NSWorkspace.shared.open(link.url)
+    case .completeReminder(let id):
+      guard let item = reminders.reminders.first(where: { $0.id == id }) else { return }
+      reminders.complete(item)
+    case .toggleTimer:
+      timer.togglePause()
+    case .dismissTimer:
+      timer.cancel()
+    case .recoverCalendarAccess:
+      Task { await calendar.recoverAccess() }
+    case .recoverRemindersAccess:
+      Task { await reminders.recoverAccess() }
+    case .retryCalendar:
+      Task { await calendar.refreshAuthorization() }
+    case .retryReminders:
+      Task { await reminders.reload() }
     }
   }
 
-  private func permissionRow(
-    _ text: String, permission: String, action: @escaping () -> Void
-  ) -> some View {
-    HStack(spacing: 5) {
-      Text(text).font(.caption2).foregroundStyle(.orange)
-      Button("Review…", action: action)
-        .font(.caption2)
-        .buttonStyle(.link)
-        .accessibilityLabel("Review \(permission) permission")
+  private func handlePulseAction(_ decision: PulseActionOpenDecision) {
+    switch decision {
+    case .opened: break
+    case .confirmationRequired(let confirmation): pendingPulseAction = confirmation
+    case .rejected(let message): pulseActionError = message
+    }
+  }
+
+  private func pulseConfirmationMessage(for confirmation: PulseActionConfirmation) -> String {
+    let locality =
+      confirmation.destination.kind == .loopback
+      ? "This is a local loopback destination and may control software running on this Mac."
+      : "This is an external destination."
+    let transport =
+      confirmation.destination.scheme == "http"
+      ? "The connection is unencrypted."
+      : "The connection uses HTTPS."
+    return
+      "Provider \(confirmation.provider.sourceKey) wants to open \(confirmation.destination.canonicalOrigin). \(locality) \(transport) Confirming trusts only this origin for this provider."
+  }
+
+  private func dismiss(_ item: HomeAttentionItem) {
+    if item.source == .pulse {
+      guard let pulseItem = pulse.items.first(where: { $0.id.stableIdentifier == item.stableID })
+      else { return }
+      pulse.dismiss(pulseItem.id)
+    } else if item.source == .timer, item.state == "Done" {
+      timer.cancel()
+    } else {
+      vm.dismissHomeAttention(item)
+    }
+  }
+
+  private func snooze(_ item: HomeAttentionItem, now: Date) {
+    guard let until = Calendar.current.date(byAdding: .hour, value: 1, to: now) else { return }
+    vm.snoozeHomeAttention(item, until: until)
+  }
+}
+
+private struct HomeAttentionRow: View {
+  let item: HomeAttentionItem
+  let rankExplanation: String
+  let action: (HomeAttentionAction) -> Void
+  let dismiss: (HomeAttentionItem) -> Void
+  let snooze: (HomeAttentionItem) -> Void
+  @State private var meetingLinkConfirmationPresented = false
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Image(systemName: item.symbol)
+        .font(.caption)
+        .frame(width: 19)
+        .foregroundStyle(accent)
+        .accessibilityHidden(true)
+      VStack(alignment: .leading, spacing: 1) {
+        HStack(spacing: 5) {
+          Text(item.source.title)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(accent)
+          Text(item.state)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+          Spacer(minLength: 0)
+          Text(item.priority.title)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(priorityColor)
+        }
+        HStack(spacing: 4) {
+          Text(item.title).font(.caption.weight(.medium)).lineLimit(1)
+          if let detail = item.detail {
+            Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+          }
+        }
+        Text(item.rankingReason)
+          .font(.system(size: 9))
+          .foregroundStyle(.tertiary)
+          .lineLimit(1)
+      }
+      Spacer(minLength: 3)
+      if let primaryAction = item.primaryAction {
+        if case .openMeetingLink(let link) = primaryAction.kind {
+          Button {
+            performPrimaryAction(primaryAction)
+          } label: {
+            primaryActionLabel(primaryAction)
+          }
+          .buttonStyle(.plain)
+          .help(primaryAction.title)
+          .accessibilityHidden(true)
+          .calendarMeetingLinkConfirmation(
+            link: link, isPresented: $meetingLinkConfirmationPresented)
+        } else {
+          Button {
+            performPrimaryAction(primaryAction)
+          } label: {
+            primaryActionLabel(primaryAction)
+          }
+          .buttonStyle(.plain)
+          .help(primaryAction.title)
+          .accessibilityHidden(true)
+        }
+      }
+      if item.allowsSnooze || item.allowsDismiss {
+        Menu {
+          if item.allowsSnooze {
+            Button("Snooze for 1 hour") { snooze(item) }
+          }
+          if item.allowsDismiss {
+            Button("Dismiss") { dismiss(item) }
+          }
+        } label: {
+          Image(systemName: "ellipsis")
+            .font(.caption2.weight(.semibold))
+            .frame(width: 22, height: 22)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityHidden(true)
+      }
+    }
+    .padding(.horizontal, 7)
+    .padding(.vertical, 4)
+    .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8))
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("\(item.source.title), \(item.title)")
+    .accessibilityValue(item.voiceOverValue)
+    .accessibilityHint(rankExplanation)
+    .accessibilityActions {
+      if let primaryAction = item.primaryAction {
+        Button(primaryAction.title) { performPrimaryAction(primaryAction) }
+      }
+      if item.allowsSnooze {
+        Button("Snooze for 1 hour") { snooze(item) }
+      }
+      if item.allowsDismiss {
+        Button("Dismiss") { dismiss(item) }
+      }
+    }
+  }
+
+  private func primaryActionLabel(_ action: HomeAttentionAction) -> some View {
+    Image(systemName: action.symbol)
+      .font(.caption2)
+      .frame(width: 22, height: 22)
+  }
+
+  private func performPrimaryAction(_ primaryAction: HomeAttentionAction) {
+    if case .openMeetingLink(let link) = primaryAction.kind {
+      CalendarMeetingLinkPresentation.activate(link) {
+        meetingLinkConfirmationPresented = true
+      }
+    } else {
+      action(primaryAction)
+    }
+  }
+
+  private var accent: Color {
+    if item.source == .battery || item.state == "Failed" { return .red }
+    if item.state == "Needs action" || item.state == "Needs input"
+      || item.state == "Needs approval"
+    {
+      return .orange
+    }
+    return Color(isletHex: item.accentHex) ?? .cyan
+  }
+
+  private var priorityColor: Color {
+    switch item.priority {
+    case .critical: .red
+    case .urgent: .orange
+    case .high: .yellow
+    case .normal, .low: .secondary
     }
   }
 }

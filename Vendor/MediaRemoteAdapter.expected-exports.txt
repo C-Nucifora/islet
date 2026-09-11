@@ -1,7 +1,10 @@
+_MRMediaRemoteCommandInfoGetCommand
+_MRMediaRemoteCommandInfoGetEnabled
 _MRMediaRemoteGetNowPlayingApplicationIsPlaying
 _MRMediaRemoteGetNowPlayingApplicationPID
 _MRMediaRemoteGetNowPlayingClient
 _MRMediaRemoteGetNowPlayingInfo
+_MRMediaRemoteGetSupportedCommands
 _MRMediaRemoteRegisterForNowPlayingNotifications
 _MRMediaRemoteSendCommand
 _MRMediaRemoteSetElapsedTime
@@ -70,6 +73,7 @@ _kMRAIsAdvertisement
 _kMRAIsBanned
 _kMRAIsInWishList
 _kMRAIsLiked
+_kMRAIsLive
 _kMRAIsMusicApp
 _kMRAMediaType
 _kMRAParentApplicationBundleIdentifier
@@ -87,6 +91,7 @@ _kMRASupportsFastForward15Seconds
 _kMRASupportsIsBanned
 _kMRASupportsIsLiked
 _kMRASupportsRewind15Seconds
+_kMRASupportsSeeking
 _kMRATimestamp
 _kMRATimestampEpochMicros
 _kMRATitle
@@ -112,6 +117,7 @@ _kMRMediaRemoteNowPlayingInfoDuration
 _kMRMediaRemoteNowPlayingInfoElapsedTime
 _kMRMediaRemoteNowPlayingInfoGenre
 _kMRMediaRemoteNowPlayingInfoIsAdvertisement
+_kMRMediaRemoteNowPlayingInfoIsAlwaysLive
 _kMRMediaRemoteNowPlayingInfoIsBanned
 _kMRMediaRemoteNowPlayingInfoIsInWishList
 _kMRMediaRemoteNowPlayingInfoIsLiked

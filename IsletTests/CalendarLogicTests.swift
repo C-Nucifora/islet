@@ -64,7 +64,151 @@ final class CalendarLogicTests: XCTestCase {
     calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Australia/Brisbane"))
     let interval = CalendarLogic.agendaInterval(containing: now, calendar: calendar)
     XCTAssertEqual(interval.start, calendar.startOfDay(for: now))
-    XCTAssertEqual(interval.end, calendar.date(byAdding: .day, value: 1, to: interval.start))
+    XCTAssertEqual(interval.end, calendar.date(byAdding: .day, value: 3, to: interval.start))
+  }
+
+  func testThreeDayIntervalUsesDSTCalendarArithmetic() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+    let date = try XCTUnwrap(
+      calendar.date(from: DateComponents(year: 2026, month: 3, day: 7, hour: 12)))
+
+    let interval = CalendarLogic.agendaInterval(containing: date, calendar: calendar)
+
+    XCTAssertEqual(interval.duration, 71 * 60 * 60)
+    XCTAssertEqual(interval.end, calendar.date(byAdding: .day, value: 3, to: interval.start))
+  }
+
+  func testAgendaDayGroupingUsesRequestedTimeZone() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Australia/Brisbane"))
+    let localNow = try XCTUnwrap(
+      calendar.date(from: DateComponents(year: 2026, month: 6, day: 10, hour: 23, minute: 30)))
+    let afterMidnight = AgendaEvent(
+      title: "Tomorrow", start: localNow.addingTimeInterval(60 * 60),
+      end: localNow.addingTimeInterval(2 * 60 * 60), isAllDay: false,
+      calendarColorHex: nil, joinURL: nil)
+
+    let days = CalendarLogic.days(events: [afterMidnight], now: localNow, calendar: calendar)
+
+    XCTAssertEqual(days.count, 3)
+    XCTAssertTrue(days[0].events.isEmpty)
+    XCTAssertEqual(days[1].events.map(\.title), ["Tomorrow"])
+  }
+
+  func testMultiDayAndAllDayEventsAppearOnEveryIntersectedDay() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+    let localNow = try XCTUnwrap(
+      calendar.date(from: DateComponents(year: 2026, month: 6, day: 10, hour: 8)))
+    let startOfToday = calendar.startOfDay(for: localNow)
+    let multiDay = AgendaEvent(
+      title: "Conference", start: startOfToday,
+      end: try XCTUnwrap(calendar.date(byAdding: .day, value: 2, to: startOfToday)),
+      isAllDay: true, calendarColorHex: nil, joinURL: nil)
+
+    let days = CalendarLogic.days(events: [multiDay], now: localNow, calendar: calendar)
+
+    XCTAssertEqual(days[0].events.map(\.title), ["Conference"])
+    XCTAssertEqual(days[1].events.map(\.title), ["Conference"])
+    XCTAssertTrue(days[2].events.isEmpty)
+  }
+
+  func testDeletedCalendarFiltersAreRemovedAndRenamesKeepIdentifiers() {
+    XCTAssertEqual(
+      CalendarLogic.sanitizedHiddenCalendarIDs(
+        ["work-id", "deleted-id", "work-id"], availableIDs: ["work-id", "home-id"]),
+      ["work-id"])
+  }
+
+  func testPermissionChangesClearOnRevokeAndReloadOnGrant() {
+    XCTAssertEqual(
+      CalendarLogic.accessAction(
+        from: .fullAccess, to: .denied, providerEnabled: true),
+      .clear)
+    XCTAssertEqual(
+      CalendarLogic.accessAction(
+        from: .denied, to: .fullAccess, providerEnabled: true),
+      .reload)
+    XCTAssertEqual(
+      CalendarLogic.accessAction(
+        from: .fullAccess, to: .denied, providerEnabled: false),
+      .none)
+  }
+
+  func testQuickEventPreparationNormalizesFields() throws {
+    let result = CalendarLogic.prepareEvent(
+      CalendarEventDraft(
+        calendarID: "work", title: "  Planning  ", start: now, end: now + 3600,
+        location: "  Room 2  ", conferenceURL: "https://meet.google.com/abc-defg-hij"),
+      writableCalendarIDs: ["work"], authorization: .fullAccess)
+    let prepared = try result.get()
+
+    XCTAssertEqual(prepared.title, "Planning")
+    XCTAssertEqual(prepared.location, "Room 2")
+    XCTAssertEqual(prepared.conferenceURL?.host, "meet.google.com")
+  }
+
+  func testQuickEventPreparationReportsPermissionAndDestinationFailures() {
+    let draft = CalendarEventDraft(
+      calendarID: "work", title: "Planning", start: now, end: now + 3600,
+      location: "", conferenceURL: "")
+
+    XCTAssertEqual(
+      CalendarLogic.prepareEvent(
+        draft, writableCalendarIDs: ["work"], authorization: .denied),
+      .failure(.permissionRequired))
+    XCTAssertEqual(
+      CalendarLogic.prepareEvent(
+        draft, writableCalendarIDs: ["personal"], authorization: .fullAccess),
+      .failure(.calendarUnavailable))
+  }
+
+  func testQuickEventPreparationRejectsInvalidInput() {
+    let base = CalendarEventDraft(
+      calendarID: "work", title: "Planning", start: now, end: now + 3600,
+      location: "", conferenceURL: "")
+
+    XCTAssertEqual(
+      CalendarLogic.prepareEvent(
+        CalendarEventDraft(
+          calendarID: base.calendarID, title: "  ", start: base.start, end: base.end,
+          location: base.location, conferenceURL: base.conferenceURL),
+        writableCalendarIDs: ["work"], authorization: .fullAccess),
+      .failure(.titleRequired))
+    XCTAssertEqual(
+      CalendarLogic.prepareEvent(
+        CalendarEventDraft(
+          calendarID: base.calendarID, title: base.title, start: base.start, end: base.start,
+          location: base.location, conferenceURL: base.conferenceURL),
+        writableCalendarIDs: ["work"], authorization: .fullAccess),
+      .failure(.invalidTimeRange))
+    XCTAssertEqual(
+      CalendarLogic.prepareEvent(
+        CalendarEventDraft(
+          calendarID: base.calendarID, title: base.title, start: base.start, end: base.end,
+          location: base.location, conferenceURL: "http://example.com/meeting"),
+        writableCalendarIDs: ["work"], authorization: .fullAccess),
+      .failure(.invalidConferenceURL))
+  }
+
+  func testQuickEventSaveFailureIsReported() throws {
+    struct SaveFailure: LocalizedError {
+      var errorDescription: String? { "Account is read-only" }
+    }
+    let prepared = try CalendarLogic.prepareEvent(
+      CalendarEventDraft(
+        calendarID: "work", title: "Planning", start: now, end: now + 3600,
+        location: "", conferenceURL: ""),
+      writableCalendarIDs: ["work"], authorization: .fullAccess
+    ).get()
+
+    switch CalendarLogic.commitEvent(prepared, save: { _ in throw SaveFailure() }) {
+    case .success:
+      XCTFail("Expected the save error to be returned")
+    case .failure(let error):
+      XCTAssertEqual(error, .saveFailed("Account is read-only"))
+    }
   }
 
   func testDisplayDropsEndedEventsAndOrdersAllDayFirst() {

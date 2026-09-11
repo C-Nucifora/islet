@@ -60,6 +60,36 @@ final class SettingsTransferTests: XCTestCase {
     XCTAssertEqual(preview.changes.map(\.key), ["appTheme"])
   }
 
+  @MainActor
+  func testPulseStaleTimeoutRoundTripsAndRejectsUnsupportedValues() throws {
+    let saved = Defaults[.pulseStaleTimeout]
+    defer { Defaults[.pulseStaleTimeout] = saved }
+    Defaults[.pulseStaleTimeout] = 300
+
+    let data = try document(settings: ["pulseStaleTimeout": 900])
+    let preview = try SettingsTransfer.preview(data: data, current: defaultSnapshot)
+
+    XCTAssertEqual(preview.patch.pulseStaleTimeout, 900)
+    XCTAssertEqual(preview.result.pulseStaleTimeout, 900)
+    XCTAssertEqual(preview.changes.map(\.key), ["pulseStaleTimeout"])
+    SettingsTransfer.apply(preview) { SettingsTransferDefaults.apply($0) }
+    XCTAssertEqual(Defaults[.pulseStaleTimeout], 900)
+
+    let invalid = try document(settings: ["pulseStaleTimeout": 61])
+    XCTAssertThrowsError(try SettingsTransfer.preview(data: invalid, current: defaultSnapshot)) {
+      XCTAssertTrue($0.localizedDescription.contains("pulseStaleTimeout"))
+    }
+  }
+
+  func testAllDisplaysToggleTransfersAsOneGlobalBoolean() throws {
+    let data = try document(settings: ["showOnAllDisplays": true])
+    let preview = try SettingsTransfer.preview(data: data, current: defaultSnapshot)
+
+    XCTAssertTrue(preview.result.showOnAllDisplays)
+    XCTAssertEqual(preview.importedSettingCount, 1)
+    XCTAssertEqual(preview.changes.map(\.key), ["showOnAllDisplays"])
+  }
+
   func testCorruptAndTypeInvalidFilesFailBeforeProducingAPreview() throws {
     XCTAssertThrowsError(
       try SettingsTransfer.preview(data: Data("not json".utf8), current: defaultSnapshot))
@@ -196,6 +226,8 @@ final class SettingsTransferTests: XCTestCase {
     XCTAssertFalse(text.localizedCaseInsensitiveContains("token"))
     XCTAssertFalse(text.contains("t3RemoteEnvironments"))
     XCTAssertFalse(text.contains("hiddenCalendarIDs"))
+    XCTAssertFalse(text.contains("contextRules"))
+    XCTAssertFalse(text.contains("contextManualOverride"))
   }
 
   private func document(settings: [String: Any]) throws -> Data {
@@ -243,7 +275,9 @@ final class SettingsTransferTests: XCTestCase {
       systemAutoPresentMemoryPressure: true, systemAutoPresentLowDiskSpace: true,
       systemAutoPresentDiskThroughput: true, systemAutoPresentNetworkThroughput: true,
       metricStyles: [:],
-      continuityAlwaysVisible: false, continuitySneaks: true)
+      processAttributionEnabled: true, processCPUThreshold: 0.8, processMemoryThreshold: 0.9,
+      processDiskThresholdMBPerSecond: 50, processNetworkThresholdMBPerSecond: 25,
+      continuityAlwaysVisible: false, continuitySneaks: true, pulseStaleTimeout: 300)
   }
 
   private var sampleSnapshot: SettingsTransferSnapshot {
@@ -265,6 +299,8 @@ final class SettingsTransferTests: XCTestCase {
       systemAutoPresentMemoryPressure: false, systemAutoPresentLowDiskSpace: true,
       systemAutoPresentDiskThroughput: false, systemAutoPresentNetworkThroughput: true,
       metricStyles: ["cpu": "combined", "thermal": "number"],
-      continuityAlwaysVisible: true, continuitySneaks: false)
+      processAttributionEnabled: false, processCPUThreshold: 0.95, processMemoryThreshold: 0.85,
+      processDiskThresholdMBPerSecond: 125, processNetworkThresholdMBPerSecond: 75,
+      continuityAlwaysVisible: true, continuitySneaks: false, pulseStaleTimeout: 1_800)
   }
 }

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>WFWorkflowActions</key>
+  <array>
+    <dict>
+      <key>WFWorkflowActionIdentifier</key><string>dev.islet.StartIsletTimerIntent</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>AppIntentDescriptor</key><dict><key>AppIntentIdentifier</key><string>StartIsletTimerIntent</string><key>BundleIdentifier</key><string>dev.islet</string><key>Name</key><string>Islet</string><key>TeamIdentifier</key><string></string></dict>
+        <key>UUID</key><string>74B0CC8B-CCBA-4E67-9D0C-8E57E4F6B1AE</string>
+        <key>minutes</key><integer>25</integer>
+        <key>label</key><string>Focus session</string>
+        <key>ShowWhenRun</key><false/>
+      </dict>
+    </dict>
+    <dict>
+      <key>WFWorkflowActionIdentifier</key><string>dev.islet.PublishPulseEventIntent</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>AppIntentDescriptor</key><dict><key>AppIntentIdentifier</key><string>PublishPulseEventIntent</string><key>BundleIdentifier</key><string>dev.islet</string><key>Name</key><string>Islet</string><key>TeamIdentifier</key><string></string></dict>
+        <key>UUID</key><string>41C25A7B-2661-4553-95C1-054564D96B84</string>
+        <key>eventTitle</key><string>Focus timer started</string>
+        <key>identifier</key><string>shortcuts.islet.focus-timer</string>
+        <key>details</key><string>25 minutes for Focus session.</string>
+        <key>eventPriority</key><string>normal</string>
+        <key>eventState</key><string>active</string>
+        <key>seconds</key><integer>8</integer>
+        <key>ShowWhenRun</key><false/>
+      </dict>
+    </dict>
+  </array>
+  <key>WFWorkflowClientVersion</key><string>4018.0.4</string>
+  <key>WFWorkflowHasOutputFallback</key><false/>
+  <key>WFWorkflowHasShortcutInputVariables</key><false/>
+  <key>WFWorkflowIcon</key><dict><key>WFWorkflowIconGlyphNumber</key><integer>61699</integer><key>WFWorkflowIconStartColor</key><integer>946986751</integer></dict>
+  <key>WFWorkflowImportQuestions</key><array/>
+  <key>WFWorkflowInputContentItemClasses</key><array/>
+  <key>WFWorkflowMinimumClientVersion</key><integer>900</integer>
+  <key>WFWorkflowMinimumClientVersionString</key><string>900</string>
+  <key>WFWorkflowOutputContentItemClasses</key><array/>
+  <key>WFWorkflowTypes</key><array/>
+</dict>
+</plist>

@@ -36,8 +36,14 @@ struct SettingsTransferSnapshot: Equatable {
   var systemAutoPresentDiskThroughput: Bool
   var systemAutoPresentNetworkThroughput: Bool
   var metricStyles: [String: String]
+  var processAttributionEnabled: Bool
+  var processCPUThreshold: Double
+  var processMemoryThreshold: Double
+  var processDiskThresholdMBPerSecond: Double
+  var processNetworkThresholdMBPerSecond: Double
   var continuityAlwaysVisible: Bool
   var continuitySneaks: Bool
+  var pulseStaleTimeout: Double
 }
 
 struct SettingsTransferPatch: Equatable {
@@ -75,8 +81,14 @@ struct SettingsTransferPatch: Equatable {
   var systemAutoPresentDiskThroughput: Bool?
   var systemAutoPresentNetworkThroughput: Bool?
   var metricStyles: [String: String]?
+  var processAttributionEnabled: Bool?
+  var processCPUThreshold: Double?
+  var processMemoryThreshold: Double?
+  var processDiskThresholdMBPerSecond: Double?
+  var processNetworkThresholdMBPerSecond: Double?
   var continuityAlwaysVisible: Bool?
   var continuitySneaks: Bool?
+  var pulseStaleTimeout: Double?
 
   func applying(to snapshot: SettingsTransferSnapshot) -> SettingsTransferSnapshot {
     var result = snapshot
@@ -128,8 +140,20 @@ struct SettingsTransferPatch: Equatable {
       result.systemAutoPresentNetworkThroughput = systemAutoPresentNetworkThroughput
     }
     if let metricStyles { result.metricStyles = metricStyles }
+    if let processAttributionEnabled {
+      result.processAttributionEnabled = processAttributionEnabled
+    }
+    if let processCPUThreshold { result.processCPUThreshold = processCPUThreshold }
+    if let processMemoryThreshold { result.processMemoryThreshold = processMemoryThreshold }
+    if let processDiskThresholdMBPerSecond {
+      result.processDiskThresholdMBPerSecond = processDiskThresholdMBPerSecond
+    }
+    if let processNetworkThresholdMBPerSecond {
+      result.processNetworkThresholdMBPerSecond = processNetworkThresholdMBPerSecond
+    }
     if let continuityAlwaysVisible { result.continuityAlwaysVisible = continuityAlwaysVisible }
     if let continuitySneaks { result.continuitySneaks = continuitySneaks }
+    if let pulseStaleTimeout { result.pulseStaleTimeout = pulseStaleTimeout }
     return result
   }
 }
@@ -171,17 +195,17 @@ enum SettingsTransferError: LocalizedError {
   var errorDescription: String? {
     switch self {
     case .corruptDocument:
-      "The file is not valid JSON."
+      String(localized: "The file is not valid JSON.")
     case .documentTooLarge:
-      "The settings file is larger than 1 MB."
+      String(localized: "The settings file is larger than 1 MB.")
     case .wrongFormat:
-      "The file is not an Islet settings export."
+      String(localized: "The file is not an Islet settings export.")
     case .unsupportedVersion(let version):
-      "This export uses unsupported settings version \(version)."
+      String(localized: "This export uses unsupported settings version \(version).")
     case .missingSettings:
-      "The export does not contain a settings object."
+      String(localized: "The export does not contain a settings object.")
     case .invalidValue(let key, let expected):
-      "\(key) has the wrong value. Expected \(expected)."
+      String(localized: "\(key) has the wrong value. Expected \(expected).")
     }
   }
 }
@@ -201,11 +225,13 @@ enum SettingsTransfer {
     "hideFromScreenRecording", "hideInFullscreen", "hoverCollapseTimeout", "hudEnabled",
     "hudStyle", "interactionMode", "keepAwakeLowBatteryThreshold", "keepAwakeWithLidClosed",
     "launchAtLogin",
-    "mediaPriorityList", "mediaSourceMode", "metricStyles", "remindersEnabled",
+    "mediaPriorityList", "mediaSourceMode", "metricStyles", "pulseStaleTimeout", "remindersEnabled",
     "showOnAllDisplays", "systemAlwaysVisible", "systemAutoPresentCPU",
     "systemAutoPresentDiskThroughput", "systemAutoPresentLowDiskSpace",
     "systemAutoPresentMemoryPressure", "systemAutoPresentNetworkThroughput",
-    "systemAutoPresentThermal",
+    "systemAutoPresentThermal", "processAttributionEnabled", "processCPUThreshold",
+    "processDiskThresholdMBPerSecond", "processMemoryThreshold",
+    "processNetworkThresholdMBPerSecond",
   ]
 
   static let excludedPreferenceKeys: Set<String> = [
@@ -213,8 +239,11 @@ enum SettingsTransfer {
     "clipboardClearHistoryOnPause", "clipboardExcludedBundleIdentifiers",
     "clipboardManuallyPaused", "clipboardPausedFocusIdentifiers", "clipboardPausedLoginSession",
     "clipboardPausedUntil",
-    "continuityEnabled", "hiddenCalendarIDs", "onboardingVersion", "portsEnabled",
-    "pulseEnabled", "systemEnabled", "t3CodeEnabled", "t3RemoteEnvironments",
+    "commandPaletteRecentResultIDs", "commandPaletteShortcut", "contextManualOverride",
+    "contextRules", "continuityEnabled", "hiddenCalendarIDs",
+    "onboardingVersion", "portsEnabled", "pulseEnabled", "pulseHistoryMaximumEntries",
+    "pulseHistoryPersistenceEnabled", "pulseHistoryRetentionDays", "pulseRevisionStateData",
+    "systemEnabled", "t3CodeEnabled", "t3RemoteEnvironments",
   ]
 
   static func exportData(
@@ -319,8 +348,14 @@ enum SettingsTransfer {
     case "systemAutoPresentDiskThroughput": patch.systemAutoPresentDiskThroughput != nil
     case "systemAutoPresentNetworkThroughput": patch.systemAutoPresentNetworkThroughput != nil
     case "metricStyles": patch.metricStyles != nil
+    case "processAttributionEnabled": patch.processAttributionEnabled != nil
+    case "processCPUThreshold": patch.processCPUThreshold != nil
+    case "processMemoryThreshold": patch.processMemoryThreshold != nil
+    case "processDiskThresholdMBPerSecond": patch.processDiskThresholdMBPerSecond != nil
+    case "processNetworkThresholdMBPerSecond": patch.processNetworkThresholdMBPerSecond != nil
     case "continuityAlwaysVisible": patch.continuityAlwaysVisible != nil
     case "continuitySneaks": patch.continuitySneaks != nil
+    case "pulseStaleTimeout": patch.pulseStaleTimeout != nil
     default: false
     }
   }
@@ -362,8 +397,14 @@ enum SettingsTransfer {
       "systemAutoPresentDiskThroughput": value.systemAutoPresentDiskThroughput,
       "systemAutoPresentNetworkThroughput": value.systemAutoPresentNetworkThroughput,
       "metricStyles": value.metricStyles,
+      "processAttributionEnabled": value.processAttributionEnabled,
+      "processCPUThreshold": value.processCPUThreshold,
+      "processMemoryThreshold": value.processMemoryThreshold,
+      "processDiskThresholdMBPerSecond": value.processDiskThresholdMBPerSecond,
+      "processNetworkThresholdMBPerSecond": value.processNetworkThresholdMBPerSecond,
       "continuityAlwaysVisible": value.continuityAlwaysVisible,
       "continuitySneaks": value.continuitySneaks,
+      "pulseStaleTimeout": value.pulseStaleTimeout,
     ]
   }
 
@@ -434,8 +475,18 @@ enum SettingsTransfer {
     patch.systemAutoPresentNetworkThroughput = try boolean(
       "systemAutoPresentNetworkThroughput", in: values)
     patch.metricStyles = try stringDictionary("metricStyles", in: values)
+    patch.processAttributionEnabled = try boolean("processAttributionEnabled", in: values)
+    patch.processCPUThreshold = try number("processCPUThreshold", in: values, range: 0.5...1)
+    patch.processMemoryThreshold = try number("processMemoryThreshold", in: values, range: 0.5...1)
+    patch.processDiskThresholdMBPerSecond = try number(
+      "processDiskThresholdMBPerSecond", in: values, range: 5...500)
+    patch.processNetworkThresholdMBPerSecond = try number(
+      "processNetworkThresholdMBPerSecond", in: values, range: 1...500)
     patch.continuityAlwaysVisible = try boolean("continuityAlwaysVisible", in: values)
     patch.continuitySneaks = try boolean("continuitySneaks", in: values)
+    patch.pulseStaleTimeout = try allowedInteger(
+      "pulseStaleTimeout", in: values, allowed: [60, 300, 900, 1_800, 3_600]
+    ).map(Double.init)
     return patch
   }
 
@@ -444,7 +495,8 @@ enum SettingsTransfer {
   ) throws -> T? where T.RawValue == String {
     guard let raw = values[key] else { return nil }
     guard let string = raw as? String, let value = T(rawValue: string) else {
-      throw SettingsTransferError.invalidValue(key: key, expected: "a supported name")
+      throw SettingsTransferError.invalidValue(
+        key: key, expected: String(localized: "a supported name"))
     }
     return value
   }
@@ -452,7 +504,8 @@ enum SettingsTransfer {
   private static func boolean(_ key: String, in values: [String: Any]) throws -> Bool? {
     guard let raw = values[key] else { return nil }
     guard CFGetTypeID(raw as CFTypeRef) == CFBooleanGetTypeID(), let value = raw as? Bool else {
-      throw SettingsTransferError.invalidValue(key: key, expected: "true or false")
+      throw SettingsTransferError.invalidValue(
+        key: key, expected: String(localized: "true or false"))
     }
     return value
   }
@@ -463,11 +516,13 @@ enum SettingsTransfer {
     guard let raw = values[key] else { return nil }
     guard CFGetTypeID(raw as CFTypeRef) != CFBooleanGetTypeID(), let number = raw as? NSNumber
     else {
-      throw SettingsTransferError.invalidValue(key: key, expected: "a number in \(range)")
+      throw SettingsTransferError.invalidValue(
+        key: key, expected: String(localized: "a number in \(String(describing: range))"))
     }
     let value = number.doubleValue
     guard value.isFinite, range.contains(value) else {
-      throw SettingsTransferError.invalidValue(key: key, expected: "a number in \(range)")
+      throw SettingsTransferError.invalidValue(
+        key: key, expected: String(localized: "a number in \(String(describing: range))"))
     }
     return value
   }
@@ -478,7 +533,9 @@ enum SettingsTransfer {
     guard let raw = values[key] else { return nil }
     guard let value = integer(raw), allowed.contains(value) else {
       throw SettingsTransferError.invalidValue(
-        key: key, expected: "one of \(allowed.sorted().map(String.init).joined(separator: ", "))")
+        key: key,
+        expected: String(
+          localized: "one of \(allowed.sorted().map(String.init).joined(separator: ", "))"))
     }
     return value
   }
@@ -498,7 +555,8 @@ enum SettingsTransfer {
   ) throws -> [String]? {
     guard let raw = values[key] else { return nil }
     guard let array = raw as? [Any], array.allSatisfy({ $0 is String }) else {
-      throw SettingsTransferError.invalidValue(key: key, expected: "an array of text values")
+      throw SettingsTransferError.invalidValue(
+        key: key, expected: String(localized: "an array of text values"))
     }
     let result = array.compactMap { $0 as? String }
     guard result.count <= maximumItems,
@@ -523,7 +581,8 @@ enum SettingsTransfer {
     guard let dictionary = raw as? [String: Any],
       dictionary.values.allSatisfy({ $0 is String })
     else {
-      throw SettingsTransferError.invalidValue(key: key, expected: "an object with text values")
+      throw SettingsTransferError.invalidValue(
+        key: key, expected: String(localized: "an object with text values"))
     }
     let result = dictionary.compactMapValues { $0 as? String }
     let metricKeys = Set(SystemMetricKind.allCases.map(\.rawValue))
@@ -531,7 +590,8 @@ enum SettingsTransfer {
     guard Set(result.keys).isSubset(of: metricKeys),
       result.values.allSatisfy(styleNames.contains)
     else {
-      throw SettingsTransferError.invalidValue(key: key, expected: "known metric and style names")
+      throw SettingsTransferError.invalidValue(
+        key: key, expected: String(localized: "known metric and style names"))
     }
     return result
   }
@@ -540,11 +600,14 @@ enum SettingsTransfer {
     from old: SettingsTransferSnapshot, to new: SettingsTransferSnapshot
   ) -> [SettingsTransferChange] {
     var changes: [SettingsTransferChange] = []
-    func add<T: Equatable>(_ key: String, _ title: String, _ old: T, _ new: T) {
+    func add<T: Equatable>(
+      _ key: String, _ title: LocalizedStringResource, _ old: T, _ new: T
+    ) {
       guard old != new else { return }
       changes.append(
         SettingsTransferChange(
-          key: key, title: title, oldValue: summary(old), newValue: summary(new)))
+          key: key, title: String(localized: title), oldValue: summary(old), newValue: summary(new))
+      )
     }
     add("activityOrder", "Activity order", old.activityOrder, new.activityOrder)
     add("appTheme", "Theme", old.appTheme.rawValue, new.appTheme.rawValue)
@@ -593,6 +656,22 @@ enum SettingsTransfer {
       "mediaSourceMode", "Primary player", old.mediaSourceMode.rawValue,
       new.mediaSourceMode.rawValue)
     add("metricStyles", "System metrics", old.metricStyles, new.metricStyles)
+    add(
+      "processAttributionEnabled", "Process attribution", old.processAttributionEnabled,
+      new.processAttributionEnabled)
+    add(
+      "processCPUThreshold", "CPU process threshold", old.processCPUThreshold,
+      new.processCPUThreshold)
+    add(
+      "processMemoryThreshold", "Memory process threshold", old.processMemoryThreshold,
+      new.processMemoryThreshold)
+    add(
+      "processDiskThresholdMBPerSecond", "Disk process threshold",
+      old.processDiskThresholdMBPerSecond, new.processDiskThresholdMBPerSecond)
+    add(
+      "processNetworkThresholdMBPerSecond", "Network process threshold",
+      old.processNetworkThresholdMBPerSecond, new.processNetworkThresholdMBPerSecond)
+    add("pulseStaleTimeout", "Pulse stale timeout", old.pulseStaleTimeout, new.pulseStaleTimeout)
     add("remindersEnabled", "Reminders", old.remindersEnabled, new.remindersEnabled)
     add("showOnAllDisplays", "Display placement", old.showOnAllDisplays, new.showOnAllDisplays)
     add(
@@ -621,12 +700,13 @@ enum SettingsTransfer {
 
   private static func summary<T>(_ value: T) -> String {
     switch value {
-    case let value as Bool: value ? "On" : "Off"
+    case let value as Bool: value ? String(localized: "On") : String(localized: "Off")
     case let value as Double: value.formatted(.number.precision(.fractionLength(0...2)))
-    case let value as [String]: value.isEmpty ? "None" : value.joined(separator: ", ")
+    case let value as [String]:
+      value.isEmpty ? String(localized: "None") : value.joined(separator: ", ")
     case let value as [String: String]:
       value.isEmpty
-        ? "Default"
+        ? String(localized: "Default")
         : value.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: ", ")
     default: String(describing: value)
     }
@@ -667,8 +747,14 @@ enum SettingsTransferDefaults {
       systemAutoPresentDiskThroughput: Defaults[.systemAutoPresentDiskThroughput],
       systemAutoPresentNetworkThroughput: Defaults[.systemAutoPresentNetworkThroughput],
       metricStyles: Defaults[.metricStyles],
+      processAttributionEnabled: Defaults[.processAttributionEnabled],
+      processCPUThreshold: Defaults[.processCPUThreshold],
+      processMemoryThreshold: Defaults[.processMemoryThreshold],
+      processDiskThresholdMBPerSecond: Defaults[.processDiskThresholdMBPerSecond],
+      processNetworkThresholdMBPerSecond: Defaults[.processNetworkThresholdMBPerSecond],
       continuityAlwaysVisible: Defaults[.continuityAlwaysVisible],
-      continuitySneaks: Defaults[.continuitySneaks])
+      continuitySneaks: Defaults[.continuitySneaks],
+      pulseStaleTimeout: Defaults[.pulseStaleTimeout])
   }
 
   static func apply(_ patch: SettingsTransferPatch) {
@@ -722,7 +808,17 @@ enum SettingsTransferDefaults {
       Defaults[.systemAutoPresentNetworkThroughput] = value
     }
     if let value = patch.metricStyles { Defaults[.metricStyles] = value }
+    if let value = patch.processAttributionEnabled { Defaults[.processAttributionEnabled] = value }
+    if let value = patch.processCPUThreshold { Defaults[.processCPUThreshold] = value }
+    if let value = patch.processMemoryThreshold { Defaults[.processMemoryThreshold] = value }
+    if let value = patch.processDiskThresholdMBPerSecond {
+      Defaults[.processDiskThresholdMBPerSecond] = value
+    }
+    if let value = patch.processNetworkThresholdMBPerSecond {
+      Defaults[.processNetworkThresholdMBPerSecond] = value
+    }
     if let value = patch.continuityAlwaysVisible { Defaults[.continuityAlwaysVisible] = value }
     if let value = patch.continuitySneaks { Defaults[.continuitySneaks] = value }
+    if let value = patch.pulseStaleTimeout { Defaults[.pulseStaleTimeout] = value }
   }
 }
