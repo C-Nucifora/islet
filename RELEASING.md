@@ -51,9 +51,10 @@ normal Sparkle failure; the update is not installed.
 
 Complete every item before creating the first release tag:
 
-1. Resolve issue #108. Add the maintainer-approved license at the repository root and set a
-   nonempty `NSHumanReadableCopyright` in `project.yml`. The workflow rejects a release without
-   both.
+1. Add the maintainer-approved license at the repository root and set a nonempty
+   `NSHumanReadableCopyright` in `project.yml`, as described in issue #108. Check the release
+   commit for both files and values even if that issue is closed. The workflow rejects a release
+   without them. Preserve the third-party notices when adding the approved project license.
 2. Use one stable Developer ID Application identity for `dev.islet`. Record its 10-character Apple
    team identifier as the repository variable `DEVELOPER_ID_TEAM_ID`.
 3. Create and protect a GitHub environment named `release`. Required reviewers are recommended.
@@ -180,10 +181,17 @@ the archive under its exact version tag.
 ## Required two-version acceptance run
 
 The workflow is not a substitute for an update from one real release to the next. Before calling
-the feature complete, perform this run on a test Mac with disposable test data:
+the feature complete, perform this run on a clean test Mac with disposable test data. Record the
+macOS version, architecture, release A and B tags, their commit IDs, and links to their successful
+release runs in issue #19 alongside the observations below.
 
-1. Install release A at `/Applications/Islet.app`. Do not rename the bundle or move it during the
-   test.
+1. Download release A's published archive in Safari and install it at `/Applications/Islet.app`.
+   Open it normally with Gatekeeper enabled. Keep the download's quarantine metadata and do not
+   use Open Anyway or another security override. Record the first-launch result and any dialog;
+   distinguish the normal downloaded-app confirmation from an unverified-developer or malware
+   warning. A copied local build does not prove the published download passes Gatekeeper.
+   See [Apple's Developer ID test procedure](https://help.apple.com/xcode/mac/current/en.lproj/dev1cc22a95c.html).
+   Do not rename the bundle or move it during the test.
 2. Open Settings diagnostics and record the executable path, bundle identifier, Developer ID team,
    designated requirement, signing authorities, and launch-at-login status. Record the current
    Accessibility, Calendar, Reminders, and any other granted privacy permissions in System
