@@ -38,11 +38,33 @@ These checks require real accounts and cross-client observation. The available p
 | Provider | Reminder fields and deletion | Alerts and recurrence | Plain-list name and color | Native-only metadata | Status |
 | --- | --- | --- | --- | --- | --- |
 | Local | Unavailable | Unavailable | Unavailable | Unavailable | Not configured |
-| iCloud | Create, cross-client readback, and stale-write rejection passed; deletion pending | Weekly recurrence and a departure alert appeared in Reminders; remaining alerts and delivery pending | Create and rename passed; color pending | A Reminders flag survived a notes-only Islet edit | Partial |
+| iCloud | Create, cross-client readback, stale-write rejection, deletion, and cancelling deletion passed | Daily, monthly, and yearly rules and arrival alerts also appeared in Reminders; count-ended recurrence, early-alert interpretation, and notification delivery remain pending | Create and rename passed; color pending | A Reminders flag survived a notes-only Islet edit | Partial |
 | Shared iCloud list | Pending | Pending | Pending, where permitted | Pending | Available, not modified |
 | Exchange | Unavailable | Unavailable | Unavailable | Unavailable | Not configured |
 
 The iCloud run also exposed EventKit normalization when a floating date-only start is combined with a timed due date in an explicit time zone. Islet now permits the instant-preserving staged conversion, commits it, and keeps the editor open with the provider's changed start and due values highlighted. Reloading showed the provider's actual floating midnight start and floating timed due value; Reminders showed the same due instant.
+
+## Personal iCloud follow-up, 12 September 2026
+
+The follow-up used commit `fa6f0e872fe1369f750597c349b490604c7188b5`, built locally as a signed arm64 Debug app. The build passed under a 600-second timeout with `.build/pr-249-provider-dd` as its DerivedData directory. The installed app was stopped before launching this build. No app-hosted tests ran during this manual check.
+
+The owner authorized creating and removing disposable records in personal iCloud only, and explicitly left shared-list checks pending. Tests used a new personal list, renamed to `Islet PR249 personal verification`. An Exchange list was visible on this Mac but was outside that authorization. The earlier matrix's account-availability notes describe the original reviewer's Mac.
+
+| Check | Observed result |
+| --- | --- |
+| Plain-list creation and rename | Both saved through Islet and appeared in Reminders. |
+| Daily recurrence | The date-only reminder appeared as Daily in Reminders. Completing it in Reminders produced an incomplete occurrence due tomorrow. |
+| Count-ended recurrence | A three-occurrence daily rule was entered in Islet, but Reminders showed End Repeat as Never after completion. The remaining count was not read back in Islet or exercised to exhaustion, so this case is unconfirmed. |
+| Custom monthly recurrence and date end | Every two months on the last Monday appeared in Reminders. Its native details showed an end date of 31 December 2030. Reopening in Islet retained the two-month interval and end date. |
+| Yearly recurrence and arrival alert | Editing the same record to February 1 each year and adding an arrival alert at a public landmark saved successfully. Reminders showed Yearly and the matching arrival-location title. Geofence delivery was not exercised. |
+| Relative alert | A 15-minute early alert survived saving and reopening in Islet. Reminders displayed the alert's earlier time on its row. Native early-reminder interpretation and delivery remain unconfirmed. |
+| Absolute alert | An alert for 10:38 pm on 12 September saved through Islet and appeared at that time in Reminders and the calendar widget. No delivered notification was verified. |
+| Delete and cancel | Cancelling Islet's deletion confirmation left the record in both apps. Confirming deletion of the yearly test removed it from Reminders and moved it to Recently Deleted. |
+| List color | The UI automation could not open a usable color picker through the color well, its accessibility action, or keyboard navigation. No color change was verified. |
+
+UI automation also encountered repeated ScreenCaptureKit capture failures and window lookup errors. These blocked further inspection; they do not establish an Islet defect. No production-code change resulted from this run.
+
+Cleanup removed the disposable list and its remaining test records through Reminders. The temporary PR app exited before the installed `/Applications/Islet.app` was restored. Shared lists and existing reminders were not edited. This PR remains a draft until the outstanding provider and delivery checks have evidence.
 
 For each available provider:
 
