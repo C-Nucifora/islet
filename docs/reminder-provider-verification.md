@@ -39,7 +39,7 @@ These checks require real accounts and cross-client observation. The available p
 | --- | --- | --- | --- | --- | --- |
 | Local | Unavailable | Unavailable | Unavailable | Unavailable | Not configured |
 | iCloud | Create, cross-client readback, stale-write rejection, deletion, and cancelling deletion passed | Daily, monthly, and yearly rules and arrival alerts also appeared in Reminders; count-ended recurrence, early-alert interpretation, and notification delivery remain pending | Create and rename passed; color pending | A Reminders flag survived a notes-only Islet edit | Partial |
-| Shared iCloud list | Pending | Pending | Pending, where permitted | Pending | Dedicated list created; invitation sent; acceptance and tests unverified |
+| Shared iCloud list | Owner-side create/readback, priorities, date normalization, stale-write rejection, deletion and cancellation passed | Daily count exhaustion, weekly/monthly/yearly rules, date-end readback, and saved absolute/relative/location alarms passed; delivery pending | Rename and restoration passed; color pending | Flags, owner assignment, tags and a subtask survived notes-only edits | Partial; Ned is listed as a participant, but his device has not been observed |
 | Exchange | Unavailable | Unavailable | Unavailable | Unavailable | Not configured |
 
 The iCloud run also exposed EventKit normalization when a floating date-only start is combined with a timed due date in an explicit time zone. Islet now permits the instant-preserving staged conversion, commits it, and keeps the editor open with the provider's changed start and due values highlighted. Reloading showed the provider's actual floating midnight start and floating timed due value; Reminders showed the same due instant.
@@ -70,7 +70,48 @@ Cleanup removed the disposable list and its remaining test records through Remin
 
 The owner subsequently authorized a dedicated list shared with `nedlane` for the remaining checks. `Islet PR249 shared verification` was created under iCloud in Reminders, and its collaboration invitation was sent to Ned Lane through Messages at 10:48 pm. The list was empty when invited. Existing lists were not shared or modified.
 
-Invitation acceptance and shared-list round trips have not been verified. Native UI access began returning `cgWindowNotFound` and invalid-element errors, preventing further inspection. The test list remains available for Ned to join; this setup is not a passing shared-provider result.
+At the end of the 12 September setup, invitation acceptance and shared-list round trips had not been verified. Native UI access began returning `cgWindowNotFound` and invalid-element errors, preventing further inspection. The test list was left available for Ned to join; the setup alone was not a passing shared-provider result.
+
+## Shared iCloud follow-up, 13 September 2026
+
+Native UI access recovered. Reminders' sharing sheet listed two participants, the owner and Ned Lane, without a pending-invitation label. This establishes the displayed membership only; no observation from Ned's device was available.
+
+The run used the previously built signed arm64 Debug app from `fa6f0e872fe1369f750597c349b490604c7188b5`. PR head `1018164e44647e0eeda06a4c59e56c28be24b463` contains the same production code and subsequent verification documentation. No Islet process was running before launch. No app-hosted tests or production-code edits were needed for this manual run.
+
+All mutations were confined to `Islet PR249 shared verification` and its disposable records. The following results compare Islet with native Reminders on the owner's Mac, using the shared iCloud provider. They do not establish synchronization to a second participant's device.
+
+| Check | Observed result |
+| --- | --- |
+| Create and readback | Islet selected the shared list and created `PR249 shared fields test`. Native Reminders displayed the title, notes, date-only 1 January 2020 due date, and high priority. A later marker with no due date also appeared. |
+| URL | The PR URL survived saving and reopening in Islet, including native edits between saves. The native details URL field did not display it. Native URL presentation remains unconfirmed. |
+| Priority categories | None, High, Medium, and Low each appeared in Reminders after Islet saves. |
+| Native flags and assignment | Reminders added a flag and assigned the first record to the owner. Both remained after a notes-only Islet save. |
+| Stale-write rejection and reload | An edited Islet draft was left open while Reminders committed a conflicting title. Islet rejected Save with "That reminder changed in another app, so it was not overwritten." Reload showed the native title and notes. An earlier attempt had left the native row editing, so it was not counted as a committed conflict. |
+| Daily recurrence and count end | A daily rule ending after two occurrences saved. Completing it in Reminders produced an incomplete occurrence due tomorrow. Completing that occurrence left two completed records and no incomplete successor. |
+| Weekly selectors | Every two weeks on Monday and Wednesday appeared with that exact rule in Reminders. Reopening in Islet retained interval 2 and weekday selectors `2:0,4:0`. |
+| Monthly selectors and date end | Every two months on the last Monday appeared in Reminders. Reopening the rule in Islet retained the interval and 31 December 2030, 9:00 am end date. |
+| Yearly selectors | Changing the rule to every year, month 2 and month day 1, saved. Reminders displayed "Every year in February". The native row does not establish the month-day selector independently. |
+| Start/due normalization | A floating, date-only start on 31 December 2019 and a timed 1 January 2020 due date in `Australia/Sydney` saved with normalization warnings. Islet kept the editor open and highlighted start and due changes. Reload showed a floating midnight start and floating 9:00 am due value. |
+| Relative alarm | The minus-15-minute alarm survived save and reload. Reminders displayed 8:45 am while Islet retained the 9:00 am due time. Native Early Reminder semantics were not independently confirmed. |
+| Absolute alarm | An alarm for 13 September 2026 at 8:02 am saved and survived reopening alongside the relative alarm. No delivered notification was observed. Notification Centre exposed a calendar widget, and attempts to inspect system controls timed out, so this is saved-data evidence only. |
+| Arrival and departure alarms | An arrival alarm at a public landmark appeared as Arriving in Reminders. Reopening retained latitude -33.8568, longitude 151.2153 and radius 100 metres. Changing the same alarm to Leaving appeared in Reminders. No physical geofence crossing was performed. |
+| Native tags and subtask | A native `PR249Test` tag survived a notes-only Islet edit. A native subtask then survived a further notes-only edit, along with the tag, departure alarm and yearly recurrence. Reopening the native list refreshed its initially stale displayed notes. |
+| Shared-list rename | Islet renamed the list to `Islet PR249 shared verification renamed`; Reminders displayed the change and retained the shared badge. Islet then restored the original name, which also appeared in Reminders. |
+| List color | The color well's accessibility action and a click on the visible control did not expose a usable picker. No color mutation was verified. |
+| Delete and cancel | Cancelling Islet's confirmation retained the parent and native subtask. Confirming deletion removed both from the shared list and added two records to Recently Deleted. |
+
+Cleanup removed both completed daily occurrences through Reminders' recoverable deletion. The shared list then showed zero incomplete and zero completed reminders. The test-only tag disappeared from the active tag list. A single new, undated `PR249 owner sync check` marker was then created through Islet and verified in Reminders. It has no alarms and remains for Ned's device check; its notes ask Ned to add `PR249 Ned sync check` after he sees it. The shared list itself remains available. The temporary PR app exited, and `pgrep -x Islet` confirmed no Islet process remained.
+
+Remaining shared acceptance work:
+
+- Observe the marker on Ned's device, then read back a reminder created or edited by Ned. Displayed membership and two apps on one Mac do not prove this path.
+- Verify delivered time and location notifications, native Early Reminder interpretation, and native URL presentation.
+- Verify list color through a usable picker. Native reminder-info actions also stopped opening a details popover, so attachment preservation and exact completion-date comparison were not exercised.
+- Exercise a participant with read-only or revoked access, or a provider that refuses list creation. The current owner remains writable; no such account or permission condition was available in this run.
+
+No new code defect was established. The PR remains a draft while the unverified acceptance cases are outstanding.
+
+## Provider acceptance checklist
 
 For each available provider:
 
