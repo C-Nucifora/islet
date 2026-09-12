@@ -495,11 +495,12 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertEqual(flow.proportion(of: 30), 0.5, accuracy: 0.0001)
   }
 
-  func testConfirmedExternalChargingOverridesContradictoryPowerTelemetry() throws {
+  func testMeasuredPackChargingOverridesContradictoryPowerTelemetry() throws {
     var metrics = BatteryMetrics()
     metrics.systemPowerInWatts = 70.2
     metrics.systemLoadWatts = 94.8
     metrics.batteryPowerWatts = -24.6
+    metrics.powerWatts = 50
     metrics.cpuPowerWatts = 12.1
     metrics.externalConnected = true
     metrics.isCharging = true
@@ -509,10 +510,10 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertEqual(flow.batteryDirection, .charging)
     XCTAssertEqual(try XCTUnwrap(flow.adapterInputWatts), 70.2, accuracy: 0.0001)
     XCTAssertNil(flow.batteryInputWatts)
-    XCTAssertEqual(try XCTUnwrap(flow.batteryChargeWatts), 24.6, accuracy: 0.0001)
-    XCTAssertEqual(try XCTUnwrap(flow.macUseWatts), 45.6, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(flow.batteryChargeWatts), 50, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(flow.macUseWatts), 20.2, accuracy: 0.0001)
     XCTAssertEqual(try XCTUnwrap(flow.cpuUseWatts), 12.1, accuracy: 0.0001)
-    XCTAssertEqual(try XCTUnwrap(flow.restOfMacWatts), 33.5, accuracy: 0.0001)
+    XCTAssertEqual(try XCTUnwrap(flow.restOfMacWatts), 8.1, accuracy: 0.0001)
     XCTAssertEqual(flow.scaleWatts, 70.2, accuracy: 0.0001)
 
     let incoming = (flow.adapterInputWatts ?? 0) + (flow.batteryInputWatts ?? 0)

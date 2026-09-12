@@ -29,16 +29,9 @@ struct BatteryInsightSample: Equatable, Sendable {
 
   init(state: BatteryState, metrics: BatteryMetrics) {
     self.state = state
-    if let measuredPower = metrics.batteryPowerWatts {
-      batteryPowerWatts = measuredPower
-      batteryPowerStatus = metrics.status(for: .batteryPower) ?? .available
-    } else if let derivedPower = metrics.powerWatts {
-      batteryPowerWatts = derivedPower
-      batteryPowerStatus = .available
-    } else {
-      batteryPowerWatts = nil
-      batteryPowerStatus = metrics.status(for: .batteryPower)
-    }
+    let batteryPower = metrics.resolvedBatteryPower
+    batteryPowerWatts = batteryPower.watts
+    batteryPowerStatus = batteryPower.status
     systemInputWatts = metrics.systemPowerInWatts
     reportedCapacityMAh = metrics.rawMaxCapacityMAh ?? metrics.nominalCapacityMAh
     fullyCharged = metrics.fullyCharged ?? false
@@ -341,7 +334,7 @@ struct BatteryInsightAnalyzer: Sendable {
 
     evidence = nil
     let status: BatteryInsightStatus
-    if activeConditions.contains(.chargerDischarging) {
+    if activeConditions.contains(.chargerDischarging), signedPower < -0.5 {
       status = .chargerDischarging(batteryWatts: max(0, -signedPower))
     } else if activeConditions.contains(.slowCharging) {
       status = .slowCharging(chargeWatts: max(0, signedPower))
