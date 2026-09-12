@@ -1,7 +1,6 @@
 import argparse
 import importlib.util
 from pathlib import Path
-import shutil
 import subprocess
 import tempfile
 import unittest
@@ -39,11 +38,10 @@ class TestRunnerTests(unittest.TestCase):
     def test_timeout_stops_owned_build_and_leaves_existing_process_alive(self):
         with tempfile.TemporaryDirectory() as folder:
             executable = Path(folder) / "xcodebuild"
-            shutil.copyfile("/bin/sleep", executable)
-            executable.chmod(0o755)
             subprocess.run(
-                ["codesign", "--force", "--sign", "-", str(executable)],
-                check=True, capture_output=True, timeout=10)
+                ["xcrun", "clang", "-x", "c", "-o", str(executable), "-"],
+                input=b"#include <unistd.h>\nint main(void) { sleep(30); return 0; }\n",
+                check=True, capture_output=True, timeout=30)
             unrelated = subprocess.Popen([str(executable), "30"], start_new_session=True)
             owned = None
             try:
