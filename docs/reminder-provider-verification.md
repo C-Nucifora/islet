@@ -23,24 +23,26 @@ Run all reminder test classes with the repository's safe test workflow. Tests mu
 
 ## Recorded automated run
 
-On 11 September 2026, the final full run completed with xcodebuild exit 0. XCTest executed 1,760 tests with zero failures and one skip. The live menu-bar accessibility check skipped because the test host lacked Accessibility permission. All seven Swift Testing localization tests passed.
+On 12 September 2026, the final full run completed with xcodebuild exit 0. XCTest executed 1,763 tests with zero failures and one skip. The live menu-bar accessibility check skipped because the test host lacked Accessibility permission. All seven Swift Testing localization tests passed.
 
-The run used `.build/DerivedData-issue225`, disabled parallel testing, and a 600-second hard timeout. `pgrep -x Islet` found no running app before or after the run. It completed in 73.93 seconds without cancellation, timeout, or process termination. The installed Islet app was not relaunched.
+The run used `.build/provider-full-tests`, disabled parallel testing, and a 1,200-second hard timeout. `pgrep -x Islet` found no running app before or after the run. XCTest completed in 64.14 seconds without cancellation, timeout, or process termination. Production preferences were unchanged.
 
-Local verification artifacts are `.build/reminder-full-tests.log`, `.build/reminder-full-verification.json`, and `.build/run-full-reminder-verification.py`. The wrapper records the owned process tree and limits timeout cleanup to the permitted test-host and compiler executables.
+The repository test wrapper records the owned process tree and limits timeout cleanup to the permitted test-host and compiler executables.
 
 The localization catalog contains 1,733 keys. Catalog synchronization reports no missing or stale entries. Existing English localizations and plural variants remain intact; the pseudolocale follows the tested key and plural expansion rules.
 
 ## Manual provider matrix
 
-These checks require real accounts and cross-client observation. No rows below have been executed during this implementation session.
+These checks require real accounts and cross-client observation. The available personal iCloud account was partially exercised on 12 September 2026. Local and Exchange accounts were not configured on the test Mac. A shared iCloud list was present but was not modified.
 
 | Provider | Reminder fields and deletion | Alerts and recurrence | Plain-list name and color | Native-only metadata | Status |
 | --- | --- | --- | --- | --- | --- |
-| Local | Pending | Pending | Pending | Pending | Not tested |
-| iCloud | Pending | Pending | Pending | Pending | Not tested |
-| Shared iCloud list | Pending | Pending | Pending, where permitted | Pending | Not tested |
-| Exchange | Pending | Pending, including restrictions | Pending, where permitted | Pending | Not tested |
+| Local | Unavailable | Unavailable | Unavailable | Unavailable | Not configured |
+| iCloud | Create and cross-client readback passed; deletion pending | Weekly recurrence and a departure alert appeared in Reminders; remaining alerts and delivery pending | Create and rename passed; color pending | Pending | Partial |
+| Shared iCloud list | Pending | Pending | Pending, where permitted | Pending | Available, not modified |
+| Exchange | Unavailable | Unavailable | Unavailable | Unavailable | Not configured |
+
+The iCloud run also exposed EventKit normalization when a floating date-only start is combined with a timed due date in an explicit time zone. Islet now permits the instant-preserving staged conversion, commits it, and keeps the editor open with the provider's changed start and due values highlighted. Reloading showed the provider's actual floating midnight start and floating timed due value; Reminders showed the same due instant.
 
 For each available provider:
 
