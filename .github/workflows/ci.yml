@@ -98,6 +98,7 @@ jobs:
             Scripts/*.sh
           actionlint
           Scripts/test-update-tooling.sh
+          python3 -m unittest discover -s Scripts/tests -p 'test_*.py'
           Scripts/validate-pulse-shortcuts.sh
 
       - name: Test out-of-process Pulse providers
@@ -136,26 +137,23 @@ jobs:
       - name: Run arm64 tests
         run: |
           set -o pipefail
-          xcodebuild \
-            -project Islet.xcodeproj \
-            -scheme Islet \
-            -destination 'platform=macOS,arch=arm64' \
-            -derivedDataPath "$DERIVED_DATA" \
+          python3 Scripts/test-islet.py --timeout 1200 --derived-data "$DERIVED_DATA" -- \
             -disableAutomaticPackageResolution \
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO \
             ISLET_UPDATE_PUBLIC_ED_KEY=11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo= \
             CODE_SIGN_IDENTITY=- \
             CODE_SIGN_STYLE=Manual \
-            test | xcbeautify
+            | xcbeautify
 
       - name: Verify arm64 build products
         run: |
-          app="$DERIVED_DATA/Build/Products/Debug/Islet.app"
+          app="$DERIVED_DATA/Build/Products/Testing/Islet.app"
           framework="$app/Contents/Frameworks/MediaRemoteAdapter.framework/MediaRemoteAdapter"
           lipo "$app/Contents/MacOS/Islet" -verify_arch arm64
           lipo "$framework" -verify_arch arm64
-          ISLET_GENERATED_INFO_PLIST="$app/Contents/Info.plist" Scripts/test-update-tooling.sh
+          ISLET_GENERATED_INFO_PLIST="$app/Contents/Info.plist" \
+            ISLET_EXPECTED_BUNDLE_IDENTIFIER=dev.islet.tests Scripts/test-update-tooling.sh
 
       - name: Run static analysis
         run: |
@@ -230,23 +228,20 @@ jobs:
       - name: Run x86_64 tests
         run: |
           set -o pipefail
-          xcodebuild \
-            -project Islet.xcodeproj \
-            -scheme Islet \
-            -destination 'platform=macOS,arch=x86_64' \
-            -derivedDataPath "$DERIVED_DATA" \
+          python3 Scripts/test-islet.py --timeout 1200 --derived-data "$DERIVED_DATA" -- \
             -disableAutomaticPackageResolution \
             ARCHS=x86_64 \
             ONLY_ACTIVE_ARCH=NO \
             ISLET_UPDATE_PUBLIC_ED_KEY=11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo= \
             CODE_SIGN_IDENTITY=- \
             CODE_SIGN_STYLE=Manual \
-            test | xcbeautify
+            | xcbeautify
 
       - name: Verify x86_64 build products
         run: |
-          app="$DERIVED_DATA/Build/Products/Debug/Islet.app"
+          app="$DERIVED_DATA/Build/Products/Testing/Islet.app"
           framework="$app/Contents/Frameworks/MediaRemoteAdapter.framework/MediaRemoteAdapter"
           lipo "$app/Contents/MacOS/Islet" -verify_arch x86_64
           lipo "$framework" -verify_arch x86_64
-          ISLET_GENERATED_INFO_PLIST="$app/Contents/Info.plist" Scripts/test-update-tooling.sh
+          ISLET_GENERATED_INFO_PLIST="$app/Contents/Info.plist" \
+            ISLET_EXPECTED_BUNDLE_IDENTIFIER=dev.islet.tests Scripts/test-update-tooling.sh

@@ -67,6 +67,8 @@ final class ActivityLifecycleController {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+  // Validate before initializing delegates that might acquire application preferences.
+  private let testHostValidation: Void = TestHostIsolation.requireSafeIdentity()
   private var launchAtLoginObserver: AnyCancellable?
   private var activityLifecycleController: ActivityLifecycleController?
   private var audioDeviceLifecycleCancellable: AnyCancellable?
@@ -82,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// for a permission, which hangs a test runner that has no one to answer the dialog. Unit tests
   /// drive the pure logic directly and need none of it running.
   private var isRunningTests: Bool {
-    NSClassFromString("XCTestCase") != nil
+    TestHostIsolation.isRunningTests
   }
 
   func applicationWillFinishLaunching(_ notification: Notification) {
