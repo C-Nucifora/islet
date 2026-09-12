@@ -39,7 +39,7 @@ These checks require real accounts and cross-client observation. The available p
 | --- | --- | --- | --- | --- | --- |
 | Local | Unavailable | Unavailable | Unavailable | Unavailable | Not configured |
 | iCloud | Create, cross-client readback, stale-write rejection, deletion, and cancelling deletion passed | Daily, monthly, and yearly rules and arrival alerts also appeared in Reminders; count-ended recurrence, early-alert interpretation, and notification delivery remain pending | Create and rename passed; color pending | A Reminders flag survived a notes-only Islet edit | Partial |
-| Shared iCloud list | Pending | Pending | Pending, where permitted | Pending | Available, not modified |
+| Shared iCloud list | Pending | Pending | Pending, where permitted | Pending | Dedicated list created; invitation sent; acceptance and tests unverified |
 | Exchange | Unavailable | Unavailable | Unavailable | Unavailable | Not configured |
 
 The iCloud run also exposed EventKit normalization when a floating date-only start is combined with a timed due date in an explicit time zone. Islet now permits the instant-preserving staged conversion, commits it, and keeps the editor open with the provider's changed start and due values highlighted. Reloading showed the provider's actual floating midnight start and floating timed due value; Reminders showed the same due instant.
@@ -65,6 +65,12 @@ The owner authorized creating and removing disposable records in personal iCloud
 UI automation also encountered repeated ScreenCaptureKit capture failures and window lookup errors. These blocked further inspection; they do not establish an Islet defect. No production-code change resulted from this run.
 
 Cleanup removed the disposable list and its remaining test records through Reminders. The temporary PR app exited before the installed `/Applications/Islet.app` was restored. Shared lists and existing reminders were not edited. This PR remains a draft until the outstanding provider and delivery checks have evidence.
+
+## Shared iCloud setup, 12 September 2026
+
+The owner subsequently authorized a dedicated list shared with `nedlane` for the remaining checks. `Islet PR249 shared verification` was created under iCloud in Reminders, and its collaboration invitation was sent to Ned Lane through Messages at 10:48 pm. The list was empty when invited. Existing lists were not shared or modified.
+
+Invitation acceptance and shared-list round trips have not been verified. Native UI access began returning `cgWindowNotFound` and invalid-element errors, preventing further inspection. The test list remains available for Ned to join; this setup is not a passing shared-provider result.
 
 For each available provider:
 
