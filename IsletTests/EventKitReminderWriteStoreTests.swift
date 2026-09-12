@@ -36,6 +36,29 @@ final class EventKitReminderWriteStoreTests: XCTestCase {
     XCTAssertEqual(backing.postCommitRefreshCount, 1)
   }
 
+  func testCreateCommitsAnInstantPreservingStagedTimeZoneNormalization() throws {
+    let backing = Backing()
+    let calendar = backing.addWritableCalendar(title: "Inbox")
+    let startComponents = components(year: 2026, month: 9, day: 12)
+    var dueComponents = components(year: 2026, month: 9, day: 12, hour: 11, minute: 54)
+    dueComponents.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+    let fields = try ReminderEditableFields(
+      validating: "Requested", notes: nil, url: nil, listID: calendar.calendarIdentifier,
+      startDate: ReminderDateValue(validating: startComponents),
+      dueDate: ReminderDateValue(validating: dueComponents), priority: 0,
+      completion: ReminderCompletionValue(validating: false, completionDate: nil))
+    let store = EventKitReminderWriteStore(backing: backing)
+
+    let outcome = try store.create(fields)
+
+    guard case .committedWithNormalization(_, let mismatches) = outcome else {
+      return XCTFail("Expected provider normalization, got \(outcome)")
+    }
+    XCTAssertEqual(mismatches.map(\.field), [.dueDate])
+    XCTAssertEqual(backing.commitCount, 1)
+    XCTAssertEqual(backing.resetCount, 0)
+  }
+
   func testCreateMissingSelectedListNeverFallsBack() throws {
     let backing = Backing()
     _ = backing.addWritableCalendar(title: "Default")

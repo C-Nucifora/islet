@@ -241,7 +241,8 @@ final class EventKitReminderWriteStore: ReminderWriteStore {
 
     let stagedMismatches = Self.mismatches(
       for: requestedPatch, in: reminder, expectedAlarms: expectedAlarms,
-      expectedRules: expectedRules, expectedRecord: expectedRecord)
+      expectedRules: expectedRules, expectedRecord: expectedRecord,
+      allowEquivalentDateInstants: true)
     guard stagedMismatches.isEmpty else {
       backing.reset()
       throw ReminderWriteError.eventKit(
@@ -306,7 +307,7 @@ final class EventKitReminderWriteStore: ReminderWriteStore {
   private static func mismatches(
     for patch: ReminderPatch, in reminder: EKReminder,
     expectedAlarms: [ReminderAlarmRevision], expectedRules: [ReminderRecurrenceRevision],
-    expectedRecord: ReminderWriteRecord
+    expectedRecord: ReminderWriteRecord, allowEquivalentDateInstants: Bool = false
   ) -> [ReminderNormalizationMismatch] {
     var mismatches: [ReminderNormalizationMismatch] = []
 
@@ -319,12 +320,16 @@ final class EventKitReminderWriteStore: ReminderWriteStore {
       patch.listID, actual: reminder.calendar?.calendarIdentifier ?? "", field: .list,
       to: &mismatches)
     if case .value(let requested) = patch.startDate,
-      !ReminderDateValue.semanticallyEqual(requested?.components, reminder.startDateComponents)
+      !datesMatch(
+        requested?.components, reminder.startDateComponents,
+        allowEquivalentInstants: allowEquivalentDateInstants)
     {
       mismatches.append(mismatch(for: .startDate))
     }
     if case .value(let requested) = patch.dueDate,
-      !ReminderDateValue.semanticallyEqual(requested?.components, reminder.dueDateComponents)
+      !datesMatch(
+        requested?.components, reminder.dueDateComponents,
+        allowEquivalentInstants: allowEquivalentDateInstants)
     {
       mismatches.append(mismatch(for: .dueDate))
     }
@@ -390,6 +395,27 @@ final class EventKitReminderWriteStore: ReminderWriteStore {
       reminder.location == expectedRecord.location && reminder.timeZone == expectedRecord.timeZone,
       field: .nativeMetadata)
     return mismatches
+  }
+
+  private static func datesMatch(
+    _ requested: DateComponents?, _ actual: DateComponents?, allowEquivalentInstants: Bool
+  ) -> Bool {
+    if ReminderDateValue.semanticallyEqual(requested, actual) { return true }
+    guard allowEquivalentInstants, let requested, let actual,
+      requested.timeZone != nil,
+      requested.hour != nil, requested.minute != nil,
+      actual.hour != nil, actual.minute != nil
+    else {
+      return false
+    }
+
+    return resolvedDate(from: requested) == resolvedDate(from: actual)
+  }
+
+  private static func resolvedDate(from components: DateComponents) -> Date? {
+    var calendar = components.calendar ?? Calendar(identifier: .gregorian)
+    if let timeZone = components.timeZone { calendar.timeZone = timeZone }
+    return calendar.date(from: components)
   }
 
   private static func appendMismatch<Value: Equatable & Sendable>(
