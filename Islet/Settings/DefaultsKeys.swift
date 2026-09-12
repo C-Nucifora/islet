@@ -19,6 +19,33 @@ enum HapticStrength: String, CaseIterable, Codable, Sendable {
   }
 }
 
+enum HomeLayoutMode: String, CaseIterable, Codable, Identifiable, Sendable {
+  case compact
+  case scrollable
+  case split
+
+  var id: Self { self }
+
+  var title: String {
+    switch self {
+    case .compact: String(localized: "Compact")
+    case .scrollable: String(localized: "Scrollable")
+    case .split: String(localized: "Split")
+    }
+  }
+
+  var detail: String {
+    switch self {
+    case .compact:
+      String(localized: "Show three ranked items, with a More button for the rest.")
+    case .scrollable:
+      String(localized: "Show every ranked item in one scrollable list.")
+    case .split:
+      String(localized: "Show Calendar and Reminders in separate columns.")
+    }
+  }
+}
+
 /// Maps the push-distance slider onto physical cursor travel. A logarithmic curve gives the short
 /// end more resolution, where a few points materially change how the notch feels, while preserving
 /// the full useful range for users who prefer a deliberate push.
@@ -131,6 +158,7 @@ extension MediaSourceMode: Defaults.Serializable {}
 extension HUDStyle: Defaults.Serializable {}
 extension EnergyMode: Defaults.Serializable {}
 extension HapticStrength: Defaults.Serializable {}
+extension HomeLayoutMode: Defaults.Serializable {}
 extension PulseDeliveryProfile: Defaults.Serializable {}
 extension BatteryDrainBaselinePoint: Defaults.Serializable {}
 extension BatteryCapacityPoint: Defaults.Serializable {}
@@ -260,6 +288,7 @@ extension Defaults.Keys {
   static let calendarLeadMinutes = Key<Int>("calendarLeadMinutes", default: 10)
   static let hiddenCalendarIDs = Key<[String]>("hiddenCalendarIDs", default: [])
   static let remindersEnabled = Key<Bool>("remindersEnabled", default: true)
+  static let homeLayoutMode = Key<HomeLayoutMode>("homeLayoutMode", default: .compact)
   static let showOnAllDisplays = Key<Bool>(
     "showOnAllDisplays", default: DisplayPlacementDefaults.showOnAllDisplays)
   /// The display's Quartz UUID. This remains set while the display is disconnected so Islet can
