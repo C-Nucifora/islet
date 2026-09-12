@@ -38,7 +38,7 @@ These checks require real accounts and cross-client observation. The available p
 | Provider | Reminder fields and deletion | Alerts and recurrence | Plain-list name and color | Native-only metadata | Status |
 | --- | --- | --- | --- | --- | --- |
 | Local | Unavailable | Unavailable | Unavailable | Unavailable | Not configured |
-| iCloud | Create and cross-client readback passed; deletion pending | Weekly recurrence and a departure alert appeared in Reminders; remaining alerts and delivery pending | Create and rename passed; color pending | Pending | Partial |
+| iCloud | Create, cross-client readback, and stale-write rejection passed; deletion pending | Weekly recurrence and a departure alert appeared in Reminders; remaining alerts and delivery pending | Create and rename passed; color pending | A Reminders flag survived a notes-only Islet edit | Partial |
 | Shared iCloud list | Pending | Pending | Pending, where permitted | Pending | Available, not modified |
 | Exchange | Unavailable | Unavailable | Unavailable | Unavailable | Not configured |
 
