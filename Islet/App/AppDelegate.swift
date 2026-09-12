@@ -142,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       NSApp.terminate(nil)
       return
     }
+    AppNetworkCache.install()
     reminderCommandHotKey.start()
     timerCompletionNotifications.start()
     Task { @MainActor in
