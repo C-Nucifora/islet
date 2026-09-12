@@ -3,9 +3,14 @@ options:
   deploymentTarget:
     macOS: "26.0"
   createIntermediateGroups: true
+configs:
+  Debug: debug
+  Release: release
+  Testing: debug
 configFiles:
   Debug: Config/Islet.xcconfig
   Release: Config/Islet.xcconfig
+  Testing: Config/Islet.xcconfig
 packages:
   Defaults:
     url: https://github.com/sindresorhus/Defaults
@@ -32,6 +37,9 @@ settings:
   configs:
     Debug:
       ENABLE_HARDENED_RUNTIME: false
+    Testing:
+      ENABLE_HARDENED_RUNTIME: false
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) DEBUG ISLET_TESTING"
     Release:
       ENABLE_HARDENED_RUNTIME: true
 targets:
@@ -53,6 +61,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: "$(ISLET_PRODUCT_BUNDLE_IDENTIFIER)"
+      configs:
+        Testing:
+          PRODUCT_BUNDLE_IDENTIFIER: dev.islet.tests
     info:
       path: Islet/Info.plist
       properties:
@@ -110,4 +121,5 @@ schemes:
         Islet: all
         IsletTests: [test]
     test:
+      config: Testing
       targets: [IsletTests]

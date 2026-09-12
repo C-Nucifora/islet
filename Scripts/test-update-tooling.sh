@@ -100,7 +100,8 @@ grep -Eq \
   Config/Update.xcconfig
 
 if [[ -n "${ISLET_GENERATED_INFO_PLIST:-}" ]]; then
-  Scripts/validate-update-config.sh "$ISLET_GENERATED_INFO_PLIST"
+  Scripts/validate-update-config.sh "$ISLET_GENERATED_INFO_PLIST" \
+    "${ISLET_EXPECTED_BUNDLE_IDENTIFIER:-dev.islet}"
 fi
 grep -Fq 'SPARKLE_ED25519_PRIVATE_KEY' .github/workflows/release.yml
 grep -Fq -- '--ed-key-file -' .github/workflows/release.yml

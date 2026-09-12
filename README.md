@@ -58,16 +58,33 @@ ISLET_CODE_SIGN_IDENTITY = Your Code Signing Identity
 
 ## Run the tests
 
-Generate the project first, then run the scheme from Xcode or with `xcodebuild`:
+The scheme's test action uses the `Testing` configuration and the `dev.islet.tests` identity.
+Its standard preferences, including writes through Defaults, are separate from the installed app.
+Debug and Release builds retain the configured application identity. Do not override the test
+configuration or test host bundle identifier.
+
+Keep the installed Islet app closed during app-hosted tests until testing alongside an installed
+copy has been verified. Never run multiple Islet test suites concurrently. The test runner checks
+`pgrep -x Islet`, takes a per-user test lock, and gives each worktree its own DerivedData directory.
+It compares production preferences before and after the whole suite without logging their values.
 
 ```sh
-xcodebuild \
-  -project Islet.xcodeproj \
-  -scheme Islet \
-  -destination "platform=macOS,arch=$(uname -m)" \
-  -derivedDataPath DerivedData \
-  test
+xcodegen generate
+python3 Scripts/test-islet.py --timeout 600
 ```
+
+Pass additional build settings or a focused selection after `--`:
+
+```sh
+python3 Scripts/test-islet.py --timeout 600 -- \
+  -only-testing:IsletTests/TestHostIsolationTests \
+  CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual
+```
+
+Cancellation or timeout stops only the test host, `xcodebuild`, `swift-frontend`, and
+`islet-xcode-pulse` processes owned by that run. Wait for the runner to finish before relaunching
+the installed app. Xcode's test action selects the same isolated configuration, but the command-line
+runner additionally enforces the lock, hard timeout, and whole-suite preferences check.
 
 CI runs the full suite on both arm64 and x86_64, verifies the vendored MediaRemote adapter, lints integration files, and runs static analysis.
 
