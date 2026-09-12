@@ -43,12 +43,7 @@ enum BatteryFlowDirection: Equatable {
   case supplementing
 
   static func resolve(metrics: BatteryMetrics?) -> Self {
-    let confirmedCharging =
-      metrics?.externalConnected == true
-      && metrics?.isCharging == true
-      && metrics?.timeToFullMinutes != nil
-    if confirmedCharging { return .charging }
-    return resolve(batteryWatts: metrics?.batteryPowerWatts ?? metrics?.powerWatts)
+    resolve(batteryWatts: metrics?.resolvedBatteryPower.watts)
   }
 
   static func resolve(batteryWatts: Double?) -> Self {
@@ -59,7 +54,7 @@ enum BatteryFlowDirection: Equatable {
 
 /// A balanced, display-ready view of instantaneous power. Battery discharge moves to the input
 /// side, battery charge moves to the output side, and per-port USB output is subtracted from the
-/// aggregate SystemLoad to leave the Mac's own draw. An optional CPU estimate subdivides that draw
+/// remaining input power to estimate the Mac's own draw. An optional CPU estimate subdivides it
 /// without changing the graph's total.
 struct PowerFlowSnapshot: Equatable {
   let batteryDirection: BatteryFlowDirection
@@ -74,7 +69,7 @@ struct PowerFlowSnapshot: Equatable {
 
   init(metrics: BatteryMetrics?) {
     let adapter = Self.positive(metrics?.systemPowerInWatts)
-    let pack = metrics?.batteryPowerWatts ?? metrics?.powerWatts
+    let pack = metrics?.resolvedBatteryPower.watts
     let direction = BatteryFlowDirection.resolve(metrics: metrics)
     let batteryMagnitude = Self.positive(pack.map { abs($0) })
     let batteryIn = direction == .supplementing ? batteryMagnitude : nil
@@ -85,14 +80,14 @@ struct PowerFlowSnapshot: Equatable {
     let reportedSystemUse = Self.positive(metrics?.systemLoadWatts)
     let inferredSystemUse: Double? = {
       let supplied = (adapter ?? 0) + (batteryIn ?? 0)
-      guard supplied > 0 else { return nil }
+      guard supplied > 0, pack != nil else { return nil }
       return max(0, supplied - (batteryCharge ?? 0))
     }()
-    let directionOverridesTelemetry = direction == .charging && (pack ?? 0) < -0.05
+    // Derive the Mac share from input minus measured battery charge, or input plus discharge.
+    // Do not mix a valid pack reading with the contradictory private SystemLoad estimate.
     let totalSystemUse =
-      directionOverridesTelemetry
-      ? inferredSystemUse ?? reportedSystemUse
-      : reportedSystemUse ?? inferredSystemUse
+      inferredSystemUse
+      ?? (pack == nil && metrics?.batteryPowerWatts != nil ? nil : reportedSystemUse)
 
     batteryDirection = direction
     adapterInputWatts = adapter
