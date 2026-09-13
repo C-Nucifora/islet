@@ -1,0 +1,429 @@
+import Foundation
+
+enum ReminderEditorFocus: Hashable, Sendable {
+  case title
+  case notes
+  case url
+  case startDate
+  case dueDate
+  case completionDate
+}
+
+enum ReminderEditorCommand: Equatable, Sendable {
+  case returnKey
+  case saveButton
+  case escape
+  case commandN
+  case deleteShortcut
+}
+
+enum ReminderEditorCommandAction: Equatable, Sendable {
+  case submit
+  case dismiss
+  case startNew
+  case reopenPending
+  case none
+}
+
+enum ReminderEditorHandoff: Equatable, Sendable {
+  case remindersApplication
+}
+
+struct ReminderEditorFieldMessage: Equatable, Sendable {
+  let field: ReminderField
+  let message: String
+}
+
+struct ReminderEditorListOption: Identifiable, Equatable, Sendable {
+  let id: String
+  let title: String
+  let isUnavailable: Bool
+}
+
+struct ReminderEditorDeletionPayload: Equatable, Sendable {
+  let sessionID: UUID?
+  let draft: ReminderCoordinatorDraft
+
+  init(sessionID: UUID? = nil, draft: ReminderCoordinatorDraft) {
+    self.sessionID = sessionID
+    self.draft = draft
+  }
+}
+
+struct ReminderEditorAlertButton: Equatable, Sendable {
+  let title: String
+  let isDefault: Bool
+  let isDestructive: Bool
+}
+
+enum ReminderEditorAlertConfiguration {
+  static let deleteButtons = [
+    ReminderEditorAlertButton(title: "Cancel", isDefault: true, isDestructive: false),
+    ReminderEditorAlertButton(title: "Delete", isDefault: false, isDestructive: true),
+  ]
+
+  static let stopWaitingButtons = [
+    ReminderEditorAlertButton(title: "Cancel", isDefault: true, isDestructive: false),
+    ReminderEditorAlertButton(
+      title: "Open Reminders and Stop Waiting", isDefault: false, isDestructive: true),
+  ]
+}
+
+struct ReminderEditorSession: Equatable, Sendable {
+  let id: UUID
+  var draft: ReminderCoordinatorDraft
+  var fieldMessages: [ReminderEditorFieldMessage]
+  var generalMessage: String?
+  let calendar: Calendar
+  let displayTimeZone: TimeZone
+
+  init(
+    id: UUID = UUID(), draft: ReminderCoordinatorDraft,
+    fieldMessages: [ReminderEditorFieldMessage] = [], generalMessage: String? = nil,
+    calendar: Calendar, displayTimeZone: TimeZone
+  ) {
+    self.id = id
+    self.draft = draft
+    self.fieldMessages = fieldMessages
+    self.generalMessage = generalMessage
+    self.calendar = calendar
+    self.displayTimeZone = displayTimeZone
+  }
+
+  var isPending: Bool { draft.pendingCommitReceipt != nil }
+}
+
+enum ReminderEditorWindowRequest: Equatable, Sendable {
+  case new
+  case edit
+  case snooze
+}
+
+enum ReminderEditorWindowRoute: Equatable, Sendable {
+  case editor
+  case snooze
+}
+
+enum ReminderEditorPrimaryActionPlacement: Equatable, Sendable {
+  case fixedFooter
+}
+
+enum ReminderEditorHandoffCompletion: Equatable, Sendable {
+  case abandon
+  case retain(message: String)
+  case ignore
+}
+
+struct ReminderEditorRetention: Equatable, Sendable {
+  let session: ReminderEditorSession
+  let invalidatesReloadGeneration: Bool
+  let requestsReload: Bool
+}
+
+struct ReminderEditorPendingIdentity: Equatable, Sendable {
+  let sessionID: UUID
+  let receipt: ReminderCommitReceipt
+
+  func matches(sessionID: UUID?, draft: ReminderCoordinatorDraft?) -> Bool {
+    self.sessionID == sessionID && receipt == draft?.pendingCommitReceipt
+  }
+}
+
+enum ReminderEditorDraftValidation: Equatable, Sendable {
+  case valid(ReminderCoordinatorDraft)
+  case invalid(ReminderCoordinatorDraft, messages: [ReminderEditorFieldMessage])
+}
+
+enum ReminderEditorSubmissionDisposition: Equatable, Sendable {
+  case close(ReminderCoordinatorDraft)
+  case keepOpen(ReminderCoordinatorDraft, messages: [ReminderEditorFieldMessage])
+  case pending(ReminderCoordinatorDraft, message: String)
+}
+
+enum ReminderEditorPresentation {
+  static let deleteUsesDefaultAction = false
+  static let primaryActionPlacement = ReminderEditorPrimaryActionPlacement.fixedFooter
+  static let pendingRetryDelays: [Duration] = [
+    .milliseconds(250), .milliseconds(750), .seconds(2), .seconds(4),
+  ]
+
+  static func action(
+    for command: ReminderEditorCommand, focus: ReminderEditorFocus?, isPending: Bool,
+    isSubmissionEnabled: Bool = true
+  ) -> ReminderEditorCommandAction {
+    switch command {
+    case .returnKey:
+      guard !isPending, isSubmissionEnabled else { return .none }
+      return focus == .notes ? .none : .submit
+    case .saveButton:
+      return isSubmissionEnabled ? .submit : .none
+    case .escape:
+      return .dismiss
+    case .commandN:
+      return isPending ? .reopenPending : .startNew
+    case .deleteShortcut:
+      return .none
+    }
+  }
+
+  static func offersOpenInReminders(for draft: ReminderCoordinatorDraft) -> Bool {
+    draft.reminderID != nil || draft.pendingCommitReceipt != nil
+  }
+
+  static func handoff(for draft: ReminderCoordinatorDraft) -> ReminderEditorHandoff {
+    .remindersApplication
+  }
+
+  static func canSubmit(_ draft: ReminderCoordinatorDraft) -> Bool {
+    draft.canRetry
+      && !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  static func canDelete(_ draft: ReminderCoordinatorDraft) -> Bool {
+    draft.reminderID != nil && draft.pendingCommitReceipt == nil
+  }
+
+  static func isReadOnly(_ draft: ReminderCoordinatorDraft) -> Bool {
+    draft.pendingCommitReceipt != nil || draft.retryBlockedReason != nil
+  }
+
+  static func windowRoute(
+    currentDraft: ReminderCoordinatorDraft?, request: ReminderEditorWindowRequest
+  ) -> ReminderEditorWindowRoute {
+    if currentDraft != nil { return .editor }
+    return request == .snooze ? .snooze : .editor
+  }
+
+  static func windowTitle(for draft: ReminderCoordinatorDraft) -> String {
+    draft.reminderID == nil ? String(localized: "New reminder") : String(localized: "Edit reminder")
+  }
+
+  static func handoffCompletion(
+    expectedSessionID: UUID, expectedReceipt: ReminderCommitReceipt,
+    currentSessionID: UUID?, currentReceipt: ReminderCommitReceipt?,
+    currentSessionIsPending: Bool, openedRunningApplication: Bool, errorDescription: String?
+  ) -> ReminderEditorHandoffCompletion {
+    guard currentSessionID == expectedSessionID, currentReceipt == expectedReceipt,
+      currentSessionIsPending
+    else { return .ignore }
+    if let errorDescription {
+      return .retain(message: "Couldn’t open Reminders. \(errorDescription)")
+    }
+    guard openedRunningApplication else {
+      return .retain(message: "Couldn’t open Reminders. Try again or open Reminders manually.")
+    }
+    return .abandon
+  }
+
+  static func prepareForSubmission(
+    _ draft: ReminderCoordinatorDraft
+  ) -> ReminderEditorDraftValidation {
+    var prepared = draft
+    if prepared.notes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+      prepared.notes = nil
+    }
+
+    let trimmedURL = prepared.urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmedURL.isEmpty {
+      prepared.urlText = ""
+      return .valid(prepared)
+    }
+    guard let url = URL(string: trimmedURL), url.scheme?.isEmpty == false else {
+      return .invalid(
+        prepared,
+        messages: [
+          ReminderEditorFieldMessage(field: .url, message: "Enter a valid reminder URL.")
+        ])
+    }
+    prepared.urlText = url.absoluteString
+    return .valid(prepared)
+  }
+
+  static func disposition(
+    for write: ReminderCoordinatorWrite
+  ) -> ReminderEditorSubmissionDisposition {
+    switch write.outcome {
+    case .noChanges, .saved:
+      if write.draft.retryBlockedReason != nil {
+        return .keepOpen(write.draft, messages: [])
+      }
+      return .close(write.draft)
+    case .committedWithNormalization(_, let mismatches):
+      return .keepOpen(
+        write.draft,
+        messages: mismatches.map {
+          ReminderEditorFieldMessage(field: $0.field, message: $0.reason)
+        })
+    case .commitStatusUnknown:
+      return .pending(
+        write.draft,
+        message:
+          "Islet is waiting for Reminders to reload this commit. Add or Save is disabled until the reminder can be confirmed."
+      )
+    }
+  }
+
+  static func reviewMessage(
+    for draft: ReminderCoordinatorDraft, fieldMessages: [ReminderEditorFieldMessage]
+  ) -> String? {
+    if let retryBlockedReason = draft.retryBlockedReason { return retryBlockedReason }
+    guard !fieldMessages.isEmpty else { return nil }
+    return "Reminders saved different values. Review the highlighted fields."
+  }
+
+  static func retention(
+    for write: ReminderCoordinatorWrite, existingSession: ReminderEditorSession?,
+    newSessionID: UUID = UUID(), calendar: Calendar, displayTimeZone: TimeZone
+  ) -> ReminderEditorRetention? {
+    let draft: ReminderCoordinatorDraft
+    let fieldMessages: [ReminderEditorFieldMessage]
+    let invalidatesReloadGeneration: Bool
+
+    switch disposition(for: write) {
+    case .close:
+      return nil
+    case .keepOpen(let retainedDraft, let messages):
+      draft = retainedDraft
+      fieldMessages = messages
+      invalidatesReloadGeneration = false
+    case .pending(let retainedDraft, _):
+      draft = retainedDraft
+      fieldMessages = []
+      invalidatesReloadGeneration = true
+    }
+
+    let session = ReminderEditorSession(
+      id: existingSession?.id ?? newSessionID, draft: draft,
+      fieldMessages: fieldMessages,
+      generalMessage: {
+        if case .pending(_, let message) = disposition(for: write) { return message }
+        return reviewMessage(for: draft, fieldMessages: fieldMessages)
+      }(),
+      calendar: existingSession?.calendar ?? calendar,
+      displayTimeZone: existingSession?.displayTimeZone ?? displayTimeZone)
+    return ReminderEditorRetention(
+      session: session, invalidatesReloadGeneration: invalidatesReloadGeneration,
+      requestsReload: true)
+  }
+
+  static func initialListID(
+    defaultID: String?, lists: [ReminderListItem]
+  ) -> String? {
+    if let defaultID, lists.contains(where: { $0.id == defaultID }) { return defaultID }
+    return lists.first?.id
+  }
+
+  static func listOptions(
+    lists: [ReminderListItem], selectedID: String?
+  ) -> [ReminderEditorListOption] {
+    var options = lists.map {
+      ReminderEditorListOption(id: $0.id, title: $0.title, isUnavailable: false)
+    }
+    if let selectedID, !lists.contains(where: { $0.id == selectedID }) {
+      options.append(
+        ReminderEditorListOption(
+          id: selectedID, title: "Unavailable list", isUnavailable: true))
+    }
+    return options
+  }
+
+  static func timeZoneIdentifiers(
+    selectedIdentifier: String?, knownIdentifiers: [String] = TimeZone.knownTimeZoneIdentifiers
+  ) -> [String] {
+    guard let selectedIdentifier, !knownIdentifiers.contains(selectedIdentifier) else {
+      return knownIdentifiers
+    }
+    return [selectedIdentifier] + knownIdentifiers
+  }
+
+  static func settingCompletion(
+    _ isCompleted: Bool, in draft: ReminderCoordinatorDraft, now: Date
+  ) -> ReminderCoordinatorDraft {
+    var changed = draft
+    changed.isCompleted = isCompleted
+    changed.completionDate = isCompleted ? now : nil
+    return changed
+  }
+
+  static func removingTime(from value: ReminderDateValue) throws -> ReminderDateValue {
+    var components = value.components
+    components.hour = nil
+    components.minute = nil
+    components.second = nil
+    components.nanosecond = nil
+    return try ReminderDateValue(validating: components)
+  }
+
+  static func assigningTimeZone(
+    _ timeZone: TimeZone?, to value: ReminderDateValue
+  ) throws -> ReminderDateValue {
+    var components = value.components
+    components.timeZone = timeZone
+    return try ReminderDateValue(validating: components)
+  }
+
+  static func addingTime(
+    to value: ReminderDateValue, clock: Date, calendar: Calendar,
+    displayTimeZone: TimeZone
+  ) throws -> ReminderDateValue {
+    guard calendar.identifier == .gregorian else {
+      throw ReminderWriteError.invalidDateComponents
+    }
+    var extractionCalendar = calendar
+    extractionCalendar.timeZone = value.components.timeZone ?? displayTimeZone
+    let clockComponents = extractionCalendar.dateComponents([.hour, .minute], from: clock)
+    var components = value.components
+    components.hour = clockComponents.hour
+    components.minute = clockComponents.minute
+    components.second = nil
+    components.nanosecond = nil
+    return try ReminderDateValue(validating: components)
+  }
+
+  static func dateValue(
+    from date: Date, includesTime: Bool, timeZone: TimeZone?, calendar: Calendar,
+    displayTimeZone: TimeZone
+  ) throws -> ReminderDateValue {
+    guard calendar.identifier == .gregorian else {
+      throw ReminderWriteError.invalidDateComponents
+    }
+    let effectiveTimeZone = timeZone ?? displayTimeZone
+    var extractionCalendar = calendar
+    extractionCalendar.timeZone = effectiveTimeZone
+    let requestedComponents: Set<Calendar.Component> =
+      includesTime
+      ? [.era, .year, .month, .day, .hour, .minute]
+      : [.era, .year, .month, .day]
+    var components = extractionCalendar.dateComponents(requestedComponents, from: date)
+    components.calendar = extractionCalendar
+    components.timeZone = timeZone
+    return try ReminderDateValue(validating: components)
+  }
+
+  static func displayDate(
+    for value: ReminderDateValue, calendar: Calendar, displayTimeZone: TimeZone
+  ) throws -> Date {
+    guard calendar.identifier == .gregorian else {
+      throw ReminderWriteError.invalidDateComponents
+    }
+    var conversionCalendar = calendar
+    conversionCalendar.timeZone = value.components.timeZone ?? displayTimeZone
+    return try value.date(in: conversionCalendar)
+  }
+
+  static func pendingLookupID(for draft: ReminderCoordinatorDraft) -> String? {
+    draft.pendingCommitReceipt?.itemIdentifier ?? draft.reminderID
+  }
+
+  static func authoritativePendingRecord(
+    for draft: ReminderCoordinatorDraft, acceptedReloadGeneration: Bool,
+    record: ReminderWriteRecord?
+  ) -> ReminderWriteRecord? {
+    guard acceptedReloadGeneration, let identifier = pendingLookupID(for: draft),
+      let record, record.id == identifier
+    else {
+      return nil
+    }
+    return record
+  }
+}
