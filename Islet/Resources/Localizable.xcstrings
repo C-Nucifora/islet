@@ -2841,6 +2841,16 @@
         }
       }
     },
+    "All clear" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Åll çlëår ~~~~~］"
+          }
+        }
+      }
+    },
     "All day" : {
       "localizations" : {
         "en-XA" : {
@@ -3874,6 +3884,16 @@
         }
       }
     },
+    "Calendar: %@" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Çålëñdår: %@ ~~~~~~］"
+          }
+        }
+      }
+    },
     "Calendars shown in Islet" : {
       "localizations" : {
         "en-XA" : {
@@ -4758,6 +4778,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Çømplëtë ~~~~］"
+          }
+        }
+      }
+    },
+    "Complete %@" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Çømplëtë %@ ~~~~~］"
           }
         }
       }
@@ -6143,6 +6173,16 @@
         }
       }
     },
+    "Enable Calendar or Reminders in Settings" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ëñåblë Çålëñdår ør Rëmïñdërs ïñ Sëttïñgs ~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "Enabled" : {
       "localizations" : {
         "en-XA" : {
@@ -7319,6 +7359,16 @@
         }
       }
     },
+    "Home layout" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Hømë låÿøût ~~~~~］"
+          }
+        }
+      }
+    },
     "Home selected" : {
       "localizations" : {
         "en-XA" : {
@@ -8261,6 +8311,16 @@
         }
       }
     },
+    "Layout" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Låÿøût ~~~~］"
+          }
+        }
+      }
+    },
     "Learned baseline" : {
       "localizations" : {
         "en-XA" : {
@@ -8457,6 +8517,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Løådïñg çålëñdår ~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Loading reminders" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Løådïñg rëmïñdërs ~~~~~~~］"
           }
         }
       }
@@ -9111,6 +9181,16 @@
         }
       }
     },
+    "More in Reminders" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Mørë ïñ Rëmïñdërs ~~~~~~~］"
+          }
+        }
+      }
+    },
     "More sources" : {
       "localizations" : {
         "en-XA" : {
@@ -9617,6 +9697,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Ñø ëvëñts ~~~~~］"
+          }
+        }
+      }
+    },
+    "No events today" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Ñø ëvëñts tødåÿ ~~~~~~~］"
           }
         }
       }
@@ -10513,6 +10603,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Øpëñs thë Ïslët ñøtçh påñël. ~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Opens the Reminders app" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Øpëñs thë Rëmïñdërs åpp ~~~~~~~~~］"
           }
         }
       }
@@ -12199,6 +12299,16 @@
         }
       }
     },
+    "Reminders: %@" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëmïñdërs: %@ ~~~~~~］"
+          }
+        }
+      }
+    },
     "Remote T3 Code machines must use HTTPS." : {
       "localizations" : {
         "en-XA" : {
@@ -12971,6 +13081,16 @@
         }
       }
     },
+    "Review %@ permission" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëvïëw %@ përmïssïøñ ~~~~~~~~］"
+          }
+        }
+      }
+    },
     "Review Accessibility permission…" : {
       "localizations" : {
         "en-XA" : {
@@ -12997,6 +13117,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Rëvïëw thë çhåñgës bëløw. Ñøthïñg hås bëëñ åpplïëd ÿët. ~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Review…" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Rëvïëw… ~~~~］"
           }
         }
       }
@@ -13451,6 +13581,16 @@
         }
       }
     },
+    "Scrollable" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Sçrøllåblë ~~~~~］"
+          }
+        }
+      }
+    },
     "Search" : {
       "localizations" : {
         "en-XA" : {
@@ -13827,6 +13967,16 @@
         }
       }
     },
+    "Show Calendar and Reminders in separate columns." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Shøw Çålëñdår åñd Rëmïñdërs ïñ sëpåråtë çølûmñs. ~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
     "Show Islet" : {
       "localizations" : {
         "en-XA" : {
@@ -13873,6 +14023,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Shøw ëvërÿ prøvïdër ûpdåtë ~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Show every ranked item in one scrollable list." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Shøw ëvërÿ råñkëd ïtëm ïñ øñë sçrøllåblë lïst. ~~~~~~~~~~~~~~~~~］"
           }
         }
       }
@@ -13943,6 +14103,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Shøw thë %@ åçtïvïtÿ ïñ Ïslët ~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Show three ranked items, with a More button for the rest." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Shøw thrëë råñkëd ïtëms, wïth å Mørë bûttøñ før thë rëst. ~~~~~~~~~~~~~~~~~~~~~］"
           }
         }
       }
@@ -14279,6 +14449,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Søûrçë ~~~~］"
+          }
+        }
+      }
+    },
+    "Split" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Splït ~~~］"
           }
         }
       }

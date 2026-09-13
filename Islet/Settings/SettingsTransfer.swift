@@ -22,6 +22,7 @@ struct SettingsTransferSnapshot: Equatable {
   var calendarEnabled: Bool
   var calendarLeadMinutes: Int
   var remindersEnabled: Bool
+  var homeLayoutMode: HomeLayoutMode
   var showOnAllDisplays: Bool
   var hideInFullscreen: Bool
   var launchAtLogin: Bool
@@ -67,6 +68,7 @@ struct SettingsTransferPatch: Equatable {
   var calendarEnabled: Bool?
   var calendarLeadMinutes: Int?
   var remindersEnabled: Bool?
+  var homeLayoutMode: HomeLayoutMode?
   var showOnAllDisplays: Bool?
   var hideInFullscreen: Bool?
   var launchAtLogin: Bool?
@@ -118,6 +120,7 @@ struct SettingsTransferPatch: Equatable {
     if let calendarEnabled { result.calendarEnabled = calendarEnabled }
     if let calendarLeadMinutes { result.calendarLeadMinutes = calendarLeadMinutes }
     if let remindersEnabled { result.remindersEnabled = remindersEnabled }
+    if let homeLayoutMode { result.homeLayoutMode = homeLayoutMode }
     if let showOnAllDisplays { result.showOnAllDisplays = showOnAllDisplays }
     if let hideInFullscreen { result.hideInFullscreen = hideInFullscreen }
     if let launchAtLogin { result.launchAtLogin = launchAtLogin }
@@ -222,9 +225,9 @@ enum SettingsTransfer {
     "calendarEnabled", "calendarLeadMinutes", "continuityAlwaysVisible", "continuitySneaks",
     "disabledActivities", "disabledEventSources", "energyMode",
     "excludedAudioOnlySourceBundleIdentifiers", "hapticStrength", "hapticsEnabled",
-    "hideFromScreenRecording", "hideInFullscreen", "hoverCollapseTimeout", "hudEnabled",
-    "hudStyle", "interactionMode", "keepAwakeLowBatteryThreshold", "keepAwakeWithLidClosed",
-    "launchAtLogin",
+    "hideFromScreenRecording", "hideInFullscreen", "homeLayoutMode", "hoverCollapseTimeout",
+    "hudEnabled", "hudStyle", "interactionMode", "keepAwakeLowBatteryThreshold",
+    "keepAwakeWithLidClosed", "launchAtLogin",
     "mediaPriorityList", "mediaSourceMode", "metricStyles", "pulseStaleTimeout", "remindersEnabled",
     "showOnAllDisplays", "systemAlwaysVisible", "systemAutoPresentCPU",
     "systemAutoPresentDiskThroughput", "systemAutoPresentLowDiskSpace",
@@ -334,6 +337,7 @@ enum SettingsTransfer {
     case "calendarEnabled": patch.calendarEnabled != nil
     case "calendarLeadMinutes": patch.calendarLeadMinutes != nil
     case "remindersEnabled": patch.remindersEnabled != nil
+    case "homeLayoutMode": patch.homeLayoutMode != nil
     case "showOnAllDisplays": patch.showOnAllDisplays != nil
     case "hideInFullscreen": patch.hideInFullscreen != nil
     case "launchAtLogin": patch.launchAtLogin != nil
@@ -383,6 +387,7 @@ enum SettingsTransfer {
       "calendarEnabled": value.calendarEnabled,
       "calendarLeadMinutes": value.calendarLeadMinutes,
       "remindersEnabled": value.remindersEnabled,
+      "homeLayoutMode": value.homeLayoutMode.rawValue,
       "showOnAllDisplays": value.showOnAllDisplays,
       "hideInFullscreen": value.hideInFullscreen,
       "launchAtLogin": value.launchAtLogin,
@@ -458,6 +463,7 @@ enum SettingsTransfer {
     patch.calendarLeadMinutes = try allowedInteger(
       "calendarLeadMinutes", in: values, allowed: [0, 5, 10, 15, 30, 60])
     patch.remindersEnabled = try boolean("remindersEnabled", in: values)
+    patch.homeLayoutMode = try enumeration("homeLayoutMode", in: values, type: HomeLayoutMode.self)
     patch.showOnAllDisplays = try boolean("showOnAllDisplays", in: values)
     patch.hideInFullscreen = try boolean("hideInFullscreen", in: values)
     patch.launchAtLogin = try boolean("launchAtLogin", in: values)
@@ -649,6 +655,8 @@ enum SettingsTransfer {
     add("hudEnabled", "System HUD", old.hudEnabled, new.hudEnabled)
     add("hudStyle", "HUD style", old.hudStyle.rawValue, new.hudStyle.rawValue)
     add(
+      "homeLayoutMode", "Home layout", old.homeLayoutMode.rawValue, new.homeLayoutMode.rawValue)
+    add(
       "interactionMode", "Interaction", old.interactionMode.rawValue, new.interactionMode.rawValue)
     add("launchAtLogin", "Launch at login", old.launchAtLogin, new.launchAtLogin)
     add("mediaPriorityList", "Player order", old.mediaPriorityList, new.mediaPriorityList)
@@ -734,6 +742,7 @@ enum SettingsTransferDefaults {
       hudStyle: Defaults[.hudStyle], calendarEnabled: Defaults[.calendarEnabled],
       calendarLeadMinutes: Defaults[.calendarLeadMinutes],
       remindersEnabled: Defaults[.remindersEnabled],
+      homeLayoutMode: Defaults[.homeLayoutMode],
       showOnAllDisplays: Defaults[.showOnAllDisplays],
       hideInFullscreen: Defaults[.hideInFullscreen],
       launchAtLogin: Defaults[.launchAtLogin], activityOrder: Defaults[.activityOrder],
@@ -784,6 +793,7 @@ enum SettingsTransferDefaults {
     if let value = patch.calendarEnabled { Defaults[.calendarEnabled] = value }
     if let value = patch.calendarLeadMinutes { Defaults[.calendarLeadMinutes] = value }
     if let value = patch.remindersEnabled { Defaults[.remindersEnabled] = value }
+    if let value = patch.homeLayoutMode { Defaults[.homeLayoutMode] = value }
     if let value = patch.showOnAllDisplays { Defaults[.showOnAllDisplays] = value }
     if let value = patch.hideInFullscreen { Defaults[.hideInFullscreen] = value }
     if let value = patch.launchAtLogin { Defaults[.launchAtLogin] = value }

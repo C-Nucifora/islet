@@ -19,13 +19,12 @@ struct CompactArtworkView: View {
 
 struct CompactBarsView: View {
   @ObservedObject var activity: NowPlayingActivity
-  @Environment(\.appTheme) private var appTheme
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     TimelineView(
       .animation(
-        minimumInterval: 0.15,
+        minimumInterval: 1.0 / 60,
         paused: reduceMotion || activity.playback?.isPlaying != true)
     ) { context in
       let t = context.date.timeIntervalSinceReferenceDate
@@ -33,11 +32,11 @@ struct CompactBarsView: View {
         ForEach(0..<4) { i in
           let phase = t * 3 + Double(i) * 0.9
           Capsule()
-            .fill(appTheme.color(for: .nowPlaying))
+            .fill(.white)
             .frame(
-              width: 2.5,
+              width: 1.5,
               height: activity.playback?.isPlaying == true && !reduceMotion
-                ? 4 + 10 * abs(sin(phase)) : 4)
+                ? 9 + 5 * sin(phase) : 4)
         }
       }
       .frame(width: 20, height: 18, alignment: .center)

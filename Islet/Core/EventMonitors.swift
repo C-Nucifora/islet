@@ -67,8 +67,12 @@ final class EventMonitors {
     }
     downMonitor = down
     down.start()
-    let fileDrag = PairedMonitor(mask: [.leftMouseDragged]) { [weak self] _ in
-      guard Self.dragPasteboardContainsFileURLs() else { return }
+    let fileDrag = PairedMonitor(mask: [.leftMouseDragged]) { [weak self] event in
+      guard
+        Self.shouldHandleMonitoredFileDrag(
+          hasFileURLs: Self.dragPasteboardContainsFileURLs(),
+          eventHasWindow: event.window != nil)
+      else { return }
       guard let self else { return }
       self.forwardFileDragIfRelevant(
         NSEvent.mouseLocation,
@@ -137,7 +141,13 @@ final class EventMonitors {
       }
       // A Finder drag hovering over the notch opens the Shelf immediately. Do not also feed the
       // same event into the ordinary hover barrier.
-      if event.type == .leftMouseDragged, Self.dragPasteboardContainsFileURLs() { return }
+      if event.type == .leftMouseDragged,
+        Self.shouldHandleMonitoredFileDrag(
+          hasFileURLs: Self.dragPasteboardContainsFileURLs(),
+          eventHasWindow: event.window != nil)
+      {
+        return
+      }
       guard self.forwardsHoverMovement else { return }
       self.forwardMovementIfRelevant(event, location: location)
     }
@@ -154,6 +164,16 @@ final class EventMonitors {
   nonisolated static func pasteboardContainsFileURLs(_ pasteboard: NSPasteboard) -> Bool {
     pasteboard.canReadObject(
       forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+  }
+
+  /// The drag pasteboard keeps its last payload after a drag ends. A small pointer movement while
+  /// clicking an Islet control can therefore arrive as `leftMouseDragged` while stale file URLs
+  /// are still present. Events attached to one of our windows are ordinary local interaction;
+  /// external Finder drags arrive through the global monitor without an Islet window.
+  nonisolated static func shouldHandleMonitoredFileDrag(
+    hasFileURLs: Bool, eventHasWindow: Bool
+  ) -> Bool {
+    hasFileURLs && !eventHasWindow
   }
 
   private nonisolated static func dragPasteboardContainsFileURLs() -> Bool {

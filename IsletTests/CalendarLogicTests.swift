@@ -1,9 +1,39 @@
+import Combine
 import XCTest
 
 @testable import Islet
 
 final class CalendarLogicTests: XCTestCase {
+  private var cancellables: Set<AnyCancellable> = []
   let now = Date(timeIntervalSince1970: 1_000_000)
+
+  override func tearDown() {
+    cancellables.removeAll()
+    super.tearDown()
+  }
+
+  @MainActor
+  func testDayBoundaryNotificationsPostedOffMainAreDeliveredOnMain() async {
+    let center = NotificationCenter()
+    let delivered = expectation(description: "Day boundary notifications delivered")
+    delivered.expectedFulfillmentCount = 2
+    var receivedNames: [Notification.Name] = []
+    CalendarActivity.dayBoundaryNotifications(center: center)
+      .sink { notification in
+        XCTAssertTrue(Thread.isMainThread)
+        receivedNames.append(notification.name)
+        delivered.fulfill()
+      }
+      .store(in: &cancellables)
+
+    DispatchQueue.global().async {
+      center.post(name: .NSCalendarDayChanged, object: nil)
+      center.post(name: .NSSystemTimeZoneDidChange, object: nil)
+    }
+
+    await fulfillment(of: [delivered], timeout: 2)
+    XCTAssertEqual(Set(receivedNames), [.NSCalendarDayChanged, .NSSystemTimeZoneDidChange])
+  }
 
   func event(
     _ title: String, startOffset: TimeInterval, duration: TimeInterval = 3600,
