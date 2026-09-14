@@ -39,7 +39,7 @@ These checks require real accounts and cross-client observation. The available p
 | --- | --- | --- | --- | --- | --- |
 | Local | Unavailable | Unavailable | Unavailable | Unavailable | Not configured |
 | iCloud | Create, cross-client readback, stale-write rejection, deletion, and cancelling deletion passed | Daily, monthly, and yearly rules and arrival alerts also appeared in Reminders; count-ended recurrence, early-alert interpretation, and notification delivery remain pending | Create and rename passed; color pending | A Reminders flag survived a notes-only Islet edit | Partial |
-| Shared iCloud list | Owner-side create/readback, priorities, date normalization, stale-write rejection, deletion and cancellation passed | Daily count exhaustion, weekly/monthly/yearly rules, date-end readback, and saved absolute/relative/location alarms passed; delivery pending | Rename and restoration passed; color pending | Flags, owner assignment, tags and a subtask survived notes-only edits | Partial; owner-to-Ned marker sync observed, reverse-direction receipt pending |
+| Shared iCloud list | Owner-side create/readback, priorities, date normalization, stale-write rejection, deletion and cancellation passed | Daily count exhaustion, weekly/monthly/yearly rules, date-end readback, and saved absolute/relative/location alarms passed; delivery pending | Rename and restoration passed; color pending | Flags, owner assignment, tags and a subtask survived notes-only edits | Partial; marker synchronization observed in both directions between the owner and Ned |
 | Exchange | Unavailable | Unavailable | Unavailable | Unavailable | Not configured |
 
 The iCloud run also exposed EventKit normalization when a floating date-only start is combined with a timed due date in an explicit time zone. Islet now permits the instant-preserving staged conversion, commits it, and keeps the editor open with the provider's changed start and due values highlighted. Reloading showed the provider's actual floating midnight start and floating timed due value; Reminders showed the same due instant.
@@ -102,7 +102,7 @@ All mutations were confined to `Islet PR249 shared verification` and its disposa
 
 Cleanup removed both completed daily occurrences through Reminders' recoverable deletion. The shared list then showed zero incomplete and zero completed reminders. The test-only tag disappeared from the active tag list. A single new, undated `PR249 owner sync check` marker was then created through Islet and verified in Reminders. It has no alarms and remains for Ned's device check; its notes ask Ned to add `PR249 Ned sync check` after he sees it. The shared list itself remains available. The temporary PR app exited, and `pgrep -x Islet` confirmed no Islet process remained.
 
-Remaining shared acceptance work:
+Shared acceptance work remaining after the 13 September run:
 
 - Confirm receipt of `PR249 Ned sync check` on the owner's device. The owner marker has now been observed on Ned's Mac, and Ned's marker was created and read back there; the reverse-direction receipt remains pending.
 - Verify delivered time and location notifications, native Early Reminder interpretation, and native URL presentation.
@@ -117,9 +117,19 @@ On Ned's Mac, native Reminders and a fresh public EventKit read both found `PR24
 
 Ned explicitly authorized one undated, alarm-free `PR249 Ned sync check` and a PR update. A public EventKit helper created that single reminder in the existing shared list. A separate EventKit process read it back as incomplete, with no start date, due date, or alarms. Native Reminders displayed both markers and a list count of two. No existing reminder or list was changed. The new marker remains for the owner to observe.
 
-Owner-to-Ned synchronization is observed. Ned-to-owner synchronization still requires confirmation on the owner's device. This check used public EventKit and native Reminders, not a new Islet-editor round trip. It does not verify notification delivery or any other outstanding provider-matrix item.
+Owner-to-Ned synchronization was observed on 13 September. Ned-to-owner synchronization was still pending at that point and was confirmed in the 14 September follow-up below. This participant check used public EventKit and native Reminders, not a new Islet-editor round trip. It does not verify notification delivery or any other outstanding provider-matrix item.
 
 Current `main` was merged into the PR branch. The only merge conflict was in the localization catalog: `Complete %@` from the Home layout changes now coexists with `Completed` and `Completion date` from reminder editing. Existing branch deletions and translations were retained.
+
+## Owner receipt and acceptance retry, 14 September 2026
+
+Native Reminders on the owner's Mac displayed both `PR249 owner sync check` and `PR249 Ned sync check` in `Islet PR249 shared verification`, with a list count of two. Ned's marker was incomplete. Its native details showed Date, Time, Urgent, Location and When Messaging off, with no priority or assignment. No marker was edited. Combined with Ned's recorded observation, this completes the marker synchronization check in both directions. It does not claim a participant-side Islet-editor round trip.
+
+The current PR head, `61c10f44d8a30cddb8e1af2e3f0a4e6307b37e2f`, built successfully as a signed arm64 Debug app under a 600-second timeout using `.build/pr-249-provider-dd`. The first local build used a stale generated project and could not resolve `AppNetworkCache`; regenerating with `xcodegen generate` resolved that build-input problem. No source change was needed. No Islet process was running before the manual run, no app-hosted tests ran, and `pgrep -x Islet` confirmed the temporary app had exited afterward.
+
+The shared-list color retry did not reach a usable picker. Native reminder details did open after raising the Reminders window, but Add Image exposed Photos and device-capture options rather than a file chooser. An attempted paste of a generated PNG fixture inserted its filename into the disposable record's title, so no attachment-preservation result was claimed. The title was restored and that record was recoverably deleted. The shared list again contained only the two original sync markers, which remain available for review.
+
+No new production-code defect was established in this acceptance retry. Delivered notifications, geofence delivery, list color, native early-alert and URL comparisons, attachments and exact completion-date comparison remain unverified. The unavailable provider and permission scenarios retain their previously documented limits. The PR remains a draft pending that acceptance evidence.
 
 ## Provider acceptance checklist
 
