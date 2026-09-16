@@ -101,6 +101,14 @@ struct BatteryCapacityTrend: Equatable, Sendable {
   let changeMAh: Int
   let days: Int
 
+  var shortText: String {
+    guard changeMAh <= -100 || changeMAh >= 100 else {
+      return String(localized: "Stable")
+    }
+    let change = changeMAh.formatted(.number.sign(strategy: .always()))
+    return String(localized: "\(change) mAh")
+  }
+
   var wording: String {
     if changeMAh <= -100 {
       return String(localized: "Reported capacity is \(-changeMAh) mAh lower over \(days) days")
