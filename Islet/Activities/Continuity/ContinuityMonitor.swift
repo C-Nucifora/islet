@@ -133,10 +133,12 @@ final class ContinuityMonitor: ObservableObject {
             .font(.caption)
             .foregroundStyle(appearing ? Color.blue : Color.secondary)),
         trailing: AnyView(
-          Text(text)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.white)
-            .lineLimit(1)),
+          CompactMarquee(viewportWidth: 120) {
+            Text(text)
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(.white)
+              .lineLimit(1)
+          }),
         announcement: appearing
           ? String(localized: "iPhone: \(text) live activity started") : text))
   }

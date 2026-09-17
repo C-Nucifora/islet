@@ -91,6 +91,12 @@ struct NotchGeometry: Equatable {
 
   // MARK: - Island alignment
 
+  /// Leave more room for macOS 27's menu bar overflow control beside a hardware notch.
+  /// Padding and the corner flare add another 18pt to the notification's trailing extent.
+  func compactNotificationTextWidth(osMajorVersion: Int) -> CGFloat {
+    hasHardwareNotch && osMajorVersion >= 27 ? 80 : 120
+  }
+
   /// Width of the drawn island body — the black shape, EXCLUDING the outward corner flare — for a
   /// pair of measured compact slot widths. One definition, shared by the view that draws it and by
   /// `collapsedIslandRect` below that says where it lands.

@@ -4,7 +4,7 @@
 
 Islet is a macOS utility that puts timers, media controls, files, and live status around the MacBook notch. It runs without a Dock or menu-bar icon. Open it by pushing the pointer past the top edge of the display, or switch to click-to-pin interaction in Settings.
 
-Islet currently targets macOS 26 and is under active development. Build it from source to try it.
+Islet supports macOS 26 and macOS 27 and is under active development. Build it from source to try it.
 
 ## What Islet includes
 
@@ -18,7 +18,7 @@ You can choose, reorder, and hide activities during setup or in Settings. Islet 
 ## Requirements
 
 - macOS 26 or later
-- Xcode 26 with the command-line tools installed
+- Xcode 26.6 or Xcode 27 with the command-line tools installed
 - A stable code-signing identity for local builds
 
 The project uses [XcodeGen](https://github.com/yonaskolb/XcodeGen), so the generated `Islet.xcodeproj` is not committed.
@@ -86,7 +86,11 @@ Cancellation or timeout stops only the test host, `xcodebuild`, `swift-frontend`
 the installed app. Xcode's test action selects the same isolated configuration, but the command-line
 runner additionally enforces the lock, hard timeout, and whole-suite preferences check.
 
-CI runs the full suite on both arm64 and x86_64, verifies the vendored MediaRemote adapter, lints integration files, and runs static analysis.
+CI runs the full suite on macOS 26 with arm64 and x86_64, and on macOS 27 with arm64 using GitHub's `xcode-27` preview runner. It also verifies the vendored MediaRemote adapter, lints integration files, and runs static analysis. The deployment target remains macOS 26.
+
+On notched Macs running macOS 27, notification text uses a narrower scrolling viewport to leave more room for the menu bar overflow arrows. Displays without a notch retain the wider viewport.
+
+See [macOS 27 compatibility](docs/macos-27-compatibility.md) for validation and manual checks.
 
 ## Permissions and privacy
 

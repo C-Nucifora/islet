@@ -1,5 +1,16 @@
 import SwiftUI
 
+private struct CompactNotificationTextWidthKey: EnvironmentKey {
+  static let defaultValue: CGFloat = 120
+}
+
+extension EnvironmentValues {
+  var compactNotificationTextWidth: CGFloat {
+    get { self[CompactNotificationTextWidthKey.self] }
+    set { self[CompactNotificationTextWidthKey.self] = newValue }
+  }
+}
+
 /// Pure timing and geometry for a compact, repeating text marquee.
 ///
 /// The view owns dates and rendering; this model makes the reading phases deterministic and keeps
@@ -55,6 +66,7 @@ struct CompactMarquee<Content: View>: View {
   private let content: Content
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.compactNotificationTextWidth) private var maximumViewportWidth
   @State private var contentWidth: CGFloat = 0
   @State private var epoch = Date()
 
@@ -64,14 +76,16 @@ struct CompactMarquee<Content: View>: View {
   }
 
   private var motion: MarqueeMotion {
-    MarqueeMotion(viewportWidth: viewportWidth, contentWidth: contentWidth)
+    MarqueeMotion(viewportWidth: effectiveViewportWidth, contentWidth: contentWidth)
   }
+
+  private var effectiveViewportWidth: CGFloat { min(viewportWidth, maximumViewportWidth) }
 
   @ViewBuilder var body: some View {
     if reduceMotion {
       content
         .lineLimit(1)
-        .frame(width: viewportWidth, alignment: .leading)
+        .frame(width: effectiveViewportWidth, alignment: .leading)
         .clipped()
     } else {
       TimelineView(.animation(minimumInterval: 1 / 30, paused: motion.travelDistance == 0)) {
@@ -85,7 +99,7 @@ struct CompactMarquee<Content: View>: View {
             epoch = Date()
           }
           .offset(x: offset)
-          .frame(width: viewportWidth, alignment: .leading)
+          .frame(width: effectiveViewportWidth, alignment: .leading)
           .clipped()
           .mask {
             LinearGradient(
