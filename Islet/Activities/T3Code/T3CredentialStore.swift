@@ -212,10 +212,10 @@ final class T3CredentialVault {
   func save(_ token: String, credentialID: String) throws {
     _ = try migrateAggregateVaults()
     let address = credentialAddress(for: credentialID)
+    defer { cachedTokens[credentialID] = nil }
     try applyTransaction(
       replacements: [address: try encodedCredential(token: token, credentialID: credentialID)],
       deletions: [])
-    cachedTokens[credentialID] = nil
   }
 
   func saveLocal(_ token: String, credentialID: String, environmentID: String) throws {
@@ -229,11 +229,14 @@ final class T3CredentialVault {
       return item.address != destination
     }
     let staleAddresses = Set(staleItems.map(\.address))
+    // A failed rollback can leave records changed, so evict affected tokens even on failure.
+    defer {
+      cachedTokens[credentialID] = nil
+      for item in staleItems { cachedTokens[item.record.credentialID] = nil }
+    }
     try applyTransaction(
       replacements: [destination: try encodedCredential(token: token, credentialID: credentialID)],
       deletions: staleAddresses)
-    cachedTokens[credentialID] = nil
-    for item in staleItems { cachedTokens[item.record.credentialID] = nil }
   }
 
   func delete(credentialIDs: Set<String>) throws {
@@ -243,10 +246,12 @@ final class T3CredentialVault {
       addresses.compactMap { address in
         try store.data(service: address.service, account: address.account) == nil ? nil : address
       })
+    defer {
+      for credentialID in credentialIDs { cachedTokens[credentialID] = nil }
+    }
     if !existingAddresses.isEmpty {
       try applyTransaction(replacements: [:], deletions: existingAddresses)
     }
-    for credentialID in credentialIDs { cachedTokens[credentialID] = nil }
   }
 
   nonisolated static func account(for credentialID: String) -> String {
