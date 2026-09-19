@@ -631,8 +631,9 @@ final class ReminderWriteCoordinator {
   private func editableFields(
     from draft: ReminderCoordinatorDraft, listID: String
   ) throws -> ReminderEditableFields {
-    let title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !title.isEmpty else { throw ReminderWriteError.emptyTitle }
+    let trimmedTitle = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedTitle.isEmpty else { throw ReminderWriteError.emptyTitle }
+    let title = draft.title == draft.baseline?.title ? draft.title : trimmedTitle
 
     let trimmedURL = draft.urlText.trimmingCharacters(in: .whitespacesAndNewlines)
     let url: URL?

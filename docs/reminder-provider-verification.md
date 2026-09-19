@@ -33,7 +33,7 @@ The localization catalog contains 1,733 keys. Catalog synchronization reports no
 
 ## Manual provider matrix
 
-These checks require real accounts and cross-client observation. The available personal iCloud account was partially exercised on 12 September 2026. Local and Exchange accounts were not configured on the test Mac. A shared iCloud list was present but was not modified.
+These checks require real accounts and cross-client observation. The table includes the personal iCloud checks on 12 September and the shared iCloud follow-ups through 14 September 2026. Local and Exchange accounts were not configured on the original reviewer's Mac. The dated sections below retain each run's account availability and authorization limits.
 
 | Provider | Reminder fields and deletion | Alerts and recurrence | Plain-list name and color | Native-only metadata | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -104,7 +104,7 @@ Cleanup removed both completed daily occurrences through Reminders' recoverable 
 
 Shared acceptance work remaining after the 13 September run:
 
-- Confirm receipt of `PR249 Ned sync check` on the owner's device. The owner marker has now been observed on Ned's Mac, and Ned's marker was created and read back there; the reverse-direction receipt remains pending.
+- Confirm receipt of `PR249 Ned sync check` on the owner's device. This was pending after the 13 September run and passed in the 14 September follow-up below.
 - Verify delivered time and location notifications, native Early Reminder interpretation, and native URL presentation.
 - Verify list color through a usable picker. Native reminder-info actions also stopped opening a details popover, so attachment preservation and exact completion-date comparison were not exercised.
 - Exercise a participant with read-only or revoked access, or a provider that refuses list creation. The current owner remains writable; no such account or permission condition was available in this run.
@@ -132,6 +132,8 @@ The shared-list color retry did not reach a usable picker. Native reminder detai
 No new production-code defect was established in this acceptance retry. Delivered notifications, geofence delivery, list color, native early-alert and URL comparisons, attachments and exact completion-date comparison remain unverified. The unavailable provider and permission scenarios retain their previously documented limits. The PR remains a draft pending that acceptance evidence.
 
 ## Provider acceptance checklist
+
+The remaining available-provider checks are delivered time and location notifications, native Early Reminder and URL comparisons, list color, attachment preservation, and exact completion-date comparison. Marker synchronization passed in both directions. Local and Exchange providers and read-only, revoked-access, and list-creation-denial scenarios still need a suitable test account or permission condition. The recorded marker authorization does not authorize additional cloud changes.
 
 For each available provider:
 

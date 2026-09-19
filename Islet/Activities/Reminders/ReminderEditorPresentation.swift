@@ -219,7 +219,9 @@ enum ReminderEditorPresentation {
     _ draft: ReminderCoordinatorDraft
   ) -> ReminderEditorDraftValidation {
     var prepared = draft
-    if prepared.notes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+    if prepared.notes != prepared.baseline?.notes,
+      prepared.notes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true
+    {
       prepared.notes = nil
     }
 

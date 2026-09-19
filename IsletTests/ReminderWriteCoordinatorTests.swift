@@ -406,6 +406,69 @@ final class ReminderWriteCoordinatorTests: XCTestCase {
       draft.dueDate?.components.timeZone, TimeZone(identifier: "America/Los_Angeles"))
   }
 
+  func testNotesOnlyUpdatePreservesUneditedTitleWhitespace() throws {
+    let store = Store()
+    let item = store.addExisting()
+    let originalTitle = "  File report  "
+    store.records[item.id]?.title = originalTitle
+    let coordinator = ReminderWriteCoordinator(store: store)
+    var draft = try coordinator.writeDraft(for: item).get()
+    draft.notes = "Updated notes"
+
+    _ = try coordinator.updateOutcome(draft).get()
+
+    XCTAssertEqual(store.lastPatch?.title, .unchanged)
+    XCTAssertEqual(store.records[item.id]?.title, originalTitle)
+    XCTAssertEqual(store.records[item.id]?.notes, "Updated notes")
+  }
+
+  func testTitleOnlyEditorSubmissionPreservesUneditedBlankNotes() throws {
+    for originalNotes in ["", "  \n "] {
+      let store = Store()
+      let item = store.addExisting()
+      store.records[item.id]?.notes = originalNotes
+      let coordinator = ReminderWriteCoordinator(store: store)
+      var draft = try coordinator.writeDraft(for: item).get()
+      draft.title = "Updated title"
+      guard case .valid(let prepared) = ReminderEditorPresentation.prepareForSubmission(draft)
+      else { return XCTFail("Expected a valid title-only edit") }
+
+      _ = try coordinator.updateOutcome(prepared).get()
+
+      XCTAssertEqual(store.lastPatch?.notes, .unchanged)
+      XCTAssertEqual(store.records[item.id]?.notes, originalNotes)
+      XCTAssertEqual(store.records[item.id]?.title, "Updated title")
+    }
+  }
+
+  func testEditorSubmissionStillClearsNotesWhenEditedToWhitespace() throws {
+    let store = Store()
+    let item = store.addExisting()
+    let coordinator = ReminderWriteCoordinator(store: store)
+    var draft = try coordinator.writeDraft(for: item).get()
+    draft.notes = "  \n "
+    guard case .valid(let prepared) = ReminderEditorPresentation.prepareForSubmission(draft)
+    else { return XCTFail("Expected a valid notes edit") }
+
+    _ = try coordinator.updateOutcome(prepared).get()
+
+    XCTAssertEqual(store.lastPatch?.notes, .value(nil))
+    XCTAssertNil(store.records[item.id]?.notes)
+  }
+
+  func testEditedTitleStillTrimsWhitespace() throws {
+    let store = Store()
+    let item = store.addExisting()
+    let coordinator = ReminderWriteCoordinator(store: store)
+    var draft = try coordinator.writeDraft(for: item).get()
+    draft.title = "  Updated title  "
+
+    _ = try coordinator.updateOutcome(draft).get()
+
+    XCTAssertEqual(store.lastPatch?.title, .value("Updated title"))
+    XCTAssertEqual(store.records[item.id]?.title, "Updated title")
+  }
+
   func testUpdateDoesNotPatchUnchangedFields() throws {
     let store = Store()
     let item = store.addExisting()
