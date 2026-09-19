@@ -520,10 +520,14 @@ struct BatteryExpandedView: View {
         detail(String(localized: "Capacity"), capacityValue, symbol: "battery.75percent")
         if let trend = monitor.insightSnapshot.capacityTrend {
           detail(
-            String(localized: "Capacity trend"), trend.wording,
+            String(localized: "Capacity trend"), trend.shortText,
             symbol: "chart.line.downtrend.xyaxis"
           )
-          .help(trend.explanation)
+          .frame(maxWidth: 100, alignment: .leading)
+          .help(trend.wording + "\n\n" + trend.explanation)
+          .accessibilityLabel(String(localized: "Capacity trend"))
+          .accessibilityValue(trend.wording)
+          .accessibilityHint(trend.explanation)
         }
         telemetryDiagnostics
         ForEach(monitor.peripherals) { device in
