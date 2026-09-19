@@ -578,6 +578,67 @@ final class BatteryMetricsTests: XCTestCase {
     XCTAssertEqual(incoming, outgoing, accuracy: 0.0001)
   }
 
+  func testMissingAdapterInputPreservesReportedSystemLoadDuringDischarge() throws {
+    for externalConnected: Bool? in [true, nil] {
+      for usbWatts in [0.0, 3.0] {
+        var metrics = BatteryMetrics()
+        metrics.externalConnected = externalConnected
+        metrics.powerWatts = -5
+        metrics.batteryPowerWatts = -5
+        metrics.systemLoadWatts = 35
+        metrics.cpuPowerWatts = 12
+        metrics.usbPowerOutputs = [
+          USBPowerOutput(portIndex: 1, watts: usbWatts, volts: nil, amps: nil)
+        ]
+
+        let flow = PowerFlowSnapshot(metrics: metrics)
+        XCTAssertNil(flow.adapterInputWatts)
+        XCTAssertEqual(flow.batteryDirection, .supplementing)
+        XCTAssertEqual(try XCTUnwrap(flow.batteryInputWatts), 5, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(flow.macUseWatts), 35 - usbWatts, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(flow.cpuUseWatts), 12, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(flow.restOfMacWatts), 23 - usbWatts, accuracy: 0.0001)
+        XCTAssertEqual(flow.scaleWatts, 35, accuracy: 0.0001)
+      }
+    }
+  }
+
+  func testMissingAdapterInputAndSystemLoadLeaveMacUseUnavailable() {
+    for externalConnected: Bool? in [true, nil] {
+      var metrics = BatteryMetrics()
+      metrics.externalConnected = externalConnected
+      metrics.powerWatts = -5
+      metrics.batteryPowerWatts = -5
+      metrics.cpuPowerWatts = 12
+
+      let flow = PowerFlowSnapshot(metrics: metrics)
+      XCTAssertNil(flow.macUseWatts)
+      XCTAssertNil(flow.cpuUseWatts)
+      XCTAssertNil(flow.restOfMacWatts)
+    }
+  }
+
+  func testDisconnectedExternalPowerAllowsSystemUseFromBatteryDischarge() throws {
+    var metrics = BatteryMetrics()
+    metrics.externalConnected = false
+    metrics.powerWatts = -5
+    metrics.systemLoadWatts = 35
+
+    let flow = PowerFlowSnapshot(metrics: metrics)
+    XCTAssertEqual(try XCTUnwrap(flow.macUseWatts), 5, accuracy: 0.0001)
+  }
+
+  func testMeasuredZeroAdapterInputAllowsSystemUseFromBatteryDischarge() throws {
+    var metrics = BatteryMetrics()
+    metrics.externalConnected = true
+    metrics.systemPowerInWatts = 0
+    metrics.powerWatts = -5
+    metrics.systemLoadWatts = 35
+
+    let flow = PowerFlowSnapshot(metrics: metrics)
+    XCTAssertEqual(try XCTUnwrap(flow.macUseWatts), 5, accuracy: 0.0001)
+  }
+
   func testTimeToFullAloneDoesNotOverrideBatterySupplementing() throws {
     var metrics = BatteryMetrics()
     metrics.systemPowerInWatts = 28.407

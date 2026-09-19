@@ -79,6 +79,10 @@ struct PowerFlowSnapshot: Equatable {
 
     let reportedSystemUse = Self.positive(metrics?.systemLoadWatts)
     let inferredSystemUse: Double? = {
+      // Missing adapter telemetry does not mean zero input while external power may be present.
+      guard metrics?.systemPowerInWatts != nil || metrics?.externalConnected == false else {
+        return nil
+      }
       let supplied = (adapter ?? 0) + (batteryIn ?? 0)
       guard supplied > 0, pack != nil else { return nil }
       return max(0, supplied - (batteryCharge ?? 0))
