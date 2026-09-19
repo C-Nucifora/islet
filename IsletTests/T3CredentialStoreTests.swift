@@ -47,6 +47,48 @@ final class T3CredentialStoreTests: XCTestCase {
     }
   }
 
+  func testRepeatedLoadsReadAValidCredentialOnlyOnce() throws {
+    let store = T3MemoryCredentialRecordStore()
+    let vault = makeVault(store: store)
+    let credentialID = "remote|wake-cache"
+    let storedSecret = secret(21)
+    try vault.save(storedSecret, credentialID: credentialID)
+    store.clearOperations()
+
+    assertSecret(try vault.load(credentialID: credentialID), matches: storedSecret)
+    let firstLoadOperations = store.operations
+    XCTAssertFalse(firstLoadOperations.isEmpty)
+
+    assertSecret(try vault.load(credentialID: credentialID), matches: storedSecret)
+    XCTAssertEqual(store.operations, firstLoadOperations)
+  }
+
+  func testReplacementInvalidatesTheCachedCredential() throws {
+    let store = T3MemoryCredentialRecordStore()
+    let vault = makeVault(store: store)
+    let credentialID = "remote|replacement"
+    let original = secret(22)
+    let replacement = secret(23)
+    try vault.save(original, credentialID: credentialID)
+    assertSecret(try vault.load(credentialID: credentialID), matches: original)
+
+    try vault.save(replacement, credentialID: credentialID)
+
+    assertSecret(try vault.load(credentialID: credentialID), matches: replacement)
+  }
+
+  func testDeletionEvictsTheCachedCredential() throws {
+    let store = T3MemoryCredentialRecordStore()
+    let vault = makeVault(store: store)
+    let credentialID = "remote|deleted"
+    try vault.save(secret(24), credentialID: credentialID)
+    XCTAssertNotNil(try vault.load(credentialID: credentialID))
+
+    try vault.delete(credentialIDs: [credentialID])
+
+    XCTAssertNil(try vault.load(credentialID: credentialID))
+  }
+
   func testMigrationWritesAndVerifiesEveryItemBeforeRemovingAggregateVaults() throws {
     let currentSecret = secret(3)
     let sharedSecret = secret(4)
@@ -219,6 +261,9 @@ final class T3CredentialStoreTests: XCTestCase {
     try vault.save(secret(14), credentialID: oldLocalID)
     try vault.save(secret(15), credentialID: legacyLocalID)
     try vault.save(remoteSecret, credentialID: remoteID)
+    XCTAssertNotNil(try vault.load(credentialID: oldLocalID))
+    XCTAssertNotNil(try vault.load(credentialID: legacyLocalID))
+    assertSecret(try vault.load(credentialID: remoteID), matches: remoteSecret)
     store.set(Data([0xFF]), service: service, account: corruptAccount)
 
     try vault.saveLocal(
