@@ -1,4 +1,5 @@
 import argparse
+import fcntl
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -27,6 +28,7 @@ class TestRunnerTests(unittest.TestCase):
                 return real_popen(["/usr/bin/true"], start_new_session=True)
 
             with patch.object(runner, "__file__", str(root / "Scripts/test-islet.py")), \
+                    patch.object(runner.tempfile, "gettempdir", return_value=folder), \
                     patch.object(runner, "preference_domain", return_value={}), \
                     patch.object(runner, "process_snapshot", return_value={}), \
                     patch.object(runner.subprocess, "run", side_effect=command_result), \
@@ -34,6 +36,25 @@ class TestRunnerTests(unittest.TestCase):
                 status = runner.run(argparse.Namespace(
                     derived_data=None, xcodebuild_args=[], timeout=2))
             self.assertEqual(status, 0)
+
+    def test_concurrent_run_stops_before_reading_preferences_or_starting_build(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "Islet.xcodeproj").mkdir()
+            lock_path = root / f"islet-app-hosted-tests-{runner.os.getuid()}.lock"
+            with lock_path.open("a") as existing_run:
+                fcntl.flock(existing_run, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with patch.object(runner, "__file__", str(root / "Scripts/test-islet.py")), \
+                        patch.object(runner.tempfile, "gettempdir", return_value=folder), \
+                        patch.object(runner, "preference_domain") as preferences, \
+                        patch.object(runner.subprocess, "run") as command, \
+                        patch.object(runner.subprocess, "Popen") as build:
+                    with self.assertRaisesRegex(RuntimeError, "Another Islet test run"):
+                        runner.run(argparse.Namespace(
+                            derived_data=None, xcodebuild_args=[], timeout=2))
+                preferences.assert_not_called()
+                command.assert_not_called()
+                build.assert_not_called()
 
     def test_timeout_stops_owned_build_and_leaves_existing_process_alive(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -65,6 +86,7 @@ class TestRunnerTests(unittest.TestCase):
             real_popen = subprocess.Popen
             snapshots = [{"private": "before"}, None, {"private": "do-not-print"}]
             with patch.object(runner, "__file__", str(root / "Scripts/test-islet.py")), \
+                    patch.object(runner.tempfile, "gettempdir", return_value=folder), \
                     patch.object(runner, "preference_domain", side_effect=snapshots), \
                     patch.object(runner, "process_snapshot", return_value={}), \
                     patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)), \
