@@ -86,6 +86,42 @@ Cancellation or timeout stops only the test host, `xcodebuild`, `swift-frontend`
 the installed app. Xcode's test action selects the same isolated configuration, but the command-line
 runner additionally enforces the lock, hard timeout, and whole-suite preferences check.
 
+For the controlled coexistence acceptance in issue #226, the runner has an explicit
+`--coexist-with-pid` option. Ordinary test runs still require Islet to be closed. The option
+requires exactly one running Islet process with the production `dev.islet` identity, outside
+the test DerivedData directory. It verifies that process's executable and start time before
+and after testing, keeps the per-user lock and hard timeout, and excludes every preexisting
+PID from test cleanup. It never changes production preferences or provider records itself.
+
+Inspect the running process first. Set `installed_islet_pid` to that exact PID after confirming
+its path is the installed app you intend to observe. Start with the two focused isolation tests:
+
+```sh
+pgrep -x Islet
+ps -axo pid=,comm= | rg '/Islet.app/Contents/MacOS/Islet$'
+installed_islet_pid=12345 # Replace with the verified running production PID.
+xcodegen generate
+python3 Scripts/test-islet.py --timeout 600 \
+  --derived-data .build/coexistence/DerivedData \
+  --coexist-with-pid "$installed_islet_pid" -- \
+  -only-testing:IsletTests/TestHostIsolationTests \
+  CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual
+```
+
+Record both app identities and executable paths while the test host is running. The runner
+must report unchanged production preferences and the same original process after cleanup.
+Also observe the installed app before, during, and after the run: its panel must still open
+and close normally, its selected settings must stay unchanged, and active monitoring must
+continue without duplicate panels or unexpected permission prompts. Avoid changing settings
+or personal provider records during this check. Normal updates from the installed app can
+change its persisted state; a resulting preference mismatch needs investigation and must
+not be recorded as a pass.
+
+After the focused run passes, repeat the command without `-only-testing` for the full-suite
+coexistence acceptance. Keep tests serialized. Record the source commit, macOS version,
+test result, original PID and path, and observations in issue #226. A passing focused test
+or surviving process alone does not establish full-suite runtime coexistence.
+
 CI runs the full suite on both arm64 and x86_64, verifies the vendored MediaRemote adapter, lints integration files, and runs static analysis.
 
 ## Permissions and privacy
