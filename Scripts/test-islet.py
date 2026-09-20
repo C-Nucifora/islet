@@ -42,6 +42,42 @@ def process_snapshot():
     }
 
 
+def coexistence_identity(pid, derived_data):
+    executable = process_snapshot().get(pid)
+    if executable is None:
+        raise RuntimeError("The approved Islet process is no longer running")
+    path = Path(executable).resolve()
+    if (path.name != "Islet" or path.parent.name != "MacOS"
+            or path.parent.parent.name != "Contents"
+            or path.parent.parent.parent.suffix != ".app"
+            or path.is_relative_to(derived_data)):
+        raise RuntimeError("Coexistence requires an existing Islet app outside test DerivedData")
+    with (path.parent.parent / "Info.plist").open("rb") as source:
+        info = plistlib.load(source)
+    if (info.get("CFBundleIdentifier") != PRODUCTION_DOMAIN
+            or info.get("CFBundleExecutable") != "Islet"):
+        raise RuntimeError("Coexistence requires the dev.islet production application identity")
+    started = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "lstart="], capture_output=True, text=True,
+        check=True, timeout=10, env={**os.environ, "LC_ALL": "C"},
+    ).stdout.strip()
+    if not started:
+        raise RuntimeError("Could not verify the approved Islet process start time")
+    return str(path), started
+
+
+def validate_running_islet(running, coexist_pid, derived_data):
+    if running.returncode not in (0, 1):
+        raise RuntimeError("Could not verify whether Islet is running")
+    if coexist_pid is None:
+        if running.returncode == 0:
+            raise RuntimeError("Quit Islet and wait for other test hosts to exit before testing")
+        return None
+    if running.returncode != 0 or running.stdout.split() != [str(coexist_pid).encode()]:
+        raise RuntimeError("Coexistence requires exactly the approved Islet PID and no other hosts")
+    return coexistence_identity(coexist_pid, derived_data)
+
+
 def owned_processes(group, previous_pids, derived_data):
     owned = []
     for pid, executable in process_snapshot().items():
@@ -107,10 +143,8 @@ def run(args):
         except BlockingIOError as error:
             raise RuntimeError("Another Islet test run holds the test lock") from error
         running = subprocess.run(["pgrep", "-x", "Islet"], capture_output=True, timeout=10)
-        if running.returncode == 0:
-            raise RuntimeError("Quit Islet and wait for other test hosts to exit before testing")
-        if running.returncode != 1:
-            raise RuntimeError("Could not verify whether Islet is running")
+        coexist_pid = getattr(args, "coexist_with_pid", None)
+        original_identity = validate_running_islet(running, coexist_pid, derived_data)
 
         production_before = preference_domain(PRODUCTION_DOMAIN)
         if preference_domain(TEST_DOMAIN):
@@ -118,6 +152,10 @@ def run(args):
                 ["defaults", "delete", TEST_DOMAIN], check=True, capture_output=True, timeout=10,
             )
         previous_pids = set(process_snapshot())
+        if coexist_pid is not None:
+            if (coexist_pid not in previous_pids
+                    or coexistence_identity(coexist_pid, derived_data) != original_identity):
+                raise RuntimeError("The approved Islet process changed before testing")
         command = [
             "xcodebuild", "-project", str(root / "Islet.xcodeproj"), "-scheme", "Islet",
             "-configuration", "Testing", "-destination", f"platform=macOS,arch={os.uname().machine}",
@@ -129,6 +167,10 @@ def run(args):
         # Compare in memory. Preferences may contain private data; never print their contents.
         if preference_domain(PRODUCTION_DOMAIN) != production_before:
             raise RuntimeError("Production preferences changed during the test run")
+        if coexist_pid is not None:
+            if coexistence_identity(coexist_pid, derived_data) != original_identity:
+                raise RuntimeError("The approved Islet process changed during testing")
+            print("Approved Islet process is still running with the same identity and start time.")
         print("Production preferences unchanged.")
         return status
 
@@ -137,10 +179,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--timeout", type=float, default=600, help="Hard timeout in seconds")
     parser.add_argument("--derived-data", help="Defaults to this worktree's .build/tests/DerivedData")
+    parser.add_argument(
+        "--coexist-with-pid", type=int,
+        help="Explicitly verify coexistence with this sole running dev.islet process",
+    )
     parser.add_argument("xcodebuild_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be finite and positive")
+    if args.coexist_with_pid is not None and args.coexist_with_pid <= 0:
+        parser.error("--coexist-with-pid must be a positive process ID")
     previous_handler = signal.signal(signal.SIGTERM, handle_termination)
     try:
         return run(args)
