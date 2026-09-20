@@ -120,6 +120,10 @@ final class PanelInstance {
     self.viewModel = viewModel
     viewModel.$panelFrame
       .removeDuplicates()
+      // Published emits before storing the frame. AppKit resizing can synchronously measure
+      // compact content again; defer it so a nested update cannot be dropped or overwritten
+      // by the outer property setter, leaving the window permanently too narrow.
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] frame in self?.apply(frame) }
       .store(in: &cancellables)
   }
