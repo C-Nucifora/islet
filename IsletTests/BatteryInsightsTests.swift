@@ -165,6 +165,140 @@ final class BatteryInsightsTests: XCTestCase {
     XCTAssertEqual(update.snapshot.status, .chargerDischarging(batteryWatts: 6))
   }
 
+  private func contradictoryChargingMetrics() -> BatteryMetrics {
+    var metrics = BatteryMetrics()
+    metrics.systemPowerInWatts = 64.732
+    metrics.systemLoadWatts = 73.729
+    metrics.batteryPowerWatts = -8.997
+    BatteryMetricsParser.applyInstant(
+      &metrics, from: ["Voltage": 12_256, "InstantAmperage": 4_646])
+    metrics.externalConnected = true
+    metrics.isCharging = true
+    metrics.timeToFullMinutes = 82
+    return metrics
+  }
+
+  func testConfirmedChargingAgreesWithGraphWithoutShortfallAlerts() throws {
+    for privateTelemetryMissing in [false, true] {
+      var metrics = contradictoryChargingMetrics()
+      if privateTelemetryMissing {
+        metrics.batteryPowerWatts = nil
+        metrics.telemetryStatus[.batteryPower] = .unsupported
+      }
+      let sample = BatteryInsightSample(
+        state: BatteryState(percent: 30, isCharging: true, onAC: true), metrics: metrics)
+      let flow = PowerFlowSnapshot(metrics: metrics)
+      XCTAssertEqual(try XCTUnwrap(sample.batteryPowerWatts), 56.941376, accuracy: 0.0001)
+      XCTAssertEqual(sample.batteryPowerWatts, flow.batteryChargeWatts)
+      XCTAssertNil(flow.batteryInputWatts)
+      XCTAssertEqual(try XCTUnwrap(flow.macUseWatts), 7.790624, accuracy: 0.0001)
+
+      let clock = TestClock()
+      var analyzer = BatteryInsightAnalyzer(clock: clock)
+      for _ in 0..<10 {
+        let update = analyzer.ingest(sample)
+        XCTAssertTrue(update.alerts.isEmpty)
+        XCTAssertEqual(update.snapshot.status, .normal(baselineWatts: nil))
+        clock.advance(60)
+      }
+    }
+  }
+
+  func testUnconfirmedChargingRetainsGenuineShortfallWarnings() {
+    for missingSignal in 0..<3 {
+      var metrics = contradictoryChargingMetrics()
+      metrics.powerWatts = nil
+      metrics.batteryPowerWatts = -9.1
+      switch missingSignal {
+      case 0: metrics.timeToFullMinutes = nil
+      case 1: metrics.isCharging = false
+      default: metrics.externalConnected = false
+      }
+      let sample = BatteryInsightSample(
+        state: BatteryState(percent: 30, isCharging: true, onAC: true), metrics: metrics)
+      XCTAssertEqual(sample.batteryPowerWatts, -9.1)
+      XCTAssertEqual(PowerFlowSnapshot(metrics: metrics).batteryDirection, .supplementing)
+      let clock = TestClock()
+      var analyzer = BatteryInsightAnalyzer(clock: clock)
+      _ = analyzer.ingest(sample)
+      clock.advance(BatteryInsightAnalyzer.chargerDischargeEvidence)
+      let update = analyzer.ingest(sample)
+      XCTAssertEqual(update.alerts, [.chargerDischarging(batteryWatts: 9.1)])
+      XCTAssertEqual(update.snapshot.status, .chargerDischarging(batteryWatts: 9.1))
+    }
+  }
+
+  func testConfirmedChargingDoesNotMakeStalePowerUsable() {
+    var metrics = contradictoryChargingMetrics()
+    metrics.telemetryStatus[.current] = .unavailable(.stale)
+    metrics.telemetryStatus[.batteryPower] = .unavailable(.stale)
+    let sample = BatteryInsightSample(
+      state: BatteryState(percent: 30, isCharging: true, onAC: true), metrics: metrics)
+    var analyzer = BatteryInsightAnalyzer(clock: TestClock())
+    let update = analyzer.ingest(sample)
+    XCTAssertTrue(update.alerts.isEmpty)
+    XCTAssertEqual(
+      update.snapshot.status, .telemetryUnavailable(reason: "Last sample is stale"))
+  }
+
+  func testSignedPackDischargeOverridesChargingFlagsAndPrivateTelemetry() throws {
+    var metrics = contradictoryChargingMetrics()
+    metrics.powerWatts = -6
+    metrics.batteryPowerWatts = 20
+    let sample = BatteryInsightSample(
+      state: BatteryState(percent: 30, isCharging: true, onAC: true), metrics: metrics)
+    let flow = PowerFlowSnapshot(metrics: metrics)
+    XCTAssertEqual(flow.batteryDirection, .supplementing)
+    XCTAssertEqual(flow.batteryInputWatts, 6)
+    XCTAssertEqual(try XCTUnwrap(flow.macUseWatts), 70.732, accuracy: 0.0001)
+    let clock = TestClock()
+    var analyzer = BatteryInsightAnalyzer(clock: clock)
+    _ = analyzer.ingest(sample)
+    clock.advance(BatteryInsightAnalyzer.chargerDischargeEvidence)
+    XCTAssertEqual(analyzer.ingest(sample).alerts, [.chargerDischarging(batteryWatts: 6)])
+  }
+
+  func testContradictoryPrivatePowerWithoutPackReadingIsUnavailable() {
+    var metrics = contradictoryChargingMetrics()
+    metrics.powerWatts = nil
+    let sample = BatteryInsightSample(
+      state: BatteryState(percent: 30, isCharging: true, onAC: true), metrics: metrics)
+    let flow = PowerFlowSnapshot(metrics: metrics)
+    XCTAssertNil(sample.batteryPowerWatts)
+    XCTAssertNil(flow.batteryChargeWatts)
+    XCTAssertNil(flow.batteryInputWatts)
+    XCTAssertNil(flow.macUseWatts)
+    var analyzer = BatteryInsightAnalyzer(clock: TestClock())
+    let update = analyzer.ingest(sample)
+    XCTAssertTrue(update.alerts.isEmpty)
+    XCTAssertEqual(
+      update.snapshot.status, .telemetryUnavailable(reason: "Temporarily unavailable"))
+  }
+
+  func testChargingHidesPriorShortfallWhileRetainingRecoveryAndCooldown() {
+    let clock = TestClock()
+    var analyzer = BatteryInsightAnalyzer(clock: clock)
+    let shortfall = chargerSample(batteryWatts: -9.1)
+    _ = analyzer.ingest(shortfall)
+    clock.advance(BatteryInsightAnalyzer.chargerDischargeEvidence)
+    XCTAssertEqual(analyzer.ingest(shortfall).alerts.count, 1)
+
+    let charging = BatteryInsightSample(
+      state: BatteryState(percent: 30, isCharging: true, onAC: true),
+      metrics: contradictoryChargingMetrics())
+    let recovered = analyzer.ingest(charging)
+    XCTAssertTrue(recovered.alerts.isEmpty)
+    XCTAssertEqual(recovered.snapshot.status, .normal(baselineWatts: nil))
+    clock.advance(BatteryInsightAnalyzer.recoveryEvidence)
+    XCTAssertEqual(analyzer.ingest(charging).snapshot.status, .normal(baselineWatts: nil))
+
+    _ = analyzer.ingest(shortfall)
+    clock.advance(BatteryInsightAnalyzer.chargerDischargeEvidence)
+    let recurrence = analyzer.ingest(shortfall)
+    XCTAssertTrue(recurrence.alerts.isEmpty, "A recovered shortfall must still respect cooldown")
+    XCTAssertEqual(recurrence.snapshot.status, .chargerDischarging(batteryWatts: 9.1))
+  }
+
   func testSustainedSlowChargingRequiresInputTelemetry() {
     let clock = TestClock()
     var analyzer = BatteryInsightAnalyzer(clock: clock)

@@ -165,6 +165,30 @@ struct BatteryMetrics: Equatable, Sendable {
 
   var lowPowerMode = false
 
+  /// Pack voltage times signed current measures battery power directly. Private BatteryPower
+  /// and SystemLoad can contradict both this reading and the reported charging state.
+  var resolvedBatteryPower: (watts: Double?, status: BatteryTelemetryStatus) {
+    if let powerWatts, powerWatts.isFinite,
+      (status(for: .voltage) ?? .available) == .available,
+      (status(for: .current) ?? .available) == .available
+    {
+      return (powerWatts, .available)
+    }
+    let privateStatus = status(for: .batteryPower) ?? .available
+    guard privateStatus == .available else { return (nil, privateStatus) }
+    guard let batteryPowerWatts, batteryPowerWatts.isFinite else {
+      return (nil, .unavailable(.noSample))
+    }
+    // A charging flag alone can coexist with a real shortfall. With a time-to-full as well,
+    // contradictory private telemetry is insufficient to infer either direction or magnitude.
+    if externalConnected == true, isCharging == true, timeToFullMinutes != nil,
+      batteryPowerWatts < -0.05
+    {
+      return (nil, .unavailable(.transient))
+    }
+    return (batteryPowerWatts, .available)
+  }
+
   /// The support and last-read state for the fields in the expanded diagnostics. The parser fills
   /// every entry whenever it receives an AppleSmartBattery dictionary. Empty test fixtures and
   /// manually-seeded previews may leave this empty rather than claiming an unperformed read.
