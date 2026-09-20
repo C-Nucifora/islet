@@ -20,6 +20,59 @@ final class SneakSnapshotTests: XCTestCase {
     XCTAssertEqual(host.fittingSize.width, 120, accuracy: 0.5)
   }
 
+  func testNarrowNotificationViewportFitsLongText() {
+    let event = SystemEvent(
+      sourceID: "bluetooth", icon: "headphones",
+      title: "An extraordinarily long Bluetooth headphone device name", subtitle: "Connected")
+    let host = NSHostingView(
+      rootView: EventTrailingView(event: event)
+        .environment(\.compactNotificationTextWidth, 80))
+    host.layoutSubtreeIfNeeded()
+    XCTAssertEqual(host.fittingSize.width, 80, accuracy: 0.5)
+  }
+
+  func testMacOS27LongNotificationKeepsTrailingPanelWithin98PointsOfNotch() throws {
+    guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 else {
+      throw XCTSkip("The macOS 27 compact notification policy requires macOS 27")
+    }
+    let geometry = NotchGeometry(
+      screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+      safeAreaTop: 32, auxLeftWidth: 716, auxRightWidth: 716, menuBarHeight: 37)
+    let vm = NotchViewModel(geometry: geometry, modeOverride: .clickToPin)
+    let window = NSWindow(
+      contentRect: vm.panelFrame.offsetBy(dx: -6000, dy: -6000),
+      styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    let host = NotchHosting.view(for: vm)
+    window.contentView = host
+    window.orderFrontRegardless()
+    let sink = vm.$panelFrame.removeDuplicates().sink { frame in
+      window.setFrame(frame.offsetBy(dx: -6000, dy: -6000), display: false)
+      host.alignRenderer(toWindowFrame: frame)
+      vm.setActualPanelFrame(frame)
+    }
+    defer {
+      RunLoop.main.run(until: Date().addingTimeInterval(1.3))
+      sink.cancel()
+      window.close()
+    }
+
+    SneakQueue.shared.submit(
+      Sneak(
+        event: SystemEvent(
+          sourceID: "macos27-layout-test", icon: "headphones",
+          title: "An extraordinarily long Bluetooth headphone device name",
+          subtitle: "Connected", duration: 1)))
+    RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+
+    XCTAssertNotNil(SneakQueue.shared.current)
+    let trailingExtent = vm.panelFrame.maxX - geometry.notchRect.maxX
+    XCTAssertGreaterThan(trailingExtent, 70, "The notification must remain visible")
+    XCTAssertLessThanOrEqual(
+      trailingExtent, 98.5,
+      "Popup text, padding and corner flare must leave room for the overflow arrows")
+  }
+
   func testSnapshotBluetoothSneak() throws {
     let geometry = NotchGeometry(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),

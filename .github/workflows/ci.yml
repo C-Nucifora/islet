@@ -245,3 +245,88 @@ jobs:
           lipo "$framework" -verify_arch x86_64
           ISLET_GENERATED_INFO_PLIST="$app/Contents/Info.plist" \
             ISLET_EXPECTED_BUNDLE_IDENTIFIER=dev.islet.tests Scripts/test-update-tooling.sh
+
+  test-macos-27:
+    name: Build and test on macOS 27 (arm64)
+    # GitHub's Xcode 27 preview image runs macOS 27 on Apple silicon.
+    runs-on: xcode-27
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      DERIVED_DATA: ${{ github.workspace }}/DerivedData
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install XcodeGen
+        run: |
+          Scripts/install-xcodegen.sh "$RUNNER_TEMP/xcodegen"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Restore verified xcbeautify archive
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/xcbeautify-cache
+          key: xcbeautify-3.2.1-universal-87fdbe786f71d7b2ee28c5c1ca97087587292f2c5c6f9e721cf02db8b2a3c241
+
+      - name: Install xcbeautify
+        run: |
+          Scripts/install-xcbeautify.sh "$RUNNER_TEMP/xcbeautify" "$RUNNER_TEMP/xcbeautify-cache"
+          echo "$RUNNER_TEMP/xcbeautify/bin" >> "$GITHUB_PATH"
+
+      - name: Check macOS 27 toolchain
+        run: |
+          [[ "$(uname -m)" == arm64 ]]
+          [[ "$(sw_vers -productVersion)" == 27.* ]]
+          [[ "$(xcrun --sdk macosx --show-sdk-version)" == 27.* ]]
+          xcodebuild -version
+          swift --version
+          xcodegen --version
+          test "$(xcbeautify --version)" = "3.2.1"
+
+      - name: Verify bundled MediaRemoteAdapter
+        run: Scripts/verify-mediaremote-adapter.sh
+
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate
+          resolved_dir=Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+          mkdir -p "$resolved_dir"
+          install -m 0644 Package.resolved "$resolved_dir/Package.resolved"
+          git diff --exit-code -- Islet/Info.plist
+
+      - name: Resolve pinned packages
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project Islet.xcodeproj \
+            -scheme Islet \
+            -derivedDataPath "$DERIVED_DATA" \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -packageAuthorizationProvider netrc | xcbeautify
+          cmp Package.resolved Islet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+      - name: Run macOS 27 tests
+        run: |
+          set -o pipefail
+          python3 Scripts/test-islet.py --timeout 1200 --derived-data "$DERIVED_DATA" -- \
+            -disableAutomaticPackageResolution \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            ISLET_UPDATE_PUBLIC_ED_KEY=11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo= \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGN_STYLE=Manual \
+            | xcbeautify
+
+      - name: Verify macOS 27 build products
+        run: |
+          app="$DERIVED_DATA/Build/Products/Testing/Islet.app"
+          framework="$app/Contents/Frameworks/MediaRemoteAdapter.framework/MediaRemoteAdapter"
+          lipo "$app/Contents/MacOS/Islet" -verify_arch arm64
+          lipo "$framework" -verify_arch arm64
+          ISLET_GENERATED_INFO_PLIST="$app/Contents/Info.plist" \
+            ISLET_EXPECTED_BUNDLE_IDENTIFIER=dev.islet.tests Scripts/test-update-tooling.sh

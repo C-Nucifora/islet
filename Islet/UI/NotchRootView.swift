@@ -227,6 +227,11 @@ struct NotchRootView: View {
     .tint(appTheme.accentColor)
     .environment(\.appTheme, appTheme)
     .environment(\.batteryGraphStyle, batteryGraphStyle)
+    .environment(
+      \.compactNotificationTextWidth,
+      vm.geometry.compactNotificationTextWidth(
+        osMajorVersion: ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
+    )
     .preferredColorScheme(.dark)
   }
 

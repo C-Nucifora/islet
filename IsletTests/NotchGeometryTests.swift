@@ -109,6 +109,17 @@ final class NotchGeometryTests: XCTestCase {
     XCTAssertEqual(ext.notchSize, CGSize(width: Metrics.fallbackNotchWidth, height: 24))
   }
 
+  func testNotificationWidthReservesSpaceOnlyOnMacOS27NotchedDisplays() {
+    XCTAssertEqual(mbp.compactNotificationTextWidth(osMajorVersion: 26), 120)
+    XCTAssertEqual(mbp.compactNotificationTextWidth(osMajorVersion: 27), 80)
+    XCTAssertEqual(mbp.compactNotificationTextWidth(osMajorVersion: 28), 80)
+
+    let external = NotchGeometry(
+      screenFrame: CGRect(x: -2560, y: 400, width: 2560, height: 1440),
+      safeAreaTop: 0, auxLeftWidth: 0, auxRightWidth: 0, menuBarHeight: 24)
+    XCTAssertEqual(external.compactNotificationTextWidth(osMajorVersion: 27), 120)
+  }
+
   // MARK: - Island alignment
   //
   // The island is drawn centred in the panel window and nudged sideways by `islandOffset`. If that
