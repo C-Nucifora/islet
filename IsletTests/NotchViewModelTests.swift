@@ -168,6 +168,21 @@ final class DisplayStateReconcilerTests: XCTestCase {
 
 @MainActor
 final class MultiDisplayPresentationTests: XCTestCase {
+  func testUpperDisplayClickDoesNotOpenLowerDisplayIsland() {
+    let lowerFrame = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+    let upperFrame = CGRect(x: 0, y: lowerFrame.maxY, width: 1728, height: 900)
+    let lowerGeometry = NotchGeometry(
+      screenFrame: lowerFrame,
+      safeAreaTop: 32, auxLeftWidth: 716, auxRightWidth: 708, menuBarHeight: 37)
+    let lower = NotchViewModel(geometry: lowerGeometry, modeOverride: .clickToPin)
+    let upperDisplayClick = CGPoint(x: lowerGeometry.notchRect.midX, y: upperFrame.midY)
+
+    XCTAssertTrue(upperFrame.contains(upperDisplayClick))
+    lower.handleMouseDown(upperDisplayClick)
+
+    XCTAssertEqual(lower.state, .closed)
+  }
+
   func testExpansionAndShelfDropAffectOnlyTheTargetDisplayViewModel() {
     let leftGeometry = NotchGeometry(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),

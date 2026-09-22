@@ -290,11 +290,12 @@ final class NotchViewModel: ObservableObject {
 
   /// `CGRect.contains` excludes its maximum edges. The pointer can legitimately clamp to the
   /// display's exact `maxY`, so nudge that coordinate one representable value back onto the screen
-  /// before hit-testing. Without this, reaching the top resets the barrier before raw deltas can
-  /// carry the push any farther.
+  /// before hit-testing. A point above `maxY` belongs to another vertically stacked display and
+  /// must not be pulled back into this display's interaction region.
   private func region(_ region: CGRect, contains location: CGPoint) -> Bool {
     var hitLocation = location
-    if hitLocation.y >= geometry.screenFrame.maxY {
+    guard hitLocation.y <= geometry.screenFrame.maxY else { return false }
+    if hitLocation.y == geometry.screenFrame.maxY {
       hitLocation.y = geometry.screenFrame.maxY.nextDown
     }
     return region.contains(hitLocation)
