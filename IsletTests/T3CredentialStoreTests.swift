@@ -47,6 +47,106 @@ final class T3CredentialStoreTests: XCTestCase {
     }
   }
 
+  func testRepeatedLoadsReadAValidCredentialOnlyOnce() throws {
+    let store = T3MemoryCredentialRecordStore()
+    let vault = makeVault(store: store)
+    let credentialID = "remote|wake-cache"
+    let storedSecret = secret(21)
+    try vault.save(storedSecret, credentialID: credentialID)
+    store.clearOperations()
+
+    assertSecret(try vault.load(credentialID: credentialID), matches: storedSecret)
+    let firstLoadOperations = store.operations
+    XCTAssertFalse(firstLoadOperations.isEmpty)
+
+    assertSecret(try vault.load(credentialID: credentialID), matches: storedSecret)
+    XCTAssertEqual(store.operations, firstLoadOperations)
+  }
+
+  func testReplacementInvalidatesTheCachedCredential() throws {
+    let store = T3MemoryCredentialRecordStore()
+    let vault = makeVault(store: store)
+    let credentialID = "remote|replacement"
+    let original = secret(22)
+    let replacement = secret(23)
+    try vault.save(original, credentialID: credentialID)
+    assertSecret(try vault.load(credentialID: credentialID), matches: original)
+
+    try vault.save(replacement, credentialID: credentialID)
+
+    assertSecret(try vault.load(credentialID: credentialID), matches: replacement)
+  }
+
+  func testDeletionEvictsTheCachedCredential() throws {
+    let store = T3MemoryCredentialRecordStore()
+    let vault = makeVault(store: store)
+    let credentialID = "remote|deleted"
+    try vault.save(secret(24), credentialID: credentialID)
+    XCTAssertNotNil(try vault.load(credentialID: credentialID))
+
+    try vault.delete(credentialIDs: [credentialID])
+
+    XCTAssertNil(try vault.load(credentialID: credentialID))
+  }
+
+  func testFailedDeletionEvictsCachedCredentialsWhenRollbackCannotRestoreThem() throws {
+    let store = T3MemoryCredentialRecordStore()
+    let vault = makeVault(store: store)
+    let credentialIDs = ["remote|first-deletion", "remote|second-deletion"].sorted {
+      T3CredentialVault.account(for: $0) < T3CredentialVault.account(for: $1)
+    }
+    for credentialID in credentialIDs {
+      try vault.save(secret(25), credentialID: credentialID)
+      XCTAssertNotNil(try vault.load(credentialID: credentialID))
+    }
+    store.failDeletion(
+      of: .init(service: service, account: T3CredentialVault.account(for: credentialIDs[1])))
+    store.failReplacement(number: 1)
+
+    XCTAssertThrowsError(try vault.delete(credentialIDs: Set(credentialIDs))) { error in
+      guard case T3CredentialStoreError.rollbackFailed = error else {
+        return XCTFail("Expected rollbackFailed, got \(error)")
+      }
+    }
+
+    // The first deletion succeeded, and rollback failed before restoring its record.
+    XCTAssertNil(
+      store.value(service: service, account: T3CredentialVault.account(for: credentialIDs[0])))
+    XCTAssertNil(try vault.load(credentialID: credentialIDs[0]))
+    XCTAssertNotNil(try vault.load(credentialID: credentialIDs[1]))
+  }
+
+  func testFailedLocalReplacementEvictsDeletedCredentialsWhenRollbackFails() throws {
+    let store = T3MemoryCredentialRecordStore()
+    let vault = makeVault(store: store)
+    let staleIDs = ["local|first-deletion", "local|second-deletion"].sorted {
+      T3CredentialVault.account(for: $0) < T3CredentialVault.account(for: $1)
+    }
+    for credentialID in staleIDs {
+      try vault.save(secret(26), credentialID: credentialID)
+      XCTAssertNotNil(try vault.load(credentialID: credentialID))
+    }
+    store.failDeletion(
+      of: .init(service: service, account: T3CredentialVault.account(for: staleIDs[1])))
+    // The new local credential is written first. Restoring the first deleted item then fails.
+    store.failReplacement(number: 2)
+
+    XCTAssertThrowsError(
+      try vault.saveLocal(
+        secret(27), credentialID: "local|replacement", environmentID: "local-environment")
+    ) { error in
+      guard case T3CredentialStoreError.rollbackFailed = error else {
+        return XCTFail("Expected rollbackFailed, got \(error)")
+      }
+    }
+
+    XCTAssertNil(
+      store.value(service: service, account: T3CredentialVault.account(for: staleIDs[0])))
+    XCTAssertNil(try vault.load(credentialID: staleIDs[0]))
+    XCTAssertNotNil(try vault.load(credentialID: staleIDs[1]))
+    assertSecret(try vault.load(credentialID: "local|replacement"), matches: secret(27))
+  }
+
   func testMigrationWritesAndVerifiesEveryItemBeforeRemovingAggregateVaults() throws {
     let currentSecret = secret(3)
     let sharedSecret = secret(4)
@@ -219,6 +319,9 @@ final class T3CredentialStoreTests: XCTestCase {
     try vault.save(secret(14), credentialID: oldLocalID)
     try vault.save(secret(15), credentialID: legacyLocalID)
     try vault.save(remoteSecret, credentialID: remoteID)
+    XCTAssertNotNil(try vault.load(credentialID: oldLocalID))
+    XCTAssertNotNil(try vault.load(credentialID: legacyLocalID))
+    assertSecret(try vault.load(credentialID: remoteID), matches: remoteSecret)
     store.set(Data([0xFF]), service: service, account: corruptAccount)
 
     try vault.saveLocal(

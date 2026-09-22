@@ -163,6 +163,9 @@ final class T3CredentialVault {
   private let service: String
   private let legacyServices: [String]
   private let store: any T3CredentialRecordStore
+  // Monitor tasks are recreated after sleep. Retain decrypted tokens for this process so wake does
+  // not request Keychain access again for credentials the app has already loaded.
+  private var cachedTokens: [String: String] = [:]
 
   init(
     service: String, legacyServices: [String],
@@ -185,6 +188,7 @@ final class T3CredentialVault {
   }
 
   func load(credentialID: String) throws -> String? {
+    if let cached = cachedTokens[credentialID] { return cached }
     let address = credentialAddress(for: credentialID)
     if let storedData = try store.data(service: address.service, account: address.account),
       let record = try? decodeCredential(storedData, expectedID: credentialID)
@@ -192,6 +196,7 @@ final class T3CredentialVault {
       // A failed cleanup must not hide an independently readable environment. A later mutating
       // operation will retry the migration and report the failure.
       _ = try? migrateAggregateVaults()
+      cachedTokens[credentialID] = record.token
       return record.token
     }
 
@@ -199,12 +204,15 @@ final class T3CredentialVault {
     guard let storedData = try store.data(service: address.service, account: address.account) else {
       return nil
     }
-    return try decodeCredential(storedData, expectedID: credentialID).token
+    let token = try decodeCredential(storedData, expectedID: credentialID).token
+    cachedTokens[credentialID] = token
+    return token
   }
 
   func save(_ token: String, credentialID: String) throws {
     _ = try migrateAggregateVaults()
     let address = credentialAddress(for: credentialID)
+    defer { cachedTokens[credentialID] = nil }
     try applyTransaction(
       replacements: [address: try encodedCredential(token: token, credentialID: credentialID)],
       deletions: [])
@@ -213,14 +221,19 @@ final class T3CredentialVault {
   func saveLocal(_ token: String, credentialID: String, environmentID: String) throws {
     _ = try migrateAggregateVaults()
     let destination = credentialAddress(for: credentialID)
-    let staleAddresses = Set(
-      try validCredentialItems().compactMap { item -> Address? in
-        guard
-          item.record.credentialID == environmentID
-            || item.record.credentialID.hasPrefix("local|")
-        else { return nil }
-        return item.address == destination ? nil : item.address
-      })
+    let staleItems = try validCredentialItems().filter { item in
+      guard
+        item.record.credentialID == environmentID
+          || item.record.credentialID.hasPrefix("local|")
+      else { return false }
+      return item.address != destination
+    }
+    let staleAddresses = Set(staleItems.map(\.address))
+    // A failed rollback can leave records changed, so evict affected tokens even on failure.
+    defer {
+      cachedTokens[credentialID] = nil
+      for item in staleItems { cachedTokens[item.record.credentialID] = nil }
+    }
     try applyTransaction(
       replacements: [destination: try encodedCredential(token: token, credentialID: credentialID)],
       deletions: staleAddresses)
@@ -233,8 +246,12 @@ final class T3CredentialVault {
       addresses.compactMap { address in
         try store.data(service: address.service, account: address.account) == nil ? nil : address
       })
-    guard !existingAddresses.isEmpty else { return }
-    try applyTransaction(replacements: [:], deletions: existingAddresses)
+    defer {
+      for credentialID in credentialIDs { cachedTokens[credentialID] = nil }
+    }
+    if !existingAddresses.isEmpty {
+      try applyTransaction(replacements: [:], deletions: existingAddresses)
+    }
   }
 
   nonisolated static func account(for credentialID: String) -> String {
