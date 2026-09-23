@@ -39,7 +39,7 @@ struct ReminderCommandPresentation {
   func route(for intent: Intent) -> Route? {
     switch intent {
     case .create:
-      return writableListIDs.isEmpty ? nil : .create
+      return .create
     case .undo:
       return hasCompletionUndo && !writableListIDs.isEmpty ? .undo : nil
     case .complete, .edit, .snooze, .customSnooze, .move:

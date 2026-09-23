@@ -1,3 +1,4 @@
+import Defaults
 import SwiftUI
 
 /// A display edge and hardware notch used in setup.
@@ -75,11 +76,19 @@ enum AppState {
 struct IsletApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
   @ObservedObject private var reminderCommandHotKey = ReminderCommandHotKey.shared
+  @ObservedObject private var reminders = RemindersProvider.shared
+  @Default(.remindersEnabled) private var remindersEnabled
 
   var body: some Scene {
     Settings { EmptyView() }
       .commands {
         CommandMenu("Reminders") {
+          Button("New Reminder") {
+            ReminderEditorWindow.shared.presentEditor(provider: reminders, item: nil)
+          }
+          .keyboardShortcut("n", modifiers: .command)
+          .disabled(!remindersEnabled || !reminders.authorization.canRead)
+
           Button(
             reminderCommandHotKey.isAvailable
               ? "Open Reminder Commands (global ⌘⌥⇧R)"
