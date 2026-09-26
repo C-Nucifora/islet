@@ -140,6 +140,8 @@ final class ContinuityMonitor: ObservableObject {
               .lineLimit(1)
           }),
         announcement: appearing
-          ? String(localized: "iPhone: \(text) live activity started") : text))
+          ? (card.isRemote == true
+            ? String(localized: "iPhone: \(text) live activity started")
+            : String(localized: "\(text) started")) : text))
   }
 }
