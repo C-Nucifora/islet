@@ -19,12 +19,14 @@ struct MenuBarLiveActivity: Equatable, Sendable {
 struct LiveActivityCard: Identifiable, Equatable, Sendable {
   /// The accessibility identifier, stable for as long as the activity is on screen.
   let id: String
+  /// Empty when macOS exposes only the shared Live Activity renderer.
   let bundleIdentifier: String
   let appName: String
   let symbol: String
   /// False when the bundle identifier resolves to an app installed on this Mac, so a Mac-side
   /// activity cannot quietly pass itself off as one from the phone.
-  let isRemote: Bool
+  /// Nil when the originating app is not exposed.
+  let isRemote: Bool?
 }
 
 /// Turns a menu bar reading into ordered cards.
@@ -40,6 +42,16 @@ enum LiveActivityCatalog {
       items
       .sorted { $0.minX < $1.minX }
       .compactMap { item -> LiveActivityCard? in
+        if LiveActivityIdentifier.parse(item.axIdentifier) == .unidentified {
+          // Multiple displays expose the same shared pill. It is one presence indicator,
+          // not an app named WidgetRenderer and not a count of activities on the phone.
+          guard seen.insert(item.axIdentifier).inserted else { return nil }
+          return LiveActivityCard(
+            id: item.axIdentifier, bundleIdentifier: "",
+            appName: item.appName.flatMap { $0.isEmpty ? nil : $0 }
+              ?? String(localized: "Live Activity"),
+            symbol: LiveActivityAppStyle.fallbackSymbol, isRemote: nil)
+        }
         // Overflow and empty placeholders are ControlCenter's own bookkeeping, not activities.
         guard case .app(let bundleIdentifier)? = LiveActivityIdentifier.parse(item.axIdentifier)
         else { return nil }

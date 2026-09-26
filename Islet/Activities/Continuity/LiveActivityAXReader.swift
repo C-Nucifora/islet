@@ -113,7 +113,7 @@ enum LiveActivityAXConversion {
   }
 }
 
-/// The private ControlCenter hierarchy Islet knows how to read.
+/// The private menu bar hierarchy exposed by ControlCenter and macOS 27's MenuBarAgent.
 ///
 /// Keeping the attribute names in this generic walker makes the schema assumption testable with
 /// fixtures. The production adapter supplies `AXUIElement` values; tests supply in-memory nodes.
@@ -124,15 +124,41 @@ struct LiveActivityAXHierarchyReader<Element> {
   let optionalString: (Element, String) throws(LiveActivityAXCompatibilityError) -> String?
   let rect: (Element, String) throws(LiveActivityAXCompatibilityError) -> CGRect
 
-  func read(from application: Element) throws(LiveActivityAXCompatibilityError)
+  func read(from application: Element, includesWindowActivities: Bool = false)
+    throws(LiveActivityAXCompatibilityError)
     -> [MenuBarLiveActivity]
   {
     let extras = try element(application, "AXExtrasMenuBar")
     let items = try children(extras, kAXChildrenAttribute as String)
+    var candidates: [Element] = []
+    for item in items {
+      // MenuBarAgent wraps each system item in an identifier-less AXGroup. Only unwrap that
+      // known container, never unrelated buttons or the activity's remote content subtree.
+      if try optionalString(item, kAXIdentifierAttribute as String) == nil,
+        try optionalString(item, kAXRoleAttribute as String) == kAXGroupRole as String
+      {
+        candidates.append(contentsOf: try children(item, kAXChildrenAttribute as String))
+      } else {
+        candidates.append(item)
+      }
+    }
+    if includesWindowActivities {
+      // On macOS 27 the shared Live Activity pill is a direct child of the menu bar window,
+      // outside AXExtrasMenuBar. Inspect only that level, not other apps' embedded AX trees.
+      for window in try children(application, kAXWindowsAttribute as String) {
+        for item in try children(window, kAXChildrenAttribute as String) {
+          if let identifier = try optionalString(item, kAXIdentifierAttribute as String),
+            LiveActivityIdentifier.parse(identifier) == .unidentified
+          {
+            candidates.append(item)
+          }
+        }
+      }
+    }
     var readableIdentifierCount = 0
     var activities: [MenuBarLiveActivity] = []
 
-    for item in items {
+    for item in candidates {
       guard let identifier = try optionalString(item, kAXIdentifierAttribute as String) else {
         continue
       }
@@ -202,9 +228,14 @@ final class LiveActivityAXReader {
   /// Whether Islet has been granted Accessibility.
   var isTrusted: Bool { AccessibilityPermission.isTrusted }
 
-  private var controlCenter: NSRunningApplication? {
+  private var menuBarHostBundleIdentifier: String {
+    if #available(macOS 27, *) { return "com.apple.MenuBarAgent" }
+    return "com.apple.controlcenter"
+  }
+
+  private var menuBarHost: NSRunningApplication? {
     NSWorkspace.shared.runningApplications.first {
-      $0.bundleIdentifier == "com.apple.controlcenter"
+      $0.bundleIdentifier == menuBarHostBundleIdentifier
     }
   }
 
@@ -212,7 +243,7 @@ final class LiveActivityAXReader {
   /// the catalogue can then treat a filtered-empty result as genuinely empty.
   func read() -> LiveActivityAXReadResult {
     guard isTrusted else { return .permissionDenied }
-    guard let pid = controlCenter?.processIdentifier else { return .controlCenterUnavailable }
+    guard let pid = menuBarHost?.processIdentifier else { return .controlCenterUnavailable }
     let app = AXUIElementCreateApplication(pid)
     let hierarchy = LiveActivityAXHierarchyReader<AXUIElement>(
       element: {
@@ -246,13 +277,16 @@ final class LiveActivityAXReader {
         return try LiveActivityAXConversion.rect(from: value, attribute: attribute)
       })
     do {
-      return .success(try hierarchy.read(from: app))
+      return .success(
+        try hierarchy.read(
+          from: app,
+          includesWindowActivities: menuBarHostBundleIdentifier == "com.apple.MenuBarAgent"))
     } catch {
       return .classify(error)
     }
   }
 
-  /// Re-attaches after a permission grant or a transient ControlCenter restart, then lets the
+  /// Re-attaches after a permission grant or a transient menu bar host restart, then lets the
   /// monitor perform a synchronous retry.
   func retryObservation() { attach() }
 
@@ -261,9 +295,7 @@ final class LiveActivityAXReader {
     stopObserving()
     self.onChange = onChange
     attach()
-    // ControlCenter is restartable — it is a launch agent, and restarting it is even the known fix
-    // for its pairing state going stale. A dead observer would leave the tab frozen on whatever it
-    // last saw, so re-attach whenever it comes back.
+    // The menu bar host can restart. Reattach to its new PID so the tab does not keep stale data.
     let center = NSWorkspace.shared.notificationCenter
     for name in [
       NSWorkspace.didLaunchApplicationNotification,
@@ -271,8 +303,8 @@ final class LiveActivityAXReader {
     ] {
       let token = center.addObserver(forName: name, object: nil, queue: .main) { note in
         let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-        guard app?.bundleIdentifier == "com.apple.controlcenter" else { return }
         MainActor.assumeIsolated {
+          guard app?.bundleIdentifier == self.menuBarHostBundleIdentifier else { return }
           LiveActivityAXReader.shared.attach()
           LiveActivityAXReader.shared.notifyChanged()
         }
@@ -292,7 +324,10 @@ final class LiveActivityAXReader {
   }
 
   private func attach() {
-    guard isTrusted, let pid = controlCenter?.processIdentifier else { return }
+    guard isTrusted, let pid = menuBarHost?.processIdentifier else {
+      detach()
+      return
+    }
     guard pid != observedPID || observer == nil else { return }
     detach()
 
@@ -313,7 +348,7 @@ final class LiveActivityAXReader {
       AXObserverAddNotification(created, app, name as CFString, nil)
     }
     Log.app.notice(
-      "Continuity: observing ControlCenter accessibility (pid \(pid, privacy: .public))")
+      "Continuity: observing menu bar accessibility (pid \(pid, privacy: .public))")
   }
 
   private func detach() {

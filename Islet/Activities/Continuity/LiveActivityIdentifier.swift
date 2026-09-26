@@ -11,6 +11,8 @@ enum LiveActivityIdentifier {
 
   enum Kind: Equatable, Sendable {
     case app(bundleIdentifier: String)
+    /// macOS 27 exposes a shared renderer pill without the originating app's identity.
+    case unidentified
     /// ControlCenter collapses surplus activities into one item rather than filling the menu bar.
     case overflow
     /// A placeholder ControlCenter keeps around when it has nothing to show.
@@ -23,6 +25,9 @@ enum LiveActivityIdentifier {
   /// Returns `nil` for anything that is not a Live Activity — Wi-Fi, the clock, third-party
   /// status items — which is how the reader filters the menu bar down.
   static func parse(_ axIdentifier: String) -> Kind? {
+    if axIdentifier == "live-activity-pill-com.apple.chrono.WidgetRenderer-Activities" {
+      return .unidentified
+    }
     guard axIdentifier.hasSuffix(suffix) else { return nil }
     if axIdentifier == overflowIdentifier { return .overflow }
     if axIdentifier == emptyIdentifier { return .empty }

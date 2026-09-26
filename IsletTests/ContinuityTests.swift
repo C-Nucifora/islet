@@ -165,6 +165,22 @@ final class LiveActivityCatalogTests: XCTestCase {
     XCTAssertEqual(cards([item("com.phone.app.liveActivity")]).first?.isRemote, true)
   }
 
+  func testMenuBarAgentPillDoesNotInventAnAppIdentity() throws {
+    let identifier = "live-activity-pill-com.apple.chrono.WidgetRenderer-Activities"
+    let out = cards(
+      [
+        item(identifier, name: "Live Activity", minX: 100),
+        item(identifier, name: "Live Activity", minX: 300),
+      ], installed: ["com.apple.chrono.WidgetRenderer-Activities"])
+
+    XCTAssertEqual(out.count, 1)
+    let card = try XCTUnwrap(out.first)
+    XCTAssertEqual(card.id, identifier)
+    XCTAssertEqual(card.bundleIdentifier, "")
+    XCTAssertEqual(card.appName, "Live Activity")
+    XCTAssertNil(card.isRemote)
+  }
+
   func testNoItemsYieldNoCards() {
     XCTAssertTrue(cards([]).isEmpty)
   }
@@ -322,6 +338,99 @@ final class LiveActivityAXHierarchyReaderTests: XCTestCase {
     let application = LiveActivityAXFixtureNode(["AXExtrasMenuBar": .element(extras)])
 
     XCTAssertEqual(try fixtureHierarchyReader().read(from: application), [])
+  }
+
+  func testMenuBarAgentGroupsExposeLiveActivities() throws {
+    let clock = LiveActivityAXFixtureNode([
+      "AXIdentifier": .string("com.apple.menuextra.clock")
+    ])
+    let activity = LiveActivityAXFixtureNode([
+      "AXIdentifier": .string("com.example.delivery.liveActivity"),
+      "AXDescription": .string("Delivery"),
+      "AXFrame": .rect(CGRect(x: 420, y: 5.5, width: 28, height: 22)),
+    ])
+    let groups = [clock, activity].map {
+      LiveActivityAXFixtureNode([
+        "AXRole": .string("AXGroup"), "AXChildren": .children([$0]),
+      ])
+    }
+    let overflowButton = LiveActivityAXFixtureNode(["AXRole": .string("AXButton")])
+    let extras = LiveActivityAXFixtureNode([
+      "AXChildren": .children(groups + [overflowButton])
+    ])
+    let application = LiveActivityAXFixtureNode(["AXExtrasMenuBar": .element(extras)])
+
+    XCTAssertEqual(
+      try fixtureHierarchyReader().read(from: application),
+      [item("com.example.delivery.liveActivity", name: "Delivery", minX: 420)])
+  }
+
+  func testMenuBarAgentGroupsCanBeGenuinelyEmpty() throws {
+    let clock = LiveActivityAXFixtureNode([
+      "AXIdentifier": .string("com.apple.menuextra.clock")
+    ])
+    let group = LiveActivityAXFixtureNode([
+      "AXRole": .string("AXGroup"), "AXChildren": .children([clock]),
+    ])
+    let extras = LiveActivityAXFixtureNode(["AXChildren": .children([group])])
+    let application = LiveActivityAXFixtureNode(["AXExtrasMenuBar": .element(extras)])
+
+    XCTAssertEqual(try fixtureHierarchyReader().read(from: application), [])
+  }
+
+  func testGroupWithoutReadableIdentifiersRemainsASchemaChange() {
+    let group = LiveActivityAXFixtureNode([
+      "AXRole": .string("AXGroup"), "AXChildren": .children([LiveActivityAXFixtureNode()]),
+    ])
+    let extras = LiveActivityAXFixtureNode(["AXChildren": .children([group])])
+    let application = LiveActivityAXFixtureNode(["AXExtrasMenuBar": .element(extras)])
+
+    XCTAssertThrowsError(try fixtureHierarchyReader().read(from: application)) { error in
+      XCTAssertEqual(
+        error as? LiveActivityAXCompatibilityError, .noReadableIdentifiers(childCount: 1))
+    }
+  }
+
+  func testGroupWithMissingChildrenRemainsASchemaChange() {
+    let group = LiveActivityAXFixtureNode(["AXRole": .string("AXGroup")])
+    let extras = LiveActivityAXFixtureNode(["AXChildren": .children([group])])
+    let application = LiveActivityAXFixtureNode(["AXExtrasMenuBar": .element(extras)])
+
+    XCTAssertThrowsError(try fixtureHierarchyReader().read(from: application)) { error in
+      XCTAssertEqual(
+        error as? LiveActivityAXCompatibilityError, .missingAttribute(attribute: "AXChildren"))
+    }
+  }
+
+  func testMenuBarAgentReadsActivityPillsFromWindows() throws {
+    let identifier = "live-activity-pill-com.apple.chrono.WidgetRenderer-Activities"
+    let pill = LiveActivityAXFixtureNode([
+      "AXIdentifier": .string(identifier), "AXDescription": .string("Live Activity"),
+      "AXFrame": .rect(CGRect(x: 895, y: 4.5, width: 74, height: 24)),
+    ])
+    let unrelated = LiveActivityAXFixtureNode(["AXRole": .string("AXButton")])
+    let window = LiveActivityAXFixtureNode(["AXChildren": .children([unrelated, pill])])
+    let extras = LiveActivityAXFixtureNode(["AXChildren": .children([])])
+    let application = LiveActivityAXFixtureNode([
+      "AXExtrasMenuBar": .element(extras), "AXWindows": .children([window]),
+    ])
+
+    XCTAssertEqual(
+      try fixtureHierarchyReader().read(from: application, includesWindowActivities: true),
+      [item(identifier, name: "Live Activity", minX: 895)])
+    XCTAssertEqual(try fixtureHierarchyReader().read(from: application), [])
+  }
+
+  func testMenuBarAgentRequiresReadableWindows() {
+    let extras = LiveActivityAXFixtureNode(["AXChildren": .children([])])
+    let application = LiveActivityAXFixtureNode(["AXExtrasMenuBar": .element(extras)])
+
+    XCTAssertThrowsError(
+      try fixtureHierarchyReader().read(from: application, includesWindowActivities: true)
+    ) { error in
+      XCTAssertEqual(
+        error as? LiveActivityAXCompatibilityError, .missingAttribute(attribute: "AXWindows"))
+    }
   }
 
   func testRenamedExtrasMenuBarIsASchemaChange() {

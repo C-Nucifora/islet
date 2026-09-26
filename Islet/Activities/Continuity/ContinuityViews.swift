@@ -56,8 +56,14 @@ struct ContinuityExpandedView: View {
           ForEach(cards) { card in ContinuityCardRow(card: card) }
         }
         Spacer(minLength: 0)
-        Text("Live Activities show which apps are active. macOS doesn't share their contents.")
-          .font(.system(size: 9)).foregroundStyle(.tertiary)
+        Text(
+          cards.contains { $0.isRemote == nil }
+            ? String(localized: "macOS does not share the app name for this Live Activity.")
+            : String(
+              localized:
+                "Live Activities show which apps are active. macOS doesn't share their contents.")
+        )
+        .font(.system(size: 9)).foregroundStyle(.tertiary)
       }
     }
     .foregroundStyle(.white)
@@ -105,7 +111,7 @@ struct ContinuityCardRow: View {
           .font(.caption).foregroundStyle(.white).lineLimit(1)
         Spacer(minLength: 0)
         // A Mac-side activity should not silently pass itself off as one from the phone.
-        if !card.isRemote {
+        if card.isRemote == false {
           Text("Mac")
             .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(.secondary)
@@ -122,9 +128,11 @@ struct ContinuityCardRow: View {
     .buttonStyle(.plain)
     .help("Open iPhone Mirroring")
     .accessibilityLabel(
-      card.isRemote
-        ? String(localized: "\(card.appName), iPhone Live Activity")
-        : String(localized: "\(card.appName), Mac Live Activity")
+      card.isRemote == nil
+        ? card.appName
+        : card.isRemote == true
+          ? String(localized: "\(card.appName), iPhone Live Activity")
+          : String(localized: "\(card.appName), Mac Live Activity")
     )
     .accessibilityHint("Opens iPhone Mirroring")
   }

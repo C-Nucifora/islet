@@ -435,6 +435,16 @@
         }
       }
     },
+    "%@ started" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［%@ stårtëd ~~~~~］"
+          }
+        }
+      }
+    },
     "%@ theme" : {
       "localizations" : {
         "en-XA" : {
@@ -8111,6 +8121,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［Lïvë Åçtïvïtïës shøw whïçh åpps årë åçtïvë. måçØS døësñ't shårë thëïr çøñtëñts. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "Live Activity" : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［Lïvë Åçtïvïtÿ ~~~~~~］"
           }
         }
       }
@@ -17075,6 +17095,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "［måçØS døës ñøt shårë Çålëñdår tråvël-tïmë ëstïmåtës, sø Ïslët døës ñøt gûëss whëñ tø lëåvë. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~］"
+          }
+        }
+      }
+    },
+    "macOS does not share the app name for this Live Activity." : {
+      "localizations" : {
+        "en-XA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "［måçØS døës ñøt shårë thë åpp ñåmë før thïs Lïvë Åçtïvïtÿ. ~~~~~~~~~~~~~~~~~~~~~］"
           }
         }
       }
